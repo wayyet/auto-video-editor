@@ -1,6 +1,6 @@
-"""StateGraph 装配(Week 3,对照附件 3.4 节)。
+"""StateGraph 装配(Week 4,对照附件 3.4 节 + 第 4 周计划 §5)。
 
-完整图拓扑(Week 3):
+完整图拓扑(Week 4):
   START
     → clean_cache
     → launch_openstoryline
@@ -12,16 +12,28 @@
       ├─→ node_08_add_subtitles  (达标,产出 snapshot2)
       ├─→ node_07_speed_fit      (未达标,retry_counts < MAX_RETRY)
       └─→ escalate_guardrail_failure → END  (重试超限)
-    → node_08_add_subtitles
+    → bridge_snapshot2                 (写 snapshot2_path)
+    → node_08_add_subtitles            (Week 4 同步写 asr_segments_zh 到 state)
     → node_09_inject_fx
     → node_10_inject_text_fx
     → node_11_inject_sticker
     → node_12_human_add_bgm            ⏸ interrupt("checkpoint2")
-    → node_13_adjust_volume            (Week 3 占位,Week 4 实现)
-    → END
+    → node_13_adjust_volume
+    ├─→ node_14_make_covers            (中文主线尾段)
+    │     → node_15_localize_covers_en
+    │           └─────────────┐
+    │                         ▼
+    └─→ [parallel fork_draft → node_16(关卡③ interrupt) → node_17]
+                         ▼
+                  join_before_delivery
+                         ▼
+                        END
 
-关卡①/② 使用 ``langgraph.types.interrupt``,需要 checkpointer(Week 3 用 SqliteSaver
-做持久化,覆盖多日挂起恢复)。
+LangGraph 自动 fan-in:node_15 与 node_17 都有出边指向 join_before_delivery,
+等两分支都到达才触发 join。
+
+关卡①/②/③ 使用 ``langgraph.types.interrupt``,需要 checkpointer(Week 3 用
+SqliteSaver 做持久化,覆盖多日挂起恢复)。
 """
 
 from __future__ import annotations
@@ -43,6 +55,12 @@ from nodes.node_10_inject_text_fx import inject_text_fx
 from nodes.node_11_inject_sticker import inject_sticker
 from nodes.node_12_human_add_bgm import human_add_bgm
 from nodes.node_13_adjust_volume import adjust_volume
+from nodes.node_14_make_covers import node_14_make_covers
+from nodes.node_15_localize_covers_en import node_15_localize_covers_en
+from nodes.node_16_translate_subtitles import node_16_translate_subtitles
+from nodes.node_17_inject_english_tts_stub import node_17_inject_english_tts_stub
+from nodes.node_fork_english_branch import fork_draft_for_english_branch
+from nodes.node_join_before_delivery import join_before_delivery
 from state import WorkflowState
 
 
@@ -146,6 +164,14 @@ def _build_state_graph():
     g.add_node("node_12_human_add_bgm", human_add_bgm)
     g.add_node("node_13_adjust_volume", adjust_volume)
 
+    # ---- Week 4 新增节点(6 个)----
+    g.add_node("fork_draft_for_english_branch", fork_draft_for_english_branch)
+    g.add_node("node_14_make_covers", node_14_make_covers)
+    g.add_node("node_15_localize_covers_en", node_15_localize_covers_en)
+    g.add_node("node_16_translate_subtitles", node_16_translate_subtitles)
+    g.add_node("node_17_inject_english_tts_stub", node_17_inject_english_tts_stub)
+    g.add_node("join_before_delivery", join_before_delivery)
+
     # ---- 边 ----
     g.add_edge(START, "clean_cache")
     g.add_edge("clean_cache", "launch_openstoryline")
@@ -172,12 +198,26 @@ def _build_state_graph():
     g.add_edge("escalate_guardrail_failure", END)
     g.add_edge("bridge_snapshot2", "node_08_add_subtitles")
 
-    # 8 → 9 → 10 → 11 → 12 → 13 → END
+    # 8 → 9 → 10 → 11 → 12 → 13
     g.add_edge("node_08_add_subtitles", "node_09_inject_fx")
     g.add_edge("node_09_inject_fx", "node_10_inject_text_fx")
     g.add_edge("node_10_inject_text_fx", "node_11_inject_sticker")
     g.add_edge("node_11_inject_sticker", "node_12_human_add_bgm")
     g.add_edge("node_12_human_add_bgm", "node_13_adjust_volume")
-    g.add_edge("node_13_adjust_volume", END)
+
+    # ---- Week 4 双分支 + 汇合 ----
+    # 中文主线尾段:13 → 14 → 15 → join
+    g.add_edge("node_13_adjust_volume", "node_14_make_covers")
+    g.add_edge("node_14_make_covers", "node_15_localize_covers_en")
+    g.add_edge("node_15_localize_covers_en", "join_before_delivery")
+
+    # 英文分支:bridge_snapshot2 → fork → 16(关卡③ interrupt)→ 17 → join
+    g.add_edge("bridge_snapshot2", "fork_draft_for_english_branch")
+    g.add_edge("fork_draft_for_english_branch", "node_16_translate_subtitles")
+    g.add_edge("node_16_translate_subtitles", "node_17_inject_english_tts_stub")
+    g.add_edge("node_17_inject_english_tts_stub", "join_before_delivery")
+
+    # join → END(LangGraph 自动等两分支都到达)
+    g.add_edge("join_before_delivery", END)
 
     return g

@@ -24,6 +24,7 @@ langsmith==0.11.2
 orjson==3.12.0
 ormsgpack==1.12.2
 packaging==26.3
+pillow==12.3.0
 pluggy==1.6.0
 pydantic==2.13.5
 pydantic_core==2.46.5

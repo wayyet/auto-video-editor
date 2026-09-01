@@ -20,3 +20,6 @@ artifacts/draft_content.json
 # Week 3 runtime state
 checkpoints/
 drafts/
+
+# Git worktrees (本地并行开发目录，不入库)
+.worktrees/

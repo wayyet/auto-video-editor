@@ -115,6 +115,21 @@ NODE_INACTIVITY_TIMEOUT_S: int = 120      # 单节点无响应超时(秒)
 
 
 # ---------------------------------------------------------------------------
+# Week 4 — 翻译 / FireRed-Image-Edit / 字体常量(对齐第 4 周计划 §1.1)
+# ---------------------------------------------------------------------------
+# 翻译服务 endpoint(Week 4 用 Mock,Week 5 接真实服务)
+TRANSLATE_MCP_ENDPOINT: str = "http://127.0.0.1:8007/mcp"
+
+# FireRed-Image-Edit 常驻推理服务 endpoint(Week 4 用 Mock,Week 5 接真实)
+FIRERED_IMAGE_EDIT_ENDPOINT: str = "http://127.0.0.1:8008/mcp"
+
+# 字体路径(Week 4 占位 — README 标注由运维提供真实字体)
+ASSETS_FONTS_DIR: Path = Path(__file__).parent / "assets" / "fonts"
+ZH_FONT_NAME: str = "SourceHanSansCN-Bold.otf"
+EN_FONT_NAME: str = "Roboto-Bold.ttf"
+
+
+# ---------------------------------------------------------------------------
 # 派生:最终访问的 URL
 # ---------------------------------------------------------------------------
 def openstoryline_mcp_url() -> str:
