@@ -1,0 +1,15 @@
+{
+  "_comment": "花字样式模板 — 步骤10 使用。Week 3 占位(entrance_animation 留 None);Week 4 从 AVAILABLE_ASSETS.md 选定具体枚举值。",
+  "default_style": {
+    "size": 5.0,
+    "bold": true,
+    "color": [1.0, 1.0, 1.0],
+    "align": 1,
+    "border": {"color": [0, 0, 0], "width": 40.0},
+    "transform_y": -0.8,
+    "outline": true,
+    "shadow": true,
+    "entrance_animation": null
+  },
+  "_week3_status": "placeholder"
+}

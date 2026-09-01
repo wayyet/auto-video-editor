@@ -1,0 +1,10 @@
+{
+  "_comment": "贴纸 resource_id 库 — 步骤11 使用。Week 3 占位;Week 4 接入 sync_jy_assets.py 思路后替换为真实 resource_id。",
+  "sticker_by_keyword": {
+    "赞": "PLACEHOLDER_STICKER_THUMBS_UP",
+    "加油": "PLACEHOLDER_STICKER_FIGHT",
+    "惊喜": "PLACEHOLDER_STICKER_SURPRISE",
+    "默认": "PLACEHOLDER_STICKER_DEFAULT"
+  },
+  "_week3_status": "placeholder"
+}

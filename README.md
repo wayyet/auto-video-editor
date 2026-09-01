@@ -1,0 +1,194 @@
+# AI 视频剪辑自动化工作流 — Week 2 + Week 3 交付物
+
+本目录实现附件《第 2 周分阶段实施计划》与《第 3 周详细实施计划》的全部交付物:
+
+- **Week 2**:LangGraph 5 节点骨架(节点 1-5)+ draft_content.json 加密检测/版本策略/原子写入底层库 + 端到端集成测试
+- **Week 3**:扩展为 13+1 节点完整图(节点 1-13 + 1 升级节点)+ 关卡①/② interrupt/resume 联调 + 心跳监控 + 持久化 SqliteSaver
+
+## 1. 目录结构
+
+```
+auto-video-editor/
+├── README.md                           本文件
+├── pyproject.toml                      项目元数据 + 依赖
+├── requirements.txt                    pip 兜底依赖清单
+├── .gitignore
+├── config.py                           集中配置(Week1/3 待核实项占位)
+├── state.py                            WorkflowState TypedDict(Week 3 +5 字段)
+├── graph.py                            StateGraph 装配 + 编译(Week 3 13+1 节点)
+├── nodes/
+│   ├── node_01_clean_cache.py          ─┐
+│   ├── node_02_launch_openstoryline.py │
+│   ├── node_03_open_preview.py         │ Week 2 已有
+│   ├── node_04_import_and_plan.py      │
+│   ├── node_05_generate_draft.py       ─┘
+│   ├── node_06_human_reorder.py        [新] 关卡① interrupt + 副作用挪后
+│   ├── node_07_speed_fit.py            [新] 护栏节点 + 帧对齐分配公式
+│   ├── node_08_add_subtitles.py        [新] ASR Mock + 字幕样式注入
+│   ├── node_09_inject_fx.py            [新] 转场 + 视频特效注入
+│   ├── node_10_inject_text_fx.py       [新] 花字样式追加
+│   ├── node_11_inject_sticker.py       [新] 贴纸 resource_id 关联
+│   ├── node_12_human_add_bgm.py        [新] 关卡② interrupt(同节点6结构)
+│   └── node_13_adjust_volume.py        [新] 占位节点(Week 4 实现)
+├── draft_ops/                          Week 2 底层库(无 LangGraph 依赖,Week 3 复用)
+│   ├── atomic_writer.py
+│   ├── encryption_detector.py
+│   └── version_strategy.py
+├── jy_common/                          [新] Week 3 共享模块
+│   ├── template_library.py             模板加载(Week 3 占位,Week 4 真实)
+│   ├── asr_client.py                   ASR Mock 接口(Week 4 接 FireRedASR2S)
+│   └── sticker_resolver.py             关键词→resource_id 解析
+├── templates/                          [新] Week 3 占位模板库
+│   ├── fx_template.json
+│   ├── sticker_template.json
+│   └── text_style_template.json
+├── monitoring/                         [新] Week 3 心跳监控
+│   ├── heartbeat_writer.py             编排进程内 daemon 线程
+│   ├── heartbeat_monitor.ps1           外部监控脚本(任务计划程序触发)
+│   └── register_heartbeat_task.ps1     任务计划程序注册脚本
+├── checkpoints/                        [新,gitignore] SqliteSaver 落盘目录
+├── mcp_clients/
+│   └── openstoryline_client.py         Week 2 已交付
+├── docs/
+│   └── poc_report.md                   Week 2 阶段 E PoC 报告
+└── tests/
+    ├── conftest.py                     Week 2 共享 fixtures
+    ├── unit/                           Week 2: 29 + Week 3: 31 = 60 单测
+    └── integration/                    Week 2: 8 + Week 3: 16 = 24 集成测试
+```
+
+## 2. 环境与安装
+
+### 2.1 系统要求
+
+- Python 3.10+(本项目在 Python 3.13.11 实测通过)
+- Windows / macOS / Linux
+- 需可访问 `E:\Documents\kuaishou\langgraph-main` 源仓库(本机)
+
+### 2.2 一键安装
+
+```powershell
+cd E:\Documents\kuaishou\auto-video-editor
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e E:\Documents\kuaishou\langgraph-main\libs\langgraph `
+                      -e E:\Documents\kuaishou\langgraph-main\libs\checkpoint `
+                      -e E:\Documents\kuaishou\langgraph-main\libs\prebuilt `
+                      httpx pytest pytest-mock pytest-asyncio langgraph-checkpoint-sqlite
+```
+
+### 2.3 验证安装
+
+```powershell
+python -c "from graph import build_graph; g = build_graph(); print(type(g).__name__)"
+# 应输出:CompiledStateGraph
+```
+
+## 3. 运行测试
+
+```powershell
+cd E:\Documents\kuaishou\auto-video-editor
+.\.venv\Scripts\Activate.ps1
+
+# 跑全部测试
+python -m pytest -v
+
+# 只跑单元测试
+python -m pytest tests/unit/ -v
+
+# 只跑集成测试
+python -m pytest tests/integration/ -v
+
+# 只跑某一条测试
+python -m pytest tests/integration/test_interrupt_resume.py::test_checkpoint1_interrupt_and_resume_basic -v
+```
+
+**当前测试结果**(Week 3 末):
+- 单元测试 60 条 ✅
+- 集成测试 24 条 ✅(TC-01..TC-06 + Week 3 sequential + interrupt_resume + graph_compiles)
+- 总计 **84 条全部通过**
+
+## 4. Week 3 新增功能
+
+### 4.1 持久化 checkpointer
+
+`config.make_checkpointer(backend, thread_id)` 支持两种后端:
+
+```python
+from config import make_checkpointer
+
+# 内存(单测 / 临时运行)
+saver = make_checkpointer("memory")
+
+# SQLite(Week 3 默认,支持多日挂起恢复)
+saver = make_checkpointer("sqlite", thread_id="video-001")
+# 文件落盘: <workspace>/checkpoints/<thread_id>.sqlite
+```
+
+### 4.2 interrupt / resume 模式
+
+```python
+from graph import build_graph
+from langgraph.types import Command
+
+g = build_graph(thread_id="video-001")  # 默认 sqlite
+
+# 第一次 invoke:跑到关卡① 挂起
+try:
+    g.invoke(initial_state, config={"configurable": {"thread_id": "video-001"}})
+except GraphInterrupt:
+    pass
+
+# 用户在剪映手动调整后,用 Command(resume=True) 续跑
+g.invoke(Command(resume=True), config={"configurable": {"thread_id": "video-001"}})
+```
+
+### 4.3 心跳监控
+
+编排进程启动时 `build_graph()` 自动调用 `start_heartbeat()`(后台 daemon 线程,默认 10s 写一次时间戳到 `C:\ProgramData\VideoWorkflow\heartbeat.txt`)。
+
+注册外部监控:
+
+```powershell
+# 管理员 PowerShell
+.\monitoring\register_heartbeat_task.ps1
+# 默认每 2 分钟检查一次,心跳超时 120s 即写本地日志告警
+```
+
+## 5. Week 1 交付物前置依赖(⚠️ 重要)
+
+- [ ] **剪映 v5.9.0 已安装**
+- [ ] **hosts 文件已屏蔽剪映升级域**(Week 1 交付物)
+- [ ] **OpenStoryline 实际启动命令、端口、缓存路径**已核实替换 `config.py` 占位值
+
+## 6. Week 3 已识别约束
+
+| 约束 | 当前处理 |
+|---|---|
+| VIP 资源模板库(transition / effect / sticker)为占位 | Week 3 模板库只含 `PLACEHOLDER_*` resource_id;Week 4 真实模板由人工产出后替换 |
+| ASR 真实接入未完成 | 节点 8 用 `jy_common.asr_client.MockASRClient`;Week 4 替换为 `FireRedASR2S` |
+| 步骤 13 真实音量/淡入淡出未实现 | 本周 `node_13_adjust_volume` 仅占位(写 status_log);Week 4 先做字段逆向工程再实现 |
+| `capcut decrypt` 返回码语义未实测 | Week 2 PoC 报告 §2.5 占位约定;`detect_draft_encryption` 接受 `decrypt_runner` 注入 |
+| 心跳告警渠道(企业微信/邮件)未对接 | 本周仅本地日志 `heartbeat_monitor.log`;Week 4 对接 |
+
+## 7. 手动验收(Day5 PM 必要步骤)
+
+完整跑通后(`pytest tests/integration/test_sequential_integration.py` 通过)的产物 `draft_content.json` 需在剪映 v5.9.0 客户端手动打开验证:
+- 不弹"草稿已损坏"错误
+- 时间轴显示视频轨
+- 字幕、转场、花字、贴纸可见
+- 总时长 ≤ 35s
+
+## 8. 文档索引
+
+- `docs/poc_report.md` — Week 2 阶段 E 第三方组件 PoC 评估报告
+- 实施计划:`《AI视频剪辑自动化工作流第3周详细实施计划.md》(同级目录)`
+- LangGraph 源码:`E:\Documents\kuaishou\langgraph-main`(本地 editable)
+
+## 9. 进一步阅读
+
+- [LangGraph 官方文档](https://langchain-ai.github.io/langgraph/)
+- [LangGraph 源码仓库](https://github.com/langchain-ai/langgraph)
+- `E:\Documents\kuaishou\.claude\skills\jianying-editor` — Week 3 借鉴字段结构(字幕样式 / AVAILABLE_ASSETS 枚举)
+- `E:\Documents\kuaishou\.claude\skills\jianying-speed-fit-35s` — Week 3 节点 7 帧对齐公式金标准

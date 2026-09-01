@@ -1,0 +1,26 @@
+{
+  "_comment": "VIP 资源复用机制 — 步骤9/11 共用。Week 3 Day1 上午由人工预先生成;Week 4 接入真实 resource_id 后替换本占位。",
+  "transitions": [
+    {
+      "name": "淡入淡出",
+      "category": "video_transition",
+      "resource_id": "PLACEHOLDER_TRANSITION_FADE_001",
+      "duration_us": 500000
+    },
+    {
+      "name": "滑动切换",
+      "category": "video_transition",
+      "resource_id": "PLACEHOLDER_TRANSITION_SLIDE_001",
+      "duration_us": 500000
+    }
+  ],
+  "video_effects": [
+    {
+      "name": "轻微放大",
+      "category": "video_effect",
+      "resource_id": "PLACEHOLDER_VFX_ZOOM_001",
+      "intensity": 0.3
+    }
+  ],
+  "_week3_status": "placeholder"
+}

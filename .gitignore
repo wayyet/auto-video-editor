@@ -1,0 +1,22 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+dist/
+
+# 测试产物
+artifacts/shot_plan_*.json
+artifacts/draft_content.json
+
+# IDE
+.vscode/
+.idea/
+
+# Week 3 runtime state
+checkpoints/
+drafts/
