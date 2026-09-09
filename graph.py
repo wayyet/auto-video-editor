@@ -1,13 +1,13 @@
-"""StateGraph 装配(Week 4,对照附件 3.4 节 + 第 4 周计划 §5)。
+"""StateGraph 装配(Week 5,对照附件 3.4 节 + 第 5 周计划 §2)。
 
-完整图拓扑(Week 4):
+完整图拓扑(Week 5):
   START
     → clean_cache
     → launch_openstoryline
     → open_preview
     → import_and_plan
     → generate_draft
-    → node_06_human_reorder            ⏸ interrupt("checkpoint1")
+    → node_06_human_reorder            ⏸ interrupt("①")
     → node_07_speed_fit                🔁 条件边(route_after_speed_fit):
       ├─→ node_08_add_subtitles  (达标,产出 snapshot2)
       ├─→ node_07_speed_fit      (未达标,retry_counts < MAX_RETRY)
@@ -17,30 +17,44 @@
     → node_09_inject_fx
     → node_10_inject_text_fx
     → node_11_inject_sticker
-    → node_12_human_add_bgm            ⏸ interrupt("checkpoint2")
+    → node_12_human_add_bgm            ⏸ interrupt("②")
     → node_13_adjust_volume
     ├─→ node_14_make_covers            (中文主线尾段)
     │     → node_15_localize_covers_en
     │           └─────────────┐
     │                         ▼
-    └─→ [parallel fork_draft → node_16(关卡③ interrupt) → node_17]
-                         ▼
-                  join_before_delivery
-                         ▼
-                        END
+    └─→ [parallel fork_draft → node_16a_translate_and_check
+                                ├─→ node_checkpoint3_layout_review ⏸ interrupt("③")(条件触发)
+                                └─→ node_17_inject_english_tts_stub
+                                                                 │
+                                                  join_before_delivery
+                                                                 ▼
+                                                                END
+
+Week 5 关键改动:
+- ``node_16_translate_subtitles`` 拆为 ``node_16a_translate_and_check``(翻译 +
+  layout 检测,无 interrupt) + ``node_checkpoint3_layout_review``(只做 interrupt,
+  无副作用,天然幂等);条件边 ``route_after_translate`` 据 ``layout_issues_detected``
+  二选一走向。
+- 关卡①/② payload ``checkpoint`` 字段统一为 ``"①"`` / ``"②"``(Week 5 计划 §1.1),
+  旧值保留在 ``legacy_id`` 字段。
+- ``node_17_inject_english_tts_stub`` 写空 wav 占位 + ``en_audio_path`` 字段。
 
 LangGraph 自动 fan-in:node_15 与 node_17 都有出边指向 join_before_delivery,
 等两分支都到达才触发 join。
 
 关卡①/②/③ 使用 ``langgraph.types.interrupt``,需要 checkpointer(Week 3 用
-SqliteSaver 做持久化,覆盖多日挂起恢复)。
+SqliteSaver 做持久化,覆盖多日挂起恢复;Week 5 切到 PostgresSaver)。
 """
 
 from __future__ import annotations
 
+import contextlib
+import os
+import uuid
 from pathlib import Path
 
-from config import make_checkpointer, resolve_draft_dir
+from config import POSTGRES_URI, make_checkpointer, resolve_draft_dir
 from monitoring.heartbeat_writer import start_heartbeat
 from nodes.node_01_clean_cache import clean_cache
 from nodes.node_02_launch_openstoryline import launch_openstoryline_service
@@ -57,7 +71,8 @@ from nodes.node_12_human_add_bgm import human_add_bgm
 from nodes.node_13_adjust_volume import adjust_volume
 from nodes.node_14_make_covers import node_14_make_covers
 from nodes.node_15_localize_covers_en import node_15_localize_covers_en
-from nodes.node_16_translate_subtitles import node_16_translate_subtitles
+from nodes.node_16a_translate_and_check import node_16a_translate_and_check
+from nodes.node_checkpoint3_layout_review import node_checkpoint3_layout_review
 from nodes.node_17_inject_english_tts_stub import node_17_inject_english_tts_stub
 from nodes.node_fork_english_branch import fork_draft_for_english_branch
 from nodes.node_join_before_delivery import join_before_delivery
@@ -71,6 +86,20 @@ def _route_after_import(state: WorkflowState) -> str:
     if state.get("openstoryline_ready") and state.get("shot_plan"):
         return "generate_draft"
     return "__end__"
+
+
+# ---------------------------------------------------------------------------
+# Week 5 条件边:步骤 16a 之后是否触发关卡③
+# ---------------------------------------------------------------------------
+def route_after_translate(state: WorkflowState) -> str:
+    """node_16a_translate_and_check 之后的条件路由。
+
+    - ``layout_issues_detected`` 为真 → 关卡③(``node_checkpoint3_layout_review``)
+    - 否则 → ``node_17_inject_english_tts_stub``
+    """
+    if state.get("layout_issues_detected"):
+        return "node_checkpoint3_layout_review"
+    return "node_17_inject_english_tts_stub"
 
 
 # ---------------------------------------------------------------------------
@@ -95,10 +124,57 @@ def bridge_snapshot2(state: WorkflowState) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Week 5:Postgres checkpointer asynccontextmanager
+# ---------------------------------------------------------------------------
+import contextlib
+
+
+@contextlib.asynccontextmanager
+async def get_checkpointer():
+    """Week 5 计划 §4.6:Postgres checkpointer 的异步 context manager。
+
+    用法(生产 main 入口):
+        async with get_checkpointer() as saver:
+            graph = build_graph(checkpointer=saver)
+            await graph.ainvoke(state, config)
+
+    关键步骤:
+    1. ``AsyncPostgresSaver.from_conn_string(POSTGRES_URI)`` — 内部起连接池
+    2. ``await saver.setup()`` — 首次使用建表(checkpoints / checkpoint_blobs /
+       checkpoint_writes),幂等
+    3. yield saver 供 build_graph 使用
+    4. context manager 退出时 saver 自行清理
+
+    Raises:
+        RuntimeError: 未安装 ``langgraph-checkpoint-postgres``。
+        ValueError: ``POSTGRES_URI`` 未配置或格式错误。
+    """
+    try:
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+    except ImportError as e:
+        raise RuntimeError(
+            "Postgres checkpointer 需要 langgraph-checkpoint-postgres 包,"
+            "请先 pip install langgraph-checkpoint-postgres psycopg[binary,pool]"
+        ) from e
+
+    uri = os.environ.get("POSTGRES_URI", POSTGRES_URI)
+    if not uri:
+        raise ValueError("POSTGRES_URI 环境变量未设置")
+
+    # AsyncPostgresSaver.from_conn_string 返回一个 AsyncContextManager(可作 async with)
+    # 但我们要让外层直接 yield saver,需要在内部 __aenter__ 拿到实例
+    saver_cm = AsyncPostgresSaver.from_conn_string(uri)
+    async with saver_cm as saver:
+        # 首次使用建表(幂等);Week 5 计划 §3.3 "破坏性变更应急" 文档明示
+        await saver.setup()
+        yield saver
+
+
+# ---------------------------------------------------------------------------
 # 图构建
 # ---------------------------------------------------------------------------
 def build_graph(checkpointer=None, *, thread_id: str = "default", start_heartbeat_thread: bool = True):
-    """装配 13 节点 + 1 升级节点 + 1 桥接节点的完整图。
+    """装配 17 节点 + 1 升级节点 + 1 桥接节点的完整图。
 
     Args:
         checkpointer: 已构造的 checkpointer,None 时按 config 选 SqliteSaver/InMemorySaver。
@@ -164,11 +240,12 @@ def _build_state_graph():
     g.add_node("node_12_human_add_bgm", human_add_bgm)
     g.add_node("node_13_adjust_volume", adjust_volume)
 
-    # ---- Week 4 新增节点(6 个)----
+    # ---- Week 4 节点 + Week 5 拆分(7 个)----
     g.add_node("fork_draft_for_english_branch", fork_draft_for_english_branch)
     g.add_node("node_14_make_covers", node_14_make_covers)
     g.add_node("node_15_localize_covers_en", node_15_localize_covers_en)
-    g.add_node("node_16_translate_subtitles", node_16_translate_subtitles)
+    g.add_node("node_16a_translate_and_check", node_16a_translate_and_check)
+    g.add_node("node_checkpoint3_layout_review", node_checkpoint3_layout_review)
     g.add_node("node_17_inject_english_tts_stub", node_17_inject_english_tts_stub)
     g.add_node("join_before_delivery", join_before_delivery)
 
@@ -211,13 +288,29 @@ def _build_state_graph():
     g.add_edge("node_14_make_covers", "node_15_localize_covers_en")
     g.add_edge("node_15_localize_covers_en", "join_before_delivery")
 
-    # 英文分支:bridge_snapshot2 → fork → 16(关卡③ interrupt)→ 17 → join
+    # Week 5 英文分支:bridge_snapshot2 → fork → 16a → [checkpoint3 ⏸ | 17] → join
     g.add_edge("bridge_snapshot2", "fork_draft_for_english_branch")
-    g.add_edge("fork_draft_for_english_branch", "node_16_translate_subtitles")
-    g.add_edge("node_16_translate_subtitles", "node_17_inject_english_tts_stub")
+    g.add_edge("fork_draft_for_english_branch", "node_16a_translate_and_check")
+    g.add_conditional_edges(
+        "node_16a_translate_and_check",
+        route_after_translate,
+        {
+            "node_checkpoint3_layout_review": "node_checkpoint3_layout_review",
+            "node_17_inject_english_tts_stub": "node_17_inject_english_tts_stub",
+        },
+    )
+    g.add_edge("node_checkpoint3_layout_review", "node_17_inject_english_tts_stub")
     g.add_edge("node_17_inject_english_tts_stub", "join_before_delivery")
 
     # join → END(LangGraph 自动等两分支都到达)
     g.add_edge("join_before_delivery", END)
 
     return g
+
+
+# ---------------------------------------------------------------------------
+# Week 5 辅助:生成/读取 heartbeat_id(节点需要时通过 state.get 读)
+# ---------------------------------------------------------------------------
+def new_heartbeat_id() -> str:
+    """生成一个新的 heartbeat_id(Week 5 计划 §4.1)。"""
+    return uuid.uuid4().hex

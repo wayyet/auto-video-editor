@@ -10,6 +10,12 @@
     → 用户在剪映客户端手动调整 → Command(resume=True)
     → 节点 6 继续执行(发通知 + 写 status_log) → 节点 7
 
+Week 5 改动(对齐第 5 周计划 §1.1):
+- interrupt payload ``checkpoint`` 字段统一为 ``"①"``,便于
+  ``resume_all_pending`` 自动匹配多个 interrupt。旧值
+  ``"checkpoint1_reorder"`` 保留在 ``legacy_id`` 字段,保证向后兼容。
+- 通知文案带 ``"checkpoint1"`` 标记,与 status_log ``checkpoint1_resumed`` 对齐。
+
 测试策略:
 - ``_build_interrupt_payload`` / ``_post_resume`` 抽成纯函数,单测直接覆盖
 - ``human_reorder`` 仅做编排,集成测试通过完整 graph + SqliteSaver 覆盖
@@ -33,9 +39,14 @@ def _send_notification(state: WorkflowState, checkpoint: str) -> None:
 
 
 def _build_interrupt_payload(state: WorkflowState) -> dict:
-    """构造 interrupt payload — 纯函数,便于单测。"""
+    """构造 interrupt payload — 纯函数,便于单测。
+
+    Week 5:``checkpoint`` 字段统一为 ``"①"``;保留 ``legacy_id`` 兼容旧版。
+    """
     return {
-        "checkpoint": "checkpoint1_reorder",
+        "checkpoint": "①",
+        "legacy_id": "checkpoint1_reorder",
+        "step": 6,
         "draft_path": state.get("draft_path"),
         "instructions": "请在剪映客户端手动调整分镜顺序,完成后确认继续",
     }

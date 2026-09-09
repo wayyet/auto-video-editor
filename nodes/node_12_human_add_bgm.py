@@ -3,6 +3,11 @@
 结构与 ``node_06_human_reorder`` 同构,仅替换通知文案与操作范围。
 用户被提示在剪映客户端手动添加 BGM,完成后通过 ``Command(resume=True)`` 唤醒。
 
+Week 5 改动(对齐第 5 周计划 §1.1):
+- interrupt payload ``checkpoint`` 字段统一为 ``"②"``,便于
+  ``resume_all_pending`` 自动匹配多个 interrupt。旧值
+  ``"checkpoint2_add_bgm"`` 保留在 ``legacy_id`` 字段,保证向后兼容。
+
 测试策略:与 node_06 一致 — 纯函数单测覆盖 payload + post_resume,
 真实 interrupt() 行为由集成测试覆盖。
 """
@@ -20,8 +25,14 @@ def _send_notification(state: WorkflowState, checkpoint: str) -> None:
 
 
 def _build_interrupt_payload(state: WorkflowState) -> dict:
+    """构造 interrupt payload — 纯函数,便于单测。
+
+    Week 5:``checkpoint`` 字段统一为 ``"②"``;保留 ``legacy_id`` 兼容旧版。
+    """
     return {
-        "checkpoint": "checkpoint2_add_bgm",
+        "checkpoint": "②",
+        "legacy_id": "checkpoint2_add_bgm",
+        "step": 12,
         "draft_path": state.get("draft_path"),
         "instructions": "请从剪映 VIP 音乐库选取 BGM 并拖入音轨,完成后确认继续",
     }

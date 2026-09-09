@@ -8,6 +8,11 @@ Week 4 改动:
 - ``status_log`` / ``error_log`` 加自定义 reducer(append-only + 去重),
   解决 fan-in 时"两分支同时写同一字段"的并发冲突,同时兼容既有节点
   ``{**state, "status_log": [...full_list]}`` 写法。
+
+Week 5 改动:
+- 新增 ``en_audio_path`` / ``final_video_path`` / ``heartbeat_id`` 字段
+  (Week 5 计划 §1.1)。节点必须 ``.get(key, default)`` 读取,防止旧
+  checkpoint resume 时 KeyError。
 """
 
 from __future__ import annotations
@@ -147,3 +152,17 @@ class WorkflowState(TypedDict, total=False):
 
     # 汇合节点 QA 闸门结果(join_before_delivery 写)
     join_qa_issues: NotRequired[list[str]]
+
+    # ===== Week 5 新增字段(对齐第 5 周计划 §1.1 / §4.1)=====
+    # 节点 17 写,验收脚本读。Week 5 仍是 stub,产出 en_dub.wav 占位空 wav。
+    en_audio_path: NotRequired[Optional[str]]
+    # 占位字段 — Week 5 暂不实写,阶段五 acceptance_check.py 读。
+    final_video_path: NotRequired[Optional[str]]
+    # build_graph() 启动时生成(uuid),各节点需要时读(Week 5 计划 §4.1)。
+    heartbeat_id: NotRequired[Optional[str]]
+
+    # ===== Week 5 新增:Layout 检测结果(node_16a 写)=====
+    # layout 异常列表(每条 {"index","text","width_px","max_width_px","reason"})
+    layout_issues: NotRequired[list[dict]]
+    # layout_issues 非空 → 关卡③ 触发
+    layout_issues_detected: NotRequired[bool]

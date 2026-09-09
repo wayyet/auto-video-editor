@@ -221,7 +221,8 @@ def test_node_16_no_asr_segments_skips(tmp_path: Path) -> None:
     """asr_segments_zh 缺失 → 跳过,error_log 有说明。"""
     state = {"asr_segments_zh": [], "draft_dir_en_branch": str(tmp_path), "status_log": [], "error_log": []}
     out = node_16_translate_subtitles(state)
-    assert "node_16_translate_skipped" in out["status_log"]
+    # Week 5:status_log 由 node_16a 透传,所以是 node_16a_translate_skipped
+    assert "node_16a_translate_skipped" in out["status_log"]
     assert any("asr_segments_zh" in e for e in out["error_log"])
 
 
@@ -234,7 +235,7 @@ def test_node_16_no_draft_dir_skips() -> None:
         "error_log": [],
     }
     out = node_16_translate_subtitles(state)
-    assert "node_16_translate_skipped" in out["status_log"]
+    assert "node_16a_translate_skipped" in out["status_log"]
     assert any("draft_dir_en_branch" in e for e in out["error_log"])
 
 
@@ -287,8 +288,9 @@ def test_node_16_interrupt_in_full_flow(_seed_en_branch: Path) -> None:
     """
     issues_to_inject = [{"index": 0, "reason": "text_too_wide"}]
 
+    # Week 5:node_16a 内部调 validate_layout,patch 目标要改到 16a 的命名空间
     with patch(
-        "nodes.node_16_translate_subtitles.validate_layout",
+        "nodes.node_16a_translate_and_check.validate_layout",
         return_value=issues_to_inject,
     ):
         captured: list[Any] = []

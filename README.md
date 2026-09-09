@@ -156,6 +156,103 @@ g.invoke(Command(resume=True), config={"configurable": {"thread_id": "video-001"
 # 默认每 2 分钟检查一次,心跳超时 120s 即写本地日志告警
 ```
 
+### 4.4 Week 5 持久化 checkpointer — Postgres 后端
+
+`config.make_checkpointer` Week 5 起支持 `backend="postgres"`(生产路径),由
+`graph.get_checkpointer()` asynccontextmanager 包装管理 ``setup()`` 与连接池:
+
+```python
+from graph import build_graph, get_checkpointer
+
+async def main():
+    async with get_checkpointer() as saver:
+        g = build_graph(checkpointer=saver, thread_id="video-001")
+        await g.ainvoke(initial_state, config={"configurable": {"thread_id": "video-001"}})
+        # ... Command(resume=...) / 挂起 / 跨进程恢复
+```
+
+环境变量:
+
+| 变量 | 说明 | 默认 |
+|---|---|---|
+| `WORKFLOW_ENV` | `production` 强制用 Postgres;其它值走 `CHECKPOINTER_BACKEND` | `development` |
+| `POSTGRES_URI` | `postgresql://user:pass@host:port/dbname` | `postgresql://postgres:postgres@localhost:5432/video_workflow` |
+
+依赖(`pyproject.toml` / `requirements.txt`):`langgraph-checkpoint-postgres>=3.1` + `psycopg[binary,pool]>=3.2`。本机未启 Postgres 时,`tests/integration/test_postgres_checkpointer.py` 自动 skip。
+
+### 4.5 Week 5 `resume_all_pending` — 统一 resume 入口
+
+支持单 / 多 interrupt 并发 resume,按 ``checkpoint`` 标识(`"①"` / `"②"` / `"③"`)自动匹配:
+
+```python
+from resume_utils import resume_all_pending
+
+# 单 interrupt 时按 id 模式传 dict;≥2 个挂起时 LangGraph 要求 dict 模式
+result = await resume_all_pending(
+    g, config,
+    {"①": "ok_a", "②": "ok_b"},
+)
+```
+
+- 0 个挂起 → `ValueError("无挂起可恢复")`
+- 单 interrupt + payload 缺 `checkpoint` 字段 → 走 `fallback_key="default"` 单值兼容
+- ≥2 个挂起 → 必须按 id 传 dict(否则 RuntimeError)
+
+### 4.6 Week 5 关卡③ 拓扑变化 — 节点 16 拆分
+
+Week 5 把 `node_16_translate_subtitles`(翻译 + interrupt + 写 SRT 三合一)拆成两个独立节点:
+
+```
+bridge_snapshot2 → fork → node_16a_translate_and_check
+                                  ├─→ node_checkpoint3_layout_review ⏸ interrupt("③")(条件触发)
+                                  └─→ node_17_inject_english_tts → join_before_delivery → END
+```
+
+- **`node_16a_translate_and_check`**:翻译 + 写 marker + 写 `state["subtitle_segments_en"]` + 写 `layout_issues` / `layout_issues_detected` + **不调 interrupt**(Week 5 计划 §2.1 "关键发现①")。完全幂等,resume 重放由 `_marker_exists` 守住。
+- **`node_checkpoint3_layout_review`**:只读 `layout_issues`,做 `interrupt({"checkpoint": "③", ...})`,resume 后重写 SRT(Week 5 修订:不写 `subtitle_segments_en`,避免与 16a 在同一 superstep 触发 LastValue 并发写)。
+- **`route_after_translate`**:根据 `state["layout_issues_detected"]` 二选一走向 c3 或 17。
+- **`node_17_inject_english_tts_stub`**:Week 5 升级为在 `draft_dir_en_branch` 下写 `en_dub.wav` 空 wav 占位(>5KB),产出 `en_audio_path` 字段,让阶段五 `acceptance_check.py` "英文配音音轨非空" 断言通过。真实 FireRedTTS2 留 Week 6+。
+
+### 4.7 关卡 payload 字段统一 — "①" / "②" / "③"
+
+Week 5 把三个关卡的 interrupt payload `checkpoint` 字段统一为 Unicode 圆圈数字:
+
+| 关卡 | 节点 | `checkpoint` 字段值 | `legacy_id`(兼容旧调用) |
+|---|---|---|---|
+| ① | `node_06_human_reorder` | `"①"` | `"checkpoint1_reorder"` |
+| ② | `node_12_human_add_bgm` | `"②"` | `"checkpoint2_add_bgm"` |
+| ③ | `node_checkpoint3_layout_review` | `"③"` | `"checkpoint3_layout_review"` |
+
+`resume_all_pending` 据此自动匹配多个挂起。Week 3 单测 `test_interrupt_resume.py` 已更新以匹配新字段。
+
+### 4.8 Week 5 新 State 字段(全部 NotRequired)
+
+```python
+# state.py Week 5 新增 — 所有读它们的节点用 .get(key, default) 兜底
+en_audio_path:        NotRequired[Optional[str]]  # 节点 17 写,验收脚本读
+final_video_path:     NotRequired[Optional[str]]  # 占位,Week 5 暂不实写
+heartbeat_id:         NotRequired[Optional[str]]  # build_graph() 启动时生成
+layout_issues:        NotRequired[list[dict]]     # node_16a 写
+layout_issues_detected: NotRequired[bool]         # node_16a 写
+```
+
+**团队约定**(Week 5 计划 §5.4):任何给 State 加字段的 PR,必须新增一条"旧 checkpoint 能否恢复"测试(`tests/integration/test_state_field_compatability.py` 模板)。任何 `state["key"]` 直接索引(无 `.get` 兜底)在节点函数中:code review 直接打回(由 `test_nodes_use_state_get_not_subscript` 静态扫描守护)。
+
+### 4.9 `monitoring/runs_table.py` — workflow_runs 台账
+
+Week 5 新增轻量 SQL 工具,在 Postgres 同一库里建独立表跟踪挂起线程(对齐"破坏性变更应急"流程):
+
+```python
+from monitoring import runs_table
+
+runs_table.init_schema()  # 幂等建表
+runs_table.upsert_run(thread_id, video_name, "①", "suspended")  # 关卡前
+runs_table.mark_completed(thread_id)                              # 流程结束后
+runs_table.list_suspended()  # 运维查询入口
+```
+
+Postgres 不可达时所有调用降级为 warning no-op,不阻塞主流程。
+
 ## 5. Week 1 交付物前置依赖(⚠️ 重要)
 
 - [ ] **剪映 v5.9.0 已安装**

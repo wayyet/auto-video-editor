@@ -129,15 +129,19 @@ def test_week4_checkpoint3_normal_path(tmp_path: Path, monkeypatch: pytest.Monke
     assert not _is_interrupted(g, config), "流程应已结束"
 
     # Week 4 关键产物
-    assert final.get("checkpoint3_triggered") is False
+    # Week 5:正常路径下 c3 不触发,checkpoint3_triggered 字段未设置(None 或 False 都 OK)
+    assert not final.get("checkpoint3_triggered")
     assert final.get("subtitle_srt_path")
     assert Path(final["subtitle_srt_path"]).exists()
     # covers 3 张都有 zh_path + en_path
     covers = final.get("covers") or []
     assert len(covers) == 3
     assert all(c.get("en_path") for c in covers)
-    # en_dub_audio_path 应为 None(Week 4 stub)
-    assert final.get("en_dub_audio_path") is None
+    # Week 5:节点 17 写空 wav 占位,en_audio_path 应指向存在的文件
+    assert final.get("en_audio_path") is not None
+    assert Path(final["en_audio_path"]).exists()
+    # 兼容旧 en_dub_audio_path
+    assert final.get("en_dub_audio_path") == final["en_audio_path"]
 
 
 # ---------------------------------------------------------------------------
@@ -177,8 +181,8 @@ def test_week4_zh_branch_no_rerun_after_en_resume(
     # 中文节点各只跑 1 次(无重跑)
     assert log.count("node_14_make_covers_done") == 1
     assert log.count("node_15_localize_covers_en_done") == 1
-    # 英文分支节点也各只跑 1 次
-    assert log.count("node_16_translate_subtitles_done") == 1
+    # 英文分支节点也各只跑 1 次(Week 5:16a 拆分后 status_log 改为 node_16a_translate_done)
+    assert log.count("node_16a_translate_done") == 1
     assert log.count("node_17_tts_stub_pass") == 1
     # join 在 END 之前
     assert log.count("join_before_delivery_done") == 1
@@ -273,9 +277,9 @@ def test_week4_branch_parallel_dispatch(
     # 中文分支节点都在
     assert "node_14_make_covers_done" in log
     assert "node_15_localize_covers_en_done" in log
-    # 英文分支节点都在
+    # 英文分支节点都在(Week 5:16a 拆分后)
     assert any(s.startswith("node_fork_english_branch_done:") for s in log)
-    assert "node_16_translate_subtitles_done" in log
+    assert "node_16a_translate_done" in log
     assert "node_17_tts_stub_pass" in log
     # join 是汇合点,一定在最后
     assert "join_before_delivery_done" in log

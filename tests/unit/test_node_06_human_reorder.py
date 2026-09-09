@@ -29,7 +29,10 @@ def _state(**overrides: Any) -> dict:
 # ---------------------------------------------------------------------------
 def test_interrupt_payload_structure() -> None:
     payload = _build_interrupt_payload(_state())
-    assert payload["checkpoint"] == "checkpoint1_reorder"
+    # Week 5:统一为 "①",旧值保留在 legacy_id
+    assert payload["checkpoint"] == "①"
+    assert payload["legacy_id"] == "checkpoint1_reorder"
+    assert payload["step"] == 6
     assert payload["draft_path"] == "C:/tmp/draft.json"
     assert "instructions" in payload
     assert "手动调整" in payload["instructions"]
