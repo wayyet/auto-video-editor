@@ -85,6 +85,59 @@ python -c "from graph import build_graph; g = build_graph(); print(type(g).__nam
 # 应输出:CompiledStateGraph
 ```
 
+### 2.4 本地启动 EDB Postgres 16.11（Docker 版，推荐）
+
+Week 5 切到 `AsyncPostgresSaver` 时，使用 Docker Desktop 启动本地 EDB Postgres。默认配置为：
+
+- 镜像：`quay.io/enterprisedb/postgresql:16.11-3.5-postgis-multilang`
+- 容器：`edb-postgres16`
+- 数据库：`langgraph`
+- 端口：`localhost:5432`
+- 命名卷：`edb_pgdata`
+
+在项目根目录执行：
+
+```powershell
+# 启动容器并等待 healthcheck
+.\scripts\start_postgres.ps1
+
+# 停止容器；命名卷与数据保留
+.\scripts\stop_postgres.ps1
+
+# 停止并删除容器；命名卷与数据仍保留
+.\scripts\stop_postgres.ps1 -Remove
+
+# 首次或需要重置表时执行
+$env:POSTGRES_URI = "postgresql://postgres:devpass@localhost:5432/langgraph"
+.\.venv\Scripts\python.exe scripts\setup_postgres_schema.py
+
+# 验证版本、数据库和 checkpoint 表
+.\.venv\Scripts\python.exe scripts\verify_postgres.py
+
+# 跑 Postgres 路径集成测试
+$env:WORKFLOW_ENV = "production"
+.\.venv\Scripts\python.exe -m pytest tests\integration\test_postgres_checkpointer.py -v
+```
+
+如需永久设置当前 Windows 用户的 `POSTGRES_URI`，可执行：
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+  "POSTGRES_URI",
+  "postgresql://postgres:devpass@localhost:5432/langgraph",
+  "User"
+)
+```
+
+默认 `CHECKPOINTER_BACKEND` 仍是 SQLite；只有 `WORKFLOW_ENV=production` 或显式设置 `CHECKPOINTER_BACKEND=postgres` 时才使用该容器。完全删除数据前需确认影响：checkpoint 会随 `edb_pgdata` 卷一起删除。
+
+拉镜像前若之前遇过 `127.0.0.1:3067 connect refused` 之类的代理报错，可先跑代理自检脚本（containerd 的代理层偶尔会被指向失效端口）：
+
+```powershell
+.\scripts\check_docker_proxy.ps1                 # 只检查
+.\scripts\check_docker_proxy.ps1 -RestartDocker  # 检查失败自动 docker desktop restart
+```
+
 ## 3. 运行测试
 
 ```powershell

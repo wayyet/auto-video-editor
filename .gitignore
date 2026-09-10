@@ -23,3 +23,6 @@ drafts/
 
 # Git worktrees (本地并行开发目录，不入库)
 .worktrees/
+
+# 本机代理工具目录（gost 二进制 + 私网代理日志，不入库）
+.docker-proxy/
