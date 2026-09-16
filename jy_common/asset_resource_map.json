@@ -1,0 +1,35 @@
+{
+  "_comment": "Week 3 计划文档 §11/P0-2 占位资源 ID 标注升级 — 真实 VIP resource_id 回填位。",
+  "_reverse_engineering_pending": true,
+  "_week3_status": "placeholder",
+  "_week4_resource_id_field": {
+    "transitions": "resource_id",
+    "video_effects": "resource_id",
+    "sticker_by_keyword": "<keyword>: <resource_id>"
+  },
+  "_reverse_engineering_steps": [
+    "1. 备份 drafts/default/draft_content.json",
+    "2. 剪映 v5.9.0 客户端打开,手工替换转场/特效/贴纸,导出新草稿",
+    "3. diff 新旧 draft_content.json,把真实 resource_id 回填到 templates/*.json",
+    "4. 把 _reverse_engineering_pending 设为 false"
+  ],
+  "transitions": {
+    "淡入淡出": {
+      "PLACEHOLDER_TRANSITION_FADE_001": null
+    },
+    "滑动切换": {
+      "PLACEHOLDER_TRANSITION_SLIDE_001": null
+    }
+  },
+  "video_effects": {
+    "轻微放大": {
+      "PLACEHOLDER_VFX_ZOOM_001": null
+    }
+  },
+  "sticker_by_keyword": {
+    "赞": "PLACEHOLDER_STICKER_THUMBS_UP",
+    "加油": "PLACEHOLDER_STICKER_FIGHT",
+    "惊喜": "PLACEHOLDER_STICKER_SURPRISE",
+    "默认": "PLACEHOLDER_STICKER_DEFAULT"
+  }
+}

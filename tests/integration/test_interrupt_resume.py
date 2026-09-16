@@ -139,8 +139,13 @@ def test_checkpoint1_interrupt_and_resume_basic(seeded) -> None:
     # checkpoint1/2 各 resumed 一次
     assert final["status_log"].count("checkpoint1_resumed") == 1
     assert final["status_log"].count("checkpoint2_resumed") == 1
-    # 节点 13 占位通过
-    assert final["status_log"].count("node_13_adjust_volume_placeholder_pass") == 1
+    # 节点 13 通过(Week 3 补全后真实实现:有 audio track → node_13_adjust_volume_done;
+    # 无 audio track → node_13_adjust_volume_no_audio_track 降级路径)
+    node_13_tags = [
+        t for t in final["status_log"]
+        if t in ("node_13_adjust_volume_done", "node_13_adjust_volume_no_audio_track")
+    ]
+    assert len(node_13_tags) == 1, f"节点 13 应执行 1 次,实际 {len(node_13_tags)} 次"
 
 
 # ---------------------------------------------------------------------------
@@ -168,8 +173,12 @@ def test_multi_day_resume_via_sqlite_persistence(seeded, tmp_path: Path) -> None
 
     # 节点 1-5 不应被重跑
     assert final["status_log"].count("node_05_generate_draft_done") == 1
-    # 完整路径跑通
-    assert final["status_log"].count("node_13_adjust_volume_placeholder_pass") == 1
+    # 完整路径跑通(Week 3 补全后节点 13 是真实实现,无 audio track 时走降级)
+    node_13_tags = [
+        t for t in final["status_log"]
+        if t in ("node_13_adjust_volume_done", "node_13_adjust_volume_no_audio_track")
+    ]
+    assert len(node_13_tags) == 1, f"节点 13 应执行 1 次,实际 {len(node_13_tags)} 次"
 
     # 关闭连接 + 清理 sqlite 文件(tmp_path 隔离,Windows 锁也能 unlink)
     try:
@@ -248,10 +257,18 @@ def test_thread_id_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, se
 
     # A 不应有 B 的 thread_id 痕迹
     assert all("thread_b" not in str(item) for item in final_a["status_log"])
-    # A 应跑完整路径
-    assert final_a["status_log"].count("node_13_adjust_volume_placeholder_pass") == 1
+    # A 应跑完整路径(Week 3 补全后节点 13 是真实实现)
+    node_13_a = [
+        t for t in final_a["status_log"]
+        if t in ("node_13_adjust_volume_done", "node_13_adjust_volume_no_audio_track")
+    ]
+    assert len(node_13_a) == 1, f"A 节点 13 应执行 1 次,实际 {len(node_13_a)} 次"
     # B 同样
-    assert final_b["status_log"].count("node_13_adjust_volume_placeholder_pass") == 1
+    node_13_b = [
+        t for t in final_b["status_log"]
+        if t in ("node_13_adjust_volume_done", "node_13_adjust_volume_no_audio_track")
+    ]
+    assert len(node_13_b) == 1, f"B 节点 13 应执行 1 次,实际 {len(node_13_b)} 次"
 
     # 草稿文件应保持分离
     assert draft_a.exists()

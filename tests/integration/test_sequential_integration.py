@@ -152,8 +152,14 @@ def test_sequential_full_run_no_reruns(seeded_state, tmp_path: Path) -> None:
         "node_10_inject_text_fx_done",
         "node_11_inject_sticker_done",
         "checkpoint2_resumed",
-        "node_13_adjust_volume_placeholder_pass",
     ]
+    # Week 3 补全后节点 13 是真实实现;有 audio track 时 tag = node_13_adjust_volume_done,
+    # 无 audio track 时 tag = node_13_adjust_volume_no_audio_track。
+    node_13_count = (
+        log.count("node_13_adjust_volume_done")
+        + log.count("node_13_adjust_volume_no_audio_track")
+    )
+    assert node_13_count == 1, f"节点 13 应执行 1 次,实际 {node_13_count} 次: {log}"
     for tag in expected:
         assert log.count(tag) == 1, f"{tag} 出现 {log.count(tag)} 次(期望 1): {log}"
 

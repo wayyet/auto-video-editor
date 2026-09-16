@@ -1,4 +1,15 @@
 {
+  "_reverse_engineering_pending": true,
+  "_week3_status": "placeholder",
+  "_week4_resource_id_field": {
+    "entrance_animation": "<animation_name_or_enum_value>"
+  },
+  "_reverse_engineering_steps": [
+    "1. 备份 drafts/default/draft_content.json",
+    "2. 剪映 v5.9.0 客户端打开,手工设置花字入场动画,导出新草稿",
+    "3. diff 新旧 draft_content.json,把 entrance_animation 的合法枚举值回填到 default_style.entrance_animation",
+    "4. 把 _reverse_engineering_pending 设为 false"
+  ],
   "_comment": "花字样式模板 — 步骤10 使用。Week 3 占位(entrance_animation 留 None);Week 4 从 AVAILABLE_ASSETS.md 选定具体枚举值。",
   "default_style": {
     "size": 5.0,
@@ -10,6 +21,5 @@
     "outline": true,
     "shadow": true,
     "entrance_animation": null
-  },
-  "_week3_status": "placeholder"
+  }
 }

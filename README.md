@@ -164,6 +164,34 @@ python -m pytest tests/integration/test_interrupt_resume.py::test_checkpoint1_in
 
 ## 4. Week 3 新增功能
 
+### 4.0 Week 3 末补全记录(2026-09-16)
+
+按验证报告 `auto-video-editor_第三周实施计划_代码验证报告.md` §11 落地 6 项缺口:
+
+| 优先级 | 项 | 实现位置 | 状态 |
+|---|---|---|---|
+| P0-1 | 节点 13 真实实现(volume/fade/audio_fades) | `nodes/node_13_adjust_volume.py` | ✅ 逻辑完整,字段名待剪映客户端逆向 |
+| P0-2 | 占位 resource_id 标注升级 | `templates/*.json` + `jy_common/asset_resource_map.json` | ✅ 标注完整,真实 ID 待用户逆向 |
+| P1-1 | 节点 11 按 timerange 绑 segment | `nodes/node_11_inject_sticker.py` | ✅ |
+| P1-2 | FireRedASR2S client | `jy_common/asr_client.py` | ✅ client 骨架完整,服务启端由用户做 |
+| P1-3 | 两级超时接入(默认关闭) | `monitoring/timeout_watchdog.py` + `config.ENABLE_TWO_LEVEL_TIMEOUT` | ✅ 接入完整,默认 false 避免破坏既有 24 条集成测试 |
+| P2 | 原子写入入口统一 | `jy_common/draft_writer.py` | ✅ 薄包装 re-export |
+
+**仍需用户行动项**:
+
+1. **剪映 v5.9.0 客户端字段逆向(P0-1/P0-2)**:在剪映客户端打开 `drafts/default/draft_content.json`,
+   手动加淡入/淡出/音量 + 替换云端资源,保存后 `diff` 出真实字段名与真实 `resource_id`,
+   回填到:
+   - `nodes/node_13_adjust_volume.py` 的 `_PLACEHOLDER_*_KEY` 常量
+   - `templates/*.json` 的 `_reverse_engineering_pending` 改为 `false` 并填入真实 ID
+
+2. **真实 FireRedASR2S 服务启端(P1-2)**:启 `E:\Documents\kuaishou\FireRed-OpenStoryline` ASR 服务,
+   设置:
+   ```powershell
+   $env:ASR_BACKEND = "firered"
+   $env:FIRERED_ASR_ENDPOINT = "http://127.0.0.1:8009/transcribe"
+   ```
+
 ### 4.1 持久化 checkpointer
 
 `config.make_checkpointer(backend, thread_id)` 支持两种后端:

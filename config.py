@@ -135,10 +135,22 @@ def resolve_draft_dir(state: dict | None) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Week 3 — LangGraph 两级超时(预留钩子,Week 3 不启用,Week 4 接入前核实 API)
+# Week 3 — LangGraph 两级超时
 # ---------------------------------------------------------------------------
+# Week 3 补全(§11/P1-3):通过 ``monitoring.timeout_watchdog`` 接入 watchdog 线程
+# 监控单节点无响应;通过 ``graph.invoke_with_total_timeout`` 接入总时长超时。
+# 默认通过 ``ENABLE_TWO_LEVEL_TIMEOUT=false`` **不启用**,避免破坏现有
+# 集成测试;用户按需设环境变量 ``ENABLE_TWO_LEVEL_TIMEOUT=true`` 开启。
 TOTAL_EXECUTION_TIMEOUT_S: int = 600       # 图整体超时(秒),覆盖最长理论耗时
 NODE_INACTIVITY_TIMEOUT_S: int = 120      # 单节点无响应超时(秒)
+
+
+import os as _os_for_timeout  # 局部别名,避免污染模块顶部 import 顺序
+
+ENABLE_TWO_LEVEL_TIMEOUT: bool = (
+    _os_for_timeout.environ.get("ENABLE_TWO_LEVEL_TIMEOUT", "false").lower().strip()
+    == "true"
+)
 
 
 # ---------------------------------------------------------------------------
