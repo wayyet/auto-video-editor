@@ -40,8 +40,9 @@ Week 5 关键改动:
   旧值保留在 ``legacy_id`` 字段。
 - ``node_17_inject_english_tts_stub`` 写空 wav 占位 + ``en_audio_path`` 字段。
 
-LangGraph 自动 fan-in:node_15 与 node_17 都有出边指向 join_before_delivery,
-等两分支都到达才触发 join。
+汇合:node_15 与 node_17 通过 ``add_edge([...], "join_before_delivery")`` 单次调用汇入,
+LangGraph fan-in 自动等齐两条分支后才触发 join(避免多次独立 ``add_edge`` 造成的
+重复触发,见验证报告 §5.1)。
 
 关卡①/②/③ 使用 ``langgraph.types.interrupt``,需要 checkpointer(Week 3 用
 SqliteSaver 做持久化,覆盖多日挂起恢复;Week 5 切到 PostgresSaver)。
@@ -286,7 +287,6 @@ def _build_state_graph():
     # 中文主线尾段:13 → 14 → 15 → join
     g.add_edge("node_13_adjust_volume", "node_14_make_covers")
     g.add_edge("node_14_make_covers", "node_15_localize_covers_en")
-    g.add_edge("node_15_localize_covers_en", "join_before_delivery")
 
     # Week 5 英文分支:bridge_snapshot2 → fork → 16a → [checkpoint3 ⏸ | 17] → join
     g.add_edge("bridge_snapshot2", "fork_draft_for_english_branch")
@@ -300,9 +300,15 @@ def _build_state_graph():
         },
     )
     g.add_edge("node_checkpoint3_layout_review", "node_17_inject_english_tts_stub")
-    g.add_edge("node_17_inject_english_tts_stub", "join_before_delivery")
 
-    # join → END(LangGraph 自动等两分支都到达)
+    # 汇合:中文主线(node_15)与英文分支(node_17)都到达才触发 join。
+    # 用列表语法,fan-in 自动等齐,join 只跑一次(对照验证报告 §5.1)。
+    g.add_edge(
+        ["node_15_localize_covers_en", "node_17_inject_english_tts_stub"],
+        "join_before_delivery",
+    )
+
+    # join → END
     g.add_edge("join_before_delivery", END)
 
     return g
