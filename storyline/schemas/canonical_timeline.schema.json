@@ -1,0 +1,83 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "auto-video-editor://storyline/canonical_timeline.schema.json",
+  "title": "CanonicalTimeline",
+  "description": "auto-video-editor 内部契约:整数毫秒 + file_uri,详见 storyline/contract.py。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "job_id", "created_at_ms", "source_media", "clips"],
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0" },
+    "job_id": { "type": "string", "minLength": 1 },
+    "created_at_ms": { "type": "integer", "minimum": 0 },
+    "source_media": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["media_id", "file_uri", "duration_ms"],
+        "properties": {
+          "media_id": { "type": "string", "minLength": 1 },
+          "file_uri": { "type": "string", "pattern": "^file:///" },
+          "sha256": { "type": ["string", "null"] },
+          "duration_ms": { "type": "integer", "minimum": 0 },
+          "media_type": { "type": "string", "enum": ["video", "image", "audio", "unknown"] },
+          "width": { "type": ["integer", "null"], "minimum": 0 },
+          "height": { "type": ["integer", "null"], "minimum": 0 },
+          "fps": { "type": ["number", "null"], "minimum": 0 }
+        }
+      }
+    },
+    "clips": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "clip_id", "source_media_id", "source_in_ms", "source_out_ms",
+          "timeline_in_ms", "timeline_out_ms"
+        ],
+        "properties": {
+          "clip_id": { "type": "string", "minLength": 1 },
+          "source_media_id": { "type": "string", "minLength": 1 },
+          "source_in_ms": { "type": "integer", "minimum": 0 },
+          "source_out_ms": { "type": "integer", "minimum": 0 },
+          "timeline_in_ms": { "type": "integer", "minimum": 0 },
+          "timeline_out_ms": { "type": "integer", "minimum": 0 },
+          "transcript": { "type": ["string", "null"] },
+          "scene_id": { "type": ["string", "null"] },
+          "semantic_tags": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "content_hash": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "audio": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bgm_ref": { "type": ["string", "null"] },
+        "voiceover": { "type": ["string", "null"] }
+      }
+    },
+    "subtitles": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "zh": { "type": ["string", "null"] },
+        "en": { "type": ["string", "null"] }
+      }
+    },
+    "options": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enable_ai_transition": { "type": "boolean" },
+        "enable_voiceover": { "type": "boolean" },
+        "max_duration_ms": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    }
+  }
+}

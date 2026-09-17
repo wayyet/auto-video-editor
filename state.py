@@ -166,3 +166,22 @@ class WorkflowState(TypedDict, total=False):
     layout_issues: NotRequired[list[dict]]
     # layout_issues 非空 → 关卡③ 触发
     layout_issues_detected: NotRequired[bool]
+
+    # ===== Phase 1 新增:FireRed-OpenStoryline 集成字段(plan §7.2)=====
+    # 全部 NotRequired,旧 checkpoint resume 兼容
+    # FireRed session ID(= job_id + "-storyline",由 Adapter 注入 X-Storyline-Session-Id 头)
+    storyline_session_id: NotRequired[Optional[str]]
+    # MCP 传输方式(开发期 stdio / 生产期 streamable-http)
+    storyline_transport: NotRequired[Literal["stdio", "streamable-http"]]
+    # list_tools() 缓存的 tool name(防上游静默升级;phase 0 inventory 锁定基线)
+    storyline_tools_snapshot: NotRequired[list[str]]
+    # Canonical Timeline(经 Pydantic 校验,直接喂 mapper.canonical_to_draft)
+    storyline_plan: NotRequired[Optional[dict]]
+    # FireRed artifact 索引(只存 id + summary + hash + version,不存完整 JSON)
+    storyline_artifacts: NotRequired[list[dict]]
+    # 错误码(ADR-007 5 类之一)
+    storyline_error_code: NotRequired[Optional[str]]
+    # outputs/{job_id}/ 路径(用于幂等键命中后直接读 draft_content.json)
+    storyline_outputs_root: NotRequired[Optional[str]]
+    # Phase 3 复用 Skill(默认空)
+    reuse_skill_name: NotRequired[Optional[str]]

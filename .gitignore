@@ -26,3 +26,6 @@ drafts/
 
 # 本机代理工具目录（gost 二进制 + 私网代理日志，不入库）
 .docker-proxy/
+
+# 节点运行产物（job-{verify,xyz,unknown}/ 下的 manifest/artifacts/checkpoints/logs，本机调试用）
+outputs/

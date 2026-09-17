@@ -1,0 +1,74 @@
+{
+  "$schema": "http://storyline/canonical/storyline_plan.schema.json",
+  "$id": "auto-video-editor://storyline/storyline_plan.schema.json",
+  "title": "StorylinePlan",
+  "description": "FireRed MCP plan_timeline_pro 返回的 plan 拍平结构(参考 register_tools.py wrapper)。字段允许 extra,上游漂移时 Phase 4 强校验。",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["tool", "artifact_id", "tool_excute_result", "isError"],
+  "properties": {
+    "tool": { "type": "string", "minLength": 1 },
+    "artifact_id": { "type": "string", "minLength": 1 },
+    "summary": { "type": ["string", "null"] },
+    "isError": { "type": "boolean" },
+    "tool_excute_result": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "timeline": {
+          "type": ["object", "null"],
+          "additionalProperties": true,
+          "properties": {
+            "duration_ms": { "type": ["integer", "null"], "minimum": 0 },
+            "groups": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "required": ["group_id"],
+                "properties": {
+                  "group_id": { "type": "string" },
+                  "start_ms": { "type": ["integer", "null"], "minimum": 0 },
+                  "end_ms": { "type": ["integer", "null"], "minimum": 0 },
+                  "media_refs": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "properties": {
+                        "media_id": { "type": "string" },
+                        "source_in_ms": { "type": "integer", "minimum": 0 },
+                        "source_out_ms": { "type": "integer", "minimum": 0 },
+                        "shot_id": { "type": ["string", "null"] }
+                      }
+                    }
+                  },
+                  "voiceover_ref": { "type": ["string", "null"] },
+                  "subtitle_text": { "type": ["string", "null"] }
+                }
+              }
+            },
+            "bgm_ref": { "type": ["string", "null"] },
+            "transitions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "from_group": { "type": "string" },
+                  "to_group": { "type": "string" },
+                  "type": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "media": { "type": ["array", "null"], "items": { "type": "object" } },
+        "clip_captions": { "type": ["array", "null"], "items": { "type": "object" } },
+        "group_scripts": { "type": ["array", "null"], "items": { "type": "object" } },
+        "bgm": { "type": ["object", "null"] },
+        "voiceover": { "type": ["array", "null"], "items": { "type": "object" } }
+      }
+    }
+  }
+}
