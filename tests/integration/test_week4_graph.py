@@ -286,6 +286,59 @@ def test_week4_branch_parallel_dispatch(
 
 
 # ---------------------------------------------------------------------------
+# 场景 6(对照验证报告 §5.1):join 调用次数 — fan-in 只触发一次
+# ---------------------------------------------------------------------------
+def test_week4_join_called_only_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """汇合节点 join_before_delivery 在 fan-in 后**只被调用一次**。
+
+    验证报告 §5.1 指出 ``status_log`` 用的 ``_append_unique`` reducer 会把两次重复
+    字符串合并为 1 条,所以 ``log.count("join_before_delivery_done") == 1`` 断言
+    通过 ≠ 函数只被调 1 次。本测试绕过 reducer,直接 spy ``join_before_delivery``
+    函数本身。
+    """
+    import graph as graph_mod
+    import nodes.node_join_before_delivery as join_mod
+
+    original = join_mod.join_before_delivery
+    calls: dict[str, int] = {"n": 0}
+
+    def spy(state, **kwargs):
+        calls["n"] += 1
+        return original(state, **kwargs)
+
+    # graph.py 在 import 时已经把 ``join_before_delivery`` 拷到 graph_mod 命名空间;
+    # 这里 monkeypatch graph_mod.join_before_delivery,确保 build_graph 内部
+    # ``g.add_node("join_before_delivery", join_before_delivery)`` 用的是 spy。
+    monkeypatch.setattr(graph_mod, "join_before_delivery", spy)
+
+    draft_dir = tmp_path / "drafts" / "demo"
+    draft_file = _seed_draft(draft_dir)
+    monkeypatch.setenv("AUTO_VIDEO_EDITOR_DRAFT_DIR", str(draft_dir))
+
+    state = _seed_state(str(draft_file))
+    config = {"configurable": {"thread_id": "w4-join-once"}}
+
+    g = build_graph(
+        checkpointer=InMemorySaver(),
+        thread_id="w4-join-once",
+        start_heartbeat_thread=False,
+    )
+
+    from langgraph.types import Command
+
+    g.invoke(state, config=config)
+    g.invoke(Command(resume=True), config=config)
+    g.invoke(Command(resume=True), config=config)
+
+    assert calls["n"] == 1, (
+        f"期望 join_before_delivery 被调 1 次,实际 {calls['n']} 次。"
+        "若 == 2,说明 fan-in 仍是两次独立 add_edge 写法,对照验证报告 §5.1。"
+    )
+
+
+# ---------------------------------------------------------------------------
 # 场景 2:关卡③ interrupt payload 校验 — 由 ``test_node_16_translate_subtitles.py``
 # 覆盖(纯函数更易断言)。完整 interrupt/resume 流程已由 ``test_interrupt_resume.py``
 # (关卡①/②)+ ``test_node_16_translate_subtitles.py``(节点 16 单测)覆盖。

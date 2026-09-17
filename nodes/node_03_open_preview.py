@@ -13,12 +13,17 @@ from typing import Any
 
 from state import WorkflowState
 
+# 唯一哨兵:标记 ``popen_factory`` 未显式传入。函数体执行时才解析
+# ``subprocess.Popen``,这样 ``monkeypatch.setattr(m3, "subprocess", fake)``
+# 才会真正被拾取(对照验证报告 §5.3)。哨兵不能与任何真实可调用对象冲突。
+_DEFAULT_POPEN = object()
+
 
 def open_preview(
     state: WorkflowState,
     unattended: bool = False,
     *,
-    popen_factory=subprocess.Popen,
+    popen_factory=_DEFAULT_POPEN,
     playwright_factory: callable | None = None,
     edge_browser: str = "msedge",
 ) -> dict:
@@ -28,6 +33,10 @@ def open_preview(
         state: 当前工作流状态。
         unattended: True 走 Playwright 无人值守分支;False 走人工交互分支。
         popen_factory: 人工交互分支可注入的 subprocess.Popen 工厂。
+            默认在函数体内**运行时**读取模块级 ``subprocess.Popen``,
+            便于测试通过 ``monkeypatch.setattr(m3, "subprocess", fake)``
+            真正替换底层调用(对照验证报告 §5.3)。若调用方显式传入,
+            则直接使用传入的工厂。
         playwright_factory: 无人值守分支可注入的 Playwright 工厂,
             接受 None 参数返回 context manager;None 时尝试懒加载 playwright。
         edge_browser: 浏览器可执行文件名(默认 msedge)。
@@ -40,8 +49,10 @@ def open_preview(
 
     if not unattended:
         # 人工交互场景:直接打开独立 Edge 窗口
+        # 运行时解析 subprocess.Popen —— 让 monkeypatch 真正生效
+        factory = subprocess.Popen if popen_factory is _DEFAULT_POPEN else popen_factory
         try:
-            popen_factory(["cmd", "/c", "start", "", edge_browser, web_url])
+            factory(["cmd", "/c", "start", "", edge_browser, web_url])
         except Exception as e:  # noqa: BLE001
             errors.append(f"[node_03] 启动 Edge 失败: {e}")
             return {**state, "preview_opened": False, "error_log": errors}

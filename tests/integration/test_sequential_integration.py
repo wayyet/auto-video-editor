@@ -225,3 +225,81 @@ def test_sequential_retry_count_within_bounds(seeded_state, tmp_path: Path) -> N
     retry = final.get("retry_counts", {}).get("node_07", 0)
     # 60s → 35s 帧对齐分配单次可完成,应 ≤ 2 次(留 1 次冗余)
     assert 1 <= retry <= 2, f"retry_counts[node_07]={retry}, 期望 1-2"
+
+
+# ---------------------------------------------------------------------------
+# 场景(对照验证报告 §5.3):monkeypatch 后 fake.Popen 真的被调用,
+# 真实 subprocess.Popen 没被调用
+# ---------------------------------------------------------------------------
+def test_node_03_monkeypatch_subprocess_truly_effective(
+    seeded_state, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``monkeypatch.setattr(m3, "subprocess", fake)`` 必须**真的**截获节点 3 的 Popen。
+
+    验证报告 §5.3 指出,修复前 ``popen_factory=subprocess.Popen`` 在函数定义时
+    就绑定到真实 subprocess;monkeypatch 只换名字,默认值不会变。本测试要求:
+      1) fake.Popen 被调用 1 次(节点 3 启动 Edge);
+      2) 真实 ``subprocess.Popen`` 完全不被调用(隔离生效)。
+    """
+    import subprocess as real_subprocess
+    import nodes.node_02_launch_openstoryline as m2
+    import nodes.node_03_open_preview as m3
+
+    fake_calls: dict[str, int] = {"n": 0}
+    real_calls: dict[str, int] = {"n": 0}
+
+    class _FakeStubProc:
+        def __init__(self, *a, **k):
+            self.pid = 99999
+            self.stdout = None
+            self.stderr = None
+
+    def _fake_popen(*args, **kwargs):
+        fake_calls["n"] += 1
+        return _FakeStubProc()
+
+    def _spy_real_popen(*args, **kwargs):
+        real_calls["n"] += 1
+        return real_subprocess.Popen(*args, **kwargs)
+
+    fake_subprocess = type(
+        "FakeSubprocess",
+        (),
+        {"Popen": staticmethod(_fake_popen), "PIPE": -1},
+    )
+    # 镜像节点 2 / 节点 3 的 monkeypatch 写法
+    monkeypatch.setattr(m2, "subprocess", fake_subprocess)
+    monkeypatch.setattr(m2, "_wait_for_ready", lambda url, t: True)
+    monkeypatch.setattr(m3, "subprocess", fake_subprocess)
+
+    # 在 fake_subprocess 之外,记录真实 Popen 是否有任何调用痕迹
+    monkeypatch.setattr(
+        real_subprocess, "Popen", _spy_real_popen, raising=True
+    )
+
+    state, _ = seeded_state
+    thread_id = "seq-node03-mock"
+
+    g = build_graph(checkpointer=InMemorySaver(), thread_id=thread_id, start_heartbeat_thread=False)
+
+    try:
+        g.invoke(state, config={"configurable": {"thread_id": thread_id}})
+    except GraphInterrupt:
+        pass
+    try:
+        g.invoke(Command(resume=True), config={"configurable": {"thread_id": thread_id}})
+    except GraphInterrupt:
+        pass
+    g.invoke(Command(resume=True), config={"configurable": {"thread_id": thread_id}})
+
+    # 节点 3 应被 fake 截获 1 次(开 Edge);
+    # 节点 2 应被 fake 截获 1 次(拉起 openstoryline 服务)。
+    # 在 Linux CI 上节点 2 是 fake_health 路径,但 popen_factory 还是会被 fake 截获。
+    assert fake_calls["n"] >= 1, (
+        f"fake.Popen 应至少被调 1 次(节点 3),实际 {fake_calls['n']} 次。"
+        "若 == 0,说明节点 3 没走 fake 路径,monkeypatch 失效 — 对照验证报告 §5.3。"
+    )
+    assert real_calls["n"] == 0, (
+        f"真实 subprocess.Popen 应不被调用,实际被调 {real_calls['n']} 次。"
+        "若 > 0,说明 monkeypatch 没真正替换节点 3 的 Popen 路径 — 对照验证报告 §5.3。"
+    )
