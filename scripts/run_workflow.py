@@ -195,6 +195,13 @@ async def _main_async(args: argparse.Namespace) -> int:
 def main() -> int:
     args = _parse_args()
     try:
+        # Windows: psycopg async 需 SelectorEventLoop,Python 3.13 默认 ProactorEventLoop 不兼容
+        if sys.platform == "win32":
+            import selectors
+            return asyncio.run(
+                _main_async(args),
+                loop_factory=lambda: asyncio.SelectorEventLoop(selectors.SelectSelector()),
+            )
         return asyncio.run(_main_async(args))
     except KeyboardInterrupt:
         return 130

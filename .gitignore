@@ -29,3 +29,13 @@ drafts/
 
 # 节点运行产物（job-{verify,xyz,unknown}/ 下的 manifest/artifacts/checkpoints/logs，本机调试用）
 outputs/
+
+# 启动脚本生成的 initial-state.json（含本机绝对路径，跨机无意义）
+runtime/initial_state_*.json
+
+# 启动日志与输入素材（start_production.ps1 现场产物，跨机无意义）
+logs/
+inputs/
+
+# OpenStoryline 本地运行时配置（config.toml 含 API key 占位符，本机填入真实 key 后不入库）
+openstoryline-config/

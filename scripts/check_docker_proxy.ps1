@@ -35,10 +35,13 @@ $prevErrorAction = $ErrorActionPreference
 
 function Get-DockerProxyFromInfo {
     # 从 docker info 里取 HTTP Proxy: / HTTPS Proxy: 行
+    # 注意:无代理时 Select-String 返回空数组 Object[],直接 .Trim() 会抛 "不包含 Trim 方法"
     $info = & docker info 2>&1
-    $httpProxy  = ($info | Select-String -Pattern '^\s*HTTP Proxy:\s*(.+)$')   -replace '^\s*HTTP Proxy:\s*', ''
-    $httpsProxy = ($info | Select-String -Pattern '^\s*HTTPS Proxy:\s*(.+)$')  -replace '^\s*HTTPS Proxy:\s*', ''
-    return @{ Http = $httpProxy.Trim(); Https = $httpsProxy.Trim() }
+    $httpLine  = $info | Select-String -Pattern '^\s*HTTP Proxy:\s*(.+)$'  | Select-Object -First 1
+    $httpsLine = $info | Select-String -Pattern '^\s*HTTPS Proxy:\s*(.+)$' | Select-Object -First 1
+    $httpProxy  = if ($httpLine)  { ($httpLine  -replace '^\s*HTTP Proxy:\s*', '').Trim() }  else { '' }
+    $httpsProxy = if ($httpsLine) { ($httpsLine -replace '^\s*HTTPS Proxy:\s*', '').Trim() } else { '' }
+    return @{ Http = $httpProxy; Https = $httpsProxy }
 }
 
 function Test-LocalPortListening {
