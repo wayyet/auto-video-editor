@@ -38,6 +38,10 @@ test = [
 addopts = "-q --strict-markers"
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "admin: tests that require local administrator privileges (run with `-m admin`)",
+    "slow: tests that exercise real I/O and take more than a few seconds",
+]
 
 [tool.ruff]
 lint.ignore = ["E501"]

@@ -54,9 +54,14 @@ import contextlib
 import os
 import uuid
 from pathlib import Path
+from typing import Optional
 
 from config import POSTGRES_URI, make_checkpointer, resolve_draft_dir
 from monitoring.heartbeat_writer import start_heartbeat
+
+# pre-flight 依赖只在用户显式打开时才 import,避免 84 条现有测试多走依赖链
+PreflightConfig = None  # type: ignore[assignment]
+PreflightError = None   # type: ignore[assignment]
 from nodes.node_01_clean_cache import clean_cache
 from nodes.node_02_launch_openstoryline import launch_openstoryline_service
 from nodes.node_03_open_preview import open_preview
@@ -174,7 +179,14 @@ async def get_checkpointer():
 # ---------------------------------------------------------------------------
 # 图构建
 # ---------------------------------------------------------------------------
-def build_graph(checkpointer=None, *, thread_id: str = "default", start_heartbeat_thread: bool = True):
+def build_graph(
+    checkpointer=None,
+    *,
+    thread_id: str = "default",
+    start_heartbeat_thread: bool = True,
+    run_preflight: bool = False,
+    preflight_config: Optional["PreflightConfig"] = None,
+):
     """装配 17 节点 + 1 升级节点 + 1 桥接节点的完整图。
 
     Args:
@@ -182,10 +194,40 @@ def build_graph(checkpointer=None, *, thread_id: str = "default", start_heartbea
         thread_id: sqlite 模式下决定落盘文件名。
         start_heartbeat_thread: 是否同时启动心跳写线程(默认 True)。
             单测可传 False 避免 IO。
+        run_preflight: 是否在 compile 前执行 pre-flight 自检(默认 False,
+            保持现有 84 条测试零改动)。主入口 ``scripts/run_workflow.py``
+            应设为 True。
+        preflight_config: 传入自定义 ``PreflightConfig``;None 时使用
+            ``PreflightConfig.from_env()``。仅 ``run_preflight=True`` 时生效。
 
     Returns:
         CompiledStateGraph 实例。
+
+    Raises:
+        PreflightError: pre-flight 任一步骤失败时抛出。
     """
+    if run_preflight:
+        # 延迟 import,确保 84 条现有测试不会因 preflight 模块失败而崩
+        from runtime.preflight import (
+            PreflightConfig as _PC,
+            PreflightError as _PE,
+            run_preflight as _run_preflight,
+        )
+
+        # 让模块级 hint 跟着实际导入同步,便于类型检查
+        global PreflightConfig, PreflightError
+        PreflightConfig = _PC  # type: ignore[assignment]
+        PreflightError = _PE   # type: ignore[assignment]
+
+        cfg = preflight_config or _PC.from_env()
+        result = _run_preflight(cfg)
+        if not result.ok:
+            failed = result.first_failure()
+            assert failed is not None  # ok=False 时 first_failure 必非空
+            raise _PE(
+                f"pre-flight 在 step={failed.step!r} 失败: {failed.error}"
+            )
+
     if checkpointer is None:
         checkpointer = make_checkpointer(thread_id=thread_id)
 
