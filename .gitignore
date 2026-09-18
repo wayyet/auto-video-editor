@@ -39,3 +39,7 @@ inputs/
 
 # OpenStoryline 本地运行时配置（config.toml 含 API key 占位符，本机填入真实 key 后不入库）
 openstoryline-config/
+
+# 编辑备份与脚本误产物
+*.bak
+\$*

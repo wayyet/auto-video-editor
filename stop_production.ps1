@@ -3,7 +3,7 @@
 #
 # 与 start_production.ps1 对称 —— 把启动时拉起的进程 / 容器按逆序停掉:
 #   Phase 1  python run_workflow.py
-#   Phase 2  openstoryline-web 容器
+#   Phase 2  OpenStoryline 本地进程(MCP + Web,按 PID 文件 kill + 命令行兜底)
 #   Phase 3  edb-postgres16 容器 (复用 scripts\stop_postgres.ps1)
 #   Phase 4  -StopDockerDesktop 才停 com.docker.service
 #   Phase 5  -CleanState 才删 initial_state JSON
@@ -54,7 +54,6 @@ $LogFile       = Join-Path $LogsDir ("stop_${Timestamp}.log")
 $StopPostgres  = Join-Path $RepoRoot 'scripts\stop_postgres.ps1'
 $StateJson     = Join-Path $RepoRoot ("runtime\initial_state_{0}.json" -f $ThreadId)
 $HeartbeatFile = 'C:\ProgramData\VideoWorkflow\heartbeat.txt'
-$OsContainer   = 'openstoryline-web'
 
 # ---------------------------------------------------------------
 # 日志函数:同时写控制台 + 日志文件
@@ -85,9 +84,9 @@ if ($WhatIf) {
     Write-Phase "[WhatIf] 不会执行任何修改,以下为计划:" 'Yellow'
     Write-Phase "  Phase 1:kill python run_workflow.py (--production)"
     if ($RemoveContainers) {
-        Write-Phase "  Phase 2:docker stop $OsContainer + rm"
+        Write-Phase "  Phase 2:Stop-Process OpenStoryline MCP+Web (按 PID 文件 + 命令行兜底) + 清 PID 文件"
     } else {
-        Write-Phase "  Phase 2:docker stop $OsContainer (容器保留)"
+        Write-Phase "  Phase 2:Stop-Process OpenStoryline MCP+Web (按 PID 文件 + 命令行兜底)"
     }
     if ($RemoveContainers) {
         Write-Phase "  Phase 3:$StopPostgres -Remove (容器删,卷永远保留)"
@@ -146,48 +145,97 @@ try {
 }
 
 # ===============================================================
-# Phase 2 — stop openstoryline-web
+# Phase 2 — stop OpenStoryline 本地进程(MCP + Web)
+#   优先按 PID 文件 kill;文件缺失 / 解析失败时按命令行兜底
+#   匹配 open_storyline.mcp.server 或 agent_fastapi:app 的 python.exe
 # ===============================================================
 Write-Phase ''
-Write-Phase "Phase 2:停止 $OsContainer 容器" 'Cyan'
+Write-Phase "Phase 2:停止 OpenStoryline 本地进程(MCP :8001 + Web :7860)" 'Cyan'
 
-$dockerExe = (Get-Command docker -ErrorAction SilentlyContinue).Source
-if (-not $dockerExe) {
-    Write-PhaseWarn "找不到 docker 命令,跳过 Phase 2 / 3(请确认 Docker Desktop 是否就绪)"
+# 收集要 kill 的 PID:先扫 PID 文件,再扫命令行兜底
+$OsMcpPort = 8001
+$OsWebPort = 7860
+$LogsDir = Join-Path $RepoRoot 'logs'
+$pidsToKill = [System.Collections.Generic.HashSet[int]]::new()
+$pidsSource = [System.Collections.Generic.List[string]]::new()
+
+# 路径 1:读最新 PID 文件(按 LastWriteTime 倒序取一个)
+$latestPidFile = Get-ChildItem -Path $LogsDir -Filter 'openstoryline_pids_*.json' -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if ($null -ne $latestPidFile) {
+    try {
+        $prev = Get-Content -Path $latestPidFile.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if ($null -ne $prev -and $prev.reused -ne $true) {
+            foreach ($pidName in @('mcp_pid', 'web_pid')) {
+                $pidVal = $prev.$pidName
+                if ($null -ne $pidVal -and $pidVal -gt 0 -and -not $pidsToKill.Contains([int]$pidVal)) {
+                    $pidsToKill.Add([int]$pidVal) | Out-Null
+                    $pidsSource.Add("PID 文件 ${pidName}={$pidVal}") | Out-Null
+                }
+            }
+            Write-Phase ("  读 PID 文件:{0}" -f $latestPidFile.Name)
+        } else {
+            Write-Phase "  PID 文件标记为 reused(端口复用),跳过 PID 路径,走命令行兜底"
+        }
+    } catch {
+        Write-PhaseWarn "解析 PID 文件失败(走命令行兜底): $($_.Exception.Message)"
+    }
+}
+
+# 路径 2:命令行兜底(Get-CimInstance 查 python.exe 命令行)
+try {
+    $pyProcs = Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue
+    foreach ($p in $pyProcs) {
+        $cl = $p.CommandLine
+        if ($cl -and ($cl -match 'open_storyline\.mcp\.server' -or $cl -match 'agent_fastapi:app')) {
+            if (-not $pidsToKill.Contains([int]$p.ProcessId)) {
+                $pidsToKill.Add([int]$p.ProcessId) | Out-Null
+                $preview = if ($cl.Length -gt 100) { $cl.Substring(0, 100) + '...' } else { $cl }
+                $pidsSource.Add("命令行 PID={0} ({2})" -f $p.ProcessId, $preview) | Out-Null
+            }
+        }
+    }
+} catch {
+    Write-PhaseWarn ("查询 python.exe 命令行失败: {0}" -f $_.Exception.Message)
+}
+
+if ($pidsToKill.Count -eq 0) {
+    Write-Phase "  未发现 OpenStoryline 进程,无需 kill"
 } else {
+    foreach ($pidVal in $pidsToKill) {
+        $alive = Get-Process -Id $pidVal -ErrorAction SilentlyContinue
+        if ($null -eq $alive) {
+            Write-Phase ("  PID {0} 已退出,跳过" -f $pidVal)
+            continue
+        }
+        Write-Phase ("  kill PID={0} name={1}" -f $pidVal, $alive.ProcessName)
+        try {
+            Stop-Process -Id $pidVal -Force -ErrorAction Stop
+            Write-PhaseOk ("PID {0} 已退出" -f $pidVal)
+        } catch {
+            Write-PhaseWarn ("PID {0} 终止失败: {1}" -f $pidVal, $_.Exception.Message)
+        }
+    }
+}
+
+# 路径 3:端口兜底校验 — 等 ≤5s 看 8001 / 7860 是否释放
+$portDeadline = (Get-Date).AddSeconds(5)
+$portsReleased = $false
+while ((Get-Date) -lt $portDeadline) {
     $prevEA = $ErrorActionPreference
     $ErrorActionPreference = 'SilentlyContinue'
-    $osExisting = @(& docker ps -a --filter "name=^${OsContainer}$" --format '{{.Names}}' 2>&1)
-    $osRunning  = @(& docker ps     --filter "name=^${OsContainer}$" --format '{{.Names}}' 2>&1)
+    $mcpOpen = (Test-NetConnection -ComputerName '127.0.0.1' -Port $OsMcpPort -InformationLevel Quiet -WarningAction SilentlyContinue) -eq $true
+    $webOpen = (Test-NetConnection -ComputerName '127.0.0.1' -Port $OsWebPort -InformationLevel Quiet -WarningAction SilentlyContinue) -eq $true
     $ErrorActionPreference = $prevEA
+    if (-not $mcpOpen -and -not $webOpen) { $portsReleased = $true; break }
+    Start-Sleep -Milliseconds 500
+}
+if (-not $portsReleased) {
+    Write-PhaseWarn "5s 内 8001 / 7860 未释放(可能仍有别处占用)"
+}
 
-    if (-not $osExisting -or $osExisting.Count -eq 0 -or -not ($osExisting -contains $OsContainer)) {
-        Write-PhaseWarn "容器 $OsContainer 不存在"
-    } elseif ($osRunning -and $osRunning -contains $OsContainer) {
-        & docker stop $OsContainer
-        if ($LASTEXITCODE -eq 0) {
-            Write-PhaseOk "$OsContainer 已停止"
-        } else {
-            Write-PhaseErr "docker stop $OsContainer 失败(exit=$LASTEXITCODE)"
-        }
-    } else {
-        Write-Phase "  $OsContainer 已处于停止态"
-    }
-
-    if ($RemoveContainers) {
-        if ($osExisting -and $osExisting -contains $OsContainer) {
-            & docker rm $OsContainer
-            if ($LASTEXITCODE -eq 0) {
-                Write-PhaseOk "$OsContainer 已删除"
-            } else {
-                Write-PhaseErr "docker rm $OsContainer 失败(exit=$LASTEXITCODE)"
-            }
-        } else {
-            Write-Phase "  $OsContainer 已不存在,无需 rm"
-        }
-    } else {
-        Write-Phase "  容器已保留(传 -RemoveContainers 才删)"
-    }
+if ($RemoveContainers) {
+    Write-Phase "  OpenStoryline 已无容器(本地直起),-RemoveContainers 不作用于 OpenStoryline" 'Yellow'
 }
 
 # ===============================================================
