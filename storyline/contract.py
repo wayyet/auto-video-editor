@@ -239,7 +239,7 @@ class StorylinePlan(BaseModel):
 # 错误码(ADR-007)
 # ---------------------------------------------------------------------------
 class StorylineErrorCode:
-    """5 类错误码,贯穿 OpenStorylineMCPClient / node_02 / node_04 / node_05。"""
+    """6 类错误码,贯穿 OpenStorylineMCPClient / node_02 / node_04 / node_05。"""
 
     PROCESS_START_FAILED = "PROCESS_START_FAILED"
     MCP_CONNECT_FAILED = "MCP_CONNECT_FAILED"

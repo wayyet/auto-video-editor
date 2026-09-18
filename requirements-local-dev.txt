@@ -1,0 +1,14 @@
+# 本地开发专用依赖(默认不在 CI / 其他开发者环境装)
+#
+# 用法:
+#   pip install -r requirements.txt              # 公共 PyPI 版本(所有人共享)
+#   pip install -r requirements-local-dev.txt   # 本机修改版 LangGraph(仅维护者本地)
+#
+# 警告:下面的路径是维护者(wayyet) 的本机路径,其他机器 / CI 直接执行会失败。
+#       仅当你在 wayyet 本机、且 langgraph-main 仓库路径与下方一致时才执行。
+#
+# 关联来源:docs/integration/auto-video-editor_FireRed集成_代码核查报告.md §3.2 P0
+
+-e e:\documents\kuaishou\langgraph-main\libs\langgraph
+-e e:\documents\kuaishou\langgraph-main\libs\checkpoint
+-e e:\documents\kuaishou\langgraph-main\libs\prebuilt

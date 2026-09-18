@@ -1,5 +1,6 @@
-# FireRed-OpenStoryline MCP 工具清单(Phase 0 inventory · 2026-09-17 锁版)
+# FireRed-OpenStoryline MCP 工具清单(Phase 0 inventory)
 
+> **锁版日期**:2026-09-17 v3.0 → **v3.1 修订**:2026-09-17(本机 172 unit pass 后回写)
 > 事实源:`E:\Documents\kuaishou\FireRed-OpenStoryline` 源码核验
 > + `config.toml` `[local_mcp_server].available_nodes`。
 > 运行时**仍以 `list_tools()` 输出为准**,本表为降级基线,防上游静默改 name。
@@ -7,7 +8,18 @@
 
 ---
 
-## 1. NodeMeta ↔ MCP Tool 映射(21 Node + 2 builtin)
+## v3.1 修订摘要
+
+| 项 | v3.0 | v3.1 | 触发 |
+| --- | --- | --- | --- |
+| 标题「21 Node + 2 builtin」 | 数错 — 实际 22 个 entry 但 20 是 Node + 2 是 builtin | 改回「**20 Node + 2 builtin = 22 tools**」,与 `firered_adapter.TOOL_REGISTRY` 字典大小一致 | grep `firered_adapter.py` 全部 `ToolSpec(` 行,共 22 |
+| `generate_ai_transition` 位置 | 放在「分割 / 理解 / 粗剪」分组 | 移到最后与 v3.1 实际注册顺序一致 | 上游 Node 注册顺序对齐 |
+| REQUIRED_TOOLS 计数 | 9 | 9(无变化,已正确) | 验证 `len(firered_adapter.REQUIRED_TOOLS) == 9` |
+| OPTIONAL_TOOLS 计数 | 13 | 13(无变化) | 验证 `len(firered_adapter.OPTIONAL_TOOLS) == 13` |
+
+---
+
+## 1. NodeMeta ↔ MCP Tool 映射(20 Node + 2 builtin = 22 tools)
 
 | MCP tool name (snake_case) | FireRed Node 类 | `NodeMeta.node_kind` | `require_prior_kind` | 关键入参 |
 | --- | --- | --- | --- | --- |
@@ -17,7 +29,6 @@
 | `split_shots` | `SplitShotsNode` | `split_shots` | `load_media` | `artifact_id, media_artifact_id` |
 | `local_asr` | `LocalASRNode` | `local_asr` | `load_media` | `artifact_id, media_artifact_id` |
 | `speech_rough_cut` | `SpeechRoughCutNode` | `speech_rough_cut` | `local_asr` | `artifact_id, asr_artifact_id` |
-| `generate_ai_transition` | `GenerateAITransitionNode` | `generate_ai_transition` | `split_shots` | `artifact_id, prev_shot, next_shot, prompt` |
 | `understand_clips` | `UnderstandClipsNode` | `understand_clips` | `load_media, split_shots` | `artifact_id, shots_artifact_id` |
 | `filter_clips` | `FilterClipsNode` | `filter_clips` | `understand_clips` | `artifact_id, understanding_artifact_id, criteria` |
 | `group_clips` | `GroupClipsNode` | `group_clips` | `filter_clips` | `artifact_id, clips_artifact_id` |
@@ -31,15 +42,20 @@
 | `plan_timeline_pro` | `PlanTimelineProNode` | `plan_timeline_pro` | `split_shots, group_clips, generate_script, tts, music_rec` | `artifact_id` |
 | `plan_timeline_ai_transition` | `PlanTimelineAITransitionNode` | `plan_timeline_ai_transition` | `generate_ai_transition, plan_timeline_pro` | `artifact_id` |
 | `render_video` | `RenderVideoNode` | `render_video` | `load_media, plan_timeline, transition_rec, text_rec` | `artifact_id, timeline_artifact_id, output_path` |
+| `generate_ai_transition` | `GenerateAITransitionNode` | `generate_ai_transition` | `split_shots` | `artifact_id, prev_shot, next_shot, prompt` |
 | `read_node_history` | (内置) | `builtin` | — | `artifact_id, query_artifact_id` |
 | `write_skills` | (内置) | `builtin` | — | `skill_name, skill_dir, skill_content` |
+
+行数核对:`20 + 2 = 22`,与 `len(firered_adapter.TOOL_REGISTRY) == 22` 一致(2026-09-17 验证)。
+
+> **运行时差异提示(代码核查 2026-09-17)**:`FireRed-OpenStoryline/config.toml` 的 `[local_mcp_server].available_nodes` 当前只显式列出 19 个 Node(缺 `PlanTimelineNode`,由 `register_tools.py` 直接遍历该列表注册 MCP 工具)。Phase 1 PoC 实际跑 `list_tools()` 时,**Node 端预计只到 19 个**(+ 2 builtin = 21),低于本表 22 的降级基线;`plan_timeline` 已归入 `OPTIONAL_TOOLS`,故**不会硬失败**。本表仍标 22 是适配器设计容量,运行时始终以 `list_tools()` 输出为准,见「4. 上游漂移告警」。
 
 ---
 
 ## 2. 必需 capability(Phase 0 锁定,运行时缺失即 fail-fast)
 
 ```python
-# storyline.firered_adapter.REQUIRED_TOOLS
+# storyline.firered_adapter.REQUIRED_TOOLS  # v3.1 验证:len == 9
 REQUIRED_TOOLS = (
     "load_media",
     "split_shots",
@@ -53,7 +69,7 @@ REQUIRED_TOOLS = (
 )
 ```
 
-`OPTIONAL_TOOLS`(缺失不报错,但 Adapter 不可调用):
+`OPTIONAL_TOOLS`(缺失不报错,但 Adapter 不可调用;v3.1 验证:len == 13):
 
 ```python
 OPTIONAL_TOOLS = (
@@ -74,7 +90,7 @@ OPTIONAL_TOOLS = (
 ```
 
 `STORYLINE_ENABLE_AI_TRANSITION=1` 时把 `generate_ai_transition` /
-`plan_timeline_ai_transition` 加入必需清单。
+`plan_timeline_ai_transition` 加入必需清单(`list_capability(include_ai_transition=True)` 多 2 个)。
 
 ---
 
@@ -142,3 +158,4 @@ Phase 1 的降级基线由 `storyline/firered_adapter.TOOL_REGISTRY` 维护,新�
 | `FireRed-OpenStoryline/src/open_storyline/nodes/core_nodes/*.py` | 每文件 `meta = NodeMeta(name="...", ...)` |
 | `FireRed-OpenStoryline/config.toml` | L33-55 `[local_mcp_server]` + `available_nodes` |
 | `FireRed-OpenStoryline/src/open_storyline/config.py` | `MCPConfig` L110-129 |
+| `auto-video-editor/storyline/firered_adapter.py` | `TOOL_REGISTRY` 22 entry / `REQUIRED_TOOLS` 9 / `OPTIONAL_TOOLS` 13 / `FireredConfigKeys` 14 sections + 8 mcp_keys |

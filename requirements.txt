@@ -13,12 +13,12 @@ jsonpatch==1.33
 jsonpointer==3.1.1
 langchain-core==1.6.1
 langchain-protocol==0.0.19
-# Editable install with no version control (langgraph==1.2.9)
--e e:\documents\kuaishou\langgraph-main\libs\langgraph
-# Editable install with no version control (langgraph-checkpoint==4.1.1)
--e e:\documents\kuaishou\langgraph-main\libs\checkpoint
-# Editable install with no version control (langgraph-prebuilt==1.1.0)
--e e:\documents\kuaishou\langgraph-main\libs\prebuilt
+# LangGraph 使用公共 PyPI 版本(与本机 venv 锁定的 1.2.9 / 4.1.1 / 1.1.0 一致)
+# 如需本地修改版 LangGraph(editable),请额外执行:
+#   pip install -r requirements-local-dev.txt
+langgraph==1.2.9
+langgraph-checkpoint==4.1.1
+langgraph-prebuilt==1.1.0
 # Week 5:Postgres checkpointer
 langgraph-checkpoint-postgres>=3.1,<4
 psycopg[binary,pool]>=3.2
