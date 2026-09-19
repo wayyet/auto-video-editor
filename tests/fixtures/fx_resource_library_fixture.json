@@ -1,0 +1,53 @@
+{
+  "_source": "tests/fixtures — stub for unit tests",
+  "_generated_at": "2026-01-01T00:00:00",
+  "_counts": {
+    "transitions_vip": 3,
+    "video_effects_vip": 2
+  },
+  "transitions": [
+    {
+      "name": "渐变模糊",
+      "is_vip": true,
+      "resource_id": "7123135366504124936",
+      "effect_id": "FX_TX_001",
+      "md5": "aaa111",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "魔法放大",
+      "is_vip": true,
+      "resource_id": "7320254175466492467",
+      "effect_id": "FX_TX_002",
+      "md5": "bbb222",
+      "default_duration_s": 1.0,
+      "is_overlap": true
+    },
+    {
+      "name": "黑白抖动",
+      "is_vip": true,
+      "resource_id": "7306819191724577331",
+      "effect_id": "FX_TX_003",
+      "md5": "ccc333",
+      "default_duration_s": 0.8,
+      "is_overlap": false
+    }
+  ],
+  "video_effects": [
+    {
+      "name": "胶片式黑白",
+      "is_vip": true,
+      "resource_id": "7447351620641231369",
+      "effect_id": "FX_VFX_001",
+      "md5": "ddd444"
+    },
+    {
+      "name": "老式放大",
+      "is_vip": true,
+      "resource_id": "7028458557058060831",
+      "effect_id": "FX_VFX_002",
+      "md5": "eee555"
+    }
+  ]
+}

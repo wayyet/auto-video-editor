@@ -1,0 +1,14 @@
+{
+  "_reverse_engineering_pending": false,
+  "_week3_status": "real_vip",
+  "_comment": "fx_template.json 的最小 fixture,只放短名索引。真实 ID 由 fx_resource_library.json 提供。",
+  "transitions": [
+    {"name": "渐变模糊"},
+    {"name": "魔法放大"},
+    {"name": "黑白抖动"}
+  ],
+  "video_effects": [
+    {"name": "胶片式黑白"},
+    {"name": "老式放大"}
+  ]
+}

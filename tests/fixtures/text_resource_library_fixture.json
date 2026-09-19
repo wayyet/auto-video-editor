@@ -1,0 +1,47 @@
+{
+  "_source": "tests/fixtures — stub for unit tests",
+  "_generated_at": "2026-01-01T00:00:00",
+  "_counts": {
+    "intro_vip": 2,
+    "loop_vip": 1,
+    "outro_vip": 1
+  },
+  "intro": [
+    {
+      "name": "居中打字机",
+      "is_vip": true,
+      "duration_s": 0.5,
+      "resource_id": "7265222187286532667",
+      "effect_id": "FX_TX_INTRO_001",
+      "md5": "fff666"
+    },
+    {
+      "name": "渐次出现",
+      "is_vip": true,
+      "duration_s": 0.8,
+      "resource_id": "7123116334677758501",
+      "effect_id": "FX_TX_INTRO_002",
+      "md5": "ggg777"
+    }
+  ],
+  "loop": [
+    {
+      "name": "循环模糊",
+      "is_vip": true,
+      "duration_s": 1.0,
+      "resource_id": "7441532971082846758",
+      "effect_id": "FX_TX_LOOP_001",
+      "md5": "hhh888"
+    }
+  ],
+  "outro": [
+    {
+      "name": "渐隐退出",
+      "is_vip": true,
+      "duration_s": 0.5,
+      "resource_id": "7238519014866031162",
+      "effect_id": "FX_TX_OUTRO_001",
+      "md5": "iii999"
+    }
+  ]
+}
