@@ -27,8 +27,23 @@ function Assert-DockerSuccess {
 }
 
 Write-Host "==> [1/3] 拉取镜像 $Image" -ForegroundColor Cyan
+
+# 拉取前先看镜像是否已本地缓存,避免 daemon 冷启动时第一次出网
+# TLS handshake 抖动导致 pull 失败(常见于 Windows + Docker Desktop + http_proxy 链路)
+$prevErrorActionPull = $ErrorActionPreference
+$ErrorActionPreference = 'SilentlyContinue'
+$null = & docker image inspect $Image --format '{{.Id}}' 2>&1
+$cached = ($LASTEXITCODE -eq 0)
+$ErrorActionPreference = $prevErrorActionPull
+
 & docker pull $Image
-Assert-DockerSuccess '拉取 Docker 镜像失败'
+if ($LASTEXITCODE -ne 0) {
+    if ($cached) {
+        Write-Host "==> pull 失败,但镜像已本地缓存,继续(daemon 冷启动 TLS 抖动常见)" -ForegroundColor Yellow
+    } else {
+        throw '拉取 Docker 镜像失败'
+    }
+}
 
 Write-Host "==> [2/3] 确保命名卷 $Volume 存在" -ForegroundColor Cyan
 $prevErrorAction = $ErrorActionPreference

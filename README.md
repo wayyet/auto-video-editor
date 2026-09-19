@@ -35,13 +35,17 @@ auto-video-editor/
 │   ├── encryption_detector.py
 │   └── version_strategy.py
 ├── jy_common/                          [新] Week 3 共享模块
-│   ├── template_library.py             模板加载(Week 3 占位,Week 4 真实)
+│   ├── template_library.py             模板加载 + 资源库 by_name 查询(Week 4 已迁移自 pyJianYingDraft)
 │   ├── asr_client.py                   ASR Mock 接口(Week 4 接 FireRedASR2S)
 │   └── sticker_resolver.py             关键词→resource_id 解析
-├── templates/                          [新] Week 3 占位模板库
-│   ├── fx_template.json
-│   ├── sticker_template.json
-│   └── text_style_template.json
+├── templates/                          Week 4 已迁移自 pyJianYingDraft metadata
+│   ├── fx_template.json                风格索引(name + style_tag),真实 ID 在 fx_resource_library.json
+│   ├── fx_resource_library.json        转场 + 视频特效 VIP 资源库(由 scripts/build_resource_library.py 生成)
+│   ├── text_style_template.json        文字样式模板,默认 entrance_animation_name 在 text_resource_library.json 解析
+│   ├── text_resource_library.json      文字入场/循环/出场 VIP 资源库(由 scripts/build_resource_library.py 生成)
+│   └── sticker_template.json
+├── scripts/
+│   └── build_resource_library.py       一次性生成器 — 从 pyJianYingDraft metadata 导出 VIP 资源库
 ├── monitoring/                         [新] Week 3 心跳监控
 │   ├── heartbeat_writer.py             编排进程内 daemon 线程
 │   ├── heartbeat_monitor.ps1           外部监控脚本(任务计划程序触发)
@@ -171,7 +175,7 @@ python -m pytest tests/integration/test_interrupt_resume.py::test_checkpoint1_in
 | 优先级 | 项 | 实现位置 | 状态 |
 |---|---|---|---|
 | P0-1 | 节点 13 真实实现(volume/fade/audio_fades) | `nodes/node_13_adjust_volume.py` | ✅ 逻辑完整,字段名待剪映客户端逆向 |
-| P0-2 | 占位 resource_id 标注升级 | `templates/*.json` + `jy_common/asset_resource_map.json` | ✅ 标注完整,真实 ID 待用户逆向 |
+| P0-2 | 占位 resource_id 标注升级 | `templates/*.json` + `jy_common/asset_resource_map.json` + `scripts/build_resource_library.py` | ✅ 已迁移自 pyJianYingDraft metadata(转场 303 / 视频特效 462 / 文字入场 78 / 循环 52 / 出场 46,均为 VIP);贴纸仍是占位,见 §4.3 |
 | P1-1 | 节点 11 按 timerange 绑 segment | `nodes/node_11_inject_sticker.py` | ✅ |
 | P1-2 | FireRedASR2S client | `jy_common/asr_client.py` | ✅ client 骨架完整,服务启端由用户做 |
 | P1-3 | 两级超时接入(默认关闭) | `monitoring/timeout_watchdog.py` + `config.ENABLE_TWO_LEVEL_TIMEOUT` | ✅ 接入完整,默认 false 避免破坏既有 24 条集成测试 |
@@ -344,7 +348,7 @@ Postgres 不可达时所有调用降级为 warning no-op,不阻塞主流程。
 
 | 约束 | 当前处理 |
 |---|---|
-| VIP 资源模板库(transition / effect / sticker)为占位 | Week 3 模板库只含 `PLACEHOLDER_*` resource_id;Week 4 真实模板由人工产出后替换 |
+| VIP 资源模板库(transition / effect / sticker)为占位 | **Week 4 已迁移**:转场 + 视频特效 + 文字动画的真实 VIP resource_id 已从 `pyJianYingDraft` metadata 导入 `templates/fx_resource_library.json` / `templates/text_resource_library.json`,由 `scripts/build_resource_library.py` 一键生成。**贴纸仍是占位**(§4.3 — 技能库无公开 ID)。 |
 | ASR 真实接入未完成 | 节点 8 用 `jy_common.asr_client.MockASRClient`;Week 4 替换为 `FireRedASR2S` |
 | 步骤 13 真实音量/淡入淡出未实现 | 本周 `node_13_adjust_volume` 仅占位(写 status_log);Week 4 先做字段逆向工程再实现 |
 | `capcut decrypt` 返回码语义未实测 | Week 2 PoC 报告 §2.5 占位约定;`detect_draft_encryption` 接受 `decrypt_runner` 注入 |

@@ -1,37 +1,40 @@
 {
-  "_reverse_engineering_pending": true,
-  "_week3_status": "placeholder",
+  "_reverse_engineering_pending": false,
+  "_week3_status": "real_vip",
+  "_source_vip_library": "templates/fx_resource_library.json",
+  "_generated_via": "scripts/build_resource_library.py",
+  "_comment": "Week 4 升级:资源 ID 已从 pyJianYingDraft metadata 迁移到 templates/fx_resource_library.json。本文件只保留风格索引(name + style_tag),真实 resource_id 在运行期由 TemplateLibrary.pick_transition_by_name() 解析。如需新增/调整转场,先在 fx_resource_library.json 里选真实 VIP 资源,再把 name 加进下面的索引。",
   "_week4_resource_id_field": {
-    "transitions": "resource_id",
-    "video_effects": "resource_id"
+    "transitions": "resource_id (19 位数字,fx_resource_library.json)",
+    "video_effects": "resource_id (19 位数字,fx_resource_library.json)"
   },
-  "_reverse_engineering_steps": [
-    "1. 备份 drafts/default/draft_content.json",
-    "2. 剪映 v5.9.0 客户端打开,手工替换转场/特效,导出新草稿",
-    "3. diff 新旧 draft_content.json,把真实 resource_id 回填到本文件",
-    "4. 把 _reverse_engineering_pending 设为 false"
-  ],
-  "_comment": "VIP 资源复用机制 — 步骤9/11 共用。Week 3 Day1 上午由人工预先生成;Week 4 接入真实 resource_id 后替换本占位。",
   "asset_resource_map_ref": "jy_common/asset_resource_map.json",
   "transitions": [
     {
-      "name": "淡入淡出",
+      "name": "闪屏故障",
       "category": "video_transition",
-      "resource_id": "PLACEHOLDER_TRANSITION_FADE_001",
-      "duration_us": 500000
+      "style_tag": "default"
     },
     {
-      "name": "滑动切换",
+      "name": "横向滑动",
       "category": "video_transition",
-      "resource_id": "PLACEHOLDER_TRANSITION_SLIDE_001",
-      "duration_us": 500000
+      "style_tag": "default"
+    },
+    {
+      "name": "翻转冲屏",
+      "category": "video_transition",
+      "style_tag": "default"
     }
   ],
   "video_effects": [
     {
-      "name": "轻微放大",
+      "name": "抖动模糊",
       "category": "video_effect",
-      "resource_id": "PLACEHOLDER_VFX_ZOOM_001",
+      "intensity": 0.3
+    },
+    {
+      "name": "胶片暖棕",
+      "category": "video_effect",
       "intensity": 0.3
     }
   ]

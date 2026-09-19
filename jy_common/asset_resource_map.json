@@ -1,30 +1,19 @@
 {
-  "_comment": "Week 3 计划文档 §11/P0-2 占位资源 ID 标注升级 — 真实 VIP resource_id 回填位。",
-  "_reverse_engineering_pending": true,
-  "_week3_status": "placeholder",
+  "_comment": "Week 4 升级:转场/视频特效的真实 VIP resource_id 已迁移到 templates/fx_resource_library.json,节点 9 通过 TemplateLibrary.pick_transition_by_name / pick_video_effect_by_name 直接查 resource_id。贴纸(sticker_by_keyword)仍占位,见对照报告 §4.3 — 暂不实现,留给后续 PR。",
+  "_reverse_engineering_pending": false,
+  "_week3_status": "real_vip",
+  "_source_vip_library": "templates/fx_resource_library.json",
+  "_generated_via": "scripts/build_resource_library.py",
   "_week4_resource_id_field": {
-    "transitions": "resource_id",
-    "video_effects": "resource_id",
-    "sticker_by_keyword": "<keyword>: <resource_id>"
+    "transitions": "已迁移至 fx_resource_library.json(本文件保留 schema 兼容)",
+    "video_effects": "已迁移至 fx_resource_library.json(本文件保留 schema 兼容)",
+    "sticker_by_keyword": "<keyword>: <resource_id> — Week 4 仍占位,见对照报告 §4.3"
   },
-  "_reverse_engineering_steps": [
-    "1. 备份 drafts/default/draft_content.json",
-    "2. 剪映 v5.9.0 客户端打开,手工替换转场/特效/贴纸,导出新草稿",
-    "3. diff 新旧 draft_content.json,把真实 resource_id 回填到 templates/*.json",
-    "4. 把 _reverse_engineering_pending 设为 false"
-  ],
   "transitions": {
-    "淡入淡出": {
-      "PLACEHOLDER_TRANSITION_FADE_001": null
-    },
-    "滑动切换": {
-      "PLACEHOLDER_TRANSITION_SLIDE_001": null
-    }
+    "_comment": "已迁移至 fx_resource_library.json:transitions。运行时由 TemplateLibrary 加载 fx_resource_library.json 提供真实 resource_id。"
   },
   "video_effects": {
-    "轻微放大": {
-      "PLACEHOLDER_VFX_ZOOM_001": null
-    }
+    "_comment": "已迁移至 fx_resource_library.json:video_effects。运行时由 TemplateLibrary 加载 fx_resource_library.json 提供真实 resource_id。"
   },
   "sticker_by_keyword": {
     "赞": "PLACEHOLDER_STICKER_THUMBS_UP",

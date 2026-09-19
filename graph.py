@@ -293,8 +293,11 @@ def _build_state_graph():
     g.add_node("join_before_delivery", join_before_delivery)
 
     # ---- 边 ----
-    g.add_edge(START, "clean_cache")
-    g.add_edge("clean_cache", "launch_openstoryline")
+    # 节点 clean_cache 保留在图中(供 FireRed-OpenStoryline Web UI 的
+    # "清理缓存" 按钮通过 POST /api/system/clean-cache 端点显式触发),
+    # 但不再从 START 自动跑 — 避免每次 graph.invoke 都无谓删除
+    # CACHE_PATHS_TO_CLEAN 中的剪映/OpenStoryline 临时目录。
+    g.add_edge(START, "launch_openstoryline")
     g.add_edge("launch_openstoryline", "open_preview")
     g.add_edge("open_preview", "import_and_plan")
     g.add_conditional_edges(

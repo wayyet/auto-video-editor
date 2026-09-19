@@ -6,7 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from jy_common.template_library import TemplateLibrary, load_template_library
+from jy_common.template_library import (
+    TemplateLibrary,
+    load_resource_libraries,
+    load_template_library,
+)
+
+
+FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures"
 
 
 def test_template_library_from_missing_file(tmp_path: Path) -> None:
@@ -18,8 +25,8 @@ def test_template_library_from_missing_file(tmp_path: Path) -> None:
 def test_template_library_loads_real_template(tmp_path: Path) -> None:
     """加载真实模板文件:pick_transition / default_text_style 返回正确数据。"""
     template = {
-        "transitions": [{"name": "淡入淡出", "resource_id": "tx-001", "duration_us": 500000}],
-        "video_effects": [{"name": "轻微放大", "resource_id": "vfx-001", "intensity": 0.3}],
+        "transitions": [{"name": "渐变模糊", "resource_id": "tx-001", "duration_us": 500000}],
+        "video_effects": [{"name": "胶片式黑白", "resource_id": "vfx-001", "intensity": 0.3}],
         "default_style": {"outline": True, "shadow": True, "entrance_animation": None},
     }
     f = tmp_path / "tpl.json"
@@ -30,7 +37,7 @@ def test_template_library_loads_real_template(tmp_path: Path) -> None:
 
     tx = lib.pick_transition("default")
     assert tx["resource_id"] == "tx-001"
-    assert tx["name"] == "淡入淡出"
+    assert tx["name"] == "渐变模糊"
 
     vfx = lib.pick_video_effect("default")
     assert vfx["resource_id"] == "vfx-001"
@@ -62,3 +69,95 @@ def test_load_template_library_convenience(tmp_path: Path) -> None:
     f.write_text('{"transitions": []}', encoding="utf-8")
     lib = load_template_library(f)
     assert isinstance(lib, TemplateLibrary)
+
+
+# ---------- 新 API 测试(资源库) ----------
+
+
+def _fixture_lib() -> TemplateLibrary:
+    """加载仓库内 fixture,得到一份同时持有 _data + _fx_lib + _text_lib 的 lib。"""
+    return TemplateLibrary.from_json_files(
+        fx_template=FIXTURE_DIR / "fx_template_stub.json",
+        fx_resource=FIXTURE_DIR / "fx_resource_library_fixture.json",
+        text_resource=FIXTURE_DIR / "text_resource_library_fixture.json",
+    )
+
+
+def test_from_json_files_loads_real_fixture() -> None:
+    """三个 fixture 都存在 → 三块数据都进来。"""
+    lib = _fixture_lib()
+    assert lib.is_empty is False
+    assert lib.has_fx_lib is True
+    assert lib.has_text_lib is True
+
+
+def test_pick_transition_by_name_vip() -> None:
+    """按 name 精确查转场 → 返回完整字段(resource_id 19 位数字)。"""
+    lib = _fixture_lib()
+    t = lib.pick_transition_by_name("渐变模糊")
+    assert t is not None
+    assert t["resource_id"] == "7123135366504124936"
+    assert t["effect_id"] == "FX_TX_001"
+    assert t["is_vip"] is True
+
+
+def test_pick_video_effect_by_name_vip() -> None:
+    """按 name 精确查视频特效。"""
+    lib = _fixture_lib()
+    v = lib.pick_video_effect_by_name("胶片式黑白")
+    assert v is not None
+    assert v["resource_id"] == "7447351620641231369"
+
+
+def test_pick_text_animation_intro_vip() -> None:
+    """按 kind + name 查文字入场动画。"""
+    lib = _fixture_lib()
+    a = lib.pick_text_animation("intro", "居中打字机")
+    assert a is not None
+    assert a["resource_id"] == "7265222187286532667"
+    assert a["duration_s"] == 0.5
+
+
+def test_pick_unknown_returns_none() -> None:
+    """未命中的 name 返回 None;非法 kind 也返回 None。"""
+    lib = _fixture_lib()
+    assert lib.pick_transition_by_name("不存在的转场") is None
+    assert lib.pick_video_effect_by_name("不存在的特效") is None
+    assert lib.pick_text_animation("intro", "不存在的动画") is None
+    assert lib.pick_text_animation("foo", "x") is None  # 非法 kind
+
+
+def test_list_methods() -> None:
+    """list_transitions / list_text_animations 返回 name 列表。"""
+    lib = _fixture_lib()
+    tx_names = lib.list_transitions()
+    assert set(tx_names) == {"渐变模糊", "魔法放大", "黑白抖动"}
+    intro_names = lib.list_text_animations("intro")
+    assert "居中打字机" in intro_names
+    assert "渐次出现" in intro_names
+
+
+def test_resource_libraries_missing_fallback(tmp_path: Path) -> None:
+    """fx_resource / text_resource 不存在时,by_name 查询返回 None,但 is_empty 不变。"""
+    fx_template = tmp_path / "tpl.json"
+    fx_template.write_text('{"transitions": [{"name": "x"}]}', encoding="utf-8")
+    lib = TemplateLibrary.from_json_files(
+        fx_template=fx_template,
+        fx_resource=tmp_path / "missing_fx.json",
+        text_resource=tmp_path / "missing_text.json",
+    )
+    assert lib.is_empty is False  # 模板还在
+    assert lib.has_fx_lib is False  # 但 fx_lib 没数据
+    assert lib.has_text_lib is False
+    assert lib.pick_transition_by_name("x") is None
+
+
+def test_load_resource_libraries_convenience() -> None:
+    """便捷函数 load_resource_libraries 等价于 TemplateLibrary.from_json_files。"""
+    lib = load_resource_libraries(
+        fx_template=FIXTURE_DIR / "fx_template_stub.json",
+        fx_resource=FIXTURE_DIR / "fx_resource_library_fixture.json",
+        text_resource=FIXTURE_DIR / "text_resource_library_fixture.json",
+    )
+    assert isinstance(lib, TemplateLibrary)
+    assert lib.pick_transition_by_name("魔法放大") is not None

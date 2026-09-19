@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 
 from nodes.node_09_inject_fx import inject_fx
+
+
+_VIP_ID_PATTERN = re.compile(r"^\d{19}$")
 
 
 @pytest.fixture
@@ -50,7 +54,7 @@ def _state(**overrides) -> dict:
 
 
 def test_inject_fx_adds_transitions_and_video_effects(tmp_draft: Path) -> None:
-    """3 段 → 2 个转场;1 个全局视频特效。"""
+    """3 段 → 2 个转场;1 个全局视频特效。每个 resource_id 是 19 位数字。"""
     state = _state(draft_path=str(tmp_draft))
     out = inject_fx(state)
 
@@ -60,22 +64,28 @@ def test_inject_fx_adds_transitions_and_video_effects(tmp_draft: Path) -> None:
 
     assert len(transitions) == 2  # 3 段有 2 个边界
     assert all(t.get("resource_id") for t in transitions)
+    assert all(_VIP_ID_PATTERN.match(t["resource_id"]) for t in transitions), (
+        f"resource_id 不是 19 位数字:{[t['resource_id'] for t in transitions]}"
+    )
     assert len(video_effects) >= 1
     assert all(ve.get("resource_id") for ve in video_effects)
+    assert all(_VIP_ID_PATTERN.match(ve["resource_id"]) for ve in video_effects), (
+        f"video_effect resource_id 不是 19 位数字:{[ve['resource_id'] for ve in video_effects]}"
+    )
     assert "node_09_inject_fx_done" in out["status_log"]
 
 
 def test_inject_fx_handles_missing_template(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """模板库缺失时,降级通过 — status_log 标记 + error_log 警告,不动草稿。"""
-    # 把节点 9 的 load_template_library 替换为返回空库
+    # 把节点 9 的 load_resource_libraries 替换为返回空库
     from jy_common import template_library as tl_mod
 
     empty_lib = tl_mod.TemplateLibrary({"_missing": True, "_path": "/nope.json"})
 
-    def fake_loader(_path):
+    def fake_loader(**_kwargs):
         return empty_lib
 
-    monkeypatch.setattr("nodes.node_09_inject_fx.load_template_library", fake_loader)
+    monkeypatch.setattr("nodes.node_09_inject_fx.load_resource_libraries", fake_loader)
 
     draft = {
         "canvas_config": {"width": 1080, "height": 1920},
@@ -93,6 +103,54 @@ def test_inject_fx_handles_missing_template(tmp_path: Path, monkeypatch: pytest.
     # 草稿 materials.transitions 应为空或不存在
     draft_after = json.loads(draft_path.read_text(encoding="utf-8"))
     assert not draft_after["materials"].get("transitions")
+
+
+def test_inject_fx_handles_missing_fx_resource(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """fx_resource_library.json 缺失(只有 fx_template):节点仍跑通,转场降级到占位。
+
+    现状 fx_template.json 用 PLACEHOLDER_* — 故 resource_id 不是 19 位数字,会进入
+    warning 路径,但节点不应抛异常。
+    """
+    from jy_common import template_library as tl_mod
+
+    def fake_loader(**_kwargs):
+        # 仅返回 data,fx_lib / text_lib 都空
+        return tl_mod.TemplateLibrary(
+            {
+                "transitions": [{"name": "PLACEHOLDER_NAME", "resource_id": "PLACEHOLDER_X"}],
+                "video_effects": [{"name": "PLACEHOLDER_VFX", "resource_id": "PLACEHOLDER_V"}],
+            },
+            fx_lib={},
+            text_lib={},
+        )
+
+    monkeypatch.setattr("nodes.node_09_inject_fx.load_resource_libraries", fake_loader)
+
+    draft = {
+        "canvas_config": {"width": 1080, "height": 1920},
+        "duration": 30_000_000,
+        "materials": {},
+        "tracks": [{
+            "type": "video",
+            "segments": [
+                {"id": "s1", "target_timerange": {"start": 0, "duration": 10_000_000}},
+                {"id": "s2", "target_timerange": {"start": 10_000_000, "duration": 10_000_000}},
+            ],
+        }],
+    }
+    draft_path = tmp_path / "draft.json"
+    draft_path.write_text(json.dumps(draft), encoding="utf-8")
+    state = _state(
+        draft_path=str(draft_path),
+        shot_plan={"shots": [
+            {"id": "sh1", "style_tag": "default"},
+            {"id": "sh2", "style_tag": "default"},
+        ]},
+    )
+    out = inject_fx(state)
+    assert "node_09_inject_fx_done" in out["status_log"]
+    # 应该至少有一条 warning(关于 resource_id 不是 19 位数字)
+    assert any("不是 19 位数字" in e for e in out["error_log"])
 
 
 def test_inject_fx_idempotent_keys_use_avail_assets(tmp_draft: Path) -> None:

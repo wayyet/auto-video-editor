@@ -463,6 +463,8 @@ def test_tc06_unsupported_video_format_writes_error_log(
     assert out.get("draft_path") is None
     assert any("MCP 调用失败" in e and "unsupported codec" in e for e in out["error_log"])
     # 其他字段保持完整
-    assert out["cache_cleaned"] is True
+    # clean_cache 已不再从 START 自动触发(改为 OpenStoryline Web UI 手动按钮调用),
+    # 因此 cache_cleaned 字段应保持默认值 / 不被写入。
+    assert not out.get("cache_cleaned", False)
     assert out["openstoryline_ready"] is True
     assert out["preview_opened"] is True

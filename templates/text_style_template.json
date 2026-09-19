@@ -1,16 +1,12 @@
 {
-  "_reverse_engineering_pending": true,
-  "_week3_status": "placeholder",
+  "_reverse_engineering_pending": false,
+  "_week3_status": "real_vip",
+  "_source_vip_library": "templates/text_resource_library.json",
+  "_generated_via": "scripts/build_resource_library.py",
+  "_comment": "Week 4 升级:entrance_animation 默认值在节点 10 运行时由 TemplateLibrary.pick_text_animation('intro', '<name>') 解析成真实 VIP 动画对象(resource_id 是 19 位数字)。下方 default_style 中的 entrance_animation 保留为 name 引用(节点 10 解析),不要直接放 resource_id。",
   "_week4_resource_id_field": {
-    "entrance_animation": "<animation_name_or_enum_value>"
+    "entrance_animation": "name 引用 + resource_id 在 text_resource_library.json 里查"
   },
-  "_reverse_engineering_steps": [
-    "1. 备份 drafts/default/draft_content.json",
-    "2. 剪映 v5.9.0 客户端打开,手工设置花字入场动画,导出新草稿",
-    "3. diff 新旧 draft_content.json,把 entrance_animation 的合法枚举值回填到 default_style.entrance_animation",
-    "4. 把 _reverse_engineering_pending 设为 false"
-  ],
-  "_comment": "花字样式模板 — 步骤10 使用。Week 3 占位(entrance_animation 留 None);Week 4 从 AVAILABLE_ASSETS.md 选定具体枚举值。",
   "default_style": {
     "size": 5.0,
     "bold": true,
@@ -20,6 +16,6 @@
     "transform_y": -0.8,
     "outline": true,
     "shadow": true,
-    "entrance_animation": null
+    "entrance_animation_name": "新年打字机"
   }
 }
