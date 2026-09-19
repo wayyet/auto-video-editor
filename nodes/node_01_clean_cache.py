@@ -1,12 +1,27 @@
 """节点 1:clean_cache — 对应 /kuaishou-clean-cache 技能(附件 1.2 节)。
 
-清理剪映、OpenStoryline 与系统临时目录。配置路径全部从 config 读取,
-阶段 A 开工核实后填实。
+清理剪映、OpenStoryline、FireRed-OpenStoryline、auto-video-editor 自身
+的可再生缓存(技能「一类·常规再生缓存」清单)。所有路径来源:
+
+- ``config.CACHE_PATHS_TO_CLEAN``:简单路径(直接 Path)。
+- ``config.CACHE_GLOB_SPECS``:递归/通配 spec(``__pycache__``、``tmp`` 子目录、
+  ``.DS_Store``、剪映草稿 ``.bak`` / ``.backup``、runtime 日志等)。
+- ``config.resolved_cache_paths()``:把上述两类 spec 扁平化为当下磁盘上的
+  ``list[Path]``。
+
+调用时机(2026-09 计划):
+- graph.invoke **不**自动触发本节点(START 边已剥离,见 graph.py 与
+  ``tests/integration/test_no_autoclean_cache.py``)。
+- 仅由 FireRed-OpenStoryline Web UI 的「清理缓存」按钮通过
+  ``POST /api/system/clean-cache`` 端点显式调用。
 
 单测要点(附件 1.2 节):
 - 目标目录不存在时不报错(正常跳过)
 - 目标目录存在但被占用时异常被捕获并写入 error_log,不中断流程
 - cache_cleaned_paths 只包含实际清理成功的路径
+- 禁止清理剪映 ``User Data\\Cache`` / ``User Data\\Log``(技能三类·禁删项)
+- ``__pycache__`` 递归须排除 ``.venv/`` 与 ``venv/``
+- ``tmp/`` 根下 4 个模板 JSON 不被删除(只动子目录)
 """
 
 from __future__ import annotations

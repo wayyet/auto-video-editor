@@ -13,19 +13,190 @@ Week 5 改动(对齐第 5 周计划 §1.3 / §4.6):
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 
 # ---------------------------------------------------------------------------
 # 节点 1:clean_cache 路径列表
 # ---------------------------------------------------------------------------
-# [TODO: Week1] 核实实际安装位置(剪映默认装在 %LOCALAPPDATA%\JianyingPro\
-#   User Data\Cache,但 v5.9.0 可能不同;OpenStoryline 临时目录按部署方式而异)
+# 对齐技能 ``kuaishou-clean-cache``(见 FireRed-OpenStoryline\.claude\skills\
+# kuaishou-clean-cache\SKILL.md)的「一类·常规再生缓存」清单,补齐 auto-video-editor
+# 自身 + 同级 FireRed-OpenStoryline + 共享 AppData 的可再生缓存条目。
+#
+# 双层结构:
+# - ``CACHE_PATHS_TO_CLEAN``:简单路径(直接 ``Path`` 指向目录/文件)。
+# - ``CACHE_GLOB_SPECS``:递归/通配条目(调用 ``resolved_cache_paths()`` 时才展开)。
+#
+# 关键约束(技能三类·禁止删除):
+# - 剪映 ``%LOCALAPPDATA%\JianyingPro\User Data\Cache`` —— 已注入的 VIP 转场/特效/花字/贴纸
+#   需重新联网下载才能渲染,**用户 2026-07-04 指定禁删**,绝对不进入清理清单。
+# - 剪映 ``%LOCALAPPDATA%\JianyingPro\User Data\Log`` —— 用户 2026-07-04 指定禁删。
+# - FireRed ``.venv``、模型权重、``outputs/`` 成片、草稿本体 等一律不进入本表。
+#
+# ``resolved_cache_paths()`` 在每次调用时把两类 spec 扁平化为 ``list[Path]``,
+# 反映当下的文件系统状态;不在磁盘上的路径会被静默跳过(不计入 cleaned)。
 CACHE_PATHS_TO_CLEAN: list[str] = [
-    r"%LOCALAPPDATA%\JianyingPro\User Data\Cache",
+    # 原有:系统级临时目录(低风险,保留)
     r"%LOCALAPPDATA%\Temp\OpenStoryline",
     r"%TEMP%\jianying_workflow_tmp",
+    # ---- 新增:剪映草稿回收站(技能一类 §2.3,2026-07-04 已升为常规清理项) ----
+    r"%LOCALAPPDATA%\JianyingPro\User Data\Projects\com.lveditor.draft\.recycle_bin",
+    # ---- 新增:FireRed-OpenStoryline 一类项(技能命令模板 #1/#3) ----
+    r"E:\Documents\kuaishou\FireRed-OpenStoryline\.storyline\.server_cache",
+    r"E:\Documents\kuaishou\FireRed-OpenStoryline\.playwright-cli",
+    r"E:\Documents\kuaishou\.playwright-cli",
+    # ---- 新增:FireRed 日志 / 安装 / 测试 / 配置备份(技能命令模板 #4) ----
+    r"E:\Documents\kuaishou\FireRed-OpenStoryline\web.out.log",
+    r"E:\Documents\kuaishou\FireRed-OpenStoryline\web.err.log",
+    r"E:\Documents\kuaishou\FireRed-OpenStoryline\mcp.out.log",
+    r"E:\Documents\kuaishou\FireRed-OpenStoryline\mcp.err.log",
+    r"E:\Documents\kuaishou\FireRed-OpenStoryline\install_log.txt",
+    r"E:\Documents\kuaishou\FireRed-OpenStoryline\test_result.txt",
+    r"E:\Documents\kuaishou\FireRed-OpenStoryline\test_tts_result.txt",
+    # ---- 新增:env_check 报告(技能命令模板 #4) ----
+    r"E:\Documents\kuaishou\env_check_report.txt",
+    # ---- 新增:剪映程序日志 + 剪艾 agent boot 日志(技能命令模板 #6) ----
+    r"E:\Documents\kuaishou\JianyingPro\5.9.0.11632\log",
+    r"E:\Documents\kuaishou\剪艾（剪辑agent）\win-unpacked\boot.log",
+    # ---- 新增:auto-video-editor 自身 .pytest_cache + .docker-proxy 日志 ----
+    r"E:\Documents\kuaishou\auto-video-editor\.pytest_cache",
+    r"E:\Documents\kuaishou\auto-video-editor\.docker-proxy\gost.out.log",
+    r"E:\Documents\kuaishou\auto-video-editor\.docker-proxy\gost.err.log",
 ]
+
+
+# ---------------------------------------------------------------------------
+# 节点 1:clean_cache 递归/通配 spec
+# ---------------------------------------------------------------------------
+# 简单路径放 ``CACHE_PATHS_TO_CLEAN``;以下条目需要通配/递归,调用
+# ``resolved_cache_paths()`` 时按 ``kind`` 展开为扁平 ``list[Path]``。
+#
+# - ``dir_recurse``:对 ``root`` 做 ``rglob(pattern)``,只保留目录。
+# - ``dir_children``:对 ``root`` 做 ``iterdir()``,只保留目录(不动文件,用于
+#   保护 ``tmp/`` 根下 4 个模板 JSON)。
+# - ``file_recurse``:对 ``root`` 做 ``rglob(pattern)``,只保留文件。
+# - ``file_pattern``:对 ``root`` 做 ``glob(pattern)``,只保留文件(非递归)。
+#
+# ``exclude_substr`` 是路径黑名单(命中即丢弃),用于把 ``__pycache__`` 递归
+# 排除在 ``.venv/`` 与 ``venv/`` 之外。
+@dataclass(frozen=True)
+class CacheGlobSpec:
+    """一条递归/通配清理条目。"""
+
+    root: str  # 含环境变量,展开后必须存在(或本轮结果为空)
+    kind: Literal["dir_recurse", "file_recurse", "dir_children", "file_pattern"]
+    pattern: str  # rglob/glob/iterdir 参数
+    exclude_substr: tuple[str, ...] = ()  # 例如 ("\\venv\\", "\\.venv\\")
+    description: str = ""
+
+
+CACHE_GLOB_SPECS: list[CacheGlobSpec] = [
+    # 技能一类 #2:源码 __pycache__ —— 排除两个 venv
+    CacheGlobSpec(
+        root=r"E:\Documents\kuaishou",
+        kind="dir_recurse",
+        pattern="__pycache__",
+        exclude_substr=("\\venv\\", "\\.venv\\"),
+        description="源码 __pycache__ (排除 venv)",
+    ),
+    # 技能一类 #7:tmp/ 子目录(保留根下 4 个模板 json)
+    CacheGlobSpec(
+        root=r"E:\Documents\kuaishou\tmp",
+        kind="dir_children",
+        pattern="*",
+        exclude_substr=(),
+        description="tmp 子目录(不动根下 4 个模板)",
+    ),
+    # 技能一类 #10:.DS_Store 残留
+    CacheGlobSpec(
+        root=r"E:\Documents\kuaishou",
+        kind="file_recurse",
+        pattern=".DS_Store",
+        description=".DS_Store 残留",
+    ),
+    # 技能一类 #11:剪映草稿注入 .bak 备份
+    CacheGlobSpec(
+        root=r"%LOCALAPPDATA%\JianyingPro\User Data\Projects\com.lveditor.draft",
+        kind="file_recurse",
+        pattern="*.bak",
+        description="剪映草稿 .bak 备份",
+    ),
+    CacheGlobSpec(
+        root=r"%LOCALAPPDATA%\JianyingPro\User Data\Projects\com.lveditor.draft",
+        kind="dir_recurse",
+        pattern=".backup",
+        description="剪映草稿 .backup 目录",
+    ),
+    # auto-video-editor 独有:runtime/initial_state_*.json
+    CacheGlobSpec(
+        root=r"E:\Documents\kuaishou\auto-video-editor\runtime",
+        kind="file_pattern",
+        pattern="initial_state_*.json",
+        description="start_production 生成的 initial_state",
+    ),
+    # auto-video-editor 独有:logs/*.log
+    CacheGlobSpec(
+        root=r"E:\Documents\kuaishou\auto-video-editor\logs",
+        kind="file_recurse",
+        pattern="*.log",
+        description="start/stop/openstoryline/_sanity 日志",
+    ),
+    # FireRed config.toml.bak.*
+    CacheGlobSpec(
+        root=r"E:\Documents\kuaishou\FireRed-OpenStoryline",
+        kind="file_pattern",
+        pattern="config.toml.bak.*",
+        description="FireRed config.toml 备份",
+    ),
+]
+
+
+def _expand_spec(spec: CacheGlobSpec) -> list[Path]:
+    """把一条 ``CacheGlobSpec`` 展开为扁平 ``list[Path]``。
+
+    展开规则:
+    - ``root`` 不存在 → 返回 ``[]``(静默跳过,不抛异常)。
+    - ``dir_recurse``/``file_recurse``:对 ``root.rglob(pattern)`` 结果应用
+      ``exclude_substr`` 过滤。
+    - ``dir_children``:对 ``root.iterdir()`` 取 ``is_dir()``,应用过滤。
+    - ``file_pattern``:对 ``root.glob(pattern)`` 取 ``is_file()``,应用过滤。
+    """
+    root = Path(os.path.expandvars(spec.root))
+    if not root.exists():
+        return []
+
+    def keep(p: Path) -> bool:
+        s = str(p)
+        return not any(token in s for token in spec.exclude_substr)
+
+    if spec.kind == "dir_recurse":
+        return [p for p in root.rglob(spec.pattern) if p.is_dir() and keep(p)]
+    if spec.kind == "file_recurse":
+        return [p for p in root.rglob(spec.pattern) if p.is_file() and keep(p)]
+    if spec.kind == "dir_children":
+        return [p for p in root.iterdir() if p.is_dir() and keep(p)]
+    if spec.kind == "file_pattern":
+        return [p for p in root.glob(spec.pattern) if p.is_file() and keep(p)]
+    raise ValueError(f"Unknown CacheGlobSpec.kind: {spec.kind!r}")
+
+
+def resolved_cache_paths() -> list[Path]:
+    """把 ``CACHE_PATHS_TO_CLEAN`` + ``CACHE_GLOB_SPECS`` 扁平化为 ``list[Path]``。
+
+    - 简单路径:展开环境变量后,只保留当下磁盘上存在的 ``Path``。
+    - 递归/通配:按 ``_expand_spec`` 展开,root 不存在则返回空项。
+    - 调用时才展开(``rglob`` 等),保证反映当下文件系统状态。
+    """
+    out: list[Path] = []
+    for raw in CACHE_PATHS_TO_CLEAN:
+        p = Path(os.path.expandvars(raw))
+        if p.exists():
+            out.append(p)
+    for spec in CACHE_GLOB_SPECS:
+        out.extend(_expand_spec(spec))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -243,11 +414,6 @@ def openstoryline_mcp_url() -> str:
 
 def openstoryline_web_url() -> str:
     return f"http://127.0.0.1:{OPENSTORYLINE_WEB_PORT}"
-
-
-def resolved_cache_paths() -> list[Path]:
-    """把 CACHE_PATHS_TO_CLEAN 中的环境变量展开为绝对路径,供节点 1 使用。"""
-    return [Path(os.path.expandvars(p)) for p in CACHE_PATHS_TO_CLEAN]
 
 
 def make_checkpointer(backend: str = CHECKPOINTER_BACKEND, thread_id: str = "default"):

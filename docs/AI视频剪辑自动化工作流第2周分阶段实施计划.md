@@ -62,42 +62,109 @@ class WorkflowState(TypedDict):
 
 ### 1.2 节点1：`clean_cache`
 
-对应技能`/kuaishou-clean-cache`（第13.1节），清理剪映、OpenStoryline与系统临时目录。
+对应技能`/kuaishou-clean-cache`（第13.1节），清理剪映、OpenStoryline、FireRed-OpenStoryline、auto-video-editor 自身的「一类·常规再生缓存」。
+
+```python
+# config.py
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal
+
+# 简单路径：环境变量展开后直接当 Path 用
+CACHE_PATHS_TO_CLEAN: list[str] = [
+    r"%LOCALAPPDATA%\Temp\OpenStoryline",
+    r"%TEMP%\jianying_workflow_tmp",
+    r"%LOCALAPPDATA%\JianyingPro\User Data\Projects\com.lveditor.draft\.recycle_bin",
+    r"E:\Documents\kuaishou\FireRed-OpenStoryline\.storyline\.server_cache",
+    r"E:\Documents\kuaishou\FireRed-OpenStoryline\.playwright-cli",
+    r"E:\Documents\kuaishou\.playwright-cli",
+    r"E:\Documents\kuaishou\env_check_report.txt",
+    r"E:\Documents\kuaishou\JianyingPro\5.9.0.11632\log",
+    r"E:\Documents\kuaishou\剪艾（剪辑agent）\win-unpacked\boot.log",
+    r"E:\Documents\kuaishou\auto-video-editor\.pytest_cache",
+    r"E:\Documents\kuaishou\auto-video-editor\.docker-proxy\gost.out.log",
+    r"E:\Documents\kuaishou\auto-video-editor\.docker-proxy\gost.err.log",
+    # … FireRed web/mcp 日志、install_log.txt、test_result.txt、config.toml.bak.* 等
+]
+
+# 递归/通配 spec：调用 resolved_cache_paths 时才展开为 Path
+@dataclass(frozen=True)
+class CacheGlobSpec:
+    root: str                              # 含环境变量
+    kind: Literal["dir_recurse", "file_recurse", "dir_children", "file_pattern"]
+    pattern: str                           # rglob/glob 参数
+    exclude_substr: tuple[str, ...] = ()   # 例如 ("\\venv\\", "\\.venv\\")
+    description: str = ""
+
+CACHE_GLOB_SPECS: list[CacheGlobSpec] = [
+    CacheGlobSpec(
+        root=r"E:\Documents\kuaishou",
+        kind="dir_recurse",
+        pattern="__pycache__",
+        exclude_substr=("\\venv\\", "\\.venv\\"),
+        description="源码 __pycache__ (排除 venv)",
+    ),
+    CacheGlobSpec(
+        root=r"E:\Documents\kuaishou\tmp",
+        kind="dir_children",
+        pattern="*",
+        exclude_substr=(),
+        description="tmp 子目录（不动根下 4 个模板）",
+    ),
+    # … .DS_Store、剪映草稿 *.bak / .backup、runtime/initial_state_*.json、logs/*.log、config.toml.bak.* 等
+]
+
+
+def resolved_cache_paths() -> list[Path]:
+    """扁平化两类 spec 为 Path 列表。调用时才展开 glob/递归。"""
+    out: list[Path] = []
+    for raw in CACHE_PATHS_TO_CLEAN:
+        p = Path(os.path.expandvars(raw))
+        if p.exists():
+            out.append(p)
+    for spec in CACHE_GLOB_SPECS:
+        out.extend(_expand_spec(spec))
+    return out
+```
+
+> **重要禁删项**（技能三类）：剪映 `User Data\Cache` 与 `User Data\Log` **绝不**进入 `CACHE_PATHS_TO_CLEAN` —— 删除 VIP 素材/特效下载缓存会导致已注入的转场/特效/花字/贴纸下次渲染需重新联网下载（用户 2026-07-04 指定）。
 
 ```python
 # nodes/node_01_clean_cache.py
-import os
-import shutil
-from pathlib import Path
-
+from config import resolved_cache_paths
 from state import WorkflowState
 
-# 待PoC/环境搭建阶段核实实际路径（因安装方式而异）。
-# 下方为Windows常见默认位置起点，非最终值。
-CACHE_PATHS_TO_CLEAN = [
-    r"%LOCALAPPDATA%\JianyingPro\User Data\Cache",
-    r"%TEMP%\OpenStoryline",
-    r"%TEMP%\jianying_workflow_tmp",
-]
-
-def clean_cache(state: WorkflowState) -> WorkflowState:
+def clean_cache(state: WorkflowState) -> dict:
     cleaned: list[str] = []
-    errors = list(state.get("error_log", []))
-    for raw_path in CACHE_PATHS_TO_CLEAN:
-        path = Path(os.path.expandvars(raw_path))
+    errors = list(state.get("error_log", []) or [])
+    for path in resolved_cache_paths():
         try:
             if path.exists():
-                shutil.rmtree(path, ignore_errors=False)
+                if path.is_dir():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
                 cleaned.append(str(path))
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             errors.append(f"[node_01] 清理失败 {path}: {e}")
-    return {**state, "cache_cleaned": True, "cache_cleaned_paths": cleaned, "error_log": errors}
+    return {
+        **state,
+        "cache_cleaned": True,
+        "cache_cleaned_paths": cleaned,
+        "error_log": errors,
+    }
 ```
+
+**调用时机**：graph.invoke **不**自动触发本节点（START 边已剥离），仅由 FireRed-OpenStoryline Web UI 的「清理缓存」按钮通过 `POST /api/system/clean-cache` 端点显式调用。
 
 **单元测试要点**：
 - 目标目录不存在时不报错（正常跳过）
 - 目标目录存在但被占用（模拟文件锁）时，异常被捕获并写入`error_log`，不中断流程
 - 断言返回的`cache_cleaned_paths`只包含实际清理成功的路径
+- `CACHE_PATHS_TO_CLEAN` 不含剪映 `User Data\Cache` / `User Data\Log`
+- `__pycache__` 递归排除 `.venv/` 与 `venv/`
+- `tmp/` 根下 4 个模板 JSON 不被删除（只动子目录）
 
 ### 1.3 节点2：`launch_openstoryline_service`
 
