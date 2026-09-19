@@ -37,7 +37,7 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
-from jy_common.draft_writer import atomic_write_draft_json
+from draft_ops.atomic_writer import safe_write_draft
 from state import WorkflowState
 
 
@@ -154,7 +154,8 @@ def jianying_adjust_volume(
                 continue
             written_entry = _apply_fade(audio_fades, seg_id, fade_in_seconds, fade_out_seconds)
 
-    atomic_write_draft_json(draft_file, draft)
+    # Week 5:从旧单写入口切到 safe_write_draft 双写(draft_dir 由 draft_file.parent 提供)。
+    safe_write_draft(draft_file.parent, draft)
     return written_entry
 
 

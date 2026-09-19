@@ -17,7 +17,7 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
-from draft_ops.atomic_writer import atomic_write_draft
+from draft_ops.atomic_writer import safe_write_draft
 from jy_common.sticker_resolver import resolve_sticker_resource_id
 from state import WorkflowState
 
@@ -123,7 +123,10 @@ def inject_sticker(state: WorkflowState) -> dict:
             target_seg.setdefault("extra_material_refs", []).append(sticker_id)
 
     video_track["segments"] = segments
-    atomic_write_draft(draft_path, draft)
+    # Week 5:参数从 draft_path 提升为 draft_path.parent,safe_write_draft 双写
+    write_result = safe_write_draft(draft_path.parent, draft)
 
     log = list(state.get("status_log", []) or []) + ["node_11_inject_sticker_done"]
+    if write_result.get("jianying_running"):
+        log.append("[node_11] 剪映进程在跑,写入仍继续(告警不阻断)")
     return {**state, "status_log": log, "error_log": error_log}

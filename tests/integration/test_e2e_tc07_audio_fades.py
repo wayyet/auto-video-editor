@@ -129,13 +129,24 @@ def test_tc07_node_13_then_resume_keeps_state_idempotent(audio_draft: Path) -> N
     assert fade_count_2 >= fade_count_1
 
 
-def test_tc07_node_13_uses_draft_writer_entry_point(audio_draft: Path) -> None:
-    """TC07:节点 13 走 ``jy_common.draft_writer.atomic_write_draft_json`` 入口(计划文档约定)。"""
-    # 通过 import 路径验证 — 不依赖运行行为
+def test_tc07_node_13_uses_safe_write_draft_entry_point(audio_draft: Path) -> None:
+    """TC07:节点 13 走 ``draft_ops.atomic_writer.safe_write_draft`` 入口(Week 5 双写契约)。
+
+    升级历史:
+    - Week 3/4:节点 13 走 ``jy_common.draft_writer.atomic_write_draft_json``(单写)。
+    - Week 5(本计划 §6.2):节点 13 切到 ``safe_write_draft``(双写 + 校验 + 失败回退),
+      与节点 5/7/8/9/10/11/16 保持一致。
+    """
     import inspect
 
     from nodes import node_13_adjust_volume
 
     src = inspect.getsource(node_13_adjust_volume)
-    assert "jy_common.draft_writer" in src, \
-        "节点 13 应通过 jy_common.draft_writer 入口写入(计划文档 §4.8 约定)"
+    assert "safe_write_draft" in src, (
+        "节点 13 应通过 draft_ops.atomic_writer.safe_write_draft 入口写入"
+        "(Week 5 计划 §6.2 双写契约)"
+    )
+    # 反向断言:不再走旧的 jy_common.draft_writer.atomic_write_draft_json
+    assert "atomic_write_draft_json" not in src, (
+        "节点 13 不应再走 atomic_write_draft_json(Week 5 已切到 safe_write_draft)"
+    )

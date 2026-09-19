@@ -102,27 +102,50 @@ class TemplateLibrary:
             self._text_lib.get(k) for k in ("intro", "loop", "outro")
         )
 
-    # ---------- 旧 API(兼容) ----------
+    # ---------- 旧 API(Week 5 升级 — 按 style_tag 精确匹配 + hash 兜底)----------
 
     def pick_transition(self, style_tag: str) -> dict[str, Any]:
-        """根据 style_tag 选择一个转场对象;无匹配时返回第一个或空 dict。
+        """根据 ``style_tag`` 选一个转场对象;无匹配时回退到全表 hash 兜底。
 
-        Week 3 占位:按索引顺序循环 + style_tag hash 取模;Week 4 真实 ID 在节点 9 里
-        通过 ``pick_transition_by_name`` 二次补齐。本方法保留旧语义。
+        升级历史:
+        - Week 3 占位:按全表 hash-modulo 选(同 ``style_tag`` 永远映射到同一 index,
+          与语义无关)。
+        - Week 5 升级:先按 ``row["style_tag"] == style_tag`` 精确匹配;无匹配则用
+          ``_legacy_pick_by_hash`` 兜底(保留旧 hash 行为供单测 / 全表循环用例使用,
+          外部 API 不变)。
         """
         transitions = self._data.get("transitions", [])
         if not transitions:
             return {}
-        idx = abs(hash(style_tag)) % len(transitions)
-        return dict(transitions[idx])
+        # 1. 精确匹配 style_tag
+        for row in transitions:
+            if row.get("style_tag") == style_tag:
+                return dict(row)
+        # 2. 兜底:hash-modulo 全表
+        return self._legacy_pick_by_hash(transitions, style_tag)
 
     def pick_video_effect(self, style_tag: str) -> dict[str, Any]:
-        """选择一个视频特效对象;无匹配时返回空 dict。"""
+        """选择一个视频特效对象;无匹配时回退到全表 hash 兜底。
+
+        Week 5 升级:同 ``pick_transition``,按 ``style_tag`` 字段精确匹配 +
+        hash 兜底。若资源行**未**带 ``style_tag`` 字段(Week 3 占位数据),
+        所有 style_tag 都走兜底路径(语义上等价于旧 hash 行为)。
+        """
         effects = self._data.get("video_effects", [])
         if not effects:
             return {}
-        idx = abs(hash(style_tag)) % len(effects)
-        return dict(effects[idx])
+        # 1. 精确匹配 style_tag
+        for row in effects:
+            if row.get("style_tag") == style_tag:
+                return dict(row)
+        # 2. 兜底:hash-modulo 全表
+        return self._legacy_pick_by_hash(effects, style_tag)
+
+    @staticmethod
+    def _legacy_pick_by_hash(rows: list[dict[str, Any]], style_tag: str) -> dict[str, Any]:
+        """Week 3 旧行为:hash-modulo 全表选一行。供单测 / 全表循环用例保留使用。"""
+        idx = abs(hash(style_tag)) % len(rows)
+        return dict(rows[idx])
 
     def default_text_style(self) -> dict[str, Any]:
         """返回默认花字样式(Week 3 占位 — entrance_animation=None)。

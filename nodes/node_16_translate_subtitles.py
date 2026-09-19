@@ -31,6 +31,7 @@ from typing import Optional
 from PIL import Image, ImageDraw, ImageFont
 from langgraph.types import interrupt  # 模块级别 import:让 ``patch("nodes.node_16_translate_subtitles.interrupt")`` 仍能工作
 
+from draft_ops.atomic_writer import safe_write_draft
 from draft_ops.atomic_writer_file import atomic_write_file
 from state import SubtitleSegment, WorkflowState
 
@@ -162,7 +163,12 @@ def _read_segments_from_draft(draft_dir: Path) -> list[SubtitleSegment]:
 
 
 def _write_marker(draft_dir: Path, segments: list[SubtitleSegment]) -> None:
-    """写 subtitle_en.json marker(中断前可重放操作)。"""
+    """写 subtitle_en.json marker(中断前可重放操作)。
+
+    Week 5 升级:从 ``atomic_write_file(draft_file, json.dumps(draft))``(单写且
+    不走双文件)切到 ``safe_write_draft(draft_dir, draft)``,与节点 5/7/8/9/10/11/13
+    保持一致 — content 与 info 双写 + 校验 + 失败回退。
+    """
     draft_file = draft_dir / "draft_content.json"
     if not draft_file.exists():
         return
@@ -173,10 +179,8 @@ def _write_marker(draft_dir: Path, segments: list[SubtitleSegment]) -> None:
         idx = int(seg.get("index", -1))
         if 0 <= idx < len(texts):
             texts[idx]["text_en"] = seg.get("text_en", "")
-    atomic_write_file(
-        draft_file,
-        json.dumps(draft, ensure_ascii=False, indent=2).encode("utf-8"),
-    )
+    # safe_write_draft 内部已做 verify,失败时整目录回退 + raise
+    safe_write_draft(draft_dir, draft)
 
 
 def _marker_exists(draft_dir: Path, expected_count: int) -> bool:

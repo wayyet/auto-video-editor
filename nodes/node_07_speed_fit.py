@@ -24,7 +24,7 @@ from config import (
     NODE_07_MAX_RETRY,
     TARGET_DURATION_US,
 )
-from draft_ops.atomic_writer import atomic_write_draft
+from draft_ops.atomic_writer import safe_write_draft
 from state import WorkflowState
 
 
@@ -146,12 +146,19 @@ def speed_fit(state: WorkflowState) -> dict:
     video_track["segments"] = src_segments
     draft["duration"] = cursor
 
-    atomic_write_draft(draft_path, draft)
+    # Week 5:safe_write_draft 双写(content + info)+ duration 索引同步;签名从
+    # (draft_file, content) 改为 (draft_dir, content),参数提升为目录。
+    write_result = safe_write_draft(
+        draft_path.parent, draft, duration_us=int(draft.get("duration", 0))
+    )
+    log = list(state.get("status_log", []) or [])
+    if write_result.get("jianying_running"):
+        log.append("[node_07] 剪映进程在跑,写入仍继续(告警不阻断)")
 
     retry = dict(state.get("retry_counts") or {})
     retry["node_07"] = retry.get("node_07", 0) + 1
 
-    return {**state, "retry_counts": retry}
+    return {**state, "retry_counts": retry, "status_log": log}
 
 
 # ---------------------------------------------------------------------------

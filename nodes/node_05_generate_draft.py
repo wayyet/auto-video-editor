@@ -6,7 +6,8 @@
 - 输入优先级:
     1. ``state["storyline_plan"]``(来自 node_04 真实 MCP 链路)→ mapper
     2. ``state["shot_plan"]``(Mock 兜底)→ 旧 ``_build_draft_content`` 兜底
-- 原子写入 ``draft_content.json``(沿用 ``draft_ops.atomic_writer.atomic_write_draft``)。
+- 原子写入 ``draft_content.json`` + ``draft_info.json`` 双写(Week 5 起走
+  :func:`draft_ops.atomic_writer.safe_write_draft`,剪映 5.9+ 需要二者一致)。
 - 写完回填 ``manifest.draft_path``(幂等键下一次直接命中)。
 """
 
@@ -22,7 +23,7 @@ from config import (
     WORKFLOW_ENV,
     storyline_outputs_root,
 )
-from draft_ops.atomic_writer import atomic_write_draft
+from draft_ops.atomic_writer import safe_write_draft
 from draft_ops.encryption_detector import DraftStatus, detect_draft_encryption
 from draft_ops.version_strategy import resolve_strategy
 from mcp_clients.openstoryline_client import ContractInvalid
@@ -45,15 +46,16 @@ def generate_initial_jianying_draft(
     draft_dir: Path,
     *,
     encrypt_detector=detect_draft_encryption,
-    writer=atomic_write_draft,
+    writer=safe_write_draft,
 ) -> dict:
     """生成剪映初始草稿文件(Phase 2 接入 Canonical Timeline mapper)。
 
     Args:
         state: 当前工作流状态(优先 ``storyline_plan``;fallback 到 ``shot_plan``)。
-        draft_dir: 剪映草稿目录(含或待生成 draft_content.json)。
+        draft_dir: 剪映草稿目录(含或待生成 draft_content.json / draft_info.json)。
         encrypt_detector: 可注入的加密检测函数,默认 detect_draft_encryption。
-        writer: 可注入的原子写入函数,默认 atomic_write_draft(必须用)。
+        writer: 可注入的写入函数(Week 5 起签名 ``(draft_dir, content)``),
+            默认 :func:`draft_ops.atomic_writer.safe_write_draft`(剪映 5.9+ 双写)。
     """
     errors = list(state.get("error_log", []) or [])
 
@@ -102,10 +104,16 @@ def generate_initial_jianying_draft(
             "error_log": errors,
         }
 
-    # 4. 原子写入
+    # 4. 原子双写(content + info,Week 5 新增 — 剪映 5.9+ 期望二者一致)
+    draft_dir = Path(draft_dir)
     draft_dir.mkdir(parents=True, exist_ok=True)
+    write_result = writer(draft_dir, draft_content)
+    # writer 返回值可能是 dict(safe_write_draft)或 None(legacy atomic_write_draft),
+    # 兼容两种形态。
+    if isinstance(write_result, dict) and write_result.get("jianying_running"):
+        log = list(state.get("status_log", []) or [])
+        log.append("[node_05] 剪映进程在跑,写入仍继续(告警不阻断)")
     draft_file = draft_dir / "draft_content.json"
-    writer(draft_file, draft_content)
 
     # 5. 回填 manifest.draft_path(Phase 2 幂等键)
     if job_id:

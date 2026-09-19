@@ -27,11 +27,17 @@ from typing import Any, Iterable
 
 # ---------- 路径常量 ----------
 
-# 默认源 = FireRed-OpenStoryline 仓库里 jianying-editor 技能 vendor 的 metadata 目录。
-DEFAULT_SOURCE = Path(
+# 默认源 = 本仓库 vendor 目录下 pyJianYingDraft/metadata 的副本(只读 AST 解析用)。
+# 历史:Week 4 起此处硬编码指向 FireRed-OpenStoryline 仓库路径,跨仓库耦合;
+# 本次解耦后改读本仓库 ``vendor/pyJianYingDraft/metadata``,FireRed 升级时手动
+# ``cp`` 同步即可(参考 docs/integration/剪映核心技能集成auto-video-editor开发计划.md §2.3)。
+DEFAULT_SOURCE = Path(__file__).resolve().parents[1] / "vendor" / "pyJianYingDraft" / "metadata"
+DEFAULT_OUT_DIR = Path(__file__).resolve().parents[1] / "templates"
+
+# 历史源(只读),保留用于 ``--copy-from-firered`` 一次性同步辅助子命令。
+FIRERED_SOURCE = Path(
     r"E:\Documents\kuaishou\FireRed-OpenStoryline\.claude\skills\jianying-editor\scripts\vendor\pyJianYingDraft\metadata"
 )
-DEFAULT_OUT_DIR = Path(__file__).resolve().parents[1] / "templates"
 
 
 # ---------- AST 工具 ----------
@@ -257,7 +263,39 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="只打印与已有 JSON 的差异,不写文件",
     )
+    parser.add_argument(
+        "--copy-from-firered",
+        action="store_true",
+        help=f"把 FireRed-OpenStoryline metadata 复制到本地 vendor/ 目录(只复制 5 个 metadata 文件,不覆盖 templates/);源固定为 {FIRERED_SOURCE}",
+    )
     args = parser.parse_args(argv)
+
+    # --copy-from-firered 一次性辅助:从 FireRed 把 5 个 metadata 文件复制到本地 vendor/
+    if args.copy_from_firered:
+        if not FIRERED_SOURCE.exists():
+            print(f"[build_resource_library] FireRed source missing: {FIRERED_SOURCE}", file=sys.stderr)
+            return 2
+        DEFAULT_SOURCE.mkdir(parents=True, exist_ok=True)
+        copied = 0
+        for filename in (
+            "transition_meta.py",
+            "video_scene_effect.py",
+            "text_intro.py",
+            "text_loop.py",
+            "text_outro.py",
+        ):
+            src_file = FIRERED_SOURCE / filename
+            if not src_file.exists():
+                print(f"[build_resource_library] skip missing: {src_file}", file=sys.stderr)
+                continue
+            dst_file = DEFAULT_SOURCE / filename
+            dst_file.write_bytes(src_file.read_bytes())
+            copied += 1
+        print(
+            f"[copy-from-firered] copied {copied} files from {FIRERED_SOURCE} -> {DEFAULT_SOURCE}",
+            file=sys.stderr,
+        )
+        return 0
 
     src_dir: Path = args.source
     out_dir: Path = args.out_dir

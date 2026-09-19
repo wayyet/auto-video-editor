@@ -18,7 +18,7 @@ import json
 import re
 from pathlib import Path
 
-from draft_ops.atomic_writer import atomic_write_draft
+from draft_ops.atomic_writer import safe_write_draft
 from jy_common.template_library import TemplateLibrary, load_resource_libraries
 from state import WorkflowState
 
@@ -156,9 +156,12 @@ def inject_fx(state: WorkflowState) -> dict:
     else:
         warning_msgs.append("[node_09] 未找到可用视频特效,跳过")
 
-    atomic_write_draft(draft_path, draft)
+    # Week 5:参数从 draft_path 提升为 draft_path.parent,safe_write_draft 双写
+    write_result = safe_write_draft(draft_path.parent, draft)
 
     log = list(state.get("status_log", []) or []) + ["node_09_inject_fx_done"]
+    if write_result.get("jianying_running"):
+        log.append("[node_09] 剪映进程在跑,写入仍继续(告警不阻断)")
     errors = list(state.get("error_log", []) or [])
     errors.extend(warning_msgs)
     return {**state, "status_log": log, "error_log": errors}

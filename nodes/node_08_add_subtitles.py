@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from draft_ops.atomic_writer import atomic_write_draft
+from draft_ops.atomic_writer import safe_write_draft
 from jy_common.asr_client import call_asr2s
 from state import SubtitleSegment, WorkflowState
 
@@ -66,9 +66,11 @@ def add_subtitles(state: WorkflowState) -> dict:
             "text_zh": text_content,
         })
 
-    atomic_write_draft(draft_path, draft)
-
+    # Week 5:参数从 draft_path 提升为 draft_path.parent,safe_write_draft 双写
+    write_result = safe_write_draft(draft_path.parent, draft)
     log = list(state.get("status_log", []) or []) + ["node_08_add_subtitles_done"]
+    if write_result.get("jianying_running"):
+        log.append("[node_08] 剪映进程在跑,写入仍继续(告警不阻断)")
     return {
         **state,
         "asr_segments_zh": asr_zh,

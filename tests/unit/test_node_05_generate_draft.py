@@ -55,12 +55,12 @@ def test_happy_path_produces_draft_and_uses_atomic_writer(tmp_path: Path) -> Non
 
     writer_called = []
 
-    def fake_writer(draft_file, content):
-        writer_called.append((draft_file, content))
-        # 真写一份以验证最终文件可读
-        from draft_ops.atomic_writer import atomic_write_draft
+    def fake_writer(draft_dir, content):
+        # Week 5:writer 签名变更为 (draft_dir, content),走 safe_write_draft 路径
+        writer_called.append((draft_dir, content))
+        from draft_ops.atomic_writer import safe_write_draft
 
-        atomic_write_draft(draft_file, content)
+        safe_write_draft(draft_dir, content)
 
     out = generate_initial_jianying_draft(
         state, tmp_path, encrypt_detector=fake_encrypt, writer=fake_writer
@@ -70,6 +70,8 @@ def test_happy_path_produces_draft_and_uses_atomic_writer(tmp_path: Path) -> Non
     draft_path = Path(out["draft_path"])
     assert draft_path.exists()
     assert draft_path.name == "draft_content.json"
+    # Week 5:safe_write_draft 双写 → draft_info.json 也应存在
+    assert (tmp_path / "draft_info.json").exists()
     loaded = json.loads(draft_path.read_text(encoding="utf-8"))
     assert set(loaded.keys()) >= {"canvas_config", "materials", "tracks"}
     assert loaded["canvas_config"]["width"] == 1080
@@ -81,7 +83,7 @@ def test_happy_path_produces_draft_and_uses_atomic_writer(tmp_path: Path) -> Non
 
 def test_writer_called_not_bare_open(tmp_path: Path) -> None:
     """禁止节点 5 直接 open().write() —— 必须走注入的 writer(单测层断言)。"""
-    from draft_ops.atomic_writer import atomic_write_draft
+    from draft_ops.atomic_writer import safe_write_draft
 
     state = {
         "shot_plan": {"shots": [{"id": "s1", "video_ref": "v1"}]},
@@ -91,10 +93,12 @@ def test_writer_called_not_bare_open(tmp_path: Path) -> None:
 
     captured = {}
 
-    def fake_writer(draft_file, content):
+    def fake_writer(draft_dir, content):
+        # Week 5:新签名 (draft_dir, content)
         captured["called"] = True
-        # 真原子写入
-        atomic_write_draft(draft_file, content)
+        captured["draft_dir"] = draft_dir
+        captured["content_keys"] = set(content.keys())
+        safe_write_draft(draft_dir, content)
 
     generate_initial_jianying_draft(
         state,
@@ -103,6 +107,9 @@ def test_writer_called_not_bare_open(tmp_path: Path) -> None:
         writer=fake_writer,
     )
     assert captured.get("called") is True
+    # Week 5:writer 收到的是 draft_dir(tmp_path),不是 draft_file
+    assert captured.get("draft_dir") == tmp_path
+    assert captured.get("content_keys") >= {"canvas_config", "materials", "tracks"}
 
 
 # ---------------------------------------------------------------------------

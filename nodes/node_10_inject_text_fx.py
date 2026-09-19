@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from draft_ops.atomic_writer import atomic_write_draft
+from draft_ops.atomic_writer import safe_write_draft
 from jy_common.template_library import load_resource_libraries
 from state import WorkflowState
 
@@ -78,7 +78,10 @@ def inject_text_fx(state: WorkflowState) -> dict:
         style = text_obj.setdefault("style", {})
         style.update(default_style)
 
-    atomic_write_draft(draft_path, draft)
+    # Week 5:参数从 draft_path 提升为 draft_path.parent,safe_write_draft 双写
+    write_result = safe_write_draft(draft_path.parent, draft)
 
     log = list(state.get("status_log", []) or []) + ["node_10_inject_text_fx_done"]
+    if write_result.get("jianying_running"):
+        log.append("[node_10] 剪映进程在跑,写入仍继续(告警不阻断)")
     return {**state, "status_log": log}

@@ -115,7 +115,11 @@ def test_inject_text_fx_fallback_when_text_resource_missing(
         "materials": {"texts": [{"id": "t1", "style": {}}]},
         "tracks": [],
     }
-    p = tmp_path / "draft.json"
+    # Week 5:safe_write_draft 写到 draft_dir/draft_content.json(目录级别);
+    # 用 ``tmp_path / draft / draft_content.json`` 模拟真实剪映草稿目录布局。
+    draft_dir = tmp_path / "draft"
+    draft_dir.mkdir()
+    p = draft_dir / "draft_content.json"
     p.write_text(json.dumps(draft), encoding="utf-8")
     state = _state(p)
     out = inject_text_fx(p) if False else inject_text_fx({"draft_path": str(p), "status_log": [], "error_log": []})

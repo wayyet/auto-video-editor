@@ -47,6 +47,103 @@ def test_template_library_loads_real_template(tmp_path: Path) -> None:
     assert style["entrance_animation"] is None
 
 
+# ---------- Week 5 升级:pick_transition/pick_video_effect 按 style_tag 匹配 ----------
+
+
+def test_pick_transition_style_tag_exact_match(tmp_path: Path) -> None:
+    """transitions 行有 style_tag 字段 → pick_transition 按 style_tag 精确匹配。"""
+    template = {
+        "transitions": [
+            {"name": "渐变模糊", "style_tag": "calm", "resource_id": "tx-c"},
+            {"name": "动感快切", "style_tag": "energetic", "resource_id": "tx-e"},
+            {"name": "魔法放大", "style_tag": "energetic", "resource_id": "tx-m"},
+        ],
+        "video_effects": [],
+    }
+    f = tmp_path / "tpl.json"
+    f.write_text(__import__("json").dumps(template), encoding="utf-8")
+    lib = TemplateLibrary.from_json_file(f)
+
+    # 精确匹配 calm → 唯一命中
+    calm = lib.pick_transition("calm")
+    assert calm["name"] == "渐变模糊"
+    assert calm["resource_id"] == "tx-c"
+
+    # 精确匹配 energetic → 第一条(确定性,顺序)
+    energetic = lib.pick_transition("energetic")
+    assert energetic["style_tag"] == "energetic"
+    assert energetic["name"] in {"动感快切", "魔法放大"}
+
+
+def test_pick_transition_no_match_falls_back_to_legacy_hash(tmp_path: Path) -> None:
+    """无 style_tag 匹配时回退到 hash-modulo 全表(行为不变)。"""
+    template = {
+        "transitions": [
+            {"name": "A", "style_tag": "calm"},
+            {"name": "B", "style_tag": "energetic"},
+            {"name": "C", "style_tag": "default"},
+        ],
+    }
+    f = tmp_path / "tpl.json"
+    f.write_text(__import__("json").dumps(template), encoding="utf-8")
+    lib = TemplateLibrary.from_json_file(f)
+
+    # "unknown" 不匹配任何 style_tag → hash 兜底
+    picked = lib.pick_transition("unknown")
+    assert picked in template["transitions"]
+    # hash 兜底对同一 style_tag 应稳定(同 hash → 同 idx)
+    assert lib.pick_transition("unknown") == picked
+
+
+def test_pick_transition_rows_without_style_tag_use_legacy(tmp_path: Path) -> None:
+    """行无 style_tag 字段 → 全表都走 hash 兜底(语义等价旧行为)。"""
+    template = {
+        "transitions": [
+            {"name": "A"},
+            {"name": "B"},
+            {"name": "C"},
+        ],
+    }
+    f = tmp_path / "tpl.json"
+    f.write_text(__import__("json").dumps(template), encoding="utf-8")
+    lib = TemplateLibrary.from_json_file(f)
+
+    picked = lib.pick_transition("default")
+    assert picked in template["transitions"]
+    # 旧 hash 行为:abs(hash("default")) % 3 → 稳定 idx
+    expected_idx = abs(hash("default")) % 3
+    assert picked["name"] == template["transitions"][expected_idx]["name"]
+
+
+def test_pick_video_effect_style_tag_exact_match(tmp_path: Path) -> None:
+    """video_effects 按 style_tag 精确匹配 + 无匹配时回退 hash。"""
+    template = {
+        "transitions": [],
+        "video_effects": [
+            {"name": "胶片式黑白", "style_tag": "vintage", "resource_id": "vfx-v"},
+            {"name": "动感抖动", "style_tag": "energetic", "resource_id": "vfx-e"},
+        ],
+    }
+    f = tmp_path / "tpl.json"
+    f.write_text(__import__("json").dumps(template), encoding="utf-8")
+    lib = TemplateLibrary.from_json_file(f)
+
+    vintage = lib.pick_video_effect("vintage")
+    assert vintage["name"] == "胶片式黑白"
+
+    # 无匹配 → 兜底到 hash-modulo 全表
+    unknown = lib.pick_video_effect("unknown")
+    assert unknown in template["video_effects"]
+
+
+def test_pick_video_effect_empty_list(tmp_path: Path) -> None:
+    """video_effects 为空 → 返回空 dict。"""
+    f = tmp_path / "empty.json"
+    f.write_text('{"video_effects": []}', encoding="utf-8")
+    lib = TemplateLibrary.from_json_file(f)
+    assert lib.pick_video_effect("anything") == {}
+
+
 def test_pick_transition_empty_list(tmp_path: Path) -> None:
     """transitions 为空列表 → pick_transition 返回空 dict。"""
     f = tmp_path / "empty.json"
