@@ -61,17 +61,18 @@ $RunScript  = Join-Path $RepoRoot 'scripts\run_workflow.py'
 $StateJson  = Join-Path $RepoRoot ("runtime\initial_state_${ThreadId}.json")
 $VenvActivate = Join-Path $RepoRoot '.venv\Scripts\Activate.ps1'
 
-# OpenStoryline 本地直起路径(Phase 0.6 / 0.7 用)
-$FireRedRoot   = 'E:\Documents\kuaishou\FireRed-OpenStoryline'
-$FireRedPy     = Join-Path $FireRedRoot '.venv\Scripts\python.exe'
-$FireRedConfig = Join-Path $FireRedRoot 'config.toml'
-$FireRedSrc    = Join-Path $FireRedRoot 'src'
-$FireRedAgent  = Join-Path $FireRedRoot 'agent_fastapi.py'
-$OsMcpPort     = 8001
-$OsWebPort     = 7860
-$OsMcpLog      = Join-Path $LogsDir ("openstoryline_mcp_${Timestamp}.log")
-$OsWebLog      = Join-Path $LogsDir ("openstoryline_web_${Timestamp}.log")
-$OsPidFile     = Join-Path $LogsDir ("openstoryline_pids_${Timestamp}.json")
+# OpenStoryline 本地直起路径(Phase 0.6 / 0.7 用,2026-09 迁移解耦后)
+# 仓库根下的 openstoryline/ 子目录(含独立 .venv/ + agent_fastapi.py)。
+# 取消对外部 FireRed-OpenStoryline 仓库的引用 — 改为本仓自包含子模块。
+$OsDir     = Join-Path $RepoRoot 'openstoryline'
+$OsVenvPy  = Join-Path $OsDir '.venv\Scripts\python.exe'
+$OsAgent   = Join-Path $OsDir 'agent_fastapi.py'
+$OsSrc     = Join-Path $OsDir 'src'
+# 端口:Web 7860(走 uvicorn agent_fastapi:app);MCP 8001 保留常量但不再起子进程。
+$OsMcpPort = 8001
+$OsWebPort = 7860
+$OsWebLog  = Join-Path $LogsDir ("openstoryline_web_${Timestamp}.log")
+$OsPidFile = Join-Path $LogsDir ("openstoryline_pids_${Timestamp}.json")
 
 # 派生路径
 $InputsFull = Join-Path $InputsDir $InputsFileName
@@ -97,7 +98,7 @@ Write-Phase ('=' * 60) 'Magenta'
 Write-Phase "auto-video-editor 一键启动(生产全栈)" 'Magenta'
 Write-Phase ("ThreadId : {0}" -f $ThreadId) 'Magenta'
 Write-Phase ("日志路径 : {0}" -f $LogFile) 'Magenta'
-Write-Phase ("FireRedRoot : {0}" -f $FireRedRoot) 'Magenta'
+Write-Phase ("OsDir (OpenStoryline 子系统) : {0}" -f $OsDir) 'Magenta'
 Write-Phase ('=' * 60) 'Magenta'
 
 # ---------------------------------------------------------------
@@ -108,12 +109,13 @@ if ($WhatIf) {
     Write-Phase "  Phase 0:复制 $SourceVideo -> $InputsFull"
     Write-Phase "         生成 $StateJson"
     Write-Phase "  Phase 0.5:确保 Docker Desktop daemon 在线(只服务 Postgres)"
-    Write-Phase "  Phase 0.6:本地直起 OpenStoryline(MCP :$OsMcpPort + Web :$OsWebPort)"
-    Write-Phase "          工作目录 = $FireRedRoot"
-    Write-Phase "          Start-Process python -m open_storyline.mcp.server"
-    Write-Phase "          Start-Process python -m uvicorn agent_fastapi:app --host 127.0.0.1 --port $OsWebPort"
-    Write-Phase "          写 PID 文件:$OsPidFile"
-    Write-Phase "  Phase 0.7:校验 OpenStoryline 健康(PID + 端口 + 日志)"
+    Write-Phase "  Phase 0.55:校验 openstoryline 资源/模型(.storyline/models + resource/)"
+    Write-Phase "          缺失则提示人工跑 scripts/download_resources.ps1 / download_models.ps1"
+    Write-Phase "  Phase 0.6:本地直起 OpenStoryline Web(:$OsWebPort,2026-09 后仅 1 个进程)"
+    Write-Phase "          工作目录 = $OsDir"
+    Write-Phase "          Start-Process $OsVenvPy -m uvicorn agent_fastapi:app --host 127.0.0.1 --port $OsWebPort"
+    Write-Phase "          写 PID 文件:$OsPidFile(MCP 端口 $OsMcpPort 不再起子进程,仅作常量保留)"
+    Write-Phase "  Phase 0.7:校验 OpenStoryline Web 健康(PID + 7860 端口 + 日志)"
     Write-Phase "  Phase 1:$Preflight"
     Write-Phase "  Phase 2:$VenvPy $RunScript --production --thread-id $ThreadId --initial-state-json $StateJson"
     if (-not $SkipPhase3) {
@@ -220,54 +222,80 @@ if ($daemonReady) {
 }
 
 # ===============================================================
-# Phase 0.6 — 本地直起 OpenStoryline(MCP :8001 + Web :7860)
-#   不再用 docker run;直接 Start-Process python 进程。
-#   工作目录 = $FireRedRoot(等价于 docker 容器内 /app),
-#   PYTHONPATH=src(等价于镜像 run.sh export 的 PYTHONPATH)。
+# Phase 0.55 — 校验 openstoryline 资源/模型(2026-09 迁移后新增)
+#   resource/ ~526 MB; .storyline/models/ ~116 MB; 入 .gitignore,需手工拉。
 # ===============================================================
 Write-Phase ''
-Write-Phase "Phase 0.6:本地直起 OpenStoryline(MCP :$OsMcpPort + Web :$OsWebPort)" 'Cyan'
+Write-Phase "Phase 0.55:校验 openstoryline 资源/模型" 'Cyan'
+
+$OsResource = Join-Path $OsDir 'resource'
+$OsModels   = Join-Path $OsDir '.storyline\models'
+
+$needDownload = $false
+if (-not (Test-Path $OsResource) -or -not (Get-ChildItem $OsResource -ErrorAction SilentlyContinue)) {
+    Write-PhaseWarn "openstoryline/resource/ 缺失或为空"
+    $needDownload = $true
+}
+if (-not (Test-Path $OsModels) -or -not (Get-ChildItem $OsModels -ErrorAction SilentlyContinue)) {
+    Write-PhaseWarn "openstoryline/.storyline/models/ 缺失或为空"
+    $needDownload = $true
+}
+if ($needDownload) {
+    Write-Phase "    请运行以下命令手动下载(总大小约 642 MB):" 'Yellow'
+    Write-Phase "      .\openstoryline\scripts\download_resources.ps1" 'Yellow'
+    Write-Phase "      .\openstoryline\scripts\download_models.ps1" 'Yellow'
+    Write-Phase "    或一键: .\openstoryline\scripts\install.ps1" 'Yellow'
+    Write-Phase "    完成后重跑 start_production.ps1" 'Yellow'
+    exit 16
+}
+Write-PhaseOk "openstoryline 资源/模型已就绪"
+
+# ===============================================================
+# Phase 0.6 — 本地直起 OpenStoryline Web(:7860)
+#   2026-09 迁移后:不再起 MCP 子进程;只起 agent_fastapi.py 的 uvicorn。
+#   取消对外部 FireRed-OpenStoryline 仓库的引用。
+# ===============================================================
+Write-Phase ''
+Write-Phase "Phase 0.6:本地直起 OpenStoryline Web(:$OsWebPort,MCP 链路已迁移解耦)" 'Cyan'
 
 # 路径校验(venv / 入口文件 / 包)
-if (-not (Test-Path $FireRedPy)) {
-    Write-PhaseErr "找不到 $FireRedPy"
-    Write-Phase "    请先跑 FireRed-OpenStoryline\scripts\一键安装.bat 建 venv" 'Yellow'
+if (-not (Test-Path $OsVenvPy)) {
+    Write-PhaseErr "找不到 $OsVenvPy"
+    Write-Phase "    请先跑 openstoryline\scripts\install.ps1 建 venv 并装依赖" 'Yellow'
     exit 18
 }
-if (-not (Test-Path $FireRedAgent)) {
-    Write-PhaseErr "找不到 $FireRedAgent(请确认 FireRed-OpenStoryline 仓库完整)" 'Yellow'
+if (-not (Test-Path $OsAgent)) {
+    Write-PhaseErr "找不到 $OsAgent(请确认 openstoryline/ 子目录代码搬运完整)" 'Yellow'
     exit 18
 }
-if (-not (Test-Path (Join-Path $FireRedSrc 'open_storyline\__init__.py'))) {
-    Write-PhaseErr "找不到 $FireRedSrc\open_storyline\__init__.py" 'Yellow'
+if (-not (Test-Path (Join-Path $OsSrc 'open_storyline\__init__.py'))) {
+    Write-PhaseErr "找不到 $OsSrc\open_storyline\__init__.py" 'Yellow'
     exit 18
 }
 
-# 探测两个端口是否已在听(等价旧版"docker ps 看到 running 就跳过")
+# 探测 Web 端口是否已在听(等价旧版"docker ps 看到 running 就跳过")
 $prevErrorAction3 = $ErrorActionPreference
 $ErrorActionPreference = 'SilentlyContinue'
-$mcpPortOpen = (Test-NetConnection -ComputerName '127.0.0.1' -Port $OsMcpPort -InformationLevel Quiet -WarningAction SilentlyContinue) -eq $true
 $webPortOpen = (Test-NetConnection -ComputerName '127.0.0.1' -Port $OsWebPort -InformationLevel Quiet -WarningAction SilentlyContinue) -eq $true
 $ErrorActionPreference = $prevErrorAction3
 
-$mcpProc = $null
 $webProc = $null
 $osPidReused = $false
 
-if ($mcpPortOpen -and $webPortOpen) {
-    Write-PhaseOk "OpenStoryline 端口已在听(:$OsMcpPort + :$OsWebPort),复用现有进程"
+if ($webPortOpen) {
+    Write-PhaseOk "OpenStoryline Web 端口已在听(:$OsWebPort),复用现有进程"
     $osPidReused = $true
     # 复用模式:写一个只含 reused=true 的 PID 标记文件,stop 时按命令行兜底 kill
     $pidObj = [ordered]@{
-        timestamp    = $Timestamp
-        reused       = $true
-        firered_root = $FireRedRoot
-        mcp_log      = $null
-        web_log      = $null
+        timestamp = $Timestamp
+        reused    = $true
+        os_dir    = $OsDir
+        web_pid   = $null
+        web_log   = $null
     }
     $pidObj | ConvertTo-Json | Set-Content -Path $OsPidFile -Encoding UTF8
 } else {
-    # 孤儿清理:扫本仓库之前的 PID 文件,把仍活着的 python 进程 kill
+    # 孤儿清理:扫本仓库之前的 PID 文件,把仍活着的 web python 进程 kill
     Get-ChildItem -Path $LogsDir -Filter 'openstoryline_pids_*.json' -ErrorAction SilentlyContinue |
         Where-Object { $_.FullName -ne $OsPidFile } |
         Sort-Object LastWriteTime -Descending |
@@ -275,14 +303,12 @@ if ($mcpPortOpen -and $webPortOpen) {
             try {
                 $prev = Get-Content -Path $_.FullName -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue
                 if ($null -ne $prev -and $prev.reused -eq $true) { return }
-                foreach ($pidName in @('mcp_pid', 'web_pid')) {
-                    $pidVal = $prev.$pidName
-                    if ($null -ne $pidVal -and $pidVal -gt 0) {
-                        $alive = Get-Process -Id $pidVal -ErrorAction SilentlyContinue
-                        if ($null -ne $alive) {
-                            Write-Phase ("  杀孤儿 PID={0} ({1})" -f $pidVal, $pidName)
-                            Stop-Process -Id $pidVal -Force -ErrorAction SilentlyContinue
-                        }
+                $pidVal = $prev.web_pid
+                if ($null -ne $pidVal -and $pidVal -gt 0) {
+                    $alive = Get-Process -Id $pidVal -ErrorAction SilentlyContinue
+                    if ($null -ne $alive) {
+                        Write-Phase ("  杀孤儿 web PID={0}" -f $pidVal)
+                        Stop-Process -Id $pidVal -Force -ErrorAction SilentlyContinue
                     }
                 }
             } catch { }
@@ -291,58 +317,19 @@ if ($mcpPortOpen -and $webPortOpen) {
     # 强制 Python 不缓冲(便于日志实时落盘)
     $env:PYTHONUNBUFFERED = '1'
 
-    # 启动 MCP 进程(streamable-http,端口由 config.toml 的 [local_mcp_server].port 控制,默认 8001)
-    # 方案:写临时 .bat(set env + python + 重定向),用 cmd /c 启动 .bat
-    #   - 避免 Start-Process 同时配 RedirectStandardOutput/Error 时的限制
-    #   - 避免 cmd.exe lpCommandLine quoting 引起的 ">log" 不生效问题
-    #   - 进程起来后通过 Win32_Process 找 cmd.exe 的 python.exe 子进程,拿真正的 PID
-    Write-Phase "  启动 MCP 服务(python -m open_storyline.mcp.server)..."
-    $mcpBatPath = Join-Path $env:TEMP "openstoryline_mcp_${Timestamp}.bat"
-    $mcpBatContent = @"
-@echo off
-set PYTHONPATH=src
-set PYTHONUNBUFFERED=1
-"$FireRedPy" -m open_storyline.mcp.server 1> "$OsMcpLog" 2>&1
-"@
-    [System.IO.File]::WriteAllText($mcpBatPath, $mcpBatContent, [System.Text.Encoding]::ASCII)
-    $mcpProc = Start-Process `
-        -FilePath 'cmd.exe' `
-        -ArgumentList "/c `"$mcpBatPath`"" `
-        -WorkingDirectory $FireRedRoot `
-        -WindowStyle Hidden `
-        -PassThru
-    # cmd.exe 是中间壳,真正的 python PID 要从它的 child 找
-    $mcpPyPid = $null
-    $mcpDeadline = (Get-Date).AddSeconds(8)
-    while ((Get-Date) -lt $mcpDeadline -and $null -eq $mcpPyPid) {
-        Start-Sleep -Milliseconds 500
-        try {
-            $child = Get-CimInstance Win32_Process -Filter "ParentProcessId=$($mcpProc.Id)" -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -match 'open_storyline\.mcp\.server' } |
-                Select-Object -First 1
-            if ($null -ne $child) { $mcpPyPid = [int]$child.ProcessId }
-        } catch { }
-    }
-    if ($null -eq $mcpPyPid) {
-        Write-PhaseWarn "未在 8s 内抓到 python.exe 子进程,先用 cmd.exe PID={0} 兜底" -f $mcpProc.Id
-        $mcpPyPid = $mcpProc.Id
-    }
-    Write-Phase ("  MCP cmd PID={0} -> python PID={1}" -f $mcpProc.Id, $mcpPyPid)
-
     # 启动 Web 进程(uvicorn 7860)
     Write-Phase "  启动 Web 服务(uvicorn agent_fastapi:app --host 127.0.0.1 --port $OsWebPort)..."
     $webBatPath = Join-Path $env:TEMP "openstoryline_web_${Timestamp}.bat"
     $webBatContent = @"
 @echo off
-set PYTHONPATH=src
 set PYTHONUNBUFFERED=1
-"$FireRedPy" -m uvicorn agent_fastapi:app --host 127.0.0.1 --port $OsWebPort 1> "$OsWebLog" 2>&1
+"$OsVenvPy" -m uvicorn agent_fastapi:app --host 127.0.0.1 --port $OsWebPort 1> "$OsWebLog" 2>&1
 "@
     [System.IO.File]::WriteAllText($webBatPath, $webBatContent, [System.Text.Encoding]::ASCII)
     $webProc = Start-Process `
         -FilePath 'cmd.exe' `
         -ArgumentList "/c `"$webBatPath`"" `
-        -WorkingDirectory $FireRedRoot `
+        -WorkingDirectory $OsDir `
         -WindowStyle Hidden `
         -PassThru
     $webPyPid = $null
@@ -363,32 +350,25 @@ set PYTHONUNBUFFERED=1
     Write-Phase ("  Web cmd PID={0} -> python PID={1}" -f $webProc.Id, $webPyPid)
 
     # 写 PID 文件(供 stop_production.ps1 读)
-    # python PID 优先;cmd PID 留作兜底(stop 时若 python 已死,可借 cmd 找子进程)
     $pidObj = [ordered]@{
-        timestamp    = $Timestamp
-        reused       = $false
-        firered_root = $FireRedRoot
-        mcp_pid      = $mcpPyPid
-        web_pid      = $webPyPid
-        mcp_cmd_pid  = $mcpProc.Id
-        web_cmd_pid  = $webProc.Id
-        mcp_log      = $OsMcpLog
-        web_log      = $OsWebLog
+        timestamp   = $Timestamp
+        reused      = $false
+        os_dir      = $OsDir
+        web_pid     = $webPyPid
+        web_cmd_pid = $webProc.Id
+        web_log     = $OsWebLog
     }
     $pidObj | ConvertTo-Json | Set-Content -Path $OsPidFile -Encoding UTF8
     Write-PhaseOk ("PID 文件: {0}" -f $OsPidFile)
 }
 
 # ===============================================================
-# Phase 0.7 — OpenStoryline 健康校验(本地进程版)
-#   与旧版同义,但用 Test-NetConnection + 日志尾 + PID 存活判断:
-#     (a) PID 仍活着
-#     (b) 端口在听
-#     (c) Web 日志含 startup complete / uvicorn running
-#     (d) MCP 日志含 streamable-http / uvicorn running
+# Phase 0.7 — OpenStoryline Web 健康校验(2026-09 简化)
+#   只校验 Web 7860 端口(PID 存活 + 端口在听 + 日志含 startup);
+#   MCP 端口 8001 不再起子进程(已迁移解耦)。
 # ===============================================================
 Write-Phase ''
-Write-Phase "Phase 0.7:校验 OpenStoryline 健康(PID + 端口 + 日志)" 'Cyan'
+Write-Phase "Phase 0.7:校验 OpenStoryline Web 健康(PID + 7860 端口 + 日志)" 'Cyan'
 
 $healthyDeadline = (Get-Date).AddSeconds(180)
 $osHealthy = $false
@@ -396,21 +376,13 @@ $healthyLogTail = ''
 while ((Get-Date) -lt $healthyDeadline) {
     $prevEA = $ErrorActionPreference
     $ErrorActionPreference = 'SilentlyContinue'
-    $mcpPortOpen = (Test-NetConnection -ComputerName '127.0.0.1' -Port $OsMcpPort -InformationLevel Quiet -WarningAction SilentlyContinue) -eq $true
     $webPortOpen = (Test-NetConnection -ComputerName '127.0.0.1' -Port $OsWebPort -InformationLevel Quiet -WarningAction SilentlyContinue) -eq $true
-    $mcpLogTail = if (Test-Path $OsMcpLog) { (Get-Content $OsMcpLog -Tail 200 -ErrorAction SilentlyContinue) -join "`n" } else { '' }
     $webLogTail = if (Test-Path $OsWebLog) { (Get-Content $OsWebLog -Tail 200 -ErrorAction SilentlyContinue) -join "`n" } else { '' }
     $ErrorActionPreference = $prevEA
 
     # PID 存活校验(复用模式无 PID,跳过)
     if (-not $osPidReused) {
-        $mcpAlive = ($null -ne (Get-Process -Id $mcpPyPid -ErrorAction SilentlyContinue))
         $webAlive = ($null -ne (Get-Process -Id $webPyPid -ErrorAction SilentlyContinue))
-        if (-not $mcpAlive) {
-            Write-PhaseErr "MCP 进程 (PID={0}) 已退出,日志尾:" -f $mcpPyPid
-            if (Test-Path $OsMcpLog) { Get-Content $OsMcpLog -Tail 80 | ForEach-Object { Write-Phase ("    $_") } }
-            exit 21
-        }
         if (-not $webAlive) {
             Write-PhaseErr "Web 进程 (PID={0}) 已退出,日志尾:" -f $webPyPid
             if (Test-Path $OsWebLog) { Get-Content $OsWebLog -Tail 80 | ForEach-Object { Write-Phase ("    $_") } }
@@ -419,13 +391,12 @@ while ((Get-Date) -lt $healthyDeadline) {
     }
 
     # 端口在听
-    $portsOk = $mcpPortOpen -and $webPortOpen
+    $portsOk = $webPortOpen
 
     # 日志就绪
-    $mcpLogOk  = $mcpLogTail -match 'Uvicorn running on|Application startup complete|Streamable HTTP server running'
-    $webLogOk  = $webLogTail -match 'Uvicorn running on|Application startup complete'
+    $webLogOk = $webLogTail -match 'Uvicorn running on|Application startup complete'
 
-    if ($portsOk -and $mcpLogOk -and $webLogOk) {
+    if ($portsOk -and $webLogOk) {
         $osHealthy = $true
         $healthyLogTail = $webLogTail
         break
@@ -433,9 +404,9 @@ while ((Get-Date) -lt $healthyDeadline) {
     Start-Sleep -Seconds 2
 }
 if (-not $osHealthy) {
-    Write-PhaseWarn "180s 内未同时满足 PID 存活 + 端口监听 + 日志 startup;继续(后续流程可能拒连)"
+    Write-PhaseWarn "180s 内未同时满足 PID 存活 + 7860 端口监听 + 日志 startup;继续(后续流程可能拒连)"
 } else {
-    Write-PhaseOk "OpenStoryline 健康(MCP :$OsMcpPort + Web :$OsWebPort 就绪)"
+    Write-PhaseOk "OpenStoryline Web 健康(:$OsWebPort 就绪)"
 }
 
 # ===============================================================

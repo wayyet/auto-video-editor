@@ -1,11 +1,12 @@
-"""StateGraph 装配(Week 5,对照附件 3.4 节 + 第 5 周计划 §2)。
+"""StateGraph 装配(2026-09 迁移解耦版,Week 5 拓扑)。
 
-完整图拓扑(Week 5):
+完整图拓扑(2026-09):
   START
     → clean_cache
-    → launch_openstoryline
+    → launch_openstoryline      (本地 uvicorn + httpx 健康检查,无 MCP)
     → open_preview
-    → import_and_plan
+    → checkpoint0_storyline_plan ⏸ interrupt("⓪")   (2026-09 新增;等人工在 OpenStoryline Web 完成规划)
+    → import_and_plan           (读 openstoryline/outputs/<sid>/plan_timeline_pro/*.json)
     → generate_draft
     → node_06_human_reorder            ⏸ interrupt("①")
     → node_07_speed_fit                🔁 条件边(route_after_speed_fit):
@@ -31,7 +32,16 @@
                                                                  ▼
                                                                 END
 
-Week 5 关键改动:
+2026-09 关键改动(对照 plan §4/§5):
+- OpenStoryline 改为本地 uvicorn 子进程 + 读盘(node_02 不再有 MCP 链路,
+  node_04 读 ``openstoryline/outputs/<sid>/plan_timeline_pro/``)。
+- 新增关卡⓪ ``checkpoint0_storyline_plan``:在 ``open_preview`` 与
+  ``import_and_plan`` 之间挂起,等人工在 OpenStoryline 网页完成规划后 resume,
+  再走读盘路径。
+- 关卡统一为 ``⓪/①/②/③``,``_route_after_import`` 改为
+  ``storyline_plan or shot_plan`` → ``generate_draft``。
+
+Week 5 关键改动(保留):
 - ``node_16_translate_subtitles`` 拆为 ``node_16a_translate_and_check``(翻译 +
   layout 检测,无 interrupt) + ``node_checkpoint3_layout_review``(只做 interrupt,
   无副作用,天然幂等);条件边 ``route_after_translate`` 据 ``layout_issues_detected``
@@ -78,6 +88,7 @@ from nodes.node_13_adjust_volume import adjust_volume
 from nodes.node_14_make_covers import node_14_make_covers
 from nodes.node_15_localize_covers_en import node_15_localize_covers_en
 from nodes.node_16a_translate_and_check import node_16a_translate_and_check
+from nodes.node_checkpoint0_storyline_plan import checkpoint0_wait_storyline_plan
 from nodes.node_checkpoint3_layout_review import node_checkpoint3_layout_review
 from nodes.node_17_inject_english_tts_stub import node_17_inject_english_tts_stub
 from nodes.node_fork_english_branch import fork_draft_for_english_branch
@@ -86,10 +97,11 @@ from state import WorkflowState
 
 
 # ---------------------------------------------------------------------------
-# 节点 4 之后路由(Week 2 已有,Week 3 保留)
+# 节点 4 之后路由(Week 2 已有,Week 3 保留;2026-09 关卡⓪ 后改为 storyline_plan or shot_plan)
 # ---------------------------------------------------------------------------
 def _route_after_import(state: WorkflowState) -> str:
-    if state.get("openstoryline_ready") and state.get("shot_plan"):
+    """关卡⓪ 后,产物应已写入;有 ``storyline_plan`` 或 ``shot_plan``(回退)就继续。"""
+    if state.get("storyline_plan") or state.get("shot_plan"):
         return "generate_draft"
     return "__end__"
 
@@ -268,6 +280,8 @@ def _build_state_graph():
     g.add_node("clean_cache", clean_cache)
     g.add_node("launch_openstoryline", launch_openstoryline_service)
     g.add_node("open_preview", open_preview)
+    # 关卡⓪:等人工在 OpenStoryline 网页里完成分镜/文案/BGM/时间线规划(2026-09 迁移后新增)
+    g.add_node("checkpoint0_storyline_plan", checkpoint0_wait_storyline_plan)
     g.add_node("import_and_plan", import_video_and_plan_shots)
     g.add_node("generate_draft", generate_draft_wrapped)
 
@@ -299,7 +313,9 @@ def _build_state_graph():
     # CACHE_PATHS_TO_CLEAN 中的剪映/OpenStoryline 临时目录。
     g.add_edge(START, "launch_openstoryline")
     g.add_edge("launch_openstoryline", "open_preview")
-    g.add_edge("open_preview", "import_and_plan")
+    # 关卡⓪ 串在 open_preview 与 import_and_plan 之间(2026-09 新增)
+    g.add_edge("open_preview", "checkpoint0_storyline_plan")
+    g.add_edge("checkpoint0_storyline_plan", "import_and_plan")
     g.add_conditional_edges(
         "import_and_plan",
         _route_after_import,

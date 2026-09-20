@@ -91,6 +91,10 @@ def _is_interrupted(g, config: dict) -> bool:
 # ---------------------------------------------------------------------------
 # 测试 1:跨进程恢复关卡①/②/③(SqliteSaver)
 # ---------------------------------------------------------------------------
+@pytest.mark.skipif(
+    __import__("importlib").util.find_spec("langgraph.checkpoint.sqlite") is None,
+    reason="langgraph-checkpoint-sqlite 未安装",
+)
 def test_resume_all_three_checkpoints_via_sqlite_persistence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

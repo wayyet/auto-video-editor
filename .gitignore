@@ -40,6 +40,13 @@ inputs/
 # OpenStoryline 本地运行时配置（config.toml 含 API key 占位符，本机填入真实 key 后不入库）
 openstoryline-config/
 
+# OpenStoryline 嵌入式子系统本地实例（代码+模板入库，运行时不入库）
+openstoryline/.venv/
+openstoryline/outputs/
+openstoryline/.storyline/
+openstoryline/resource/
+openstoryline/config.toml.local
+
 # 编辑备份与脚本误产物
 *.bak
 \$*

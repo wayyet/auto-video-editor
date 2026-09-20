@@ -48,3 +48,34 @@ class _StubProc:
 @pytest.fixture
 def stub_proc():
     return _StubProc()
+
+
+# ---------------------------------------------------------------------------
+# 2026-09 迁移后:让 Week 3/4/5 既有集成测试不感知关卡⓪(直接旁路 interrupt,
+# 调用 _post_resume)。test_interrupt_resume.py 显式依赖关卡⓪ 行为,不旁路。
+# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _skip_checkpoint0_for_pre_migration_tests(request, monkeypatch):
+    """对 Week 3/4/5 既有集成测试 autouse 跳过 checkpoint0_storyline_plan。
+
+    判定:测试文件路径包含 ``test_interrupt_resume`` 时不旁路(那个文件
+    显式覆盖关卡⓪/①/②/③ 行为)。
+
+    注意:graph.py 用 ``from X import Y`` 绑定的是 graph 模块本地的 Y,
+    不是 ``nodes.X.Y``。所以要同时 monkeypatch graph 模块的本地引用。
+    """
+    fspath = str(getattr(request, "fspath", "") or "")
+    if "test_interrupt_resume" in fspath:
+        return  # 显式测关卡行为,不旁路
+    try:
+        import nodes.node_checkpoint0_storyline_plan as cp0
+        import graph as _graph
+    except ImportError:
+        return
+    if not hasattr(cp0, "checkpoint0_wait_storyline_plan"):
+        return
+    passthrough = lambda state: cp0._post_resume(state)
+    # 同时 patch 两处(graph.py 通过 ``from X import Y`` 拿到了 graph 内的本地引用)
+    monkeypatch.setattr(cp0, "checkpoint0_wait_storyline_plan", passthrough)
+    if hasattr(_graph, "checkpoint0_wait_storyline_plan"):
+        monkeypatch.setattr(_graph, "checkpoint0_wait_storyline_plan", passthrough)

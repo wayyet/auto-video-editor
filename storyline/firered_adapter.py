@@ -1,6 +1,15 @@
-"""FireRed-OpenStoryline 工具注册表移植层(自参考 FireRed `nodes/core_nodes/*.py`)。
+"""FireRed-OpenStoryline 工具注册表移植层(对照文档,2026-09 解耦版)。
 
-模块用途:
+⚠️ 迁移后本文件**仅作文档参考**,不参与 graph 运行时调用。
+
+- 不再有运行时调用方(:class:`OpenStorylineMCPClient` 已删除,见
+  ``mcp_clients/openstoryline_client.py`` 的删除记录)。
+- 仅供人工核对「openstoryline/src/open_storyline/nodes/core_nodes/ 下节点接口」
+  与 ``TOOL_REGISTRY`` 是否一致;新工具上下线时手工同步这里。
+- 真正部署时以 ``openstoryline/agent_fastapi.py`` 运行时 ``list_tools()`` 输出为准
+  (Phase 0 锁定必需工具清单已固化)。
+
+模块用途(历史):
 - 把 FireRed 的 MCP 工具清单(node_name / NodeMeta.name / require_prior_kind / 默认
   入参 schema)以**纯数据**形式搬进 auto-video-editor,允许主项目在不引入
   ``open_storyline`` Python 包的情况下做能力探测与契约编排。

@@ -1,0 +1,32 @@
+# OpenStoryline 嵌入式子系统的 .gitignore(在 auto-video-editor/ 下生效)
+#
+# 设计: 代码+模板入库,所有本地实例不入库。
+# - .venv/:   独立虚拟环境,含 torch/torchaudio/funasr 等重包
+# - outputs/: 用户在网页里规划后,agent_fastapi.py 写出的产物
+#             (auto-video-editor/node_04 会从这里读产物)
+# - .storyline/: 缓存目录(server_cache + 解压后的 models)
+# - resource/: 用户解压后的字体/BGM/模板等(约 526 MB)
+# - config.toml.local: 本机手工填入真实 API Key 的副本,不入库
+
+.venv/
+outputs/
+.storyline/
+resource/
+config.toml.local
+
+# 保留入库的文件:
+# - agent_fastapi.py / web/ / src/open_storyline/ / prompts/
+# - config.toml (HEAD 版本是占位符,本地真实 key 写在 config.toml.local)
+# - LICENSE (Apache-2.0)
+# - requirements.txt (FireRed 仓沿用)
+# - scripts/install.ps1 + download_resources.ps1 + download_models.ps1
+# - README.md (本目录的子文档)
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 日志/临时文件
+*.log
+*.tmp

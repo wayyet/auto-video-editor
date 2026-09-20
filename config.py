@@ -200,11 +200,14 @@ def resolved_cache_paths() -> list[Path]:
 
 
 # ---------------------------------------------------------------------------
-# 节点 2:launch_openstoryline(Phase 1 修正:对齐 FireRed config.toml)
+# 节点 2:launch_openstoryline(2026-09 迁移解耦版 — 本地 uvicorn + httpx 健康检查)
 # ---------------------------------------------------------------------------
 # 模块名修正:FireRed 实际是 ``open_storyline.mcp.server``,不是 ``openstoryline.server``。
 # 端口修正:MCP Server 默认 8001 + path /mcp + streamable-http(见 FireRed config.toml)。
 # Web 端口修正:agent_fastapi 走 7860(README 266 行)。
+#
+# 2026-09 迁移后,MCP 子进程链路已删除;OPENSTORYLINE_CMD / OPENSTORYLINE_MCP_PORT
+# 仅作向后兼容常量保留(README 仍引用),运行时由 node_02 直接 spawn uvicorn 子进程。
 OPENSTORYLINE_CMD: list[str] = [
     "python", "-m", "open_storyline.mcp.server",
 ]
@@ -214,61 +217,16 @@ OPENSTORYLINE_HEALTH_TIMEOUT_S: int = 30
 
 
 # ---------------------------------------------------------------------------
-# Phase 1:Storyline / FireRed-OpenStoryline 集成配置(plan §7.2)
+# Phase 2:Storyline / OpenStoryline 集成配置(2026-09 解耦后保留项)
 # ---------------------------------------------------------------------------
-from typing import Literal as _Literal  # 局部别名
+# 旧 STORYLINE_FIRERED_PYTHON / _ROOT / _MCP_TRANSPORT / _MCP_URL / _TOOL_TIMEOUT_S /
+# _CONNECT_RETRIES / _REQUIRED_TOOLS / storyline_session_id() 全部移除;
+# OpenStoryline 现走本地 uvicorn + httpx 健康检查,不再有 MCP 链路与外部路径常量。
 
-
-# FireRed Python 可执行(指向其 conda 3.11 环境),从环境变量 FIRERED_PYTHON 读
-STORYLINE_FIRERED_PYTHON: Path = Path(
-    os.environ.get("FIRERED_PYTHON", "python")
-).expanduser()
-
-# FireRed 工作目录(影响 config.toml 加载);默认指向同机 FireRed-OpenStoryline 仓库根
-STORYLINE_FIRERED_ROOT: Path = Path(
-    os.environ.get("FIRERED_ROOT", r"E:\Documents\kuaishou\FireRed-OpenStoryline")
-).expanduser()
-
-# MCP 传输方式(开发期 stdio,生产期 streamable-http)
-STORYLINE_MCP_TRANSPORT: _Literal["stdio", "streamable-http"] = os.environ.get(
-    "STORYLINE_MCP_TRANSPORT", "stdio"
-)  # type: ignore[assignment]
-
-# MCP endpoint(仅 streamable-http 用)
-STORYLINE_MCP_URL: str = os.environ.get(
-    "STORYLINE_MCP_URL", "http://127.0.0.1:8001/mcp"
-)
-
-# 是否启用 AI Transition(ADR-005:默认关闭)
+# 是否启用 AI Transition(ADR-005:默认关闭;Phase 4+ 节点已移除,保留供旧 README 引用)
 STORYLINE_ENABLE_AI_TRANSITION: bool = (
     os.environ.get("STORYLINE_ENABLE_AI_TRANSITION", "0").lower().strip() in ("1", "true", "yes")
 )
-
-# 单次 tool 调用超时(秒)
-STORYLINE_TOOL_TIMEOUT_S: int = int(os.environ.get("STORYLINE_TOOL_TIMEOUT_S", "600"))
-
-# MCP initialize / list_tools 重试次数
-STORYLINE_CONNECT_RETRIES: int = int(os.environ.get("STORYLINE_CONNECT_RETRIES", "3"))
-
-# 必需 capability 清单(Phase 0 锁定)
-STORYLINE_REQUIRED_TOOLS: list[str] = [
-    "load_media",
-    "split_shots",
-    "understand_clips",
-    "generate_script",
-    "plan_timeline_pro",
-    "select_bgm",
-    "generate_voiceover",
-    "render_video",
-    "read_node_history",
-]
-
-
-def storyline_session_id(job_id: str | None) -> str:
-    """生成 FireRed ``X-Storyline-Session-Id`` 值(job_id 不可空时使用)。"""
-    if job_id:
-        return f"{job_id}-storyline"
-    return f"av-storyline-{os.getpid()}"
 
 
 def storyline_outputs_root() -> Path:

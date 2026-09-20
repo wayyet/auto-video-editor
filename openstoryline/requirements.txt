@@ -1,0 +1,41 @@
+fastapi==0.128.0
+uvicorn[standard]==0.40.0
+langchain-core==1.4.7
+mcp==1.26.0
+colorlog==6.9.0
+librosa==0.11.0
+transnetv2_pytorch==1.0.5
+langchain==1.2.18
+# langgraph 必须与 langchain 1.2.18 配套（同一发布线）：
+# langchain 1.2.4 的元数据把 langgraph 钉在 <1.1.0，但其代码又依赖 langgraph>=1.1 才有的
+# runtime.ExecutionInfo/ServerInfo，导致 langgraph 1.0.10 + prebuilt 启动即 ImportError。
+# 显式锁定到协调发布的版本，避免重装时再次拉到不兼容组合。
+langgraph==1.1.10
+langgraph-prebuilt==1.0.13
+langchain_mcp_adapters==0.2.1
+langchain_openai==1.1.6
+ffmpeg-python==0.2.0
+aiofiles==23.2.1
+skillkit==0.4.0
+moviepy==2.2.1
+av==16.1.0
+langchain-community==0.4.1
+langchain-huggingface==1.2.0
+sentence-transformers==5.2.2
+tomli
+faiss-cpu==1.13.2
+openai==2.16.0
+emoji==2.15.0
+# funasr==1.3.1  # 2026-09 临时注释:editdistance 0.8.1 在清华源/PyPI 都没有 cp313 win_amd64 的预编译 wheel,
+                   # 需 MSVC Build Tools 才能从 sdist 编译,Windows 默认未装。
+                   # funasr 只在 OpenStoryline 的 local_asr 节点(懒加载)用到,start_production.ps1 Phase 0~3 不依赖。
+                   # 真用 ASR 时单独装 funasr + MSVC。
+torchaudio==2.11.0
+# 锁 transformers 版本：避免 sentence-transformers 5.2.2 (要 >=4.41,<6) 与
+# funasr/modelscope extras (要 >=4.26 或 >=4.32) 在 resolver 中 backtracking。
+# 4.46.3 同时满足所有约束,2024 年发布,稳定且与 torch 2.14 兼容。
+transformers==4.46.3
+# search_web_topic 节点（站内搜索小红书/抖音主题资料）依赖：
+# ddgs 自带浏览器指纹伪装，是实测唯一能绕过搜索引擎反爬页的方案；pysocks 让 requests 支持 socks5 代理
+ddgs==9.14.4
+pysocks==1.7.1

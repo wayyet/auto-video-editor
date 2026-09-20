@@ -26,9 +26,8 @@ from config import (
 from draft_ops.atomic_writer import safe_write_draft
 from draft_ops.encryption_detector import DraftStatus, detect_draft_encryption
 from draft_ops.version_strategy import resolve_strategy
-from mcp_clients.openstoryline_client import ContractInvalid
 from state import WorkflowState
-from storyline.contract import CanonicalTimeline
+from storyline.contract import CanonicalTimeline, ContractInvalid
 from storyline.mapper import canonical_to_draft
 from storyline.output_isolation import (
     OutputJobPaths,

@@ -249,6 +249,20 @@ class StorylineErrorCode:
     CONTRACT_INVALID = "CONTRACT_INVALID"
 
 
+class ContractInvalid(Exception):
+    """OpenStoryline 产出的数据不满足 CanonicalTimeline / StorylinePlan 约束时抛出。
+
+    2026-09 迁移解耦:原 ``mcp_clients.openstoryline_client.ContractInvalid``
+    移到这里,供 node_05 mapper / node_04 plan_reader 使用,与 MCP SDK 彻底解耦。
+    携带 ``error_code=StorylineErrorCode.CONTRACT_INVALID`` 用于 graph 路由决策。
+    """
+
+    def __init__(self, message: str, **ctx: Any) -> None:
+        super().__init__(message)
+        self.error_code = StorylineErrorCode.CONTRACT_INVALID
+        self.ctx = ctx
+
+
 __all__ = [
     "SourceMedia",
     "Clip",
@@ -261,4 +275,5 @@ __all__ = [
     "StorylineToolResult",
     "StorylinePlan",
     "StorylineErrorCode",
+    "ContractInvalid",
 ]
