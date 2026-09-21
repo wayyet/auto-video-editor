@@ -1,0 +1,75 @@
+# BGM 资源库参考描述(plan_v4 §5 阶段 4 / §6.1 选项 B)
+#
+# 本文件**只放标签体系**(mood / genre / tempo / duration_ms),不放二进制音
+# 频文件;vendored `openstoryline/resource/bgms/` 在本项目是空目录,二进制
+# 由用户在首次部署时按本 manifest 自行注入(版权待定)。
+#
+# 字段说明:
+# - `bgm_id`:节点引用 ID(由 select_bgm 写回 state.bg_selection.bgm_ref)
+# - `path`:相对项目根目录的资源路径(可空,空时退化为 stub metadata)
+# - `mood`: 字符串列表;select_bgm 启发式匹配 + LLM 决策
+# - `genre`: 字符串列表(electronic / acoustic / cinematic / lofi / ...)
+# - `tempo`: "slow" | "medium" | "fast"
+# - `default_volume`: 默认音量(0~1)
+# - `duration_ms`: 时长上限
+
+library:
+  - bgm_id: "bgm_story_warm"
+    path: ""        # 待用户配置
+    mood: ["warm", "calm", "storytelling"]
+    genre: ["acoustic", "cinematic"]
+    tempo: "slow"
+    default_volume: 0.35
+    duration_ms: 90000
+    beat_period_ms: 1200
+    notes: "温暖叙事向,适合 Vlog / 故事片"
+
+  - bgm_id: "bgm_upbeat_energetic"
+    path: ""
+    mood: ["happy", "energetic", "excited"]
+    genre: ["electronic", "pop"]
+    tempo: "fast"
+    default_volume: 0.40
+    duration_ms: 120000
+    beat_period_ms: 470
+    notes: "节奏鲜明,适合快剪 / 美食 / 旅行"
+
+  - bgm_id: "bgm_calm_lofi"
+    path: ""
+    mood: ["calm", "neutral", "focused"]
+    genre: ["lofi", "ambient"]
+    tempo: "medium"
+    default_volume: 0.30
+    duration_ms: 180000
+    beat_period_ms: 800
+    notes: "中性氛围,适合解说 / 教程"
+
+  - bgm_id: "bgm_dramatic_cinematic"
+    path: ""
+    mood: ["dramatic", "epic", "tense"]
+    genre: ["cinematic", "orchestral"]
+    tempo: "medium"
+    default_volume: 0.45
+    duration_ms: 150000
+    beat_period_ms: 1500
+    notes: "戏剧冲突段,适合转折 / 高潮"
+
+  - bgm_id: "bgm_sad_soft"
+    path: ""
+    mood: ["sad", "soft", "memory"]
+    genre: ["acoustic", "piano"]
+    tempo: "slow"
+    default_volume: 0.30
+    duration_ms: 120000
+    beat_period_ms: 1300
+    notes: "伤感 / 回忆向"
+
+# 默认匹配规则:无 user_request 时选哪个;标签匹配失败时也用这个
+default_match:
+  bgm_id: "bgm_calm_lofi"
+  reason: "default"
+
+# BGM 选择行为开关
+matching:
+  llm_assist: true        # 启用 LLM 决策(空/失败时退化为 tag 启发式)
+  max_candidates_for_llm: 10  # LLM 决策前的候选项上限(避免 prompt 过大)

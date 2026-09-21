@@ -1,0 +1,90 @@
+# TTS 供应商参考描述(plan_v4 §5 阶段 4 / §6.1 选项 B)
+#
+# 本文件**只放引用描述**(供应商名、endpoint、参数 schema 形状),不复制
+# 任何 API Key 或真实账号;实际 Key 走主项目 `.env`,由 `config.py` 读。
+# 用户首跑前需在 `.env` 配:
+#     TTS_PROVIDER=<minimax|bytedance|302>
+#     TTS_<PROVIDER>_API_KEY=<...>
+#     TTS_<PROVIDER>_BASE_URL=<可选>
+#
+# 注:沿用 vendored OpenStoryline 形态 `tts_providers.json`,改为 YAML 以便
+# 单测 stub 时直接读;vendored `openstoryline/resource/tts/` 在本项目是空目
+# 录(未携带二进制资源),所以本地化版本是参考描述,不是 vendored 字节拷贝。
+
+providers:
+  minimax:
+    description: "默认供应商(plan §5 阶段 4 决策 1)"
+    default_base_url: "https://api.minimax.chat"
+    env_key_prefix: "TTS_MINIMAX_"
+    env_var_overrides:
+      api_key: "TTS_MINIMAX_API_KEY"
+      base_url: "TTS_MINIMAX_BASE_URL"
+    params_schema:
+      model:
+        type: "str"
+        enum: ["speech-02-hd", "speech-02-turbo", "speech-01-hd"]
+        description: "TTS 模型"
+      voice:
+        type: "str"
+        enum:
+          - "Chinese (Mandarin)_Gentleman"
+          - "female-shaonv-jingpin"
+          - "male-qn-jingying"
+        description: "音色"
+      emotion:
+        type: "str"
+        enum: ["angry", "happy", "sad", "neutral"]
+        description: "情感"
+      speed:
+        type: "float"
+        range: [0.5, 2.0]
+        description: "语速倍率"
+
+  bytedance:
+    description: "字节火山 TTS"
+    default_base_url: "https://openspeech.bytedance.com"
+    env_key_prefix: "TTS_BYTEDANCE_"
+    env_var_overrides:
+      access_token: "TTS_BYTEDANCE_ACCESS_TOKEN"
+      appid: "TTS_BYTEDANCE_APPID"
+      uid: "TTS_BYTEDANCE_UID"
+      cluster: "TTS_BYTEDANCE_CLUSTER"
+    params_schema:
+      voice_type:
+        type: "str"
+        enum: ["BV700_streaming", "BV001_streaming", "BV002_streaming"]
+        description: "音色"
+      encoding:
+        type: "str"
+        enum: ["wav", "mp3", "pcm"]
+      speed_ratio:
+        type: "float"
+        range: [0.5, 2.0]
+
+  302:
+    description: "302.ai 中转"
+    default_base_url: "https://api.302.ai"
+    env_key_prefix: "TTS_302_"
+    env_var_overrides:
+      api_key: "TTS_302_API_KEY"
+      base_url: "TTS_302_BASE_URL"
+    params_schema:
+      model:
+        type: "str"
+        enum: ["speech-02-hd"]
+      voice:
+        type: "str"
+        enum: ["female-shaonv-jingpin"]
+
+
+# 全局开关
+default_provider: "minimax"
+fallback_provider: "minimax"
+
+# 单段 TTS 超时(秒);超过即视为失败,节点写 error_log
+per_segment_timeout_s: 30
+
+# API Key 缺失时的策略:
+# - "stub" → 写最小 wav 占位(无声 0.5s),duration 用字符数估算,error_log 不报红
+# - "error" → 节点写 TOOL_NOT_FOUND,下游跳过(用于 strict 模式)
+on_missing_key: "stub"

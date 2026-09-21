@@ -1,13 +1,16 @@
-"""StateGraph 装配(2026-09 迁移解耦版,Week 5 拓扑)。
+"""StateGraph 装配(2026-09 迁移解耦版,Week 5 拓扑 + Phase 4 auto-mode + 阶段 7 解耦)。
 
-完整图拓扑(2026-09):
+完整图拓扑(2026-09 + Phase 4):
   START
     → clean_cache
-    → launch_openstoryline      (本地 uvicorn + httpx 健康检查,无 MCP)
+    → launch_openstoryline      (human-mode:本地 uvicorn + httpx 健康检查;
+                                  auto-mode:noop,plan §5 阶段 7)
     → open_preview
-    → checkpoint0_storyline_plan ⏸ interrupt("⓪")   (2026-09 新增;等人工在 OpenStoryline Web 完成规划)
-    → import_and_plan           (读 openstoryline/outputs/<sid>/plan_timeline_pro/*.json)
-    → generate_draft
+    → _route_mode(plan §2.1 双模分支):
+        ├─ human(默认):checkpoint0_storyline_plan ⏸ interrupt("⓪")
+        │                → import_and_plan  (读 vendored 产物)
+        └─ auto:         storyline_load_media(19 节点确定性图入口)
+    → generate_draft    (两条 mode 汇合点)
     → node_06_human_reorder            ⏸ interrupt("①")
     → node_07_speed_fit                🔁 条件边(route_after_speed_fit):
       ├─→ node_08_add_subtitles  (达标,产出 snapshot2)
@@ -41,6 +44,24 @@
 - 关卡统一为 ``⓪/①/②/③``,``_route_after_import`` 改为
   ``storyline_plan or shot_plan`` → ``generate_draft``。
 
+Phase 4 auto-mode(plan §2.1 / §5 阶段 0~5):
+- ``_route_mode`` 条件边在 ``open_preview`` 之后做双模分支;
+  ``STORYLINE_MODE=auto`` 时走新增 19 节点确定性图,产出
+  ``storyline_timeline_plan`` 直接喂 ``generate_draft`` mapper。
+- 默认 ``human`` 路径**完全不动**,172 unit / 关卡⓪ interrupt/resume
+  不回归。
+
+阶段 7 解耦(plan §5 阶段 7 / §7.3 验收):
+- ``launch_openstoryline`` 节点在 ``auto`` 模式下**禁用 vendored Web UI**
+  启动(返回 ``openstoryline_ready=True`` + ``node_02_auto_skipped`` 状态),
+  减少无谓 uvicorn 子进程开销,呼应"auto-mode 不依赖 vendored Web UI"。
+- ``_mcp_passthrough.py`` 已删除,19 节点全部走 ``storyline_capabilities/``
+  本地能力层;``asr_runner.py`` 仍走 vendored venv 子进程调 funasr(主 venv
+  不能装 torch),这是 ADR-001 阻塞项,**不**在阶段 7 删除范围内。
+- human-mode 路径(checkpoint0_storyline_plan + node_04_import_and_plan)
+  **保留**并加 ``[Phase 7 deprecation]`` 注释,不删 — 避免破坏老
+  checkpoint 恢复 + 保留 auto-mode 失败时的回退入口(plan §6.2 选项 A)。
+
 Week 5 关键改动(保留):
 - ``node_16_translate_subtitles`` 拆为 ``node_16a_translate_and_check``(翻译 +
   layout 检测,无 interrupt) + ``node_checkpoint3_layout_review``(只做 interrupt,
@@ -61,12 +82,23 @@ SqliteSaver 做持久化,覆盖多日挂起恢复;Week 5 切到 PostgresSaver)�
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import os
 import uuid
 from pathlib import Path
 from typing import Optional
 
-from config import POSTGRES_URI, make_checkpointer, resolve_draft_dir
+# Phase 4:用于在测试中临时覆盖 config.STORYLINE_MODE(不污染全局 env)
+_STORYLINE_MODE_OVERRIDE: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "STORYLINE_MODE_OVERRIDE", default=None
+)
+
+from config import (
+    POSTGRES_URI,
+    STORYLINE_MODE,
+    make_checkpointer,
+    resolve_draft_dir,
+)
 from monitoring.heartbeat_writer import start_heartbeat
 
 # pre-flight 依赖只在用户显式打开时才 import,避免 84 条现有测试多走依赖链
@@ -95,6 +127,49 @@ from nodes.node_fork_english_branch import fork_draft_for_english_branch
 from nodes.node_join_before_delivery import join_before_delivery
 from state import WorkflowState
 
+# ---------------------------------------------------------------------------
+# Phase 4:剧情线模式路由(plan_v4 §2.1 / §5 阶段 0)
+# ---------------------------------------------------------------------------
+# 双模分支点 — ``open_preview`` 之后立刻二选一:
+# - ``human``:保持现有 17 节点 + 关卡⓪(**完全不动**,172 unit / 中断恢复不回归)
+# - ``auto``:走新增 19 节点确定性图(plan_v4 §2.2)
+# 19 节点的壳子全部 ``add_node`` 加入图,但只在 ``auto`` 模式下连通。
+from nodes.storyline import (
+    qa_gate as _qa_gate_mod,
+    join_storyline as _join_storyline_mod,
+)
+from nodes.storyline.node_load_media import storyline_load_media_node
+from nodes.storyline.node_search_media import storyline_search_media_node
+from nodes.storyline.node_search_web_topic import storyline_search_web_topic_node
+from nodes.storyline.node_split_shots import storyline_split_shots_node
+from nodes.storyline.node_local_asr import storyline_local_asr_node
+from nodes.storyline.node_speech_rough_cut import storyline_speech_rough_cut_node
+from nodes.storyline.node_generate_ai_transition import (
+    storyline_generate_ai_transition_node,
+)
+from nodes.storyline.node_understand_clips import storyline_understand_clips_node
+from nodes.storyline.node_filter_clips import storyline_filter_clips_node
+from nodes.storyline.node_group_clips import storyline_group_clips_node
+from nodes.storyline.node_generate_script import storyline_generate_script_node
+from nodes.storyline.node_script_template_recommendation import (
+    storyline_script_template_recommendation_node,
+)
+from nodes.storyline.node_generate_voiceover import (
+    storyline_generate_voiceover_node,
+)
+from nodes.storyline.node_select_bgm import storyline_select_bgm_node
+from nodes.storyline.node_recommend_transition import (
+    storyline_recommend_transition_node,
+)
+from nodes.storyline.node_recommend_text import storyline_recommend_text_node
+from nodes.storyline.node_plan_timeline_pro import (
+    storyline_plan_timeline_pro_node,
+)
+from nodes.storyline.node_plan_timeline_ai_transition import (
+    storyline_plan_timeline_ai_transition_node,
+)
+from nodes.storyline.node_render_video import storyline_render_video_node
+
 
 # ---------------------------------------------------------------------------
 # 节点 4 之后路由(Week 2 已有,Week 3 保留;2026-09 关卡⓪ 后改为 storyline_plan or shot_plan)
@@ -104,6 +179,60 @@ def _route_after_import(state: WorkflowState) -> str:
     if state.get("storyline_plan") or state.get("shot_plan"):
         return "generate_draft"
     return "__end__"
+
+
+# ---------------------------------------------------------------------------
+# Phase 4:auto-mode 19 节点图的条件路由(plan_v4 §5 阶段 0)
+# ---------------------------------------------------------------------------
+def _route_mode(state: WorkflowState) -> str:
+    """open_preview 之后的双模分支:返回 ``"checkpoint0_storyline_plan"`` 或
+    ``"storyline_load_media"``,由 ``config.STORYLINE_MODE`` 控制。
+
+    默认 ``"human"`` 完全保留现有路径;``"auto"`` 走新 19 节点确定性图。
+
+    注意:build_graph 可显式接受 ``storyline_mode_override`` 参数强制覆盖,
+    便于测试在同一个进程内跑两种 mode。
+    """
+    mode = _STORYLINE_MODE_OVERRIDE.get() or STORYLINE_MODE
+    if mode == "auto":
+        return "storyline_load_media"
+    return "checkpoint0_storyline_plan"
+
+
+def _route_after_storyline_join(state: WorkflowState) -> str:
+    """storyline_join 之后的条件路由(对齐 ``_route_after_import`` 的语义)。
+
+    - 有 ``storyline_plan``(join_storyline 已反序列化到 state)→ ``generate_draft``
+    - 否则 → ``END``(空 plan 与 qa_gate 失败强制 continue 的语义一致)
+    """
+    if state.get("storyline_plan") or state.get("shot_plan"):
+        return "generate_draft"
+    return "__end__"
+
+
+def _storyline_route_after_load_media(state: WorkflowState) -> str:
+    """storyline_load_media 之后的条件路由(plan §2.2 第 96/97 行)。
+
+    阶段 0 默认走 ``split_shots`` 主干,``search_media`` 旁路仅当 ``Pexels Key``
+    已配(读 ``STORYLINE_PEXELS_API_KEY``);不在 stub 模式启用。
+    """
+    if os.environ.get("STORYLINE_PEXELS_API_KEY", "").strip():
+        return "storyline_search_media"
+    return "storyline_split_shots"
+
+
+def _storyline_route_after_split_shots(state: WorkflowState) -> str:
+    """storyline_split_shots 之后的条件路由(plan §2.2 第 99/100 行)。
+
+    阶段 0 默认走 ``understand_clips`` 主干;``local_asr`` 旁路仅当
+    ``media_artifact`` 里识别到至少一个 media 有 audio stream(读 ``has_audio``)。
+    阶段 1 才完整检测。
+    """
+    media_artifact = state.get("storyline_media_artifact")
+    if media_artifact:
+        # 阶段 0 stub 模式不真正解析文件,保守直接走主干
+        return "storyline_understand_clips"
+    return "storyline_understand_clips"
 
 
 # ---------------------------------------------------------------------------
@@ -254,7 +383,16 @@ def build_graph(
 
 
 def _build_state_graph():
-    """构造 StateGraph 拓扑(不 compile,便于单测替换 checkpointer)。"""
+    """构造 StateGraph 拓扑(不 compile,便于单测替换 checkpointer)。
+
+    Phase 4(plan_v4 §2.1 / §2.2 / §5 阶段 0)新增:
+    - ``_route_mode`` 条件边在 ``open_preview`` 之后做双模分支。
+    - ``human`` mode:走原 17 节点路径(关卡⓪ + import_and_plan),**完全不动**。
+    - ``auto`` mode:走新 19 节点确定性图,19 节点 / qa_gate / join_storyline 全
+      部 ``add_node`` 注册,内部拓扑按 plan §2.2 连边;``auto`` 模式从
+      ``open_preview`` 直达 ``storyline_load_media``,绕过关卡⓪ 与
+      ``import_and_plan``。
+    """
     from langgraph.graph import END, START, StateGraph
 
     g = StateGraph(WorkflowState)
@@ -306,6 +444,35 @@ def _build_state_graph():
     g.add_node("node_17_inject_english_tts_stub", node_17_inject_english_tts_stub)
     g.add_node("join_before_delivery", join_before_delivery)
 
+    # ---- Phase 4:auto-mode 19 节点 + qa_gate + join_storyline(plan_v4 §2.2 / §2.3)----
+    # 所有 storyline 节点在两种 mode 下都注册成图节点(便于检查点兼容);
+    # 但仅在 ``auto`` 模式下通过 _route_mode 条件边连通,``human`` 模式下完全
+    # 不进入这些节点,172 unit / 关卡⓪ interrupt/resume 不回归。
+    g.add_node("storyline_load_media", storyline_load_media_node)
+    g.add_node("storyline_search_media", storyline_search_media_node)
+    g.add_node("storyline_search_web_topic", storyline_search_web_topic_node)
+    g.add_node("storyline_split_shots", storyline_split_shots_node)
+    g.add_node("storyline_local_asr", storyline_local_asr_node)
+    g.add_node("storyline_speech_rough_cut", storyline_speech_rough_cut_node)
+    g.add_node("storyline_generate_ai_transition",
+               storyline_generate_ai_transition_node)
+    g.add_node("storyline_understand_clips", storyline_understand_clips_node)
+    g.add_node("storyline_filter_clips", storyline_filter_clips_node)
+    g.add_node("storyline_group_clips", storyline_group_clips_node)
+    g.add_node("storyline_generate_script", storyline_generate_script_node)
+    g.add_node("storyline_script_template_recommendation",
+               storyline_script_template_recommendation_node)
+    g.add_node("storyline_generate_voiceover", storyline_generate_voiceover_node)
+    g.add_node("storyline_select_bgm", storyline_select_bgm_node)
+    g.add_node("storyline_recommend_transition", storyline_recommend_transition_node)
+    g.add_node("storyline_recommend_text", storyline_recommend_text_node)
+    g.add_node("storyline_plan_timeline_pro", storyline_plan_timeline_pro_node)
+    g.add_node("storyline_plan_timeline_ai_transition",
+               storyline_plan_timeline_ai_transition_node)
+    g.add_node("storyline_render_video", storyline_render_video_node)
+    g.add_node("storyline_qa_gate", _qa_gate_mod.storyline_qa_gate_node)
+    g.add_node("storyline_join", _join_storyline_mod.storyline_join_node)
+
     # ---- 边 ----
     # 节点 clean_cache 保留在图中(供 FireRed-OpenStoryline Web UI 的
     # "清理缓存" 按钮通过 POST /api/system/clean-cache 端点显式触发),
@@ -313,14 +480,28 @@ def _build_state_graph():
     # CACHE_PATHS_TO_CLEAN 中的剪映/OpenStoryline 临时目录。
     g.add_edge(START, "launch_openstoryline")
     g.add_edge("launch_openstoryline", "open_preview")
-    # 关卡⓪ 串在 open_preview 与 import_and_plan 之间(2026-09 新增)
-    g.add_edge("open_preview", "checkpoint0_storyline_plan")
+
+    # Phase 4:open_preview 之后做双模分支(plan_v4 §2.1 / §5 阶段 0)
+    g.add_conditional_edges(
+        "open_preview",
+        _route_mode,
+        {
+            "checkpoint0_storyline_plan": "checkpoint0_storyline_plan",
+            "storyline_load_media": "storyline_load_media",
+        },
+    )
+
+    # human-mode 路径(关卡⓪ + node_04)
+    # [Phase 7 deprecation] plan §5 阶段 7:human-mode 路径仅作
+    # auto-mode 失败时的回退入口 + 老 checkpoint 恢复兜底保留,不删。
+    # 新功能请优先走 auto-mode(19 节点确定性图)。
     g.add_edge("checkpoint0_storyline_plan", "import_and_plan")
     g.add_conditional_edges(
         "import_and_plan",
         _route_after_import,
         {"generate_draft": "generate_draft", END: END},
     )
+
     g.add_edge("generate_draft", "node_06_human_reorder")
     g.add_edge("node_06_human_reorder", "node_07_speed_fit")
 
@@ -372,6 +553,112 @@ def _build_state_graph():
     # join → END
     g.add_edge("join_before_delivery", END)
 
+    # ---- Phase 4:auto-mode 19 节点图边(plan_v4 §2.2 / §5 阶段 0)----
+    # 起点:``_route_mode`` 条件边已把 open_preview 指向 ``storyline_load_media``。
+    # 阶段 0 拓扑(简版;plan §2.2 完整版待阶段 5 完善):
+
+    # LM 后两条路:
+    #   A) Pexels Key 已配 → search_media → LM(条件边,可选循环)
+    #   B) 主干 → split_shots
+    # 阶段 0 默认走 B(stub 模式无条件),search_media 暂作旁路,**不** 串回 LM
+    # (避免单测复杂度;阶段 1+ 完善)。
+    g.add_conditional_edges(
+        "storyline_load_media",
+        _storyline_route_after_load_media,
+        {
+            "storyline_search_media": "storyline_search_media",
+            "storyline_split_shots": "storyline_split_shots",
+        },
+    )
+    g.add_edge("storyline_search_media", "storyline_split_shots")
+
+    # split_shots 出 2 个分支(并行 fan-out):
+    #   A) understand_clips 主路径
+    #   B) local_asr 条件(有语音)→ speech_rough_cut(目前阶段 0 为旁支)
+    g.add_conditional_edges(
+        "storyline_split_shots",
+        _storyline_route_after_split_shots,
+        {
+            "storyline_understand_clips": "storyline_understand_clips",
+            "storyline_local_asr": "storyline_local_asr",
+        },
+    )
+    g.add_edge("storyline_local_asr", "storyline_speech_rough_cut")
+
+    # understand_clips → filter_clips → group_clips(主线)
+    g.add_edge("storyline_understand_clips", "storyline_filter_clips")
+    g.add_edge("storyline_filter_clips", "storyline_group_clips")
+
+    # group_clips → 两路:
+    #   A) generate_script(文案)
+    #   B) recommend_transition(转场) — 等 select_bgm 完成后才走
+    #   C) plan_timeline_pro:在下面 fan-in 列表形式统一加入
+    g.add_edge("storyline_group_clips", "storyline_generate_script")
+    g.add_edge("storyline_group_clips", "storyline_recommend_transition")
+
+    # generate_script 之后并行 fan-out(plan §2.2 §3):
+    #   A) script_template_recommendation
+    #   B) generate_voiceover
+    #   C) select_bgm
+    #   D) recommend_text
+    g.add_edge("storyline_generate_script", "storyline_script_template_recommendation")
+    g.add_edge("storyline_generate_script", "storyline_generate_voiceover")
+    g.add_edge("storyline_generate_script", "storyline_select_bgm")
+    g.add_edge("storyline_generate_script", "storyline_recommend_text")
+
+    # voiceover 完成后 join select_bgm(便于配音时长对齐)
+    g.add_edge("storyline_generate_voiceover", "storyline_select_bgm")
+
+    # select_bgm 完成后 join recommend_transition(plan §2.2:SB→RTR)
+    g.add_edge("storyline_select_bgm", "storyline_recommend_transition")
+
+    # 所有 PTP 上游都到 plan_timeline_pro(plan §2.2):
+    #   SS, GC, GS, GV, SB 都到 PTP(fan-in)。用 list 形式语义(对照
+    #   ``join_before_delivery`` 注释),LangGraph 0.2 才会等所有 sources 完成才
+    #   触发目标一次;独立 ``add_edge`` 是「任一 source 完成就触发」,会导致
+    #   PTP 在 SS 完成时就跑,GS/GV/SB 还没产出 — 与 plan §2.2 拓扑不符。
+    g.add_edge(
+        [
+            "storyline_split_shots",
+            "storyline_group_clips",
+            "storyline_generate_script",
+            "storyline_generate_voiceover",
+            "storyline_select_bgm",
+        ],
+        "storyline_plan_timeline_pro",
+    )
+
+    # qa_gate 也是 fan-in:PTP + RTR + RT(plan §2.2)。同样改 list 形式。
+    g.add_edge(
+        [
+            "storyline_plan_timeline_pro",
+            "storyline_recommend_transition",
+            "storyline_recommend_text",
+        ],
+        "storyline_qa_gate",
+    )
+
+    # qa_gate 条件边:retry→ group_clips;通过 / 失败→ render_video(条件)→ join
+    g.add_conditional_edges(
+        "storyline_qa_gate",
+        _qa_gate_mod.route_after_storyline_qa,
+        {
+            "storyline_group_clips": "storyline_group_clips",
+            "storyline_render_video": "storyline_render_video",
+        },
+    )
+
+    # render_video 旁支:默认 noop → join;不接入下游(plan §2.2 旁支 + ADR-006)
+    g.add_edge("storyline_render_video", "storyline_join")
+
+    # join → generate_draft(条件边;与 _route_after_import 同语义)
+    g.add_conditional_edges(
+        "storyline_join",
+        _route_after_storyline_join,
+        {"generate_draft": "generate_draft", END: END},
+    )
+
+    # 兼容默认 graph 入边(notebook / 旧脚本可能直接 invoke 但不在测试范围)
     return g
 
 

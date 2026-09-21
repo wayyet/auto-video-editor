@@ -66,6 +66,24 @@ def _append_unique(existing: list[str] | None, new: list[str] | None) -> list[st
 
 
 # ---------------------------------------------------------------------------
+# Phase 4:``last-wins`` reducer(plan_v4 §5 阶段 0 / LangGraph 并发问题)
+# ---------------------------------------------------------------------------
+# 多个 storyline 节点可能在同一 tick 写同一 ``storyline_*`` 字段(例如 fan-in 到
+# plan_timeline_pro 的多个上游都想 ``append_status_tag``),LastValue channel 默认
+# 不允许多次写并抛 ``InvalidUpdateError``。本 reducer 取最后一次写入,沿用 LangGraph
+# 标准「默认无 reducer 字段只能写一次」的语义但放宽到「last-wins」。
+def _last_wins(existing: Any, new: Any) -> Any:
+    """``existing`` / ``new`` 都可能是 None;取最后一次非空值。
+
+    与 Week 4 的 ``_append_unique``(append-only + 去重)不同,本 reducer 不累积,
+    符合 Path 字段「最终以最后写入者为准」的语义。
+    """
+    if new is None:
+        return existing
+    return new
+
+
+# ---------------------------------------------------------------------------
 # Week 4 新增:字幕段结构(节点 8 写 zh,节点 16 补 en)
 # ---------------------------------------------------------------------------
 class SubtitleSegment(TypedDict, total=False):
@@ -185,3 +203,34 @@ class WorkflowState(TypedDict, total=False):
     storyline_outputs_root: NotRequired[Optional[str]]
     # Phase 3 复用 Skill(默认空)
     reuse_skill_name: NotRequired[Optional[str]]
+
+    # ===== Phase 4 新增:auto-mode 19 节点图字段(plan_v4 §3.2)=====
+    # 全部 NotRequired,旧 checkpoint resume 兼容;统一通过 state.get() 读以防
+    # 老 checkpoint 缺字段。状态日志统一用 status_log / error_log(Week 4 reducer
+    # 已支持 fan-in 去重),不允许 storyline_status_log / storyline_error_log。
+    # 注:本计划与上面 storyline_plan / storyline_artifacts / storyline_error_code
+    # / storyline_outputs_root 已在 Phase 1 落地,本阶段不在此列重复定义。
+    # ``Annotated[..., _last_wins]`` 让 fan-in(plan_timeline_pro 5 个上游)能
+    # 在同一 tick 写入同一字段而不抛 ``InvalidUpdateError``,取最后一次非空值。
+    # TypedDict(total=False) 把所有键视为 Optional(NotRequired 语义);带
+    # ``_last_wins`` reducer 的字段允许多源并发写,不带的仍走 LastValue 默认
+    # (例如 ``storyline_qa_retry_count`` 是 qa_gate 唯一写入者)。
+    storyline_media_artifact: Annotated[Optional[str], _last_wins]            # load_media
+    storyline_shots_artifact: Annotated[Optional[str], _last_wins]            # split_shots
+    storyline_understanding_artifact: Annotated[Optional[str], _last_wins]    # understand_clips
+    storyline_filtered_clips: Annotated[Optional[str], _last_wins]            # filter_clips
+    storyline_groups_artifact: Annotated[Optional[str], _last_wins]           # group_clips
+    storyline_script_artifact: Annotated[Optional[str], _last_wins]           # generate_script
+    storyline_voiceover_artifact: Annotated[Optional[str], _last_wins]        # generate_voiceover
+    storyline_bgm_selection: Annotated[Optional[dict], _last_wins]            # select_bgm
+    storyline_transition_plan: Annotated[Optional[dict], _last_wins]          # recommend_transition
+    storyline_text_style_plan: Annotated[Optional[dict], _last_wins]          # recommend_text
+    storyline_timeline_plan: Annotated[Optional[str], _last_wins]             # plan_timeline_pro / join
+    storyline_asr_artifact: Annotated[Optional[str], _last_wins]              # local_asr(条件)
+    storyline_rough_cut_artifact: Annotated[Optional[str], _last_wins]        # speech_rough_cut(条件)
+    storyline_ai_transition_artifact: Annotated[Optional[str], _last_wins]    # generate_ai_transition(ADR-005 默认关闭)
+    storyline_web_topic_artifact: Annotated[Optional[str], _last_wins]        # search_web_topic(条件)
+    storyline_render_smoke_test_path: Annotated[Optional[str], _last_wins]    # render_video(旁支)
+    storyline_qa_retry_count: NotRequired[int]            # qa_gate 唯一写入者(无需 reducer)
+    # storyline_targets:{ target_duration_ms, ratio, ... },qa_gate 用
+    storyline_targets: NotRequired[Optional[dict]]

@@ -237,6 +237,46 @@ def storyline_outputs_root() -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Phase 4 双模路由(对应 plan_v4 §5 阶段 0 开工决策)
+# ---------------------------------------------------------------------------
+# - ``STORYLINE_MODE=human``(默认):沿用关卡⓪(node_checkpoint0_storyline_plan +
+#   node_04_import_and_plan 读 vendored Web UI 产物路径)**完全不动**,保证 172 unit
+#   + 关卡⓪ interrupt/resume 不回归。
+# - ``STORYLINE_MODE=auto``:走新增的 ``nodes/storyline/`` 19 节点确定性图,产出
+#   ``storyline_timeline_plan`` 直接喂 node_05 mapper。
+# 设置方式:启动前 ``$env:STORYLINE_MODE="auto"``(也可在 build_graph() 注入位里
+# 显式传 override)。
+STORYLINE_MODE: str = os.environ.get("STORYLINE_MODE", "human").lower().strip()
+if STORYLINE_MODE not in ("human", "auto"):
+    raise ValueError(
+        f"STORYLINE_MODE 必须是 'human' 或 'auto',当前 {STORYLINE_MODE!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 render_video 冒烟测试旁支(对应 plan_v4 §5 阶段 6 / ADR-006)
+# ---------------------------------------------------------------------------
+# 默认关闭;开启后 ``storyline_render_video`` 节点会跑真实渲染并把 mp4 路径写入
+# ``storyline_render_smoke_test_path``,**不**接入下游。
+STORYLINE_ENABLE_RENDER_SMOKE_TEST: bool = (
+    os.environ.get("STORYLINE_ENABLE_RENDER_SMOKE_TEST", "0").lower().strip()
+    in ("1", "true", "yes")
+)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 vendored copy(vendored OpenStoryline)路径常量
+# ---------------------------------------------------------------------------
+# 19 节点的临时透传壳子从 ``openstoryline/`` vendored copy 拉数据 — 由于本地主
+# venv 不能装 torch,阶段 0 走 subprocess 调 vendored venv 跑子任务。后续阶段 7
+# 才彻底解耦。
+VENDORED_OPENSTORYLINE_ROOT: Path = Path(__file__).resolve().parent / "openstoryline"
+VENDORED_OPENSTORYLINE_VENV_PY: Path = (
+    VENDORED_OPENSTORYLINE_ROOT / ".venv" / "Scripts" / "python.exe"
+)
+
+
+# ---------------------------------------------------------------------------
 # 节点 3:open_preview
 # ---------------------------------------------------------------------------
 # [TODO: Week1] Edge 浏览器在本机的可执行文件名;若用 Chrome 则改 "chrome"。
