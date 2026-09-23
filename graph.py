@@ -1,6 +1,6 @@
-"""StateGraph 装配(2026-09 迁移解耦版,Week 5 拓扑 + Phase 4 auto-mode + 阶段 7 解耦)。
+"""StateGraph 装配(2026-09 迁移解耦版,Week 5 拓扑 + Phase 4 auto-mode + 阶段 7 解耦 + Phase 5 assembly QC 通道)。
 
-完整图拓扑(2026-09 + Phase 4):
+完整图拓扑(2026-09 + Phase 4 + Phase 5):
   START
     → clean_cache
     → launch_openstoryline      (human-mode:本地 uvicorn + httpx 健康检查;
@@ -11,7 +11,16 @@
         │                → import_and_plan  (读 vendored 产物)
         └─ auto:         storyline_load_media(19 节点确定性图入口)
     → generate_draft    (两条 mode 汇合点)
-    → node_06_human_reorder            ⏸ interrupt("①")
+    → [Phase 5: ASSEMBLY_QC_GATE_ENABLED=True 时插入 6 节点 QC 通道(plan §七)]
+        assembly_discover_and_probe
+        → assembly_asr_and_visual_observe
+        → assembly_build_timeline
+        → assembly_validate_render_qc      🔁 条件边(route_after_assembly_qc):
+            ├─→ assembly_repair_loop       (未达标且 retry < MAX)
+            │     ↻ assembly_validate_render_qc
+            └─→ assembly_write_report      (达标 / retry 达上限 → 软降级)
+        → node_06_human_reorder            ⏸ interrupt("①")
+      [ASSEMBLY_QC_GATE_ENABLED=False 时:generate_draft 直接到 node_06_human_reorder]
     → node_07_speed_fit                🔁 条件边(route_after_speed_fit):
       ├─→ node_08_add_subtitles  (达标,产出 snapshot2)
       ├─→ node_07_speed_fit      (未达标,retry_counts < MAX_RETRY)
@@ -126,6 +135,22 @@ from nodes.node_17_inject_english_tts_stub import node_17_inject_english_tts_stu
 from nodes.node_fork_english_branch import fork_draft_for_english_branch
 from nodes.node_join_before_delivery import join_before_delivery
 from state import WorkflowState
+
+# ---------------------------------------------------------------------------
+# Phase 5:assembly QC 通道节点(plan §七 / ADR-1~5 / §十 阶段四)
+# ---------------------------------------------------------------------------
+# 6 个新节点:discover → asr/observe → build_timeline → validate/render/qc
+# → repair_loop (条件) → write_report。所有节点都注册到图中,但当
+# ``ASSEMBLY_QC_GATE_ENABLED=false`` 时不接边,等价于改动前状态。
+from nodes.assembly import (
+    assembly_asr_and_visual_observe_node,
+    assembly_build_timeline_node,
+    assembly_discover_and_probe_node,
+    assembly_repair_loop_node,
+    assembly_validate_render_qc_node,
+    assembly_write_report_node,
+    route_after_assembly_qc,
+)
 
 # ---------------------------------------------------------------------------
 # Phase 4:剧情线模式路由(plan_v4 §2.1 / §5 阶段 0)
@@ -435,6 +460,17 @@ def _build_state_graph():
     g.add_node("node_12_human_add_bgm", human_add_bgm)
     g.add_node("node_13_adjust_volume", adjust_volume)
 
+    # ---- Phase 5:assembly QC 通道(plan §七 / §十 阶段四)----
+    # ADR-3:默认 ASSEMBLY_QC_GATE_ENABLED=True → 6 节点全部接进图;
+    # 设为 False 时只 add_node 不接边,等价于改动前状态,human-mode 关卡①
+    # 不会突然被打破。
+    g.add_node("assembly_discover_and_probe", assembly_discover_and_probe_node)
+    g.add_node("assembly_asr_and_visual_observe", assembly_asr_and_visual_observe_node)
+    g.add_node("assembly_build_timeline", assembly_build_timeline_node)
+    g.add_node("assembly_validate_render_qc", assembly_validate_render_qc_node)
+    g.add_node("assembly_repair_loop", assembly_repair_loop_node)
+    g.add_node("assembly_write_report", assembly_write_report_node)
+
     # ---- Week 4 节点 + Week 5 拆分(7 个)----
     g.add_node("fork_draft_for_english_branch", fork_draft_for_english_branch)
     g.add_node("node_14_make_covers", node_14_make_covers)
@@ -502,7 +538,39 @@ def _build_state_graph():
         {"generate_draft": "generate_draft", END: END},
     )
 
-    g.add_edge("generate_draft", "node_06_human_reorder")
+    # ---- 阶段 7 拓扑收尾 + Phase 5 assembly QC 通道边(plan §八 / ADR-3)----
+    # 默认 ``ASSEMBLY_QC_GATE_ENABLED=True``:``generate_draft`` 改为
+    # 接 ``assembly_discover_and_probe``,``assembly_write_report`` 接回
+    # ``node_06_human_reorder``。
+    # ``ASSEMBLY_QC_GATE_ENABLED=False``(应急关闭):保留原 ``generate_draft
+    # → node_06_human_reorder``,add_node 已注册但完全无连接 — 等价于
+    # 改动前状态(plan §11 验收项"应急关闭生效")。
+    #
+    # 运行时读 ``config.ASSEMBLY_QC_GATE_ENABLED``,不走模块顶层 import 的本地
+    # 绑定(单测用 ``monkeypatch.setattr(config, "ASSEMBLY_QC_GATE_ENABLED", ...)``
+    # 才能生效)。
+    import config as _config
+    if _config.ASSEMBLY_QC_GATE_ENABLED:
+        # 重新指向:generate_draft 不再直连 node_06_human_reorder,
+        # 先接 assembly 链首;6 节点按 plan §八 接边 + 条件路由。
+        g.add_edge("generate_draft", "assembly_discover_and_probe")
+        g.add_edge("assembly_discover_and_probe", "assembly_asr_and_visual_observe")
+        g.add_edge("assembly_asr_and_visual_observe", "assembly_build_timeline")
+        g.add_edge("assembly_build_timeline", "assembly_validate_render_qc")
+        g.add_conditional_edges(
+            "assembly_validate_render_qc",
+            route_after_assembly_qc,
+            {
+                "assembly_repair_loop": "assembly_repair_loop",
+                "assembly_write_report": "assembly_write_report",
+            },
+        )
+        g.add_edge("assembly_repair_loop", "assembly_validate_render_qc")
+        g.add_edge("assembly_write_report", "node_06_human_reorder")
+    else:
+        # 应急关闭:原状,add_node 注册的 6 个 assembly 节点不接边,不参与执行。
+        g.add_edge("generate_draft", "node_06_human_reorder")
+
     g.add_edge("node_06_human_reorder", "node_07_speed_fit")
 
     # 节点 7 条件边:达标走桥接 → 节点 8;未达标自循环或升级

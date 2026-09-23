@@ -404,6 +404,22 @@ EN_FONT_NAME: str = "Roboto-Bold.ttf"
 
 
 # ---------------------------------------------------------------------------
+# Phase 5 — assembly QC 通道(对照 design execution plan §7 + ADR-3)
+# ---------------------------------------------------------------------------
+# ``ASSEMBLY_QC_GATE_ENABLED``:默认 true —— 每条视频强制走 6 节点 QC 通道
+# (plan ADR-3:用户已确认接受"默认开启,每条视频强制过 QC")。设为 false 时
+# ``generate_draft`` 直接接 ``node_06_human_reorder``,等价于改动前行为。
+ASSEMBLY_QC_GATE_ENABLED: bool = (
+    os.environ.get("ASSEMBLY_QC_GATE_ENABLED", "true").lower().strip()
+    in ("1", "true", "yes")
+)
+
+# 修复循环最大重试次数(plan §7.5 / ADR-3:重试到上限后**不硬性中断**,
+# 把未解决的问题如实写进 report.md,照常进入关卡①)。
+ASSEMBLY_QC_MAX_RETRY: int = int(os.environ.get("ASSEMBLY_QC_MAX_RETRY", "2"))
+
+
+# ---------------------------------------------------------------------------
 # 派生:最终访问的 URL
 # ---------------------------------------------------------------------------
 def openstoryline_mcp_url() -> str:

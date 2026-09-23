@@ -1,0 +1,7 @@
+{
+  "name": "case_02_single_full",
+  "notes": "无场景边界 → 单段整段占位,理想保留整段 60s",
+  "ideal_segments": [
+    {"index": 0, "reason": "整段素材,无明显场景切换,保留全部"}
+  ]
+}

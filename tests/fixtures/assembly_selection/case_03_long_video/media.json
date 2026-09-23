@@ -1,0 +1,30 @@
+[
+  {
+    "source": "tests/fixtures/assembly_selection/case_03_long_video/input.mp4",
+    "probe": {
+      "duration_seconds": 120.0,
+      "size_bytes": 12582912,
+      "summary": {"duration_seconds": 120.0}
+    },
+    "analysis": {
+      "input_path": "tests/fixtures/assembly_selection/case_03_long_video/input.mp4",
+      "duration_seconds": 120.0,
+      "scene_change_count": 11,
+      "candidate_segment_count": 12,
+      "candidate_segments": [
+        {"index": 0, "start": 0.0, "end": 10.0, "duration": 10.0, "source": "scene_boundary"},
+        {"index": 1, "start": 10.5, "end": 20.0, "duration": 9.5, "source": "scene_boundary"},
+        {"index": 2, "start": 20.5, "end": 30.0, "duration": 9.5, "source": "scene_boundary"},
+        {"index": 3, "start": 30.5, "end": 40.0, "duration": 9.5, "source": "scene_boundary"},
+        {"index": 4, "start": 40.5, "end": 50.0, "duration": 9.5, "source": "scene_boundary"},
+        {"index": 5, "start": 50.5, "end": 60.0, "duration": 9.5, "source": "scene_boundary"},
+        {"index": 6, "start": 60.5, "end": 70.0, "duration": 9.5, "source": "scene_boundary"},
+        {"index": 7, "start": 70.5, "end": 80.0, "duration": 9.5, "source": "scene_boundary"},
+        {"index": 8, "start": 80.5, "end": 90.0, "duration": 9.5, "source": "scene_boundary"},
+        {"index": 9, "start": 90.5, "end": 100.0, "duration": 9.5, "source": "scene_boundary"},
+        {"index": 10, "start": 100.5, "end": 110.0, "duration": 9.5, "source": "scene_boundary"},
+        {"index": 11, "start": 110.5, "end": 120.0, "duration": 9.5, "source": "scene_boundary"}
+      ]
+    }
+  }
+]

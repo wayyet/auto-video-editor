@@ -1,0 +1,7 @@
+{
+  "language": "zh",
+  "segments": [],
+  "words": [],
+  "provider": "fixture-mock",
+  "source_media": "tests/fixtures/assembly_selection/case_01_multi_scene/input.mp4"
+}

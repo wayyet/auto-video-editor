@@ -1,0 +1,13 @@
+{
+  "language": "zh",
+  "segments": [
+    {"start": 0.0, "end": 3.0, "text": "第一段转写内容（阶段五 fixture,用于驱动 speech_transcribe）"},
+    {"start": 3.0, "end": 6.5, "text": "第二段:video-agent-kit 集成测试,验证 preview.mp4 + report.md"},
+    {"start": 6.5, "end": 10.0, "text": "第三段:30 秒测试视频,1080x1920 竖屏"}
+  ],
+  "metadata": {
+    "provider": "external-fixture",
+    "tool": "speech_transcribe",
+    "source_media": "inputs/30s.mp4"
+  }
+}

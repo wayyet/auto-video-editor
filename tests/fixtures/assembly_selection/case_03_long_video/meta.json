@@ -1,0 +1,18 @@
+{
+  "name": "case_03_long_video",
+  "notes": "12 段场景边界(未触发 24 段截断),理想保留所有 12 段;此 case 验证 LLM 选段顺序与 fallback 行为",
+  "ideal_segments": [
+    {"index": 0, "reason": "段 1"},
+    {"index": 1, "reason": "段 2"},
+    {"index": 2, "reason": "段 3"},
+    {"index": 3, "reason": "段 4"},
+    {"index": 4, "reason": "段 5"},
+    {"index": 5, "reason": "段 6"},
+    {"index": 6, "reason": "段 7"},
+    {"index": 7, "reason": "段 8"},
+    {"index": 8, "reason": "段 9"},
+    {"index": 9, "reason": "段 10"},
+    {"index": 10, "reason": "段 11"},
+    {"index": 11, "reason": "段 12"}
+  ]
+}

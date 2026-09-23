@@ -29,13 +29,21 @@ from state import WorkflowState
 
 
 def _send_notification(state: WorkflowState, checkpoint: str) -> None:
-    """Week 3 占位通知:实际接入企业微信 webhook 留 Week 4。
+    """关卡① 人工通知(Week 3 占位 + 阶段五扩展)。
+
+    阶段五(plan §7.6 / §11 验收项 "关卡① 通知文案正确带上报告路径"):
+    ``assembly_report_path`` 是 assembly 6 节点的最终产物路径;关卡① 通知里
+    必须带上,便于人工在剪映里调分镜时同步看 assembly QC 报告与 preview.mp4。
 
     本函数被刻意放在 ``interrupt()`` **之后**,避免重放时重复发送。
     单测可通过 monkeypatch 此函数计数。
     """
+    assembly_report = state.get("assembly_report_path") or "(无报告)"
     # 当前仅写入 state.log;Week 4 替换为真实通知渠道。
-    print(f"[notify] {checkpoint} thread={state.get('session_id')} draft={state.get('draft_path')}")
+    print(
+        f"[notify] {checkpoint} thread={state.get('session_id')} "
+        f"draft={state.get('draft_path')} assembly_report={assembly_report}"
+    )
 
 
 def _build_interrupt_payload(state: WorkflowState) -> dict:

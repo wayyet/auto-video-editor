@@ -50,3 +50,12 @@ openstoryline/config.toml.local
 # 编辑备份与脚本误产物
 *.bak
 \$*
+
+# Phase 4 video_agent 运行产物（视频帧采样 + 媒体分析 JSON，跨机无意义）
+.video_agent/
+
+# OpenStoryline run 输出（与 outputs/ 同性质，本地调试用）
+out/
+
+# pytest 运行日志
+.pytest_unit.log

@@ -1,0 +1,17 @@
+[
+  {
+    "source": "tests/fixtures/assembly_selection/case_02_single_full/input.mp4",
+    "probe": {
+      "duration_seconds": 60.0,
+      "size_bytes": 6291456,
+      "summary": {"duration_seconds": 60.0}
+    },
+    "analysis": {
+      "input_path": "tests/fixtures/assembly_selection/case_02_single_full/input.mp4",
+      "duration_seconds": 60.0,
+      "scene_change_count": 0,
+      "candidate_segment_count": 0,
+      "candidate_segments": []
+    }
+  }
+]

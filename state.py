@@ -13,11 +13,18 @@ Week 5 改动:
 - 新增 ``en_audio_path`` / ``final_video_path`` / ``heartbeat_id`` 字段
   (Week 5 计划 §1.1)。节点必须 ``.get(key, default)`` 读取,防止旧
   checkpoint resume 时 KeyError。
+
+Phase 5(阶段一/二)改动(对照 docs/integration/video-agent-kit集成
+auto-video-editor设计执行计划.md 第六节):
+- 新增 ``assembly_*`` 系列字段,贯穿 assembly_discover_and_probe →
+  assembly_build_timeline → assembly_validate_render_qc →
+  assembly_repair_loop → assembly_write_report 6 节点的产物路径与
+  质检状态。
 """
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, NotRequired, Optional
+from typing import Annotated, Any, Literal, NotRequired, Optional
 
 from typing_extensions import TypedDict
 
@@ -234,3 +241,18 @@ class WorkflowState(TypedDict, total=False):
     storyline_qa_retry_count: NotRequired[int]            # qa_gate 唯一写入者(无需 reducer)
     # storyline_targets:{ target_duration_ms, ratio, ... },qa_gate 用
     storyline_targets: NotRequired[Optional[dict]]
+
+    # ===== Phase 5 新增:assembly QC 通道(video-agent-kit 移植,ADR-1~5) =====
+    # 产物统一落 outputs/<job_id>/assembly/ 下(plan §6),命名照抄 video-edit-assembly
+    # 文件契约。所有字段用 _last_wins(同 storyline_*),原因同 §Phase 4 注解。
+    # ``assembly_qc_retry_count`` 是 ``assembly_repair_loop`` 唯一写入者,无需 reducer。
+    assembly_media_artifact: Annotated[Optional[str], _last_wins]            # inspect_media/analyze_media 汇总结果
+    assembly_transcript_artifact: Annotated[Optional[str], _last_wins]       # speech_transcribe 结果
+    assembly_ingest_artifact: Annotated[Optional[str], _last_wins]           # video_ingest 结果(contact sheet)
+    assembly_timeline_path: Annotated[Optional[str], _last_wins]             # 组装出的 timeline.json(plan §第七节 7.3)
+    assembly_timeline_validation_path: Annotated[Optional[str], _last_wins]  # validate_timeline 输出
+    assembly_preview_path: Annotated[Optional[str], _last_wins]              # render_preview 输出的 mp4 路径
+    assembly_qc_report_path: Annotated[Optional[str], _last_wins]            # qc_preview 输出
+    assembly_report_path: Annotated[Optional[str], _last_wins]               # 最终 report.md
+    assembly_qc_status: Annotated[Optional[str], _last_wins]                 # "pass" | "pass_with_warnings" | "escalated"
+    assembly_qc_retry_count: NotRequired[int]                                # 修复循环重试计数

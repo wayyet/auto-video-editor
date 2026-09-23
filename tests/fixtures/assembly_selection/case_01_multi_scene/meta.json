@@ -1,0 +1,11 @@
+{
+  "name": "case_01_multi_scene",
+  "notes": "5 段场景边界,理想保留所有 5 段并按原始顺序排列(短片 30s,无语音)",
+  "ideal_segments": [
+    {"index": 0, "reason": "开场 hook,街道远景"},
+    {"index": 1, "reason": "主体人物走入画面"},
+    {"index": 2, "reason": "动作展开"},
+    {"index": 3, "reason": "视角切换"},
+    {"index": 4, "reason": "收尾镜头"}
+  ]
+}
