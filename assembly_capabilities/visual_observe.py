@@ -496,6 +496,16 @@ def sample_video_frames(
 ) -> tuple[list[SampledFrame], dict]:
     from PIL import Image
 
+    # 先校验 source_time_range 参数,再读视频元数据:这样"参数错 + 文件坏"
+    # 同时发生时,优先看到清晰的"起止时间不合法"报错,而不是 ffprobe/opencv
+    # 的误导性错误。详见 docs/integration/video-agent-kit集成auto-video-editor
+    # 开发核查与执行计划 §六 问题 1。
+    if source_time_range is not None:
+        if source_time_range[0] < 0 or source_time_range[1] < 0:
+            raise ValueError("source_time_range start/end must be >= 0")
+        if source_time_range[1] <= source_time_range[0]:
+            raise ValueError("source_time_range end must be greater than start")
+
     meta = video_metadata(video_path)
     if source_time_range is None:
         range_start = 0.0
@@ -506,10 +516,6 @@ def sample_video_frames(
         sample_meta = meta
     else:
         range_start, range_end = source_time_range
-        if range_start < 0 or range_end < 0:
-            raise ValueError("source_time_range start/end must be >= 0")
-        if range_end <= range_start:
-            raise ValueError("source_time_range end must be greater than start")
         duration = float(meta.get("duration") or (meta["frame_count"] / meta["fps"]))
         if range_start >= duration:
             raise ValueError(f"source_time_range start {range_start:.3f}s is beyond video duration {duration:.3f}s")

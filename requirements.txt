@@ -19,6 +19,10 @@ langchain-protocol==0.0.19
 langgraph==1.2.9
 langgraph-checkpoint==4.1.1
 langgraph-prebuilt==1.1.0
+# Week 3:SqliteSaver 默认 checkpointer 后端(config.CHECKPOINTER_BACKEND="sqlite")
+# 提供 langgraph.checkpoint.sqlite.SqliteSaver,供 make_checkpointer("sqlite") 使用。
+# 版本下限与 pyproject.toml 一致,具体小版本按本机已验证组合浮动。
+langgraph-checkpoint-sqlite>=2.0
 # Week 5:Postgres checkpointer
 langgraph-checkpoint-postgres>=3.1,<4
 psycopg[binary,pool]>=3.2
