@@ -38,7 +38,7 @@
     │                         ▼
     └─→ [parallel fork_draft → node_16a_translate_and_check
                                 ├─→ node_checkpoint3_layout_review ⏸ interrupt("③")(条件触发)
-                                └─→ node_17_inject_english_tts_stub
+                                └─→ node_17_inject_english_tts
                                                                  │
                                                   join_before_delivery
                                                                  ▼
@@ -78,7 +78,8 @@ Week 5 关键改动(保留):
   二选一走向。
 - 关卡①/② payload ``checkpoint`` 字段统一为 ``"①"`` / ``"②"``(Week 5 计划 §1.1),
   旧值保留在 ``legacy_id`` 字段。
-- ``node_17_inject_english_tts_stub`` 写空 wav 占位 + ``en_audio_path`` 字段。
+- ``node_17_inject_english_tts`` 调真实 FireRedTTS2(Week 6+ 阶段三,9 工具迁移 §6.3) +
+  失败时 ``en_audio_path=None``,不阻塞主链;``en_audio_path`` / ``en_dub_audio_path`` 字段。
 
 汇合:node_15 与 node_17 通过 ``add_edge([...], "join_before_delivery")`` 单次调用汇入,
 LangGraph fan-in 自动等齐两条分支后才触发 join(避免多次独立 ``add_edge`` 造成的
@@ -131,7 +132,7 @@ from nodes.node_15_localize_covers_en import node_15_localize_covers_en
 from nodes.node_16a_translate_and_check import node_16a_translate_and_check
 from nodes.node_checkpoint0_storyline_plan import checkpoint0_wait_storyline_plan
 from nodes.node_checkpoint3_layout_review import node_checkpoint3_layout_review
-from nodes.node_17_inject_english_tts_stub import node_17_inject_english_tts_stub
+from nodes.node_17_inject_english_tts import node_17_inject_english_tts
 from nodes.node_fork_english_branch import fork_draft_for_english_branch
 from nodes.node_join_before_delivery import join_before_delivery
 from state import WorkflowState
@@ -267,11 +268,11 @@ def route_after_translate(state: WorkflowState) -> str:
     """node_16a_translate_and_check 之后的条件路由。
 
     - ``layout_issues_detected`` 为真 → 关卡③(``node_checkpoint3_layout_review``)
-    - 否则 → ``node_17_inject_english_tts_stub``
+    - 否则 → ``node_17_inject_english_tts``
     """
     if state.get("layout_issues_detected"):
         return "node_checkpoint3_layout_review"
-    return "node_17_inject_english_tts_stub"
+    return "node_17_inject_english_tts"
 
 
 # ---------------------------------------------------------------------------
@@ -477,7 +478,7 @@ def _build_state_graph():
     g.add_node("node_15_localize_covers_en", node_15_localize_covers_en)
     g.add_node("node_16a_translate_and_check", node_16a_translate_and_check)
     g.add_node("node_checkpoint3_layout_review", node_checkpoint3_layout_review)
-    g.add_node("node_17_inject_english_tts_stub", node_17_inject_english_tts_stub)
+    g.add_node("node_17_inject_english_tts", node_17_inject_english_tts)
     g.add_node("join_before_delivery", join_before_delivery)
 
     # ---- Phase 4:auto-mode 19 节点 + qa_gate + join_storyline(plan_v4 §2.2 / §2.3)----
@@ -606,15 +607,15 @@ def _build_state_graph():
         route_after_translate,
         {
             "node_checkpoint3_layout_review": "node_checkpoint3_layout_review",
-            "node_17_inject_english_tts_stub": "node_17_inject_english_tts_stub",
+            "node_17_inject_english_tts": "node_17_inject_english_tts",
         },
     )
-    g.add_edge("node_checkpoint3_layout_review", "node_17_inject_english_tts_stub")
+    g.add_edge("node_checkpoint3_layout_review", "node_17_inject_english_tts")
 
     # 汇合:中文主线(node_15)与英文分支(node_17)都到达才触发 join。
     # 用列表语法,fan-in 自动等齐,join 只跑一次(对照验证报告 §5.1)。
     g.add_edge(
-        ["node_15_localize_covers_en", "node_17_inject_english_tts_stub"],
+        ["node_15_localize_covers_en", "node_17_inject_english_tts"],
         "join_before_delivery",
     )
 

@@ -418,6 +418,54 @@ ASSEMBLY_QC_GATE_ENABLED: bool = (
 # 把未解决的问题如实写进 report.md,照常进入关卡①)。
 ASSEMBLY_QC_MAX_RETRY: int = int(os.environ.get("ASSEMBLY_QC_MAX_RETRY", "2"))
 
+# ---------------------------------------------------------------------------
+# 9 个 MCP 工具迁移计划 阶段五(§6.5)—— repair loop 视觉证据复核
+# ---------------------------------------------------------------------------
+# QC escalate 时,从 preview_qc_report.json 的 blackdetect / silencedetect /
+# freezedetect 日志里抽出"可疑时间段",对每段做高 fps 重采样
+# (``video_watch_segment``) + 局部放大原分辨率抽帧(``video_read_frames``),
+# 把证据帧落到 outputs/<job_id>/assembly/ 下供人工判读。
+# 关闭 → repair loop 退回阶段五之前的纯 timeline_diff 行为。
+ASSEMBLY_REPAIR_VISUAL_EVIDENCE: bool = (
+    os.environ.get("ASSEMBLY_REPAIR_VISUAL_EVIDENCE", "true").lower().strip()
+    in ("1", "true", "yes")
+)
+
+# 一次修复循环最多复核几个可疑窗口(每个窗口 = 1 次 watch_segment + 1 次 read_frames)
+ASSEMBLY_REPAIR_MAX_WINDOWS: int = int(os.environ.get("ASSEMBLY_REPAIR_MAX_WINDOWS", "3"))
+
+# 可疑片段重采样帧率(帧率越高证据越密,代价是 ffmpeg 采样耗时)
+ASSEMBLY_REPAIR_WATCH_FPS: float = float(os.environ.get("ASSEMBLY_REPAIR_WATCH_FPS", "8"))
+
+# ---------------------------------------------------------------------------
+# 9 个 MCP 工具迁移计划 阶段五(§6.5)—— 节点 5 素材宽高比归一化
+# ---------------------------------------------------------------------------
+# 混剪素材宽高比不一致时(横屏素材直接进竖屏草稿),先用
+# ``video_basic_operation`` 居中裁切到画布比例,避免草稿里被拉伸变形。
+# 只在比例真的不一致时触发(比例已对齐 → 零开销直接放行)。
+DRAFT_SOURCE_NORMALIZE_ENABLED: bool = (
+    os.environ.get("DRAFT_SOURCE_NORMALIZE_ENABLED", "true").lower().strip()
+    in ("1", "true", "yes")
+)
+
+# 比例容差:|src_ratio / canvas_ratio - 1| 超过此值才判定为"需要裁切"。
+# 0.02 ≈ 2%,足以吃掉编解码导致的亚像素误差,又不误伤 4:3 / 16:9 的真实差异。
+DRAFT_SOURCE_ASPECT_TOLERANCE: float = float(
+    os.environ.get("DRAFT_SOURCE_ASPECT_TOLERANCE", "0.02")
+)
+
+# ---------------------------------------------------------------------------
+# 9 个 MCP 工具迁移计划 阶段四(§7.1)—— node_08 落地 scout 样式建议
+# ---------------------------------------------------------------------------
+# ``subtitle_scout`` 会按实际画面给出两条建议:字号偏大/偏小,以及字幕带背景
+# 对比度够不够。node_08 把这两条建议换算成剪映 ``texts[].style`` 里对应字段,
+# 让侦察结论真正落进草稿,而不只是记一份报告。
+# 关闭 → 退回阶段四之前的纯记录行为(只写 state.subtitle_scout_report,样式不动)。
+SUBTITLE_SCOUT_STYLE_ENABLED: bool = (
+    os.environ.get("SUBTITLE_SCOUT_STYLE_ENABLED", "true").lower().strip()
+    in ("1", "true", "yes")
+)
+
 
 # ---------------------------------------------------------------------------
 # 派生:最终访问的 URL

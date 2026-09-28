@@ -192,6 +192,14 @@ class WorkflowState(TypedDict, total=False):
     # layout_issues 非空 → 关卡③ 触发
     layout_issues_detected: NotRequired[bool]
 
+    # ===== 9 工具迁移 §6.4 step 2 新增:关卡③ 预览 MP4 路径 =====
+    # node_16a 走完 subtitle_build → subtitle_render → subtitle_qc 后,
+    # subtitle_render 的产物 MP4 路径写到 state;关卡③ interrupt payload
+    # 可附 ``preview_path`` 给人工直接打开预览。
+    preview_video_path: NotRequired[Optional[str]]
+    # 关卡③ payload 可附 subtitle_qc 输出的证据帧路径列表(供人工核验)。
+    subtitle_qc_evidence_frames: NotRequired[list[str]]
+
     # ===== Phase 1 新增:FireRed-OpenStoryline 集成字段(plan §7.2)=====
     # 全部 NotRequired,旧 checkpoint resume 兼容
     # FireRed session ID(= job_id + "-storyline",由 Adapter 注入 X-Storyline-Session-Id 头)
@@ -256,3 +264,10 @@ class WorkflowState(TypedDict, total=False):
     assembly_report_path: Annotated[Optional[str], _last_wins]               # 最终 report.md
     assembly_qc_status: Annotated[Optional[str], _last_wins]                 # "pass" | "pass_with_warnings" | "escalated"
     assembly_qc_retry_count: NotRequired[int]                                # 修复循环重试计数
+
+    # ===== 9 个 MCP 工具迁移计划 阶段五(§6.5)新增 =====
+    # repair loop 的视觉证据汇总(可疑窗口 + 证据帧路径列表),None = 本轮
+    # 未跑视觉复核(开关关闭 / QC 无时间戳类 issue / 工具失败降级)。
+    assembly_repair_evidence_path: NotRequired[Optional[str]]
+    # node_05 宽高比归一化后的素材路径;None = 比例本就对齐,未做裁切。
+    draft_source_normalized_path: NotRequired[Optional[str]]

@@ -183,7 +183,9 @@ def test_week4_zh_branch_no_rerun_after_en_resume(
     assert log.count("node_15_localize_covers_en_done") == 1
     # 英文分支节点也各只跑 1 次(Week 5:16a 拆分后 status_log 改为 node_16a_translate_done)
     assert log.count("node_16a_translate_done") == 1
-    assert log.count("node_17_tts_stub_pass") == 1
+    # Week 6+ 阶段三(9 工具迁移 §6.3):节点 17 改名为 node_17_inject_english_tts,
+    # status_log 改为 node_17_inject_english_tts_done(对照原 node_17_tts_stub_pass)。
+    assert log.count("node_17_inject_english_tts_done") == 1
     # join 在 END 之前
     assert log.count("join_before_delivery_done") == 1
 
@@ -277,10 +279,12 @@ def test_week4_branch_parallel_dispatch(
     # 中文分支节点都在
     assert "node_14_make_covers_done" in log
     assert "node_15_localize_covers_en_done" in log
-    # 英文分支节点都在(Week 5:16a 拆分后)
+    # 英文分支节点都在(Week 5:16a 拆分后,Week 6+ 阶段三 rename)
     assert any(s.startswith("node_fork_english_branch_done:") for s in log)
     assert "node_16a_translate_done" in log
-    assert "node_17_tts_stub_pass" in log
+    # Week 6+ 阶段三(9 工具迁移 §6.3):节点 17 改名为 node_17_inject_english_tts,
+    # status_log 改为 node_17_inject_english_tts_done。
+    assert "node_17_inject_english_tts_done" in log
     # join 是汇合点,一定在最后
     assert "join_before_delivery_done" in log
 

@@ -54,13 +54,19 @@ def _default_windows_proc_query() -> list[str]:
             ["tasklist", "/FI", "IMAGENAME eq JianyingPro.exe", "/NH"],
             capture_output=True,
             text=True,
+            # tasklist 在中文 Windows 上按 OEM 代码页(GBK)输出。设了
+            # PYTHONUTF8=1(计划 §6.6 中文路径乱码的标准处置)之后,text=True
+            # 会按 UTF-8 解码,遇到汉字直接 UnicodeDecodeError 把整个守卫炸掉。
+            # errors="replace": 解码失败只丢个别字节,不抛异常 —— 这里只做进程名
+            # 子串匹配,丢字节不影响判断。
+            errors="replace",
             timeout=5,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
         return []
     out: list[str] = []
-    for line in result.stdout.splitlines():
+    for line in (result.stdout or "").splitlines():
         if "JianyingPro" in line:
             out.append(line.strip())
     return out
