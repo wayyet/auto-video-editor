@@ -35,6 +35,17 @@ packaging==26.3
 # visual_observe.py 第 333/543 行 ``import cv2``,第 443 行 ``import numpy as np``。
 # 虽然这是函数内 lazy import(ffmpeg 主流程不可用时不会触发),
 # 但钉住版本避免新机器装到不兼容 cv2 / numpy(已多次踩坑)。
+#
+# ⚠️ 这两个包不是"锦上添花",缺了会让 e2e 静默失败(2026-09-30 实测):
+#   - 缺 numpy → nodes/assembly/node_asr_and_visual_observe.py 的 video_ingest
+#     抽帧抛 ModuleNotFoundError,节点早退,video_ingest.json 永不落盘。
+#   - 典型症状:tests/unit 全绿(单测不碰真实抽帧),只有
+#     tests/integration/test_phase5_e2e.py 的 happy/qc_fail 慢用例挂,
+#     报 missing_artifacts=['video_ingest.json']。
+#   - 排查: `python -c "import numpy, cv2; print(numpy.__version__, cv2.__version__)"`
+#   - 注意: 跑 e2e 还需要 ffmpeg + ffprobe 在 PATH,以及 inputs/30s.mp4
+#     (inputs/ 被 .gitignore 忽略,新 clone 不会带上,缺失时慢用例是 skip
+#     而非 fail —— 静默跳过,别误以为测试通过)。
 numpy==2.5.3
 opencv-python-headless==4.10.0.84
 pillow==12.3.0

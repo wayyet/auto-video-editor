@@ -142,6 +142,45 @@ $env:WORKFLOW_ENV = "production"
 .\scripts\check_docker_proxy.ps1 -RestartDocker  # 检查失败自动 docker desktop restart
 ```
 
+### 2.5 e2e 测试的额外环境依赖(⚠️ 单元测试全绿 ≠ 全部通过)
+
+`tests/unit` **不需要**下面任何东西就能全绿。但 `tests/integration/test_phase5_e2e.py`
+的 happy / qc_fail 两个慢用例会**真实抽帧 + 真实渲染**,缺依赖时会失败——而症状具有
+迷惑性:`tests/unit` 依然全绿,只有这两个 e2e 用例挂。
+
+| 依赖 | 缺了会怎样 | 怎么确认 |
+|---|---|---|
+| `numpy`(已在 `requirements.txt` 钉 `2.5.3`) | `video_ingest` 抽帧抛 `ModuleNotFoundError` → `assembly_asr_and_visual_observe` 节点早退 → **`video_ingest.json` 永不落盘** | `python -c "import numpy; print(numpy.__version__)"` |
+| `opencv-python-headless`(钉 `4.10.0.84`) | 抽帧 / 编码静默失败 | `python -c "import cv2; print(cv2.__version__)"` |
+| `ffmpeg` + `ffprobe` 在 `PATH` | 慢用例直接 skip | `ffmpeg -version` |
+| `inputs/30s.mp4` | 慢用例直接 skip | `Test-Path inputs\30s.mp4` |
+
+一次性补齐:
+
+```powershell
+python -m pip install -r requirements.txt
+# 若 ffmpeg 缺失(本机装在 C:\ffmpeg\ffmpeg-9.0.2-essentials_build\bin)
+$env:PATH += ";C:\ffmpeg\ffmpeg-9.0.2-essentials_build\bin"
+# 素材不入库,需自行准备(任意 >=10s 的测试视频即可)
+New-Item -ItemType Directory -Force -Path inputs | Out-Null
+```
+
+**两个静默陷阱**:
+
+1. `inputs/` 被 `.gitignore:38` 忽略,新 clone 不会带上素材。此时 happy / qc_fail 是
+   **skip 而不是 fail**,`pytest` 退出码仍是 0 —— 很容易误判成"测试通过"。
+   依赖齐全时基线是 `877 passed / 11 skipped`;素材或 ffmpeg 缺失会变成
+   `875 passed / 13 skipped`(多的 2 个就是被跳过的 e2e 慢用例)。
+2. `video_ingest.json` 缺失时,失败信息是
+   `missing_artifacts=['video_ingest.json']`,但 `qc_status` 仍显示
+   `pass_with_warnings` —— 容易误判成 QC 逻辑问题,实际是抽帧根本没跑起来。
+
+**当前基线**(Python 3.13.11 + pytest 9.1.1 + numpy 2.5.3 + opencv 4.10.0 + ffmpeg 9.0.2):
+
+```
+877 通过 / 0 失败 / 0 错误 / 11 跳过   (183s)
+```
+
 ## 3. 运行测试
 
 ```powershell
