@@ -11,6 +11,14 @@
   ``subtitle_segments_en`` 最终值是正确的(16a 写一次,本节点不覆盖)。
 - 调用方由 graph.py 的条件边 ``route_after_translate`` 控制:只有
   ``state["layout_issues_detected"]`` 为真时才走到本节点。
+
+**有意不纳入 ``nodes/_checkpoint.py`` 的关卡样板(R4 收敛范围之外)**:关卡 ⓪/①/②
+三处是"``interrupt()`` → ``{**state, status_log: +1}``"的同构三段式,已收敛到
+``build_interrupt_payload`` + ``post_resume``;本节点结构已偏离:resume 后要多做一步
+SRT 重写,且返回的是 **delta 字典**(只含 3 个变更字段)而非 ``{**state}`` 全量,
+硬套工厂会为了"形状统一"而多写一层无意义的字段搬运,反而更难读。payload 本身取自
+``node_16_translate_subtitles._build_interrupt_payload``(关卡③ 自成一组,含
+``layout_issues``),刻意不复用 ⓪/①/② 的参数化版本。
 """
 
 from __future__ import annotations

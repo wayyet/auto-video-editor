@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from langgraph.types import interrupt
 
+from nodes._checkpoint import build_interrupt_payload, post_resume
 from state import WorkflowState
 
 
@@ -28,20 +29,26 @@ def _build_interrupt_payload(state: WorkflowState) -> dict:
     """构造 interrupt payload — 纯函数,便于单测。
 
     Week 5:``checkpoint`` 字段统一为 ``"②"``;保留 ``legacy_id`` 兼容旧版。
+    样板部分见 ``nodes/_checkpoint.build_interrupt_payload``;本函数只声明
+    关卡② 特有的 4 个参数。
     """
-    return {
-        "checkpoint": "②",
-        "legacy_id": "checkpoint2_add_bgm",
-        "step": 12,
-        "draft_path": state.get("draft_path"),
-        "instructions": "请从剪映 VIP 音乐库选取 BGM 并拖入音轨,完成后确认继续",
-    }
+    return build_interrupt_payload(
+        checkpoint="②",
+        legacy_id="checkpoint2_add_bgm",
+        step=12,
+        extra_payload={"draft_path": state.get("draft_path")},
+        instructions="请从剪映 VIP 音乐库选取 BGM 并拖入音轨,完成后确认继续",
+    )
 
 
 def _post_resume(state: WorkflowState, notifier=_send_notification) -> dict:
-    notifier(state, "checkpoint2")
-    log = list(state.get("status_log", []) or []) + ["checkpoint2_resumed"]
-    return {**state, "bgm_notified": True, "status_log": log}
+    """薄封装:样板见 ``nodes/_checkpoint.post_resume``(notifier 保持可注入)。"""
+    return post_resume(
+        state,
+        log_tag="checkpoint2_resumed",
+        notifier=notifier,
+        notified_field="bgm_notified",
+    )
 
 
 def human_add_bgm(state: WorkflowState) -> dict:

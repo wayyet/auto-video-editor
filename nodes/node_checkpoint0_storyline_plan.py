@@ -14,25 +14,27 @@ from __future__ import annotations
 
 from langgraph.types import interrupt
 
+from nodes._checkpoint import build_interrupt_payload, post_resume
 from state import WorkflowState
 
 
 def _build_interrupt_payload(state: WorkflowState) -> dict:
-    return {
-        "checkpoint": "⓪",
-        "legacy_id": "checkpoint0_storyline_plan",
-        "step": 4,
-        "openstoryline_web_url": state.get("openstoryline_web_url"),
-        "instructions": (
+    """薄封装:关卡 ⓪ 的差异参数(收敛样板见 ``nodes/_checkpoint.py``)。"""
+    return build_interrupt_payload(
+        checkpoint="⓪",
+        legacy_id="checkpoint0_storyline_plan",
+        step=4,
+        extra_payload={"openstoryline_web_url": state.get("openstoryline_web_url")},
+        instructions=(
             "请在 OpenStoryline 网页里上传素材并与 Agent 对话完成"
             "分镜/文案/BGM/时间线规划,完成后回复继续"
         ),
-    }
+    )
 
 
 def _post_resume(state: WorkflowState) -> dict:
-    log = list(state.get("status_log") or []) + ["checkpoint0_resumed"]
-    return {**state, "status_log": log}
+    """薄封装:关卡 ⓪ 不发通知(无 notifier / 无 notified_field)。"""
+    return post_resume(state, log_tag="checkpoint0_resumed")
 
 
 def checkpoint0_wait_storyline_plan(state: WorkflowState) -> dict:

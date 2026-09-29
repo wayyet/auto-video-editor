@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from langgraph.types import interrupt
 
+from nodes._checkpoint import build_interrupt_payload, post_resume
 from state import WorkflowState
 
 
@@ -50,21 +51,26 @@ def _build_interrupt_payload(state: WorkflowState) -> dict:
     """构造 interrupt payload — 纯函数,便于单测。
 
     Week 5:``checkpoint`` 字段统一为 ``"①"``;保留 ``legacy_id`` 兼容旧版。
+    样板部分见 ``nodes/_checkpoint.build_interrupt_payload``;本函数只声明
+    关卡① 特有的 4 个参数。
     """
-    return {
-        "checkpoint": "①",
-        "legacy_id": "checkpoint1_reorder",
-        "step": 6,
-        "draft_path": state.get("draft_path"),
-        "instructions": "请在剪映客户端手动调整分镜顺序,完成后确认继续",
-    }
+    return build_interrupt_payload(
+        checkpoint="①",
+        legacy_id="checkpoint1_reorder",
+        step=6,
+        extra_payload={"draft_path": state.get("draft_path")},
+        instructions="请在剪映客户端手动调整分镜顺序,完成后确认继续",
+    )
 
 
 def _post_resume(state: WorkflowState, notifier=_send_notification) -> dict:
-    """resume 后逻辑 — 纯函数,便于单测。"""
-    notifier(state, "checkpoint1")
-    log = list(state.get("status_log", []) or []) + ["checkpoint1_resumed"]
-    return {**state, "reorder_notified": True, "status_log": log}
+    """resume 后逻辑 — 纯函数,便于单测(notifier 保持可注入,单测直接传假函数)。"""
+    return post_resume(
+        state,
+        log_tag="checkpoint1_resumed",
+        notifier=notifier,
+        notified_field="reorder_notified",
+    )
 
 
 def human_reorder(state: WorkflowState) -> dict:
