@@ -21,24 +21,18 @@ from pathlib import Path
 
 from state import WorkflowState
 from storyline_capabilities.select_bgm import select_bgm
-from nodes.storyline._common import append_status_tag, _resolve_outputs_root
+from nodes.storyline._common import (
+    _read_groups,
+    append_status_tag,
+    _resolve_outputs_root,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def _read_groups(state: WorkflowState) -> list[dict]:
-    p = state.get("storyline_groups_artifact")
-    if not p:
-        return []
-    try:
-        doc = json.loads(Path(str(p)).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
-    if isinstance(doc, dict):
-        return list(doc.get("groups") or [])
-    return []
-
-
+# ``_read_groups`` 已收敛到 ``nodes/storyline/_common.py``(与其他 storyline 节点共用一份);
+# 本文件只保留 ``_read_script`` —— 它读的是另一个 key / 另一个数组名
+# (``storyline_script_artifact`` → ``group_scripts``),_common 里的两个 helper 不覆盖它。
 def _read_script(state: WorkflowState) -> list[dict]:
     p = state.get("storyline_script_artifact")
     if not p:

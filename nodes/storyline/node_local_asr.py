@@ -25,24 +25,18 @@ from storyline_capabilities.asr_runner import (
     ASR_MODE,
     transcribe_media,
 )
-from nodes.storyline._common import append_status_tag, _resolve_outputs_root
+from nodes.storyline._common import (
+    _read_media,
+    append_status_tag,
+    _resolve_outputs_root,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def _read_media(state: WorkflowState) -> list[dict]:
-    p = state.get("storyline_media_artifact")
-    if not p:
-        return []
-    try:
-        doc = json.loads(Path(str(p)).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
-    if isinstance(doc, dict):
-        return list(doc.get("media") or [])
-    return []
-
-
+# ``_read_media`` 已收敛到 ``nodes/storyline/_common.py``(与其他 storyline 节点共用一份)。
+# 失败语义与收敛前逐条一致:路径为空 / 文件不存在 / 非法 JSON 一律降级成空列表,
+# 不抛异常 —— 本节点的下游(stub 写空 ASR)依赖这个"永远拿得到 list"的契约。
 def _pick_audio_media(media: list[dict]) -> dict | None:
     """挑第一个 ``has_audio=True`` 的视频,否则第一个视频;无则 None。"""
     for m in media:

@@ -2,24 +2,19 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from state import WorkflowState
 from storyline_capabilities.generate_script import generate_script
-from nodes.storyline._common import append_status_tag, _resolve_outputs_root
+from nodes.storyline._common import (
+    _read_groups,
+    append_status_tag,
+    _resolve_outputs_root,
+)
 
 
-def _read_groups_dict(state: WorkflowState) -> list[dict]:
-    p = state.get("storyline_groups_artifact")
-    if not p:
-        return []
-    try:
-        doc = json.loads(Path(str(p)).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
-    if isinstance(doc, dict):
-        return list(doc.get("groups") or [])
-    return []
+# 本文件原来的 ``_read_groups_dict`` 与 ``_common._read_groups`` 是同一份逻辑
+# (同一个 key ``storyline_groups_artifact``、同一个 ``groups`` 数组、同一套失败降级),
+# 只是函数名多带一个 ``_dict`` 后缀,已直接改用 _common 版本,不再单独定义。
 
 
 def storyline_generate_script_node(state: WorkflowState) -> dict:
@@ -27,7 +22,7 @@ def storyline_generate_script_node(state: WorkflowState) -> dict:
     out_dir = outputs_root / "storyline"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    groups = _read_groups_dict(state)
+    groups = _read_groups(state)
     try:
         result = generate_script(groups=groups)
     except Exception as e:  # noqa: BLE001

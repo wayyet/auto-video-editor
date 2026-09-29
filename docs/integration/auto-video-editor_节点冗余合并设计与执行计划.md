@@ -148,17 +148,20 @@ g.add_edge(
 |---|---|---|---|
 | **R1** | 6 份逐字相同的草稿读盘 helper `def _load_draft(path): return json.loads(path.read_text(encoding="utf-8"))`（node_07/08/09/10/11/13） | `nodes/_draft_io.py::load_draft` | ✅ 已收敛（`_load_draft` 在 `nodes/` 下已 0 份定义） |
 | **R2** | 5 处 `safe_write_draft(draft_path.parent, draft)` + "剪映进程在跑"告警 log 拼接（node_08/09/10/11 + node_13）。其中 **node_13 做了同样的写入却漏掉告警**，是 5 处行为不一致 | `nodes/_draft_io.py::apply_and_write`（node_08/09/10/11）与 `write_draft` + `jianying_running_tags`（node_07/13） | ✅ 已收敛，node_13 告警已补齐 |
-| **R3** | `_read_json_artifact` / `_read_groups` / `_read_media` 三个产物读盘 helper 在 `node_plan_timeline_pro.py` 与 `node_plan_timeline_ai_transition.py` 各整块逐字复制一份 | `nodes/storyline/_common.py` | ⚠️ **部分收敛**（commit `9641af8`）——见下方说明 |
+| **R3** | `_read_json_artifact` / `_read_groups` / `_read_media` 三个产物读盘 helper 散落在 5 个 storyline 节点里各自内联一份读盘逻辑 | `nodes/storyline/_common.py` | ✅ 已收敛（`9641af8` + `d6c1a0e`） |
 | **R4** | 关卡 ⓪/①/② 三处同构的 `_build_interrupt_payload` → `interrupt()` → `_post_resume` 三段式 | `nodes/_checkpoint.py::build_interrupt_payload` + `post_resume` | ✅ 已收敛（`node_checkpoint3_layout_review` 有意不纳入，见下） |
 
-**R3 尚未完全收敛（2026-09-30 复核发现）**：commit `9641af8` 消掉了 `node_plan_timeline_pro.py` / `node_plan_timeline_ai_transition.py` 里的两份逐字复制，但全仓仍有 2 处**语义等价、写法不同**的副本——它们没有调用 `_read_json_artifact`，而是把读盘逻辑内联了一遍：
+**R3 收敛过程与踩坑记录**：分两次做完。第一次（commit `9641af8`）只消掉了 `node_plan_timeline_pro.py` / `node_plan_timeline_ai_transition.py` 里那两份**逐字**复制，验收项"`_read_*` 全仓仅剩 1 份定义"并未达成。2026-09-30 复核时发现还有 3 处**语义等价、写法不同**的副本——它们没有调用 `_read_json_artifact`，而是把读盘逻辑内联了一遍：
 
 - `nodes/storyline/node_select_bgm.py::_read_groups`
 - `nodes/storyline/node_local_asr.py::_read_media`
+- `nodes/storyline/node_generate_script.py::_read_groups_dict`
 
-（另有 `node_generate_script.py::_read_groups_dict` 是同族但不同返回结构的变体。）
+> 更正一处此前的错误描述：初查时把 `_read_groups_dict` 记成"同族但返回结构不同"，实际它与 `_common._read_groups` **完全同契约**（同一个 key `storyline_groups_artifact`、同一个 `groups` 数组、同一套失败降级），差别只有函数名多了个 `_dict` 后缀。它同样是一份重复，已一并收敛。
 
-所以验收项"`_read_*` 三函数全仓仅剩 1 份定义"**当前不成立**（`_read_json_artifact` 已达标，另两个各还剩 2–3 份）。这属于阶段 1 的范围，本次未执行；补齐时让上述两处改为 `from nodes.storyline._common import _read_groups / _read_media` 即可，无行为差异。
+这 3 处已改为从 `nodes.storyline._common` 导入（`node_generate_script.py` 顺带删掉了因此失效的 `from pathlib import Path`）。**收敛前后行为等价**已用 11 组边界用例逐条比对确认：key 缺失 / 路径空串 / 路径为 `None` / 正常 dict / 数组为 `null` / JSON 非 dict / dict 缺该键 / 非法 JSON / 文件不存在 / 路径是目录 / 路径是整数——11 × 2 个函数全部一致降级成 `[]`，无一处抛异常。
+
+`node_select_bgm.py` 里还留着一个 `_read_script`，读的是**另一个 key**（`storyline_script_artifact` → `group_scripts`），`_common` 的两个 helper 不覆盖它，故未合并。
 
 **两处"看起来该合但不能合"的判断仍然成立**（第 4 节的结论不变）：
 
