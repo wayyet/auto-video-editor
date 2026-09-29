@@ -20,13 +20,12 @@ scout 失败 / 异常 / 判定"当前设置已合适" → 一律回落到 ``_JIA
 from __future__ import annotations
 
 import copy
-import json
 from pathlib import Path
 
 import config
 from assembly_capabilities.run_context import RunContext
-from draft_ops.atomic_writer import safe_write_draft
 from jy_common.asr_client import call_asr2s
+from nodes._draft_io import apply_and_write, load_draft
 from state import SubtitleSegment, WorkflowState
 from video_edit_capabilities import subtitle_style as sty
 from video_edit_capabilities.subtitle_scout import subtitle_scout
@@ -81,10 +80,6 @@ _STYLE_SCALE_LIMITS: dict[str, tuple[float, float]] = {
 #                   字段里没有背景字段,只能降级成"描边加到最厚"。描边 ≠ 底色带,
 #                   这是**不等价的降级**,所以 status_log 会明说,不装作两者一回事。
 _BOX_BORDER_RATIO = 2.5
-
-
-def _load_draft(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _scout_style_overrides(scout_report: dict) -> dict:
@@ -219,7 +214,7 @@ def add_subtitles(state: WorkflowState) -> dict:
     snapshot2 = state.get("snapshot2_path")
     src = Path(snapshot2) if snapshot2 and Path(snapshot2).exists() else draft_path
 
-    draft = _load_draft(src)
+    draft = load_draft(src)
     asr_segments = call_asr2s(state.get("video_input_path", ""))
 
     materials = draft.setdefault("materials", {})
@@ -255,10 +250,15 @@ def add_subtitles(state: WorkflowState) -> dict:
         })
 
     # Week 5:参数从 draft_path 提升为 draft_path.parent,safe_write_draft 双写
-    write_result = safe_write_draft(draft_path.parent, draft)
-    log = list(state.get("status_log", []) or []) + ["node_08_add_subtitles_done"]
-    if write_result.get("jianying_running"):
-        log.append("[node_08] 剪映进程在跑,写入仍继续(告警不阻断)")
+    log = list(state.get("status_log", []) or [])
+    log.extend(
+        apply_and_write(
+            draft_path,
+            draft,
+            "node_08",
+            done_tag="node_08_add_subtitles_done",
+        )
+    )
     # 9 工具迁移 §6.4 step 1:成功调 scout → 把侦察报告落到 state;失败 → 不写
     if scout_report is not None:
         log.append("[node_08] subtitle_scout 成功,推荐已落到 state.subtitle_scout_report")

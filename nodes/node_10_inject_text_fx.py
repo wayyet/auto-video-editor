@@ -9,11 +9,10 @@ entrance_animation 从 None 改为含 resource_id 的 dict(剪映客户端会按
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-from draft_ops.atomic_writer import safe_write_draft
 from jy_common.template_library import load_resource_libraries
+from nodes._draft_io import apply_and_write, load_draft
 from state import WorkflowState
 
 
@@ -37,14 +36,10 @@ def _pick_default_intro_animation(template_lib) -> dict | None:
     return template_lib.pick_text_animation("intro", intro_list[0])
 
 
-def _load_draft(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
 def inject_text_fx(state: WorkflowState) -> dict:
     """读取草稿 → 为每条字幕追加描边/投影/入场动画字段 → 原子写回。"""
     draft_path = Path(state["draft_path"])
-    draft = _load_draft(draft_path)
+    draft = load_draft(draft_path)
     template_lib = load_resource_libraries(
         fx_template="templates/fx_template.json",
         fx_resource="templates/fx_resource_library.json",
@@ -79,9 +74,13 @@ def inject_text_fx(state: WorkflowState) -> dict:
         style.update(default_style)
 
     # Week 5:参数从 draft_path 提升为 draft_path.parent,safe_write_draft 双写
-    write_result = safe_write_draft(draft_path.parent, draft)
-
-    log = list(state.get("status_log", []) or []) + ["node_10_inject_text_fx_done"]
-    if write_result.get("jianying_running"):
-        log.append("[node_10] 剪映进程在跑,写入仍继续(告警不阻断)")
+    log = list(state.get("status_log", []) or [])
+    log.extend(
+        apply_and_write(
+            draft_path,
+            draft,
+            "node_10",
+            done_tag="node_10_inject_text_fx_done",
+        )
+    )
     return {**state, "status_log": log}

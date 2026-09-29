@@ -94,6 +94,46 @@ def _state(draft_path: Path) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# (g) 剪映进程告警(R2 行为对齐:此前只有 08/09/10/11 有,node_13 漏了)
+# ---------------------------------------------------------------------------
+def test_adjust_volume_warns_when_jianying_running(
+    draft_with_audio: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """剪映在跑 → status_log 出现与节点 08/09/10/11 同文案的告警,且只出现一次。
+
+    node_13 会连写两次(主音轨 + BGM),告警必须去重,否则一次节点执行刷两条。
+    """
+    monkeypatch.setattr(
+        "draft_ops.safe_write_guard.check_jianying_not_running", lambda: True
+    )
+
+    out = adjust_volume(_state(draft_with_audio))
+
+    warnings = [t for t in out["status_log"] if "剪映进程在跑" in t]
+    assert warnings == ["[node_13] 剪映进程在跑,写入仍继续(告警不阻断)"], (
+        f"告警文案/条数与节点 08/09/10/11 不一致:{warnings}"
+    )
+    # 告警不阻断:音量照写,done tag 照常出现
+    assert "node_13_adjust_volume_done" in out["status_log"]
+    assert out["volume_adjusted"] is True
+    # 双写仍然发生(目录级,不是文件级)
+    info_file = draft_with_audio.parent / "draft_info.json"
+    assert info_file.exists(), "safe_write_draft 未做双写"
+
+
+def test_adjust_volume_no_warning_when_jianying_not_running(
+    draft_with_audio: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """剪映没在跑 → 不产生该告警(避免无意义噪音)。"""
+    monkeypatch.setattr(
+        "draft_ops.safe_write_guard.check_jianying_not_running", lambda: False
+    )
+
+    out = adjust_volume(_state(draft_with_audio))
+    assert not [t for t in out["status_log"] if "剪映进程在跑" in t]
+
+
+# ---------------------------------------------------------------------------
 # (a) + (b) 主音轨与 BGM 各自应用 volume 与 fade
 # ---------------------------------------------------------------------------
 def test_jianying_adjust_volume_sets_main_volume(draft_with_audio: Path) -> None:

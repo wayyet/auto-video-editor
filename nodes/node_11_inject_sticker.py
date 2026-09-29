@@ -13,17 +13,12 @@ Week 3 补全:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from uuid import uuid4
 
-from draft_ops.atomic_writer import safe_write_draft
 from jy_common.sticker_resolver import resolve_sticker_resource_id
+from nodes._draft_io import apply_and_write, load_draft
 from state import WorkflowState
-
-
-def _load_draft(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _find_video_track(draft: dict) -> dict:
@@ -84,7 +79,7 @@ def inject_sticker(state: WorkflowState) -> dict:
     无重叠时退回 segment[0](Week 3 兼容路径)+ error_log 提示。
     """
     draft_path = Path(state["draft_path"])
-    draft = _load_draft(draft_path)
+    draft = load_draft(draft_path)
 
     materials = draft.setdefault("materials", {})
     stickers_material = materials.setdefault("stickers", [])
@@ -124,9 +119,13 @@ def inject_sticker(state: WorkflowState) -> dict:
 
     video_track["segments"] = segments
     # Week 5:参数从 draft_path 提升为 draft_path.parent,safe_write_draft 双写
-    write_result = safe_write_draft(draft_path.parent, draft)
-
-    log = list(state.get("status_log", []) or []) + ["node_11_inject_sticker_done"]
-    if write_result.get("jianying_running"):
-        log.append("[node_11] 剪映进程在跑,写入仍继续(告警不阻断)")
+    log = list(state.get("status_log", []) or [])
+    log.extend(
+        apply_and_write(
+            draft_path,
+            draft,
+            "node_11",
+            done_tag="node_11_inject_sticker_done",
+        )
+    )
     return {**state, "status_log": log, "error_log": error_log}

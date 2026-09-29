@@ -48,6 +48,39 @@ def _state(draft_path: Path) -> dict:
     return {"draft_path": str(draft_path), "status_log": [], "error_log": []}
 
 
+def test_inject_text_fx_dual_write_content_and_info(tmp_draft_with_texts: Path) -> None:
+    """A6:写回后 ``draft_content.json`` 与 ``draft_info.json`` 都在,且内容一致。
+
+    这条断言专门盯 ``nodes/_draft_io.apply_and_write`` 的入参形态:
+    ``safe_write_draft`` 收的必须是**目录**。若哪天把它改成传 ``draft_path``
+    (文件),写出会落到 ``.../draft_content.json/draft_content.json``,
+    而本目录下的 ``draft_info.json`` 永远不出现 —— 剪映 5.9+ 打开会显示
+    "时间轴异常"。
+    """
+    out = inject_text_fx(_state(tmp_draft_with_texts))
+
+    content_file = tmp_draft_with_texts
+    info_file = tmp_draft_with_texts.parent / "draft_info.json"
+    assert content_file.exists(), "draft_content.json 不应被写没"
+    assert info_file.exists(), (
+        "draft_info.json 缺失 —— safe_write_draft 很可能收到了文件路径而不是目录"
+    )
+    assert info_file.read_text(encoding="utf-8") == content_file.read_text(encoding="utf-8"), (
+        "剪映 5.9+ 要求 draft_content.json 与 draft_info.json 内容一致"
+    )
+    assert "node_10_inject_text_fx_done" in out["status_log"]
+
+
+def test_inject_text_fx_no_nested_draft_directory(tmp_draft_with_texts: Path) -> None:
+    """A6 反向断言:不该出现"以 draft_content.json 命名的子目录"这种退化写入。"""
+    inject_text_fx(_state(tmp_draft_with_texts))
+
+    nested = tmp_draft_with_texts / "draft_content.json"
+    assert not nested.is_dir(), (
+        f"出现退化写入:{nested} 是目录,说明 safe_write_draft 收到了文件路径"
+    )
+
+
 def test_inject_text_fx_appends_outline_shadow(tmp_path: Path, tmp_draft_with_texts: Path) -> None:
     """每条字幕的 style 应被追加 outline/shadow/entrance_animation 字段。
 

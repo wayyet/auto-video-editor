@@ -14,20 +14,15 @@ VIP 资源复用机制(Week 4 升级):
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
-from draft_ops.atomic_writer import safe_write_draft
 from jy_common.template_library import TemplateLibrary, load_resource_libraries
+from nodes._draft_io import apply_and_write, load_draft
 from state import WorkflowState
 
 
 _VIP_ID_PATTERN = re.compile(r"^\d{19}$")
-
-
-def _load_draft(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _find_video_track(draft: dict) -> dict:
@@ -101,7 +96,7 @@ def _resolve_vip_video_effect(
 def inject_fx(state: WorkflowState) -> dict:
     """读取草稿 → 加载模板 → 在分镜边界注入转场 → 原子写回。"""
     draft_path = Path(state["draft_path"])
-    draft = _load_draft(draft_path)
+    draft = load_draft(draft_path)
     template_lib = load_resource_libraries(
         fx_template="templates/fx_template.json",
         fx_resource="templates/fx_resource_library.json",
@@ -157,11 +152,15 @@ def inject_fx(state: WorkflowState) -> dict:
         warning_msgs.append("[node_09] 未找到可用视频特效,跳过")
 
     # Week 5:参数从 draft_path 提升为 draft_path.parent,safe_write_draft 双写
-    write_result = safe_write_draft(draft_path.parent, draft)
-
-    log = list(state.get("status_log", []) or []) + ["node_09_inject_fx_done"]
-    if write_result.get("jianying_running"):
-        log.append("[node_09] 剪映进程在跑,写入仍继续(告警不阻断)")
+    log = list(state.get("status_log", []) or [])
+    log.extend(
+        apply_and_write(
+            draft_path,
+            draft,
+            "node_09",
+            done_tag="node_09_inject_fx_done",
+        )
+    )
     errors = list(state.get("error_log", []) or [])
     errors.extend(warning_msgs)
     return {**state, "status_log": log, "error_log": errors}

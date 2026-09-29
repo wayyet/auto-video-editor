@@ -24,18 +24,13 @@ from config import (
     NODE_07_MAX_RETRY,
     TARGET_DURATION_US,
 )
-from draft_ops.atomic_writer import safe_write_draft
+from nodes._draft_io import jianying_running_tags, load_draft, write_draft
 from state import WorkflowState
 
 
 # ---------------------------------------------------------------------------
 # 公共工具:读/写 draft_content.json
 # ---------------------------------------------------------------------------
-def _load_draft(path: Path) -> dict:
-    import json
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
 def _find_video_track(draft: dict) -> dict:
     """Week 3 占位:取第一个 type=='video' 的轨道;Week 4 接入真实轨道结构时细化。"""
     for track in draft.get("tracks", []):
@@ -94,7 +89,7 @@ def _frame_aligned_durations(
 def speed_fit(state: WorkflowState) -> dict:
     """读取 draft → 校验时长 → 若超时则变速 → 原子写回。"""
     draft_path = Path(state["draft_path"])
-    draft = _load_draft(draft_path)
+    draft = load_draft(draft_path)
     video_track = _find_video_track(draft)
 
     src_segments = list(video_track.get("segments", []))
@@ -148,12 +143,11 @@ def speed_fit(state: WorkflowState) -> dict:
 
     # Week 5:safe_write_draft 双写(content + info)+ duration 索引同步;签名从
     # (draft_file, content) 改为 (draft_dir, content),参数提升为目录。
-    write_result = safe_write_draft(
-        draft_path.parent, draft, duration_us=int(draft.get("duration", 0))
+    write_result = write_draft(
+        draft_path, draft, duration_us=int(draft.get("duration", 0))
     )
     log = list(state.get("status_log", []) or [])
-    if write_result.get("jianying_running"):
-        log.append("[node_07] 剪映进程在跑,写入仍继续(告警不阻断)")
+    log.extend(jianying_running_tags("node_07", (write_result,)))
 
     retry = dict(state.get("retry_counts") or {})
     retry["node_07"] = retry.get("node_07", 0) + 1
@@ -167,7 +161,7 @@ def speed_fit(state: WorkflowState) -> dict:
 def route_after_speed_fit(state: WorkflowState) -> str:
     """节点 7 之后的条件边:达标 → 产出 snapshot2 + node_08;未达标 → 自循环 / 升级。"""
     draft_path = Path(state["draft_path"])
-    draft = _load_draft(draft_path)
+    draft = load_draft(draft_path)
     duration = draft.get("duration", 0)
 
     if duration <= TARGET_DURATION_US:

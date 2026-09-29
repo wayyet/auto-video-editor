@@ -33,11 +33,10 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from uuid import uuid4
 
-from draft_ops.atomic_writer import safe_write_draft
+from nodes._draft_io import jianying_running_tags, load_draft, write_draft
 from state import WorkflowState
 
 
@@ -53,10 +52,6 @@ _PLACEHOLDER_TRACK_ID_KEY = "track_id"                 # FIXME 字段名待逆�
 # ---------------------------------------------------------------------------
 # 辅助函数
 # ---------------------------------------------------------------------------
-def _load_draft(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
 def _find_audio_segments(draft: dict) -> list[dict]:
     """返回 ``tracks[type='audio'].segments`` 列表;无音频轨时返回空列表。"""
     for track in draft.get("tracks", []):
@@ -127,8 +122,36 @@ def jianying_adjust_volume(
         FileNotFoundError: draft_path 不存在。
         json.JSONDecodeError: 草稿不是合法 JSON(原子写入前的合法性校验捕获)。
     """
+    entry, _write_result = _adjust_volume_with_write(
+        draft_path,
+        track_selector,
+        volume_level=volume_level,
+        fade_in_seconds=fade_in_seconds,
+        fade_out_seconds=fade_out_seconds,
+    )
+    return entry
+
+
+def _adjust_volume_with_write(
+    draft_path: str,
+    track_selector: str,
+    volume_level: float = 1.0,
+    fade_in_seconds: float = 0.0,
+    fade_out_seconds: float = 0.0,
+) -> tuple[dict | None, dict | None]:
+    """:func:`jianying_adjust_volume` 的内部实现,额外回传 ``safe_write_draft`` 结果。
+
+    拆分原因:``safe_write_draft`` 的返回值里有 ``jianying_running`` 标志,节点层要靠它
+    写"剪映在跑"告警到 ``status_log``(节点 08/09/10/11 都有,唯独本节点原先漏了)。
+    而 :func:`jianying_adjust_volume` 的对外返回契约是 ``dict | None`` 且被单测与
+    集成测试直接断言,不能改成元组,所以让本私有实现同时回传两者,公开 API 只取第一个。
+
+    Returns:
+        ``(written_entry, write_result)``。无匹配音轨时 ``written_entry`` 为 None 且
+        **不发生写入**,此时 ``write_result`` 也是 None。
+    """
     draft_file = Path(draft_path)
-    draft = _load_draft(draft_file)
+    draft = load_draft(draft_file)
 
     segments = _find_audio_segments(draft)
     # 优先按 segment.name 匹配;无 name 时退到按 type 字符串匹配 selector
@@ -139,7 +162,7 @@ def jianying_adjust_volume(
         or s.get("audio_kind") == track_selector
     ]
     if not matched:
-        return None
+        return None, None
 
     audio_fades = _audio_fades_list(draft)
     written_entry: dict | None = None
@@ -155,8 +178,8 @@ def jianying_adjust_volume(
             written_entry = _apply_fade(audio_fades, seg_id, fade_in_seconds, fade_out_seconds)
 
     # Week 5:从旧单写入口切到 safe_write_draft 双写(draft_dir 由 draft_file.parent 提供)。
-    safe_write_draft(draft_file.parent, draft)
-    return written_entry
+    write_result = write_draft(draft_file, draft)
+    return written_entry, write_result
 
 
 # ---------------------------------------------------------------------------
@@ -168,10 +191,15 @@ def _try_audio_track(
     volume_level: float,
     fade_in_seconds: float = 0.0,
     fade_out_seconds: float = 0.0,
-) -> dict | None:
-    """包装 jianying_adjust_volume,失败时把错误写到 state.error_log。"""
+) -> tuple[dict | None, dict | None]:
+    """包装音量调整,失败时把错误写到 state.error_log。
+
+    Returns:
+        ``(written_entry, write_result)``;草稿文件不存在时返回 ``(None, None)``
+        并已把错误写进 ``state.error_log``。
+    """
     try:
-        return jianying_adjust_volume(
+        return _adjust_volume_with_write(
             state["draft_path"],
             track_selector,
             volume_level=volume_level,
@@ -182,7 +210,7 @@ def _try_audio_track(
         err = list(state.get("error_log", []) or [])
         err.append(f"[node_13] 草稿文件不存在: {state.get('draft_path')}")
         state["error_log"] = err  # type: ignore[index]
-        return None
+        return None, None
 
 
 def adjust_volume(state: WorkflowState) -> dict:
@@ -203,10 +231,10 @@ def adjust_volume(state: WorkflowState) -> dict:
         }
 
     # 主音轨:音量 1.0,无淡入淡出(占位惯例 — 计划文档 §4.8)
-    main_entry = _try_audio_track(state, "audio_main", volume_level=1.0)
+    main_entry, main_write = _try_audio_track(state, "audio_main", volume_level=1.0)
 
     # BGM:音量 0.35,fade-in 2s,fade-out 3s(计划文档 §4.8)
-    bgm_entry = _try_audio_track(
+    bgm_entry, bgm_write = _try_audio_track(
         state,
         "audio_bgm",
         volume_level=0.35,
@@ -228,6 +256,9 @@ def adjust_volume(state: WorkflowState) -> dict:
     status_log.append(
         "node_13_adjust_volume_done" if adjusted else "node_13_adjust_volume_no_audio_track"
     )
+    # R2 行为对齐:本节点此前做了同样的 safe_write_draft 双写,却漏了这条告警 ——
+    # 节点 08/09/10/11 都有。两次写入(主音轨 + BGM)只产出一条告警。
+    status_log.extend(jianying_running_tags("node_13", (main_write, bgm_write)))
     return {
         **state,
         "volume_adjusted": adjusted,
