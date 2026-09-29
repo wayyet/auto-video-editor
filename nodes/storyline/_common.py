@@ -3,6 +3,10 @@
 阶段 7 抽离 ``_mcp_passthrough.py`` 的 helper 函数(``append_status_tag`` /
 ``_resolve_outputs_root``)到本模块;删除 vendored 透传壳子。
 
+另:``_read_json_artifact`` / ``_read_groups`` / ``_read_media`` 三个产物读盘
+helper 原本在 ``node_plan_timeline_pro.py`` 与 ``node_plan_timeline_ai_transition.py``
+各逐字复制一份,现统一收敛到本模块(单一来源)。
+
 历史:plan §5 阶段 0 / 1 / 4 / 5 各阶段都在 ``_mcp_passthrough`` 里挂工具
 函数,导致每阶段都要重新审视 import 路径。阶段 7 起:
 - **本模块** = 纯函数 helper,无 vendored 依赖,可被 19 节点 + qa_gate +
@@ -19,6 +23,7 @@
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from state import WorkflowState
@@ -82,8 +87,48 @@ def append_error(
     return out
 
 
+# ---------------------------------------------------------------------------
+# 产物读盘(原 node_plan_timeline_pro / node_plan_timeline_ai_transition 各存一份)
+# ---------------------------------------------------------------------------
+def _read_json_artifact(
+    state: WorkflowState,
+    key: str,
+) -> dict | None:
+    """读 ``state[key]`` 指向的 JSON 产物文件。
+
+    任何一步失败(路径为空 / 文件不存在 / 非法 JSON)都返回 ``None``,由调用方
+    决定降级策略 — helper 不参与决策(设计纪律第 1 条)。
+    """
+    p = state.get(key)
+    if not p:
+        return None
+    try:
+        return json.loads(Path(str(p)).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _read_groups(state: WorkflowState) -> list[dict]:
+    """读 ``storyline_groups_artifact`` 的 ``groups`` 数组。"""
+    doc = _read_json_artifact(state, "storyline_groups_artifact")
+    if isinstance(doc, dict):
+        return list(doc.get("groups") or [])
+    return []
+
+
+def _read_media(state: WorkflowState) -> list[dict]:
+    """读 ``storyline_media_artifact`` 的 ``media`` 数组。"""
+    doc = _read_json_artifact(state, "storyline_media_artifact")
+    if isinstance(doc, dict):
+        return list(doc.get("media") or [])
+    return []
+
+
 __all__ = [
     "_resolve_outputs_root",
     "append_status_tag",
     "append_error",
+    "_read_json_artifact",
+    "_read_groups",
+    "_read_media",
 ]

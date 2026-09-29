@@ -22,43 +22,21 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 
 from state import WorkflowState
 from storyline_capabilities.ai_transition_client import (
     is_ai_transition_enabled,
 )
 from storyline_capabilities.plan_timeline_pro import plan_timeline_pro
-from nodes.storyline._common import append_status_tag, _resolve_outputs_root
+from nodes.storyline._common import (
+    _read_groups,
+    _read_json_artifact,
+    _read_media,
+    append_status_tag,
+    _resolve_outputs_root,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _read_json_artifact(
-    state: WorkflowState,
-    key: str,
-) -> dict | None:
-    p = state.get(key)
-    if not p:
-        return None
-    try:
-        return json.loads(Path(str(p)).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-
-
-def _read_groups(state: WorkflowState) -> list[dict]:
-    doc = _read_json_artifact(state, "storyline_groups_artifact")
-    if isinstance(doc, dict):
-        return list(doc.get("groups") or [])
-    return []
-
-
-def _read_media(state: WorkflowState) -> list[dict]:
-    doc = _read_json_artifact(state, "storyline_media_artifact")
-    if isinstance(doc, dict):
-        return list(doc.get("media") or [])
-    return []
 
 
 def _attach_ai_transition_meta(
