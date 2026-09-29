@@ -253,11 +253,23 @@ def write_srt_from_segments(draft_dir: Path, segments: list[SubtitleSegment]) ->
 # 向后兼容 shim — Week 5 Day 1 阶段让现有 ``tests/unit/test_node_16_translate_subtitles.py``
 # 不被破坏。Day 2 graph.py 切换到 ``node_16a`` + ``node_checkpoint3`` 后,
 # 本 shim 仅供单元测试使用,Week 6+ 可删除。
+#
+# ⚠️ **未注册进图(2026-09-30 核查,只标记不删)**:
+# ``graph.py`` 只注册了 ``node_16a_translate_and_check`` + ``node_checkpoint3_layout_review``,
+# ``node_16_translate_subtitles`` 这个函数**没有任何 add_node / add_edge 引用**,
+# 唯一调用方是 ``tests/unit/test_node_16_translate_subtitles.py``。
+#
+# 注意:**本文件本身不可删** —— 它的纯函数被生产代码复用:
+# ``node_16a_translate_and_check`` 与 ``node_checkpoint3_layout_review`` 都 import 了
+# ``_build_interrupt_payload`` / ``write_srt_from_segments`` / ``_read_segments_from_draft``。
+# 可删的只有下面这个 shim 函数。
 # ---------------------------------------------------------------------------
 def node_16_translate_subtitles(state: WorkflowState) -> dict:
     """向后兼容 shim(Week 5 拆分过渡):按顺序执行"翻译+layout 校验+条件
     interrupt 模拟+写 SRT",对外行为与 Week 4 一致,但实现委托给 16a /
     checkpoint3 内部的纯函数。
+
+    **未注册进图,仅单元测试调用**(见上方注释)。
 
     关键差异(相对 Week 4 原实现):
     - 不真正触发 ``langgraph.types.interrupt``;若 layout 有 issues,直接

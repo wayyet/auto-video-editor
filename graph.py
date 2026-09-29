@@ -253,6 +253,16 @@ def _storyline_route_after_split_shots(state: WorkflowState) -> str:
     阶段 0 默认走 ``understand_clips`` 主干;``local_asr`` 旁路仅当
     ``media_artifact`` 里识别到至少一个 media 有 audio stream(读 ``has_audio``)。
     阶段 1 才完整检测。
+
+    ⚠️ **已知缺陷(2026-09-30 核查,只标记不改)**:下面两个分支返回同一个值,
+    所以 ``if media_artifact`` 判断完全无效 —— ``storyline_local_asr`` 与它下游
+    的 ``storyline_speech_rough_cut`` **当前不可达**。这不是"遗留物"(有意保留的
+    死代码),是没写完的 ``has_audio`` 检测。
+
+    归属:属于**功能补全**,不在"节点冗余合并"计划范围内。补检测时应在
+    ``has_audio`` 为真时返回 ``"storyline_local_asr"``,并确认
+    ``storyline_local_asr → storyline_speech_rough_cut`` 的边存在;
+    这会改变 auto 模式的实际执行路径,需单独评审后再改。
     """
     media_artifact = state.get("storyline_media_artifact")
     if media_artifact:
@@ -487,10 +497,19 @@ def _build_state_graph():
     # 不进入这些节点,172 unit / 关卡⓪ interrupt/resume 不回归。
     g.add_node("storyline_load_media", storyline_load_media_node)
     g.add_node("storyline_search_media", storyline_search_media_node)
+    # ⚠️ 已注册未连通(2026-09-30 核查,只标记不删):下面这个节点**没有任何
+    # add_edge / add_conditional_edges 引用**,即永远不会被执行。模块
+    # ``nodes/storyline/node_search_web_topic.py``(50 行)因此是死代码。
+    # 若日后要接进图,参考 storyline 同级节点的接法并补一条条件边。
     g.add_node("storyline_search_web_topic", storyline_search_web_topic_node)
     g.add_node("storyline_split_shots", storyline_split_shots_node)
+    # ⚠️ 当前不可达(缺陷,不是遗留物):``_storyline_route_after_split_shots``
+    # 两个分支都返回 "storyline_understand_clips",所以本节点及其下游
+    # ``storyline_speech_rough_cut`` 永远走不到。详见该路由函数的注释。
     g.add_node("storyline_local_asr", storyline_local_asr_node)
     g.add_node("storyline_speech_rough_cut", storyline_speech_rough_cut_node)
+    # ⚠️ 已注册未连通(2026-09-30 核查,只标记不删):同 storyline_search_web_topic,
+    # 零条边引用;``nodes/storyline/node_generate_ai_transition.py``(92 行)是死代码。
     g.add_node("storyline_generate_ai_transition",
                storyline_generate_ai_transition_node)
     g.add_node("storyline_understand_clips", storyline_understand_clips_node)
@@ -504,6 +523,9 @@ def _build_state_graph():
     g.add_node("storyline_recommend_transition", storyline_recommend_transition_node)
     g.add_node("storyline_recommend_text", storyline_recommend_text_node)
     g.add_node("storyline_plan_timeline_pro", storyline_plan_timeline_pro_node)
+    # ⚠️ 已注册未连通(2026-09-30 核查,只标记不删):与上面两个 storyline 节点同理,
+    # 零条边引用 —— fan-in 只接了 ``storyline_plan_timeline_pro``(graph.py:708 附近),
+    # ai_transition 变体没有入边也没有出边。
     g.add_node("storyline_plan_timeline_ai_transition",
                storyline_plan_timeline_ai_transition_node)
     g.add_node("storyline_render_video", storyline_render_video_node)

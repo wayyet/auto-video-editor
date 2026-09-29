@@ -8,6 +8,17 @@
 
 内部实现仍在 ``draft_ops/atomic_writer.py``(纯函数库,无 LangGraph 依赖)。
 Week 4 后如需把实现主体搬到本文件,只需修改 re-export 来源,调用方零改动。
+
+⚠️ **零生产调用方(2026-09-30 核查,只标记不删)**:本文件两个导出
+(``atomic_write_draft_json`` / ``atomic_write_draft`` 别名)在**生产代码里没有任何
+调用方** —— 节点层在 Week 5 统一改走 ``draft_ops/atomic_writer.safe_write_draft``
+(目录级双写 ``draft_content.json`` + ``draft_info.json``),本文件的单文件写入语义
+已经落后于实际需要。唯一消费者是 ``tests/unit/test_draft_writer_compat.py``
+(命名兼容测试);``tests/integration/test_e2e_tc07_audio_fades.py:149`` 甚至**反向断言**
+不再走它。
+
+按"删除有回归风险、标记零调用方是等价信息量下最安全"的决策,此处只留注释,文件保留。
+若日后确要删除,连带删掉上面两个测试文件里对它的引用即可。
 """
 
 from __future__ import annotations
