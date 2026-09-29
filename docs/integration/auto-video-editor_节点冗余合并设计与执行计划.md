@@ -148,8 +148,17 @@ g.add_edge(
 |---|---|---|---|
 | **R1** | 6 份逐字相同的草稿读盘 helper `def _load_draft(path): return json.loads(path.read_text(encoding="utf-8"))`（node_07/08/09/10/11/13） | `nodes/_draft_io.py::load_draft` | ✅ 已收敛（`_load_draft` 在 `nodes/` 下已 0 份定义） |
 | **R2** | 5 处 `safe_write_draft(draft_path.parent, draft)` + "剪映进程在跑"告警 log 拼接（node_08/09/10/11 + node_13）。其中 **node_13 做了同样的写入却漏掉告警**，是 5 处行为不一致 | `nodes/_draft_io.py::apply_and_write`（node_08/09/10/11）与 `write_draft` + `jianying_running_tags`（node_07/13） | ✅ 已收敛，node_13 告警已补齐 |
-| **R3** | `_read_json_artifact` / `_read_groups` / `_read_media` 三个产物读盘 helper 在 `node_plan_timeline_pro.py` 与 `node_plan_timeline_ai_transition.py` 各整块逐字复制一份 | `nodes/storyline/_common.py` | ✅ 已收敛（commit `9641af8`） |
+| **R3** | `_read_json_artifact` / `_read_groups` / `_read_media` 三个产物读盘 helper 在 `node_plan_timeline_pro.py` 与 `node_plan_timeline_ai_transition.py` 各整块逐字复制一份 | `nodes/storyline/_common.py` | ⚠️ **部分收敛**（commit `9641af8`）——见下方说明 |
 | **R4** | 关卡 ⓪/①/② 三处同构的 `_build_interrupt_payload` → `interrupt()` → `_post_resume` 三段式 | `nodes/_checkpoint.py::build_interrupt_payload` + `post_resume` | ✅ 已收敛（`node_checkpoint3_layout_review` 有意不纳入，见下） |
+
+**R3 尚未完全收敛（2026-09-30 复核发现）**：commit `9641af8` 消掉了 `node_plan_timeline_pro.py` / `node_plan_timeline_ai_transition.py` 里的两份逐字复制，但全仓仍有 2 处**语义等价、写法不同**的副本——它们没有调用 `_read_json_artifact`，而是把读盘逻辑内联了一遍：
+
+- `nodes/storyline/node_select_bgm.py::_read_groups`
+- `nodes/storyline/node_local_asr.py::_read_media`
+
+（另有 `node_generate_script.py::_read_groups_dict` 是同族但不同返回结构的变体。）
+
+所以验收项"`_read_*` 三函数全仓仅剩 1 份定义"**当前不成立**（`_read_json_artifact` 已达标，另两个各还剩 2–3 份）。这属于阶段 1 的范围，本次未执行；补齐时让上述两处改为 `from nodes.storyline._common import _read_groups / _read_media` 即可，无行为差异。
 
 **两处"看起来该合但不能合"的判断仍然成立**（第 4 节的结论不变）：
 
