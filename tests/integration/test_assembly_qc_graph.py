@@ -477,3 +477,54 @@ def test_assembly_chain_qc_blocking_then_repair_soft_degrade(
     assert "fake blocking issue" in report_md
     # 状态 log 含 repair_loop_done(证明确实跑了修复循环)
     assert any("assembly_repair_loop_done" in tag for tag in out.get("status_log", []))
+
+
+# ---------------------------------------------------------------------------
+# 测试 7(回归 A1):缺 assembly_timeline_path 时不得无限自旋
+# ---------------------------------------------------------------------------
+def test_assembly_chain_missing_timeline_soft_degrades_within_max_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    patched_assembly_tools,
+    base_state: dict,
+) -> None:
+    """``assembly_timeline_path`` 缺失时,QC 通道必须在 MAX_RETRY 轮内软降级。
+
+    回归 P0:``assembly_validate_render_qc`` 与 ``assembly_repair_loop`` 的
+    早退分支都漏写 ``assembly_qc_retry_count``,导致
+    ``validate → repair → validate`` 形成死循环,自旋到 LangGraph 递归上限
+    (10007 superstep)才抛 ``GraphRecursionError``。
+
+    这里只 stub 掉 ``assembly_build_timeline_node``,让它不产出
+    ``assembly_timeline_path``;其余 6 节点与路由函数都是生产代码,
+    不依赖真实 ffmpeg / ASR。
+    """
+    import graph as graph_mod
+
+    monkeypatch.setattr(config, "ASSEMBLY_QC_GATE_ENABLED", True)
+    monkeypatch.setattr(config, "ASSEMBLY_QC_MAX_RETRY", 2)
+
+    def _stub_build_timeline(state):  # noqa: ANN001 - LangGraph 节点签名
+        """不写 assembly_timeline_path,复现上游产物缺失的早退路径。"""
+        return {"status_log": list(state.get("status_log", []) or []) + ["assembly_build_timeline_stub"]}
+
+    monkeypatch.setattr(graph_mod, "assembly_build_timeline_node", _stub_build_timeline)
+
+    g = _build_state_graph().compile(
+        checkpointer=InMemorySaver(),
+        interrupt_before=["node_06_human_reorder"],
+    )
+    # recursion_limit 走 config:自旋的话 50 步就够炸,不必等默认 10007
+    cfg = {
+        "configurable": {"thread_id": "assembly-missing-timeline"},
+        "recursion_limit": 50,
+    }
+    out = g.invoke(base_state, config=cfg)
+
+    # 软降级:状态被 interrupt_before 截停在 node_06 之前,证明没自旋
+    assert out.get("assembly_qc_status") == "escalated"
+    # 重试预算被真实消耗完(而不是永远停在同一个值)
+    assert int(out.get("assembly_qc_retry_count") or 0) >= config.ASSEMBLY_QC_MAX_RETRY
+    # 中间确实进过修复循环,且 report.md 已生成
+    assert any("assembly_repair_loop_failed" in tag for tag in out.get("status_log", []))
+    assert out.get("assembly_report_path")
+    assert Path(out["assembly_report_path"]).is_file()

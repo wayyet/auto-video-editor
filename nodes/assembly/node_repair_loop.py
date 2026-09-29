@@ -271,7 +271,10 @@ def assembly_repair_loop_node(state: WorkflowState) -> dict:
 
     timeline_path = state.get("assembly_timeline_path")
     if not timeline_path:
+        # P0 修复:早退也必须消耗一次重试预算,否则 validate → repair → validate
+        # 会形成死循环(retry 永远不增,自旋到 LangGraph 递归上限)。
         return {
+            "assembly_qc_retry_count": int(state.get("assembly_qc_retry_count") or 0) + 1,
             "error_log": append_error(
                 state, node_kind="assembly_repair_loop", error_code="CONTRACT_INVALID",
                 message="missing assembly_timeline_path",
@@ -355,7 +358,7 @@ def assembly_repair_loop_node(state: WorkflowState) -> dict:
         ctx,
     )
 
-    # 重试计数 +1(唯一写入者,无需 reducer)
+    # 重试计数 +1(整体覆盖写,同一 superstep 内不会与别的节点并发写,无需 reducer)
     retry_count = int(state.get("assembly_qc_retry_count") or 0) + 1
 
     if diff_result.text.startswith("[ERROR]"):

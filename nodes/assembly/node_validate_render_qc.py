@@ -63,7 +63,14 @@ def assembly_validate_render_qc_node(state: WorkflowState) -> dict:
 
     timeline_path = state.get("assembly_timeline_path")
     if not timeline_path:
+        # P0 修复:早退必须同时设 status 与重试计数,否则本节点不写
+        # assembly_qc_retry_count → route_after_assembly_qc 永远看到同一个
+        # retry 值 → repair_loop → 本节点死循环,自旋到 LangGraph 递归上限。
+        # status 设 escalated(而非留空)保证走 repair → write_report 的软降级
+        # 路径,不会被误判为达标。
         return {
+            "assembly_qc_status": "escalated",
+            "assembly_qc_retry_count": int(state.get("assembly_qc_retry_count") or 0) + 1,
             "error_log": append_error(
                 state, node_kind="assembly_validate_render_qc",
                 error_code="CONTRACT_INVALID",

@@ -265,6 +265,11 @@ def test_build_timeline_rejects_corrupt_media_json(base_state, tmp_path):
 def test_validate_render_qc_requires_timeline(base_state):
     out = assembly_validate_render_qc_node(base_state)
     assert any("missing assembly_timeline_path" in e for e in out["error_log"])
+    # P0 回归:早退必须设 status + 消耗一次重试预算,否则
+    # route_after_assembly_qc 会永远返回 repair_loop 形成死循环。
+    assert out["assembly_qc_status"] == "escalated"
+    assert out["assembly_qc_retry_count"] == 1
+    assert route_after_assembly_qc({**base_state, **out}) == "assembly_repair_loop"
 
 
 def test_validate_render_qc_happy_path(mock_assembly_capabilities, base_state, tmp_path):
@@ -383,6 +388,15 @@ def test_route_none_status_treated_as_repair(base_state, monkeypatch):
 def test_repair_loop_requires_timeline(base_state):
     out = assembly_repair_loop_node(base_state)
     assert any("missing assembly_timeline_path" in e for e in out["error_log"])
+    # P0 回归:早退也必须递增重试计数,否则 retry 永远停在同一个值
+    assert out["assembly_qc_retry_count"] == 1
+
+
+def test_repair_loop_requires_timeline_still_increments_at_retry_cap(base_state):
+    """重试到上限后,repair_loop 早退应再加 1,让 route 落到 write_report。"""
+    base_state["assembly_qc_retry_count"] = 2
+    out = assembly_repair_loop_node(base_state)
+    assert out["assembly_qc_retry_count"] == 3
 
 
 def test_repair_loop_writes_marker_and_increments_retry(mock_assembly_capabilities, base_state, tmp_path):

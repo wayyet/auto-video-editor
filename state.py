@@ -253,7 +253,9 @@ class WorkflowState(TypedDict, total=False):
     # ===== Phase 5 新增:assembly QC 通道(video-agent-kit 移植,ADR-1~5) =====
     # 产物统一落 outputs/<job_id>/assembly/ 下(plan §6),命名照抄 video-edit-assembly
     # 文件契约。所有字段用 _last_wins(同 storyline_*),原因同 §Phase 4 注解。
-    # ``assembly_qc_retry_count`` 是 ``assembly_repair_loop`` 唯一写入者,无需 reducer。
+    # ``assembly_qc_retry_count`` 由 ``assembly_repair_loop`` 与
+    # ``assembly_validate_render_qc`` 各自在自己节点的早退/正常路径上整体覆盖
+    # 写入(不会在同一 superstep 内并发写两次),故仍无需 reducer。
     assembly_media_artifact: Annotated[Optional[str], _last_wins]            # inspect_media/analyze_media 汇总结果
     assembly_transcript_artifact: Annotated[Optional[str], _last_wins]       # speech_transcribe 结果
     assembly_ingest_artifact: Annotated[Optional[str], _last_wins]           # video_ingest 结果(contact sheet)
