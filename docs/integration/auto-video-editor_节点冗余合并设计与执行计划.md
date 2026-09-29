@@ -148,7 +148,7 @@ g.add_edge(
 |---|---|---|---|
 | **R1** | 6 份逐字相同的草稿读盘 helper `def _load_draft(path): return json.loads(path.read_text(encoding="utf-8"))`（node_07/08/09/10/11/13） | `nodes/_draft_io.py::load_draft` | ✅ 已收敛（`_load_draft` 在 `nodes/` 下已 0 份定义） |
 | **R2** | 5 处 `safe_write_draft(draft_path.parent, draft)` + "剪映进程在跑"告警 log 拼接（node_08/09/10/11 + node_13）。其中 **node_13 做了同样的写入却漏掉告警**，是 5 处行为不一致 | `nodes/_draft_io.py::apply_and_write`（node_08/09/10/11）与 `write_draft` + `jianying_running_tags`（node_07/13） | ✅ 已收敛，node_13 告警已补齐 |
-| **R3** | `_read_json_artifact` / `_read_groups` / `_read_media` 三个产物读盘 helper 散落在 5 个 storyline 节点里各自内联一份读盘逻辑 | `nodes/storyline/_common.py` | ✅ 已收敛（`9641af8` + `d6c1a0e`） |
+| **R3** | `_read_json_artifact` / `_read_groups` / `_read_media` 三个产物读盘 helper 散落在 5 个 storyline 节点里各自内联一份读盘逻辑 | `nodes/storyline/_common.py` | ✅ 已收敛（`9641af8` + `1359a81`） |
 | **R4** | 关卡 ⓪/①/② 三处同构的 `_build_interrupt_payload` → `interrupt()` → `_post_resume` 三段式 | `nodes/_checkpoint.py::build_interrupt_payload` + `post_resume` | ✅ 已收敛（`node_checkpoint3_layout_review` 有意不纳入，见下） |
 
 **R3 收敛过程与踩坑记录**：分两次做完。第一次（commit `9641af8`）只消掉了 `node_plan_timeline_pro.py` / `node_plan_timeline_ai_transition.py` 里那两份**逐字**复制，验收项"`_read_*` 全仓仅剩 1 份定义"并未达成。2026-09-30 复核时发现还有 3 处**语义等价、写法不同**的副本——它们没有调用 `_read_json_artifact`，而是把读盘逻辑内联了一遍：
