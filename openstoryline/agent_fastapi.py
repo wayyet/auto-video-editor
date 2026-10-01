@@ -13,6 +13,7 @@ import uuid
 import math
 import logging
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Set
@@ -924,6 +925,13 @@ CLEAN_CACHE_ALL_RPM   = _env_int("RATE_LIMIT_CLEAN_CACHE_ALL_RPM", 2)
 CLEAN_CACHE_ALL_BURST = _env_int("RATE_LIMIT_CLEAN_CACHE_ALL_BURST", 1)
 CLEAN_CACHE_IP_RPM    = _env_int("RATE_LIMIT_CLEAN_CACHE_IP_RPM", 2)
 CLEAN_CACHE_IP_BURST  = _env_int("RATE_LIMIT_CLEAN_CACHE_IP_BURST", 1)
+
+# 「导入视频」端点(POST /api/system/import-video):图侧 import_video 节点可能
+# 正在等这个结果,限流与 clean_cache 同量级(默认 burst=1 rpm=2,防误连点)。
+IMPORT_VIDEO_ALL_RPM   = _env_int("RATE_LIMIT_IMPORT_VIDEO_ALL_RPM", 2)
+IMPORT_VIDEO_ALL_BURST = _env_int("RATE_LIMIT_IMPORT_VIDEO_ALL_BURST", 1)
+IMPORT_VIDEO_IP_RPM    = _env_int("RATE_LIMIT_IMPORT_VIDEO_IP_RPM", 2)
+IMPORT_VIDEO_IP_BURST  = _env_int("RATE_LIMIT_IMPORT_VIDEO_IP_BURST", 1)
 
 MEDIA_GET_ALL_RPM   = _env_int("RATE_LIMIT_MEDIA_GET_ALL_RPM", 600)
 MEDIA_GET_ALL_BURST = _env_int("RATE_LIMIT_MEDIA_GET_ALL_BURST", 120)
@@ -2614,6 +2622,134 @@ async def clean_cache_endpoint(request: Request):
         "ok": True,
         "cleaned_paths": result_state.get("cache_cleaned_paths", []),
         "errors": result_state.get("error_log", []),
+    })
+
+
+@api.post("/system/import-video")
+async def import_video_endpoint(request: Request):
+    """OpenStoryline Web UI「📥 导入视频」按钮对应端点(2026-10 拆分 node_04)。
+
+    行为:
+    - 前端先用**既有**上传链路(``uploadMediaChunked``)把视频传到当前会话,
+      再 POST 到这里;本端点**不碰文件**,只负责把"导入完成"这个信号
+      回写到 ``auto-video-editor`` 侧的握手结果文件。
+    - 图侧 ``nodes/node_04a_import_video.py::import_video`` 节点正在轮询等这个
+      结果文件;命中即自动继续(人只点一下按钮,不用再敲 resume)。
+    - 图**自己**绝不导入视频 —— 见
+      ``tests/integration/test_no_auto_import_video.py``。
+
+    安全设计:**不接受任意 ``job_id`` 入参**。只认"扫出来的最新未应答请求",
+    网页侧无法指定往哪个任务目录写结果,防止被诱导污染别的 job。
+
+    - 速率限制:全局 + 每 IP 双重桶,默认 burst=1 rpm=2(防误连点)。
+    - 路径定位:``AUTO_VIDEO_EDITOR_DIR`` 环境变量优先,默认
+      ``E:\\Documents\\kuaishou\\auto-video-editor``。
+    """
+    # ---- 速率限制(双桶:全局 + 每 IP)----
+    ip = _client_ip_from_http_scope(request.scope, RATE_LIMIT_TRUST_PROXY_HEADERS)
+    ok, ra, _ = await RATE_LIMITER.allow(
+        key="http:import_video:all",
+        capacity=float(IMPORT_VIDEO_ALL_BURST),
+        refill_rate=_rpm_to_rps(float(IMPORT_VIDEO_ALL_RPM)),
+        cost=1.0,
+    )
+    if not ok:
+        return _rate_limit_reject_json(ra)
+    ok2, ra2, _ = await RATE_LIMITER.allow(
+        key=f"http:import_video:{ip}",
+        capacity=float(IMPORT_VIDEO_IP_BURST),
+        refill_rate=_rpm_to_rps(float(IMPORT_VIDEO_IP_RPM)),
+        cost=1.0,
+    )
+    if not ok2:
+        return _rate_limit_reject_json(ra2)
+
+    # ---- 解析请求体 ----
+    try:
+        data = await request.json()
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        data = {}
+
+    web_session_id = str(data.get("session_id") or "").strip()
+    media_id = str(data.get("media_id") or "").strip()
+    filename = sanitize_filename(str(data.get("filename") or "").strip())
+    stored_path = str(data.get("stored_path") or "").strip()
+
+    if not web_session_id or not media_id:
+        raise HTTPException(
+            status_code=400,
+            detail="session_id and media_id are required",
+        )
+
+    # ---- 路径解析 ----
+    auto_editor_dir = Path(os.environ.get(
+        "AUTO_VIDEO_EDITOR_DIR",
+        r"E:\Documents\kuaishou\auto-video-editor",
+    ))
+    node_path = auto_editor_dir / "nodes" / "node_04a_import_video.py"
+    if not node_path.exists():
+        raise HTTPException(
+            status_code=500,
+            detail=f"auto-video-editor 路径无效: {auto_editor_dir}",
+        )
+
+    # ---- 跨 venv 加载握手函数(幂等:首次 sys.path.insert 之后无副作用)----
+    # ``node_04a_import_video`` 顶层只依赖 stdlib + config + storyline.output_isolation,
+    # 本文件跑在 openstoryline/.venv 里也能安全 import(见该模块 docstring)。
+    av_root = str(auto_editor_dir)
+    if av_root not in sys.path:
+        sys.path.insert(0, av_root)
+    try:
+        from nodes.node_04a_import_video import (
+            find_pending_request,
+            write_import_result,
+        )
+    except ImportError as e:
+        raise HTTPException(status_code=500, detail=f"导入 import_video 握手函数失败: {e}")
+
+    # ---- 找最新未应答请求 ----
+    # None = 图没在等(还没跑到 import_video 节点,或已超时退出)。
+    try:
+        pending = find_pending_request()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"扫描待导入请求失败: {e}")
+
+    if pending is None:
+        return JSONResponse(
+            {
+                "ok": False,
+                "detail": "no_pending_import_request",
+            },
+            status_code=409,
+        )
+
+    job_id, _req = pending
+
+    # ---- 回写结果文件(节点下一轮轮询即命中)----
+    try:
+        write_import_result(
+            job_id,
+            {
+                "ok": True,
+                "web_session_id": web_session_id,
+                "media_id": media_id,
+                "filename": filename,
+                "stored_path": stored_path or None,
+                "triggered_by": "import_video_button",
+                "finished_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            },
+        )
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"写回导入结果失败: {e}")
+
+    return JSONResponse({
+        "ok": True,
+        "job_id": job_id,
+        "web_session_id": web_session_id,
+        "media_id": media_id,
+        "filename": filename,
     })
 
 

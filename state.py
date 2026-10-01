@@ -273,3 +273,12 @@ class WorkflowState(TypedDict, total=False):
     assembly_repair_evidence_path: NotRequired[Optional[str]]
     # node_05 宽高比归一化后的素材路径;None = 比例本就对齐,未做裁切。
     draft_source_normalized_path: NotRequired[Optional[str]]
+
+    # ===== node_04a import_video 新增(手动导入关卡,2026-10) =====
+    # 唯一写入者是 ``nodes/node_04a_import_video.py::import_video``(单写者,
+    # 故全部 NotRequired 无需 reducer)。老 checkpoint 恢复时缺失 = 正常。
+    # "pending" | "imported" | "failed" | "timeout"
+    import_video_status: NotRequired[str]
+    import_video_media_path: NotRequired[Optional[str]]      # 网页端落盘后的绝对路径
+    import_video_web_session_id: NotRequired[Optional[str]]  # OpenStoryline 会话 id(非 job_id)
+    import_video_filename: NotRequired[Optional[str]]

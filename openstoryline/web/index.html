@@ -34,6 +34,15 @@
           </svg>
         </button>
 
+        <button id="importVideoBtn" class="sidebar-action secondary"
+                title="导入视频(手动)"
+                aria-label="导入视频(手动)"
+                data-i18n-title="sidebar.import_video"
+                data-i18n-aria-label="sidebar.import_video">
+          <span class="sidebar-action-icon">📥</span>
+          <span class="sidebar-action-text" data-i18n="sidebar.import_video">导入视频</span>
+        </button>
+
         <button id="createDialogBtn" class="sidebar-action primary"
                 title="创建新对话"
                 aria-label="创建新对话"
@@ -51,6 +60,10 @@
           <span class="sidebar-action-icon">🧹</span>
           <span class="sidebar-action-text" data-i18n="sidebar.clean_cache">清理缓存</span>
         </button>
+
+        <!-- 「导入视频」按钮的隐藏文件选择框(hidden,无视觉) -->
+        <input type="file" id="importVideoFileInput"
+               accept="video/*,.mp4,.mov,.mkv,.avi,.webm" hidden />
       </div>
 
       <!-- 中间滚动区：长内容放这里 -->

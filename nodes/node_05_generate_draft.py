@@ -4,7 +4,7 @@
 - 用 :func:`storyline.mapper.canonical_to_draft` 替换旧
   ``_build_draft_content(shot_plan, video_path)``。
 - 输入优先级:
-    1. ``state["storyline_plan"]``(来自 node_04 真实 MCP 链路)→ mapper
+    1. ``state["storyline_plan"]``(来自 node_04b 读 openstoryline 产物)→ mapper
     2. ``state["shot_plan"]``(Mock 兜底)→ 旧 ``_build_draft_content`` 兜底
 - 原子写入 ``draft_content.json`` + ``draft_info.json`` 双写(Week 5 起走
   :func:`draft_ops.atomic_writer.safe_write_draft`,剪映 5.9+ 需要二者一致)。

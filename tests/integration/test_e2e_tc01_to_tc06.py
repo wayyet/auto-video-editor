@@ -146,13 +146,13 @@ def StateGraph_Repatched(orig_generate, patched_generate, initial_state, tmp_pat
     from nodes.node_01_clean_cache import clean_cache
     from nodes.node_02_launch_openstoryline import launch_openstoryline_service
     from nodes.node_03_open_preview import open_preview
-    from nodes.node_04_import_and_plan import import_video_and_plan_shots
+    from nodes.node_04b_get_storyboard_plan import get_storyboard_plan
 
     g = StateGraph(WorkflowState)
     g.add_node("clean_cache", clean_cache)
     g.add_node("launch_openstoryline", launch_openstoryline_service)
     g.add_node("open_preview", open_preview)
-    g.add_node("import_and_plan", import_video_and_plan_shots)
+    g.add_node("import_and_plan", get_storyboard_plan)
     g.add_node("generate_draft", patched_generate)
     g.add_edge(START, "clean_cache")
     g.add_edge("clean_cache", "launch_openstoryline")
@@ -182,14 +182,14 @@ def test_tc02_state_field_completeness(patched_graph, base_initial_state, tmp_pa
     from nodes.node_01_clean_cache import clean_cache
     from nodes.node_02_launch_openstoryline import launch_openstoryline_service
     from nodes.node_03_open_preview import open_preview
-    from nodes.node_04_import_and_plan import import_video_and_plan_shots
+    from nodes.node_04b_get_storyboard_plan import get_storyboard_plan
     from nodes.node_05_generate_draft import generate_initial_jianying_draft
 
     g = StateGraph(WorkflowState)
     g.add_node("clean_cache", clean_cache)
     g.add_node("launch_openstoryline", launch_openstoryline_service)
     g.add_node("open_preview", open_preview)
-    g.add_node("import_and_plan", import_video_and_plan_shots)
+    g.add_node("import_and_plan", get_storyboard_plan)
     g.add_node("generate_draft",
                lambda s: generate_initial_jianying_draft(s, tmp_path / "draft"))
     g.add_edge(START, "clean_cache")
@@ -259,13 +259,13 @@ def test_tc03_encrypted_draft_aborts_writing(tmp_path, base_initial_state, monke
     from nodes.node_01_clean_cache import clean_cache
     from nodes.node_02_launch_openstoryline import launch_openstoryline_service
     from nodes.node_03_open_preview import open_preview
-    from nodes.node_04_import_and_plan import import_video_and_plan_shots
+    from nodes.node_04b_get_storyboard_plan import get_storyboard_plan
 
     g = StateGraph(WorkflowState)
     g.add_node("clean_cache", clean_cache)
     g.add_node("launch_openstoryline", launch_openstoryline_service)
     g.add_node("open_preview", open_preview)
-    g.add_node("import_and_plan", import_video_and_plan_shots)
+    g.add_node("import_and_plan", get_storyboard_plan)
     g.add_node("generate_draft",
                lambda s: patched_generate(s, draft_dir))
     g.add_edge(START, "clean_cache")
@@ -345,7 +345,7 @@ def test_tc04_write_interrupted_keeps_target_intact(tmp_path, base_initial_state
     from nodes.node_01_clean_cache import clean_cache
     from nodes.node_02_launch_openstoryline import launch_openstoryline_service
     from nodes.node_03_open_preview import open_preview
-    from nodes.node_04_import_and_plan import import_video_and_plan_shots
+    from nodes.node_04b_get_storyboard_plan import get_storyboard_plan
 
     def tc04_generate(state, draft_dir, *, encrypt_detector=None, writer=None):
         from draft_ops.encryption_detector import detect_draft_encryption, DraftStatus
@@ -358,7 +358,7 @@ def test_tc04_write_interrupted_keeps_target_intact(tmp_path, base_initial_state
     g.add_node("clean_cache", clean_cache)
     g.add_node("launch_openstoryline", launch_openstoryline_service)
     g.add_node("open_preview", open_preview)
-    g.add_node("import_and_plan", import_video_and_plan_shots)
+    g.add_node("import_and_plan", get_storyboard_plan)
     g.add_node("generate_draft", lambda s: tc04_generate(s, draft_dir))
     g.add_edge(START, "clean_cache")
     g.add_edge("clean_cache", "launch_openstoryline")
@@ -443,7 +443,7 @@ def test_tc06_unsupported_video_format_writes_error_log(
     """Mock 客户端抛 ValueError → 节点 4 catch 后写 error_log,其他字段不受影响。"""
     import nodes.node_02_launch_openstoryline as mod2
     import nodes.node_03_open_preview as mod3
-    import nodes.node_04_import_and_plan as mod4
+    import nodes.node_04b_get_storyboard_plan as m4b
 
     def fake_popen(*args, **kwargs):
         return _StubProc(pid=88888)
@@ -462,7 +462,7 @@ def test_tc06_unsupported_video_format_writes_error_log(
                 raise ValueError("unsupported codec")
         return _Bad()
 
-    monkeypatch.setattr(mod4, "_mock_factory", bad_factory)
+    monkeypatch.setattr(m4b, "_mock_factory", bad_factory)
 
     from graph import build_graph
 

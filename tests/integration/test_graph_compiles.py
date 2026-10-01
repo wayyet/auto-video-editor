@@ -43,6 +43,18 @@ def test_graph_compiles_with_custom_checkpointer() -> None:
     assert g.checkpointer is saver
 
 
+def test_graph_registers_split_import_nodes() -> None:
+    """2026-10 拆分 node_04:``import_video`` / ``get_storyboard_plan`` 均已注册。
+
+    ``import_and_plan`` 应已消失(它被 04a 手动导入关卡 + 04b 读盘取代)。
+    """
+    g = build_graph(checkpointer=InMemorySaver(), start_heartbeat_thread=False)
+    nodes = set(g.get_graph().nodes)
+    assert "import_video" in nodes
+    assert "get_storyboard_plan" in nodes
+    assert "import_and_plan" not in nodes
+
+
 def test_make_checkpointer_memory_returns_inmemory() -> None:
     saver = make_checkpointer("memory")
     assert isinstance(saver, InMemorySaver)

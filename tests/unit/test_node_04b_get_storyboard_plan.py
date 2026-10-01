@@ -1,4 +1,7 @@
-"""节点 4 单测 — 2026-09 读产物版(对照 plan §4.3)。
+"""节点 4b 单测 — 2026-09 读产物版(对照 plan §4.3)。
+
+由 ``tests/unit/test_node_04_import_and_plan.py`` 迁移而来(2026-10 拆分 node_04),
+仅改 import 路径 / 函数名 / 1 处 status tag 断言,用例逻辑原样保留。
 
 覆盖路径:
 1. OpenStoryline 未就绪 → fallback shot_plan(写 ``shot_plan``)。
@@ -12,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from nodes.node_04_import_and_plan import import_video_and_plan_shots
+from nodes.node_04b_get_storyboard_plan import get_storyboard_plan
 from storyline.output_isolation import (
     OutputJobPaths,
     build_manifest,
@@ -77,7 +80,7 @@ def test_openstoryline_not_ready_falls_back_to_shot_plan(tmp_path: Path) -> None
         "openstoryline_ready": False,
         "error_log": [],
     }
-    out = import_video_and_plan_shots(
+    out = get_storyboard_plan(
         state,
         outputs_root=tmp_path / "outputs",
         openstoryline_outputs_root=tmp_path / "os_outputs",
@@ -100,7 +103,7 @@ def test_idempotent_hit_reuses_manifest(tmp_path: Path) -> None:
         "openstoryline_ready": True,
         "error_log": [],
     }
-    # node_04 内部 cfg_snapshot 形如 {"WORKFLOW_ENV": WORKFLOW_ENV},
+    # node_04b 内部 cfg_snapshot 形如 {"WORKFLOW_ENV": WORKFLOW_ENV},
     # input_sha = sha256(video_path)(无 extras);这里手工算同样的 key。
     cfg_snapshot = {"WORKFLOW_ENV": _we}
     cfg_sha = hashlib.sha256(
@@ -111,7 +114,7 @@ def test_idempotent_hit_reuses_manifest(tmp_path: Path) -> None:
         job_id=job_id, input_sha256=input_sha, config_sha256=cfg_sha,
     )
 
-    # 预置一份 manifest(模拟上次跑完留下的),key 与 node_04 计算一致。
+    # 预置一份 manifest(模拟上次跑完留下的),key 与 node_04b 计算一致。
     outputs_root = tmp_path / "outputs"
     paths = OutputJobPaths.for_job(job_id=job_id, root=outputs_root)
     paths.ensure()
@@ -123,12 +126,12 @@ def test_idempotent_hit_reuses_manifest(tmp_path: Path) -> None:
         storyline_artifact_ids=["old-art"],
         draft_path=str((tmp_path / "drafts" / "draft_content.json").resolve()),
     )
-    # build_manifest 算的 key 与 node_04 不同(它用 video_path+extras 算 input_sha),
-    # 这里强制覆盖成与 node_04 一致的 key,模拟"上次跑的 key 跟这次一致"。
+    # build_manifest 算的 key 与 node_04b 不同(它用 video_path+extras 算 input_sha),
+    # 这里强制覆盖成与 node_04b 一致的 key,模拟"上次跑的 key 跟这次一致"。
     manifest.idempotency_key = expected_key
     write_manifest(paths, manifest)
 
-    out = import_video_and_plan_shots(
+    out = get_storyboard_plan(
         state,
         outputs_root=outputs_root,
         openstoryline_outputs_root=tmp_path / "os_outputs_no_dir",  # 不存在也不该读
@@ -152,7 +155,7 @@ def test_happy_path_reads_latest_plan_timeline_pro(tmp_path: Path) -> None:
         "openstoryline_ready": True,
         "error_log": [],
     }
-    out = import_video_and_plan_shots(
+    out = get_storyboard_plan(
         state,
         outputs_root=tmp_path / "outputs",
         openstoryline_outputs_root=os_outputs,
@@ -171,7 +174,7 @@ def test_happy_path_reads_latest_plan_timeline_pro(tmp_path: Path) -> None:
     assert out["storyline_session_id"] == "sid-real"
     assert out["storyline_outputs_root"].endswith("sid-real")
     # manifest 写入
-    assert any("node_04_import_and_plan_done" in s for s in out["status_log"])
+    assert any("node_04b_get_storyboard_plan_done" in s for s in out["status_log"])
 
 
 def test_no_session_dir_falls_back_to_shot_plan(tmp_path: Path) -> None:
@@ -184,7 +187,7 @@ def test_no_session_dir_falls_back_to_shot_plan(tmp_path: Path) -> None:
     }
     empty_os_outputs = tmp_path / "os_empty"
     empty_os_outputs.mkdir()  # 目录存在但里面为空
-    out = import_video_and_plan_shots(
+    out = get_storyboard_plan(
         state,
         outputs_root=tmp_path / "outputs",
         openstoryline_outputs_root=empty_os_outputs,
@@ -212,7 +215,7 @@ def test_plan_reader_error_falls_back_to_shot_plan(tmp_path: Path) -> None:
         "openstoryline_ready": True,
         "error_log": [],
     }
-    out = import_video_and_plan_shots(
+    out = get_storyboard_plan(
         state,
         outputs_root=tmp_path / "outputs",
         openstoryline_outputs_root=os_outputs,

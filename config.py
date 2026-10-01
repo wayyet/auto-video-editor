@@ -215,6 +215,24 @@ OPENSTORYLINE_MCP_PORT: int = 8001
 OPENSTORYLINE_WEB_PORT: int = 7860
 OPENSTORYLINE_HEALTH_TIMEOUT_S: int = 30
 
+# ---------------------------------------------------------------------------
+# 节点 4a:import_video 手动导入关卡(2026-10 拆分 node_04 新增)
+# ---------------------------------------------------------------------------
+# ``import_video`` 节点发出 ``import_video_request.json`` 后,轮询同目录的
+# ``import_video_result.json``;Web UI 左上角【📥 导入视频】按钮被点击时由
+# ``POST /api/system/import-video`` 端点回写结果文件。
+# 注意:这三个值都是 ``import_video`` 节点**运行时**通过 ``config.XXX`` 读取
+# 的(不是模块顶层 ``from config import``),因此单测可用
+# ``monkeypatch.setattr(config, "IMPORT_VIDEO_WAIT_TIMEOUT_S", 0)`` 加速。
+IMPORT_VIDEO_WAIT_TIMEOUT_S: int = int(os.environ.get("IMPORT_VIDEO_WAIT_TIMEOUT_S", "600"))
+IMPORT_VIDEO_POLL_INTERVAL_S: float = float(os.environ.get("IMPORT_VIDEO_POLL_INTERVAL_S", "1"))
+# True  = 必须人工点网页按钮才导入(默认,需求要求);
+# False = 应急回滚,import_video 节点自己把 video_input_path 当结果,
+#         恢复改造前的"自动导入"行为。
+IMPORT_VIDEO_MANUAL_REQUIRED: bool = (
+    os.environ.get("IMPORT_VIDEO_MANUAL_REQUIRED", "true").lower().strip() in ("1", "true", "yes")
+)
+
 
 # ---------------------------------------------------------------------------
 # Phase 2:Storyline / OpenStoryline 集成配置(2026-09 解耦后保留项)
@@ -240,7 +258,8 @@ def storyline_outputs_root() -> Path:
 # Phase 4 双模路由(对应 plan_v4 §5 阶段 0 开工决策)
 # ---------------------------------------------------------------------------
 # - ``STORYLINE_MODE=human``(默认):沿用关卡⓪(node_checkpoint0_storyline_plan +
-#   node_04_import_and_plan 读 vendored Web UI 产物路径)**完全不动**,保证 172 unit
+#   node_04a_import_video 手动导入关卡 + node_04b_get_storyboard_plan 读
+#   vendored Web UI 产物路径)**完全不动**,保证既有 unit
 #   + 关卡⓪ interrupt/resume 不回归。
 # - ``STORYLINE_MODE=auto``:走新增的 ``nodes/storyline/`` 19 节点确定性图,产出
 #   ``storyline_timeline_plan`` 直接喂 node_05 mapper。

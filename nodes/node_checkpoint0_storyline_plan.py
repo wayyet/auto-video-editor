@@ -3,9 +3,11 @@
 设计(对照 plan §4.2):
 - ``interrupt()`` 之前**不**做副作用(避免重放时重复)。
 - resume 后第一个 task 才写 ``status_log``。
-- 真正的产物读取放在 :func:`nodes.node_04_import_and_plan.import_video_and_plan_shots`,
+- 真正的产物读取放在 :func:`nodes.node_04b_get_storyboard_plan.get_storyboard_plan`,
   该函数验证过的 interrupt/resume 幂等模式(Week 3 起的 ``tests/integration/
   test_interrupt_resume.py`` 已覆盖)。
+- resume 之后依次经过 :mod:`nodes.node_04a_import_video`(等网页【📥 导入视频】
+  按钮)与 :mod:`nodes.node_04b_get_storyboard_plan`(读盘)。
 
 payload 字段 ``checkpoint`` 固定为 ``"⓪"``,与其他关卡 ``①/②/③`` 对齐
 (Week 5 计划 §1.1)。

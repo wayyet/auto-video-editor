@@ -79,3 +79,20 @@ def _skip_checkpoint0_for_pre_migration_tests(request, monkeypatch):
     monkeypatch.setattr(cp0, "checkpoint0_wait_storyline_plan", passthrough)
     if hasattr(_graph, "checkpoint0_wait_storyline_plan"):
         monkeypatch.setattr(_graph, "checkpoint0_wait_storyline_plan", passthrough)
+
+
+# ---------------------------------------------------------------------------
+# 2026-10 拆分 node_04:``import_video`` 节点默认要等网页【📥 导入视频】按钮
+# 最多 600s。测试里没人会点那个按钮,故整轮把等待压到 0 → 节点立即返回
+# ``import_video_status="timeout"`` 并继续往下走(降级路径),测试不会挂起。
+#
+# ``nodes/node_04a_import_video.py`` 运行时才读 ``config.XXX``,所以 patch
+# ``config`` 模块属性即可生效(与 graph.py:575 的 ``import config as _config``
+# 同一惯例)。需要覆盖成别的值的用例,自行再 monkeypatch 一次即可。
+# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _no_wait_for_manual_import_button(monkeypatch):
+    import config as _config
+
+    monkeypatch.setattr(_config, "IMPORT_VIDEO_WAIT_TIMEOUT_S", 0)
+    monkeypatch.setattr(_config, "IMPORT_VIDEO_POLL_INTERVAL_S", 0.0)

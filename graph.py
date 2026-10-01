@@ -8,7 +8,8 @@
     → open_preview
     → _route_mode(plan §2.1 双模分支):
         ├─ human(默认):checkpoint0_storyline_plan ⏸ interrupt("⓪")
-        │                → import_and_plan  (读 vendored 产物)
+        │                → import_video(等网页【📥 导入视频】按钮,手动)
+        │                → get_storyboard_plan(读 vendored 产物)
         └─ auto:         storyline_load_media(19 节点确定性图入口)
     → generate_draft    (两条 mode 汇合点)
     → [Phase 5: ASSEMBLY_QC_GATE_ENABLED=True 时插入 6 节点 QC 通道(plan §七)]
@@ -46,12 +47,24 @@
 
 2026-09 关键改动(对照 plan §4/§5):
 - OpenStoryline 改为本地 uvicorn 子进程 + 读盘(node_02 不再有 MCP 链路,
-  node_04 读 ``openstoryline/outputs/<sid>/plan_timeline_pro/``)。
+  node_04b 读 ``openstoryline/outputs/<sid>/plan_timeline_pro/``)。
 - 新增关卡⓪ ``checkpoint0_storyline_plan``:在 ``open_preview`` 与
-  ``import_and_plan`` 之间挂起,等人工在 OpenStoryline 网页完成规划后 resume,
+  ``import_video`` 之间挂起,等人工在 OpenStoryline 网页完成规划后 resume,
   再走读盘路径。
 - 关卡统一为 ``⓪/①/②/③``,``_route_after_import`` 改为
   ``storyline_plan or shot_plan`` → ``generate_draft``。
+
+2026-10 关键改动(拆分 node_04 ——「导入视频」显式化 + 手动关卡):
+- 原 ``import_and_plan`` 拆成两个节点:
+  ``import_video``(等网页按钮,**自己不导入**) + ``get_storyboard_plan``
+  (原 node_04 的读盘逻辑,原样搬运)。
+- 「导入视频」只能由人在 OpenStoryline 网页左上角点【📥 导入视频】触发
+  (→ ``POST /api/system/import-video`` 回写握手结果文件)。图侧
+  ``import_video`` 节点**只发请求 + 轮询等结果**,绝不碰媒体文件、绝不调
+  ``load_media`` —— 守护测试 ``tests/integration/test_no_auto_import_video.py``。
+- 握手用文件而非 ``interrupt()``,与 ``clean_cache`` 模式同构。
+- 应急回滚:``IMPORT_VIDEO_MANUAL_REQUIRED=false`` 恢复旧的自动行为。
+- auto 模式的 ``storyline_load_media`` **未改动**,仍自动导入。
 
 Phase 4 auto-mode(plan §2.1 / §5 阶段 0~5):
 - ``_route_mode`` 条件边在 ``open_preview`` 之后做双模分支;
@@ -67,9 +80,10 @@ Phase 4 auto-mode(plan §2.1 / §5 阶段 0~5):
 - ``_mcp_passthrough.py`` 已删除,19 节点全部走 ``storyline_capabilities/``
   本地能力层;``asr_runner.py`` 仍走 vendored venv 子进程调 funasr(主 venv
   不能装 torch),这是 ADR-001 阻塞项,**不**在阶段 7 删除范围内。
-- human-mode 路径(checkpoint0_storyline_plan + node_04_import_and_plan)
-  **保留**并加 ``[Phase 7 deprecation]`` 注释,不删 — 避免破坏老
-  checkpoint 恢复 + 保留 auto-mode 失败时的回退入口(plan §6.2 选项 A)。
+- human-mode 路径(checkpoint0_storyline_plan + node_04a_import_video +
+  node_04b_get_storyboard_plan)**保留**并加 ``[Phase 7 deprecation]`` 注释,
+  不删 — 避免破坏老 checkpoint 恢复 + 保留 auto-mode 失败时的回退入口
+  (plan §6.2 选项 A)。
 
 Week 5 关键改动(保留):
 - ``node_16_translate_subtitles`` 拆为 ``node_16a_translate_and_check``(翻译 +
@@ -117,7 +131,10 @@ PreflightError = None   # type: ignore[assignment]
 from nodes.node_01_clean_cache import clean_cache
 from nodes.node_02_launch_openstoryline import launch_openstoryline_service
 from nodes.node_03_open_preview import open_preview
-from nodes.node_04_import_and_plan import import_video_and_plan_shots
+# 图节点名与函数名都叫 import_video 会遮蔽,故 import 时改名。
+# 改名只为避免遮蔽,函数本身签名/行为不变(见 nodes/node_04a_import_video.py)。
+from nodes.node_04a_import_video import import_video as import_video_node
+from nodes.node_04b_get_storyboard_plan import get_storyboard_plan
 from nodes.node_05_generate_draft import generate_initial_jianying_draft
 from nodes.node_06_human_reorder import human_reorder
 from nodes.node_07_speed_fit import get_snapshot2_path, route_after_speed_fit, speed_fit
@@ -423,11 +440,12 @@ def _build_state_graph():
 
     Phase 4(plan_v4 §2.1 / §2.2 / §5 阶段 0)新增:
     - ``_route_mode`` 条件边在 ``open_preview`` 之后做双模分支。
-    - ``human`` mode:走原 17 节点路径(关卡⓪ + import_and_plan),**完全不动**。
+    - ``human`` mode:走原 17 节点路径(关卡⓪ + import_video + get_storyboard_plan),
+      业务逻辑**完全不动**。
     - ``auto`` mode:走新 19 节点确定性图,19 节点 / qa_gate / join_storyline 全
       部 ``add_node`` 注册,内部拓扑按 plan §2.2 连边;``auto`` 模式从
       ``open_preview`` 直达 ``storyline_load_media``,绕过关卡⓪ 与
-      ``import_and_plan``。
+      ``import_video`` / ``get_storyboard_plan``。
     """
     from langgraph.graph import END, START, StateGraph
 
@@ -456,7 +474,8 @@ def _build_state_graph():
     g.add_node("open_preview", open_preview)
     # 关卡⓪:等人工在 OpenStoryline 网页里完成分镜/文案/BGM/时间线规划(2026-09 迁移后新增)
     g.add_node("checkpoint0_storyline_plan", checkpoint0_wait_storyline_plan)
-    g.add_node("import_and_plan", import_video_and_plan_shots)
+    g.add_node("import_video", import_video_node)
+    g.add_node("get_storyboard_plan", get_storyboard_plan)
     g.add_node("generate_draft", generate_draft_wrapped)
 
     # ---- 关卡① + 护栏 + 关卡② (Week 3) ----
@@ -550,13 +569,14 @@ def _build_state_graph():
         },
     )
 
-    # human-mode 路径(关卡⓪ + node_04)
+    # human-mode 路径(关卡⓪ + node_04a 手动导入关卡 + node_04b 读盘)
     # [Phase 7 deprecation] plan §5 阶段 7:human-mode 路径仅作
     # auto-mode 失败时的回退入口 + 老 checkpoint 恢复兜底保留,不删。
     # 新功能请优先走 auto-mode(19 节点确定性图)。
-    g.add_edge("checkpoint0_storyline_plan", "import_and_plan")
+    g.add_edge("checkpoint0_storyline_plan", "import_video")
+    g.add_edge("import_video", "get_storyboard_plan")
     g.add_conditional_edges(
-        "import_and_plan",
+        "get_storyboard_plan",
         _route_after_import,
         {"generate_draft": "generate_draft", END: END},
     )

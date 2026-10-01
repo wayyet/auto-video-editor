@@ -9,9 +9,14 @@
 - 不再有 MCP server(`src/open_storyline/mcp/` 保留为对照文档,不被运行时调用)
 - 启动入口固定为 `uvicorn agent_fastapi:app --host 127.0.0.1 --port 7860`
 - 产物写到本目录的 `outputs/<session_id>/plan_timeline_pro/*.json`,
-  由 `auto-video-editor/nodes/node_04_import_and_plan.py` 通过
+  由 `auto-video-editor/nodes/node_04b_get_storyboard_plan.py` 通过
   `storyline.plan_reader.read_latest_plan_timeline_pro()` 读盘拍平为
   `CanonicalTimeline`。
+- 侧边栏左上角的「📥 导入视频」按钮(`POST /api/system/import-video`)是
+  auto-video-editor 图侧 `import_video` 节点唯一的继续信号来源;图自己
+  永不自动导入视频。该端点跨 venv 引入
+  `auto-video-editor/nodes/node_04a_import_video.py`,故该模块顶层只允许依赖
+  stdlib + `config` + `storyline.output_isolation`。
 
 ## 安装 (Windows)
 

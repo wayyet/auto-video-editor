@@ -138,8 +138,8 @@ def test_checkpoint1_interrupt_and_resume_basic(seeded, monkeypatch: pytest.Monk
     # 预置 openstoryline 产物让 node_04 读到 storyline_plan
     os_root = tmp_path / "os_outputs"
     _seed_openstoryline_outputs(os_root, session_id="sid-basic")
-    import nodes.node_04_import_and_plan as _m4
-    monkeypatch.setattr(_m4, "OPENSTORYLINE_OUTPUTS_ROOT", os_root)
+    import nodes.node_04b_get_storyboard_plan as _m4b
+    monkeypatch.setattr(_m4b, "OPENSTORYLINE_OUTPUTS_ROOT", os_root)
 
     g = _build_inmemory_graph("int-basic")
 
@@ -190,8 +190,8 @@ def test_multi_day_resume_via_sqlite_persistence(seeded, tmp_path: Path, monkeyp
     # 预置产物
     os_root = tmp_path / "os_outputs"
     _seed_openstoryline_outputs(os_root, session_id="sid-multi")
-    import nodes.node_04_import_and_plan as _m4
-    monkeypatch.setattr(_m4, "OPENSTORYLINE_OUTPUTS_ROOT", os_root)
+    import nodes.node_04b_get_storyboard_plan as _m4b
+    monkeypatch.setattr(_m4b, "OPENSTORYLINE_OUTPUTS_ROOT", os_root)
 
     sqlite_path = tmp_path / f"{thread_id}.sqlite"
 
@@ -244,8 +244,8 @@ def test_notification_only_sent_once_on_resume(seeded, monkeypatch: pytest.Monke
     # 预置产物
     os_root = tmp_path / "os_outputs"
     _seed_openstoryline_outputs(os_root, session_id="sid-notify")
-    import nodes.node_04_import_and_plan as _m4
-    monkeypatch.setattr(_m4, "OPENSTORYLINE_OUTPUTS_ROOT", os_root)
+    import nodes.node_04b_get_storyboard_plan as _m4b
+    monkeypatch.setattr(_m4b, "OPENSTORYLINE_OUTPUTS_ROOT", os_root)
 
     g = _build_inmemory_graph("int-notify")
 
@@ -295,8 +295,8 @@ def test_thread_id_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, se
     # 预置产物(同一目录,但 node_04 按 session_dir 找)
     os_root = tmp_path / "os_outputs"
     _seed_openstoryline_outputs(os_root, session_id="sid-iso")
-    import nodes.node_04_import_and_plan as _m4
-    monkeypatch.setattr(_m4, "OPENSTORYLINE_OUTPUTS_ROOT", os_root)
+    import nodes.node_04b_get_storyboard_plan as _m4b
+    monkeypatch.setattr(_m4b, "OPENSTORYLINE_OUTPUTS_ROOT", os_root)
 
     state_a = _seed_state(str(draft_a))
     state_b = _seed_state(str(draft_b))
@@ -412,8 +412,8 @@ def test_checkpoint0_then_resume_to_node_04(
     # 预置 openstoryline 产物 + monkeypatch node_04 的 OPENSTORYLINE_OUTPUTS_ROOT
     os_root = tmp_path / "os_outputs"
     _seed_openstoryline_outputs(os_root, session_id="sid-int-test")
-    import nodes.node_04_import_and_plan as m4
-    monkeypatch.setattr(m4, "OPENSTORYLINE_OUTPUTS_ROOT", os_root)
+    import nodes.node_04b_get_storyboard_plan as m4b
+    monkeypatch.setattr(m4b, "OPENSTORYLINE_OUTPUTS_ROOT", os_root)
 
     # 节点 2 / 3 屏蔽真实进程(_patch_external 已 autouse)
 
@@ -446,7 +446,7 @@ def test_checkpoint0_then_resume_to_node_04(
         else []
     )
     assert log_after_cp0.count("checkpoint0_resumed") == 1
-    assert any("node_04_import_and_plan_done" in s for s in log_after_cp0)
+    assert any("node_04b_get_storyboard_plan_done" in s for s in log_after_cp0)
 
     # 关卡① payload 含 checkpoint="①"
     interrupts_cp1 = list(snap_after_cp0.interrupts) if hasattr(snap_after_cp0, "interrupts") else []

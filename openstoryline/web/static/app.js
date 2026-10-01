@@ -44,6 +44,7 @@ const __OS_I18N = {
     "sidebar.toggle": "收起/展开侧边栏",
     "sidebar.new_chat": "创建新对话",
     "sidebar.clean_cache": "清理缓存",
+    "sidebar.import_video": "导入视频",
     "sidebar.history_title": "对话历史",
     "sidebar.history_empty": "暂无历史会话",
     "sidebar.history_aria": "历史会话列表",
@@ -120,6 +121,12 @@ const __OS_I18N = {
     "toast.clean_cache_done": "已清理 {n} 个路径",
     "toast.clean_cache_done_none": "没有可清理的缓存",
     "toast.clean_cache_failed": "清理缓存失败：{msg}",
+    "toast.import_video_running": "正在导入视频…",
+    "toast.import_video_progress": "正在导入视频… {pct}%",
+    "toast.import_video_done": "视频已导入",
+    "toast.import_video_no_request": "当前没有待导入的请求：请先启动工作流，等待到「导入视频」关卡。",
+    "toast.import_video_bad_type": "仅支持视频文件。",
+    "toast.import_video_failed": "导入视频失败：{msg}",
     "toast.media_all_filtered": "仅支持上传视频或图片文件。",
     "toast.media_partial_filtered": "已过滤 {n} 个不支持的文件类型，仅上传视频/图片。",
     "toast.audio_not_supported": "暂不支持音频文件上传（后端尚未支持音频处理）。",
@@ -173,6 +180,7 @@ const __OS_I18N = {
     "sidebar.toggle": "Collapse/expand sidebar",
     "sidebar.new_chat": "New chat",
     "sidebar.clean_cache": "Clean cache",
+    "sidebar.import_video": "Import video",
     "sidebar.history_title": "History",
     "sidebar.history_empty": "No past chats yet",
     "sidebar.history_aria": "Chat history list",
@@ -249,6 +257,12 @@ const __OS_I18N = {
     "toast.clean_cache_done": "Cleaned {n} paths",
     "toast.clean_cache_done_none": "No cache to clean",
     "toast.clean_cache_failed": "Cache cleanup failed: {msg}",
+    "toast.import_video_running": "Importing video…",
+    "toast.import_video_progress": "Importing video… {pct}%",
+    "toast.import_video_done": "Video imported",
+    "toast.import_video_no_request": "No pending import request. Start the workflow first and wait for the “Import video” gate.",
+    "toast.import_video_bad_type": "Only video files are supported.",
+    "toast.import_video_failed": "Video import failed: {msg}",
     "toast.media_all_filtered": "Only video or image files are supported.",
     "toast.media_partial_filtered": "{n} unsupported file(s) were filtered; only video/image files will be uploaded.",
     "toast.audio_not_supported": "Audio uploads are not supported yet (backend audio processing is not available).",
@@ -2465,6 +2479,8 @@ class App {
     this.sidebarToggleBtn = $("#sidebarToggle");
     this.createDialogBtn = $("#createDialogBtn");
     this.cleanCacheBtn = $("#cleanCacheBtn");
+    this.importVideoBtn = $("#importVideoBtn");
+    this.importVideoFileInput = $("#importVideoFileInput");
     this.devbarToggleBtn = $("#devbarToggle");
     this.devbarEl = $("#devbar");
     this.sessionHistoryListEl = $("#sessionHistoryList");
@@ -2544,6 +2560,94 @@ class App {
       btn.disabled = false;
       if (iconEl) iconEl.textContent = oldIcon;
       if (textEl) textEl.textContent = __t("sidebar.clean_cache");
+    }
+  }
+
+  // 「📥 导入视频」按钮：这是**唯一**能让 auto-video-editor 图侧
+  // import_video 节点继续往下走的入口。图自己永不自动导入视频。
+  // 链路：选文件 → 复用既有 uploadMediaChunked 上传到当前会话
+  //      → POST /api/system/import-video → 端点写回握手结果文件
+  //      → 图里正在轮询的 import_video 节点命中并自动继续。
+  async importVideo() {
+    const btn = this.importVideoBtn;
+    if (!btn || btn.disabled) return;
+    const input = this.importVideoFileInput;
+    if (!input) return;
+    input.value = "";   // 允许重复选同一个文件也能触发 change
+    input.click();      // 只弹框，不自动选
+  }
+
+  async importVideoFile(file) {
+    if (!file) return;
+    if (!this.ui || typeof this.ui.showToastI18n !== "function") {
+      console.warn("[importVideo] toast 组件未就绪");
+      return;
+    }
+
+    // 与后端 detect_media_kind 的 video 白名单保持一致
+    const ext = ("." + String(file.name || "").split(".").pop()).toLowerCase();
+    const okExt = [".mp4", ".mov", ".mkv", ".avi", ".webm"].includes(ext);
+    if (!okExt) {
+      this.ui.showToastI18n("toast.import_video_bad_type", {});
+      setTimeout(() => this.ui.hideToast(), 2200);
+      return;
+    }
+
+    const btn = this.importVideoBtn;
+    const iconEl = btn && btn.querySelector(".sidebar-action-icon");
+    const textEl = btn && btn.querySelector(".sidebar-action-text");
+    const oldIcon = (iconEl && iconEl.innerHTML) || "📥";
+    if (btn) btn.disabled = true;
+    if (iconEl) iconEl.textContent = "⏳";
+    if (textEl) textEl.textContent = __t("toast.import_video_running");
+
+    try {
+      this.ui.showToastI18n("toast.import_video_progress", { pct: 0 });
+      // 复用既有分片上传链路（与 📎 上传同一套代码）
+      const resp = await this.api.uploadMediaChunked(this.sessionId, file, {
+        chunkSize: this.limits && this.limits.upload_chunk_bytes,
+        onProgress: (loaded, total) => {
+          const pct = total ? Math.round(((loaded || 0) / total) * 100) : 0;
+          this.ui.showToastI18n("toast.import_video_progress", { pct });
+        },
+      });
+
+      const media = (resp && resp.media) || {};
+      // 素材进入 pending 区，跟 📎 上传保持一致的 UI 表现
+      this.setPending((resp && resp.pending_media) ? resp.pending_media : []);
+
+      const r = await fetch("/api/system/import-video", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          session_id: this.sessionId,
+          media_id: media.id || "",
+          // 后端 public_media 的字段是 name(不是 filename),两者都兜一下
+          filename: media.name || media.filename || file.name || "",
+          stored_path: media.path || media.stored_path || "",
+        }),
+      });
+      const data = await r.json().catch(() => ({}));
+
+      if (r.status === 409) {
+        this.ui.showToastI18n("toast.import_video_no_request", {});
+        setTimeout(() => this.ui.hideToast(), 3200);
+        return;
+      }
+      if (!r.ok || !data.ok) {
+        throw new Error(data.detail || data.message || `HTTP ${r.status}`);
+      }
+      this.ui.showToastI18n("toast.import_video_done", {});
+      setTimeout(() => this.ui.hideToast(), 2200);
+    } catch (err) {
+      const msg = (err && (err.message || err)) || "unknown";
+      this.ui.showToastI18n("toast.import_video_failed", { msg });
+      setTimeout(() => this.ui.hideToast(), 3000);
+    } finally {
+      if (btn) btn.disabled = false;
+      if (iconEl) iconEl.textContent = oldIcon;
+      if (textEl) textEl.textContent = __t("sidebar.import_video");
     }
   }
 
@@ -3721,6 +3825,15 @@ class App {
     }
     if (this.cleanCacheBtn) {
       this.cleanCacheBtn.addEventListener("click", () => this.cleanCache());
+    }
+    if (this.importVideoBtn) {
+      this.importVideoBtn.addEventListener("click", () => this.importVideo());
+    }
+    if (this.importVideoFileInput) {
+      this.importVideoFileInput.addEventListener("change", (e) => {
+        const f = e.target.files && e.target.files[0];
+        if (f) this.importVideoFile(f);
+      });
     }
 
     if (this.sessionHistoryListEl && !this._sessionHistoryBound) {

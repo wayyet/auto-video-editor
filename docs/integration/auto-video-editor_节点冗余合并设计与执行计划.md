@@ -15,7 +15,7 @@
 
 ## 1. 背景与范围
 
-auto-video-editor 是一个用 LangGraph 编排的视频剪辑流水线。**实际图节点数是 50 个**（`graph.py` 共 50 处 `g.add_node(`，50 个互不重名），不是初版所说的 22 个。差额来自初版完全没数到的两段：
+auto-video-editor 是一个用 LangGraph 编排的视频剪辑流水线。**实际图节点数是 51 个**（`graph.py` 共 51 处 `g.add_node(`，51 个互不重名；含 `START`/`END` 的 `get_graph().nodes` 为 53），不是初版所说的 22 个。差额来自初版完全没数到的两段：
 
 - **Phase 5 assembly QC 通道**：6 个节点（`assembly_discover_and_probe` → … → `assembly_write_report`），受 `config.ASSEMBLY_QC_GATE_ENABLED` 开关控制（默认 `True`）。
 - **Phase 4 auto-mode storyline 子图**：21 个节点（`storyline_load_media` … `storyline_join`），只在 `auto` 模式下经 `_route_mode` 条件边进入；`human` 模式完全不进入。
@@ -43,7 +43,8 @@ auto-video-editor 是一个用 LangGraph 编排的视频剪辑流水线。**实�
 | 2 | `launch_openstoryline` | `node_02_launch_openstoryline.py` | `START` 入边 |
 | 3 | `open_preview` | `node_03_open_preview.py` | 线性；**双模式分叉点**（`_route_mode`） |
 | 4 | `checkpoint0_storyline_plan` | `node_checkpoint0_storyline_plan.py` | `interrupt()` 关卡⓪（step 4） |
-| 5 | `import_and_plan` | `node_04_import_and_plan.py` | 线性；条件边可直通 `END` |
+| 5 | `import_video` | `node_04a_import_video.py` | **手动导入关卡**：只发请求 + 轮询等结果，**自身绝不导入**；唯一继续信号来自 Web UI 的 `POST /api/system/import-video`（【📥 导入视频】按钮）。守护测试 `tests/integration/test_no_auto_import_video.py` |
+| 5b | `get_storyboard_plan` | `node_04b_get_storyboard_plan.py` | 线性；条件边可直通 `END`。原 `import_and_plan` 的读盘逻辑（原样搬运） |
 | 6 | `generate_draft` | `node_05_generate_draft.py` | 汇合点（human 与 auto 两条模式都汇到这里） |
 | **关卡① + 护栏** ||||
 | 7 | `node_06_human_reorder` | `node_06_human_reorder.py` | `interrupt()` 关卡①（step 6） |
@@ -275,9 +276,10 @@ flowchart TD
     L2 -->|"_route_mode = human"| CP0["⓸ 4. checkpoint0_storyline_plan<br/>step 4"]
     L2 -->|"_route_mode = auto"| S30["30. storyline_load_media"]
 
-    CP0 --> L3["5. import_and_plan"]
-    L3 -->|"ok"| GD["6. generate_draft"]
-    L3 -->|"放弃"| ENDX([END])
+    CP0 --> L3["5. import_video<br/>（等网页【📥 导入视频】按钮）"]
+    L3 --> L3b["5b. get_storyboard_plan"]
+    L3b -->|"ok"| GD["6. generate_draft"]
+    L3b -->|"放弃"| ENDX([END])
 
     GD -->|"ASSEMBLY_QC_GATE_ENABLED=True"| A17["17. assembly_discover_and_probe"]
     A17 --> A18["18. assembly_asr_and_visual_observe"]

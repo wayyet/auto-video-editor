@@ -1,6 +1,11 @@
-"""节点 4:import_video_and_plan_shots — 2026-09 迁移解耦版(读产物)。
+"""节点 4b:get_storyboard_plan — 2026-09 迁移解耦版(读产物)。
 
-行为(对照 plan §4.3):
+由原 ``nodes/node_04_import_and_plan.py`` 原样搬运而来(2026-10 拆分 node_04)。
+旧节点名叫 ``import_and_plan`` 但**它根本不导入视频**,只做"读产物";真正的
+导入动作现在由前置的 :mod:`nodes.node_04a_import_video`(等网页【📥 导入视频】
+按钮)承担,故拆成 04a / 04b 两节点。
+
+行为(对照原 plan §4.3):
 - 关卡⓪ 已通过人工 resume,产物应已落在
   ``openstoryline/outputs/<sid>/plan_timeline_pro/<artifact>.json``。
 - 读最新一份,经 :mod:`storyline.plan_reader` 拍平为 ``CanonicalTimeline``,
@@ -50,7 +55,7 @@ OPENSTORYLINE_OUTPUTS_ROOT: Path = (
 # ---------------------------------------------------------------------------
 # 入口
 # ---------------------------------------------------------------------------
-def import_video_and_plan_shots(
+def get_storyboard_plan(
     state: WorkflowState,
     *,
     outputs_root: Optional[Path] = None,
@@ -83,7 +88,7 @@ def import_video_and_plan_shots(
 
     # 0. 关卡⓪ 未通过 / OpenStoryline 未就绪 → 早退 + Mock 兜底
     if not state.get("openstoryline_ready"):
-        errors.append("[node_04] OpenStoryline 服务未就绪,跳过分镜规划")
+        errors.append("[node_04b] OpenStoryline 服务未就绪,跳过分镜规划")
         return _fallback_to_shot_plan(
             state, errors,
             error_code=StorylineErrorCode.CONTRACT_INVALID,
@@ -110,14 +115,14 @@ def import_video_and_plan_shots(
                 "storyline_session_id": manifest.storyline_session_id,
                 "draft_path": manifest.draft_path,
                 "error_log": errors
-                + [f"[node_04] idempotency hit, reuse manifest draft_path={manifest.draft_path}"],
+                + [f"[node_04b] idempotency hit, reuse manifest draft_path={manifest.draft_path}"],
             }
 
     # 2. 在 openstoryline/outputs/ 下找最新会话的 plan_timeline_pro 产物
     session_dir = find_latest_session_dir(os_outputs_root)
     if session_dir is None:
         errors.append(
-            f"[node_04] 未在 {os_outputs_root} 下找到任何会话产物,"
+            f"[node_04b] 未在 {os_outputs_root} 下找到任何会话产物,"
             "请确认关卡⓪的规划已在网页里真正完成"
         )
         return _fallback_to_shot_plan(
@@ -129,7 +134,7 @@ def import_video_and_plan_shots(
     try:
         plan_file, plan_data = reader(session_dir)
     except PlanReaderError as e:
-        errors.append(f"[node_04] 产物读取失败: {e}")
+        errors.append(f"[node_04b] 产物读取失败: {e}")
         return _fallback_to_shot_plan(
             state, errors,
             error_code=StorylineErrorCode.CONTRACT_INVALID,
@@ -140,7 +145,7 @@ def import_video_and_plan_shots(
     try:
         canonical = plan_data.to_canonical(job_id=str(job_id or "unknown"))
     except Exception as e:  # noqa: BLE001
-        errors.append(f"[node_04] plan 拍平失败: {e!r}")
+        errors.append(f"[node_04b] plan 拍平失败: {e!r}")
         return _fallback_to_shot_plan(
             state, errors,
             error_code=StorylineErrorCode.CONTRACT_INVALID,
@@ -174,7 +179,7 @@ def import_video_and_plan_shots(
         "storyline_session_id": session_dir.name,
         "storyline_outputs_root": str(session_dir),
         "storyline_plan": canonical.model_dump(),
-        "status_log": (state.get("status_log") or []) + ["node_04_import_and_plan_done"],
+        "status_log": (state.get("status_log") or []) + ["node_04b_get_storyboard_plan_done"],
         "error_log": errors,
     }
 
@@ -199,7 +204,7 @@ def _fallback_to_shot_plan(
     """产物读盘失败时降级到 Mock shot_plan。
 
     ``WORKFLOW_ENV=production`` 早退;``development`` 写最小可用 shot_plan(便于
-    ``tests/unit/test_node_04_import_and_plan.py`` 既有断言继续生效)。
+    ``tests/unit/test_node_04b_get_storyboard_plan.py`` 既有断言继续生效)。
     """
     if WORKFLOW_ENV == "production":
         return {
@@ -228,6 +233,6 @@ def _fallback_to_shot_plan(
 
 
 __all__ = [
-    "import_video_and_plan_shots",
+    "get_storyboard_plan",
     "OPENSTORYLINE_OUTPUTS_ROOT",
 ]

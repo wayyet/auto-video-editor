@@ -20,7 +20,8 @@ auto-video-editor/
 │   ├── node_01_clean_cache.py          ─┐
 │   ├── node_02_launch_openstoryline.py │
 │   ├── node_03_open_preview.py         │ Week 2 已有
-│   ├── node_04_import_and_plan.py      │
+│   ├── node_04a_import_video.py        │ 手动导入关卡(等网页【📥 导入视频】按钮)
+│   ├── node_04b_get_storyboard_plan.py │ 读 openstoryline 产物 → storyline_plan
 │   ├── node_05_generate_draft.py       ─┘
 │   ├── node_06_human_reorder.py        [新] 关卡① interrupt + 副作用挪后
 │   ├── node_07_speed_fit.py            [新] 护栏节点 + 帧对齐分配公式
