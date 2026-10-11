@@ -19,6 +19,7 @@ from pathlib import Path
 
 from jy_common.template_library import TemplateLibrary, load_resource_libraries
 from nodes._draft_io import apply_and_write, load_draft
+from nodes._dual_draft import ZH, dual_draft_targets, missing_en_note
 from state import WorkflowState
 
 
@@ -93,31 +94,42 @@ def _resolve_vip_video_effect(
     return out
 
 
-def inject_fx(state: WorkflowState) -> dict:
-    """读取草稿 → 加载模板 → 在分镜边界注入转场 → 原子写回。"""
-    draft_path = Path(state["draft_path"])
-    draft = load_draft(draft_path)
-    template_lib = load_resource_libraries(
-        fx_template="templates/fx_template.json",
-        fx_resource="templates/fx_resource_library.json",
-        text_resource="templates/text_resource_library.json",
-    )
+def _upsert_by_id(items: list[dict], item: dict) -> None:
+    """按 ``id`` 覆盖写入,而不是 append(幂等:重放不会叠出重复条目)。
 
-    if template_lib.is_empty:
-        log = list(state.get("status_log", []) or []) + ["node_09_inject_fx_no_template"]
-        errors = list(state.get("error_log", []) or [])
-        errors.append("[node_09] 模板库缺失,降级通过(Week 3 可接受)")
-        return {**state, "status_log": log, "error_log": errors}
+    2026-10 K2=B 加固:本节点现在横跨关卡②,resume 路径变多,纯 append 会让
+    ``materials.transitions`` / ``video_effects`` 每重放一次就多一份。
+    """
+    item_id = item.get("id")
+    for idx, existing in enumerate(items):
+        if existing.get("id") == item_id:
+            items[idx] = item
+            return
+    items.append(item)
+
+
+def _inject_fx_into(
+    draft: dict,
+    template_lib: TemplateLibrary,
+    shot_plan: dict | None,
+    tag: str,
+) -> list[str]:
+    """把转场 + 视频特效注入**一份**草稿(就地改 ``draft``),返回告警列表。
+
+    中英两份草稿共用这一个实现(``tag`` 只用于日志前缀)。
+
+    转场数量只取决于草稿自身的 video segments 与 ``shot_plan``:两份草稿的
+    视频时间轴完全一致(fork 自同一份快照②),所以两边会得到**同样的条数**。
+    """
+    warning_msgs: list[str] = []
 
     materials = draft.setdefault("materials", {})
     transitions = materials.setdefault("transitions", [])
     video_effects = materials.setdefault("video_effects", [])
 
     video_track = _find_video_track(draft)
-    shot_plan = state.get("shot_plan")
     n_boundaries = _boundary_count(video_track, shot_plan)
 
-    warning_msgs: list[str] = []
     for i in range(n_boundaries):
         style_tag = (
             (shot_plan or {}).get("shots", [{}])[i].get("style_tag", "default")
@@ -126,41 +138,80 @@ def inject_fx(state: WorkflowState) -> dict:
         )
         trans_obj = _resolve_vip_transition(template_lib, style_tag)
         if not trans_obj:
-            warning_msgs.append(f"[node_09] boundary {i + 1} 未找到可用转场,跳过")
+            warning_msgs.append(f"[{tag}] boundary {i + 1} 未找到可用转场,跳过")
             continue
         if not _VIP_ID_PATTERN.match(trans_obj.get("resource_id", "")):
             warning_msgs.append(
-                f"[node_09] boundary {i + 1} resource_id 不是 19 位数字 "
+                f"[{tag}] boundary {i + 1} resource_id 不是 19 位数字 "
                 f"({trans_obj.get('resource_id')!r}),沿用占位"
             )
         trans_obj = dict(trans_obj)
         trans_obj["id"] = f"transition-{i + 1}"
-        transitions.append(trans_obj)
+        _upsert_by_id(transitions, trans_obj)
 
-    # 视频特效:每个追加一次(全局,不重复),与 Week 3 行为一致
+    # 视频特效:固定 id 的单条全局特效(按 id 覆盖 → 重放幂等)
     effect_obj = _resolve_vip_video_effect(template_lib, "default")
     if effect_obj:
         if not _VIP_ID_PATTERN.match(effect_obj.get("resource_id", "")):
             warning_msgs.append(
-                f"[node_09] video_effect resource_id 不是 19 位数字 "
+                f"[{tag}] video_effect resource_id 不是 19 位数字 "
                 f"({effect_obj.get('resource_id')!r}),沿用占位"
             )
         effect_obj = dict(effect_obj)
-        effect_obj["id"] = f"vfx-{len(video_effects) + 1}"
-        video_effects.append(effect_obj)
+        effect_obj["id"] = "vfx-default"
+        _upsert_by_id(video_effects, effect_obj)
     else:
-        warning_msgs.append("[node_09] 未找到可用视频特效,跳过")
+        warning_msgs.append(f"[{tag}] 未找到可用视频特效,跳过")
 
-    # Week 5:参数从 draft_path 提升为 draft_path.parent,safe_write_draft 双写
-    log = list(state.get("status_log", []) or [])
-    log.extend(
-        apply_and_write(
-            draft_path,
-            draft,
-            "node_09",
-            done_tag="node_09_inject_fx_done",
-        )
+    return warning_msgs
+
+
+def inject_fx(state: WorkflowState) -> dict:
+    """读取草稿 → 加载模板 → 在分镜边界注入转场 → 原子写回。
+
+    K2=B(2026-10):对**中文主草稿 + 英文分支草稿**各注入一次(见 ``nodes/_dual_draft.py``)。
+    两份草稿在同一节点内顺序处理,不跨超步,所以返回值契约不变(整份 state),
+    也不会给 LangGraph 引入新的同超步写冲突。
+
+    返回值里的 ``status_log`` / ``error_log`` 与重构前一致地追加在用户已有内容之后,
+    只是可能多出英文草稿那一轮的 done_tag 与告警。
+    """
+    status_log = list(state.get("status_log", []) or [])
+    error_log = list(state.get("error_log", []) or [])
+
+    template_lib = load_resource_libraries(
+        fx_template="templates/fx_template.json",
+        fx_resource="templates/fx_resource_library.json",
+        text_resource="templates/text_resource_library.json",
     )
-    errors = list(state.get("error_log", []) or [])
-    errors.extend(warning_msgs)
-    return {**state, "status_log": log, "error_log": errors}
+
+    if template_lib.is_empty:
+        status_log.append("node_09_inject_fx_no_template")
+        error_log.append("[node_09] 模板库缺失,降级通过(Week 3 可接受)")
+        return {**state, "status_log": status_log, "error_log": error_log}
+
+    targets = dual_draft_targets(state)
+    if not targets:
+        raise FileNotFoundError(f"[node_09] state.draft_path 缺失,无法注入转场")
+
+    shot_plan = state.get("shot_plan")
+    en_file = Path(state["draft_dir_en_branch"]) / "draft_content.json" if state.get("draft_dir_en_branch") else None
+    for tag, draft_file in targets:
+        draft = load_draft(draft_file)
+        error_log.extend(_inject_fx_into(draft, template_lib, shot_plan, f"node_09_{tag}"))
+        # Week 5:参数从 draft_path 提升为 draft_path.parent,safe_write_draft 双写
+        status_log.extend(
+            apply_and_write(
+                draft_file,
+                draft,
+                "node_09",
+                done_tag=(
+                    "node_09_inject_fx_done" if tag == ZH else "node_09_inject_fx_en_done"
+                ),
+            )
+        )
+
+    if len(targets) == 1 and en_file is not None:
+        error_log.append(missing_en_note(state))
+
+    return {**state, "status_log": status_log, "error_log": error_log}

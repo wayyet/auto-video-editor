@@ -154,15 +154,56 @@ def test_inject_fx_handles_missing_fx_resource(tmp_path: Path, monkeypatch: pyte
 
 
 def test_inject_fx_idempotent_keys_use_avail_assets(tmp_draft: Path) -> None:
-    """两次跑同节点:首次写 N 个转场,第二次运行应保持(本节点每次都 append — Week 4 引入幂等优化)。"""
+    """两次跑同节点:转场按 id 覆盖,不叠出重复(2026-10 K2=B 幂等加固)。
+
+    本节点现在横跨关卡②,resume 路径变多,纯 append 会让每次重放都多一份转场,
+    所以改为按 ``id`` 覆盖 —— 重放后条数保持不变。
+    """
     state = _state(draft_path=str(tmp_draft))
     inject_fx(state)
     draft_first = json.loads(tmp_draft.read_text(encoding="utf-8"))
     n_first = len(draft_first["materials"]["transitions"])
+    fx_first = len(draft_first["materials"]["video_effects"])
 
     inject_fx(state)
     draft_second = json.loads(tmp_draft.read_text(encoding="utf-8"))
     n_second = len(draft_second["materials"]["transitions"])
 
-    # 第二次跑仍追加 — Week 3 占位实现,Week 4 引入去重
-    assert n_second == n_first * 2
+    # 第二次跑覆盖同 id,条数不变(改前是 n_first * 2)
+    assert n_second == n_first
+    assert len(draft_second["materials"]["video_effects"]) == fx_first
+
+
+def test_inject_fx_applies_to_en_draft_when_present(tmp_draft: Path, tmp_path: Path) -> None:
+    """K2=B:英文分支草稿存在时,转场/特效同样注入,且两份条数一致。"""
+    zh = tmp_draft
+    en_file = tmp_path / "en_branch" / "draft_content.json"
+    en_file.parent.mkdir(parents=True, exist_ok=True)
+    en_file.write_text(zh.read_text(encoding="utf-8"), encoding="utf-8")
+
+    state = _state(
+        draft_path=str(zh),
+        draft_dir_en_branch=str(en_file.parent),
+    )
+    out = inject_fx(state)
+
+    zh_draft = json.loads(zh.read_text(encoding="utf-8"))
+    en_draft = json.loads(en_file.read_text(encoding="utf-8"))
+
+    assert len(zh_draft["materials"]["transitions"]) > 0
+    assert len(en_draft["materials"]["transitions"]) == len(zh_draft["materials"]["transitions"])
+    assert len(en_draft["materials"]["video_effects"]) > 0
+    assert "node_09_inject_fx_done" in out["status_log"]
+    assert "node_09_inject_fx_en_done" in out["status_log"]
+
+
+def test_inject_fx_degrades_when_en_draft_missing(tmp_draft: Path, tmp_path: Path) -> None:
+    """K2=B 降级:英文草稿目录指向不存在的路径 → 只处理中文,不抛异常。"""
+    zh = tmp_draft
+    state = _state(draft_path=str(zh), draft_dir_en_branch=str(tmp_path / "nope"))
+    out = inject_fx(state)
+
+    assert "node_09_inject_fx_done" in out["status_log"]
+    assert "node_09_inject_fx_en_done" not in out["status_log"]
+    assert any("英文草稿不存在" in e for e in out["error_log"])
+    assert len(json.loads(zh.read_text(encoding="utf-8"))["materials"]["transitions"]) > 0

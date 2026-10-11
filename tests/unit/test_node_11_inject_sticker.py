@@ -113,3 +113,52 @@ def test_inject_sticker_handles_missing_template(tmp_path: Path, monkeypatch: py
     # stickers 应为空或不存在
     draft_after = json.loads(p.read_text(encoding="utf-8"))
     assert not draft_after["materials"].get("stickers")
+
+
+def test_inject_sticker_idempotent_on_replay(tmp_draft_with_texts: Path) -> None:
+    """K2=B 幂等:重放不叠出重复贴纸,extra_material_refs 也不重复追加。"""
+    state = _state(tmp_draft_with_texts)
+    inject_sticker(state)
+    first = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    n_first = len(first["materials"]["stickers"])
+
+    inject_sticker(state)
+    second = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    assert len(second["materials"]["stickers"]) == n_first
+    seg = second["tracks"][0]["segments"][0]
+    refs = seg.get("extra_material_refs", [])
+    assert len(refs) == len(set(refs)), f"extra_material_refs 有重复:{refs}"
+
+
+def test_inject_sticker_applies_to_en_draft_when_present(
+    tmp_draft_with_texts: Path, tmp_path: Path
+) -> None:
+    """K2=B:英文分支草稿存在时同样注入贴纸。"""
+    en_dir = tmp_path / "en_branch"
+    en_dir.mkdir(parents=True)
+    en_file = en_dir / "draft_content.json"
+    en_file.write_text(tmp_draft_with_texts.read_text(encoding="utf-8"), encoding="utf-8")
+
+    state = {"draft_path": str(tmp_draft_with_texts),
+             "draft_dir_en_branch": str(en_dir), "status_log": [], "error_log": []}
+    out = inject_sticker(state)
+
+    zh = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    en = json.loads(en_file.read_text(encoding="utf-8"))
+    assert len(en["materials"]["stickers"]) == len(zh["materials"]["stickers"]) > 0
+    assert "node_11_inject_sticker_done" in out["status_log"]
+    assert "node_11_inject_sticker_en_done" in out["status_log"]
+
+
+def test_inject_sticker_degrades_when_en_draft_missing(
+    tmp_draft_with_texts: Path, tmp_path: Path
+) -> None:
+    """K2=B 降级:英文草稿不存在 → 只处理中文,不抛异常。"""
+    state = {"draft_path": str(tmp_draft_with_texts),
+             "draft_dir_en_branch": str(tmp_path / "nope"),
+             "status_log": [], "error_log": []}
+    out = inject_sticker(state)
+
+    assert "node_11_inject_sticker_done" in out["status_log"]
+    assert "node_11_inject_sticker_en_done" not in out["status_log"]
+    assert any("英文草稿不存在" in e for e in out["error_log"])

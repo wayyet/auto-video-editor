@@ -244,3 +244,96 @@ def test_adjust_volume_handles_missing_draft_path_file(tmp_path: Path) -> None:
     # 最终 volume_adjusted 取决于是否某通道成功写入;此处应 False
     assert out["volume_adjusted"] is False
     assert any("不存在" in e or "no_such" in e for e in out["error_log"])
+
+
+# ---------------------------------------------------------------------------
+# (h) K2=B:音量作用于中英两份草稿 + audio_fades 幂等
+# ---------------------------------------------------------------------------
+def test_adjust_volume_applies_to_en_draft_when_present(
+    draft_with_audio: Path, tmp_path: Path
+) -> None:
+    """K2=B:英文分支草稿存在时,BGM 音量/淡入淡出同样写入英文草稿。"""
+    en_dir = tmp_path / "en_branch"
+    en_dir.mkdir(parents=True)
+    en_file = en_dir / "draft_content.json"
+    en_file.write_text(draft_with_audio.read_text(encoding="utf-8"), encoding="utf-8")
+
+    state = {"draft_path": str(draft_with_audio), "draft_dir_en_branch": str(en_dir),
+             "status_log": [], "error_log": []}
+    out = adjust_volume(state)
+
+    en = json.loads(en_file.read_text(encoding="utf-8"))
+    audios = {a["id"]: a for a in en["materials"]["audios"]}
+    assert audios["audio-bgm-1"][_PLACEHOLDER_VOLUME_KEY] == 0.35
+    assert len(en["materials"]["audio_fades"]) >= 1
+    assert "node_13_adjust_volume_en_done" in out["status_log"]
+    assert out["volume_adjusted"] is True
+
+
+def test_adjust_volume_degrades_when_en_draft_has_no_audio(tmp_path: Path) -> None:
+    """K2=B 降级(计划 §6 R2):英文草稿无音轨 → 不抛异常,中文草稿照常调整。
+
+    两份草稿在此直接内联构造:``draft_with_audio`` / ``draft_without_audio`` 两个
+    fixture 都写在 ``tmp_path/draft/draft_content.json``,同时请求会互相覆盖。
+    """
+    zh_file = tmp_path / "zh" / "draft_content.json"
+    zh_file.parent.mkdir(parents=True)
+    zh_file.write_text(json.dumps({
+        "canvas_config": {"width": 1080, "height": 1920},
+        "duration": 35_000_000,
+        "materials": {
+            "audios": [{"id": "audio-bgm-1", _PLACEHOLDER_VOLUME_KEY: 0.8}],
+            "audio_fades": [],
+        },
+        "tracks": [{
+            "type": "audio",
+            "segments": [{
+                "id": "audio-bgm-1", "name": "audio_bgm", "type": "audio_bgm",
+                "target_timerange": {"start": 0, "duration": 35_000_000},
+            }],
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    en_dir = tmp_path / "en_branch"
+    en_dir.mkdir(parents=True)
+    en_file = en_dir / "draft_content.json"
+    en_file.write_text(json.dumps({
+        "canvas_config": {"width": 1080, "height": 1920},
+        "duration": 35_000_000,
+        "materials": {},
+        "tracks": [{"type": "video", "segments": []}],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    state = {"draft_path": str(zh_file), "draft_dir_en_branch": str(en_dir),
+             "status_log": [], "error_log": []}
+    out = adjust_volume(state)
+
+    assert out["volume_adjusted"] is True, "中文草稿有音轨,应判为已调整"
+    en = json.loads(en_file.read_text(encoding="utf-8"))
+    assert not en.get("materials", {}).get("audio_fades")
+
+
+def test_adjust_volume_degrades_when_en_draft_missing(
+    draft_with_audio: Path, tmp_path: Path
+) -> None:
+    """K2=B 降级:英文草稿目录不存在 → 只处理中文,写 error_log,不抛异常。"""
+    state = {"draft_path": str(draft_with_audio), "draft_dir_en_branch": str(tmp_path / "nope"),
+             "status_log": [], "error_log": []}
+    out = adjust_volume(state)
+
+    assert out["volume_adjusted"] is True
+    assert "node_13_adjust_volume_en_done" not in out["status_log"]
+    assert any("英文草稿不存在" in e for e in out["error_log"])
+
+
+def test_audio_fades_idempotent_on_replay(draft_with_audio: Path) -> None:
+    """K2=B 幂等:重放不叠出重复 fade 条目(按 track_id 覆盖)。"""
+    jianying_adjust_volume(str(draft_with_audio), "audio_bgm", volume_level=0.35,
+                           fade_in_seconds=2.0, fade_out_seconds=3.0)
+    first = json.loads(draft_with_audio.read_text(encoding="utf-8"))
+    n_first = len(first["materials"]["audio_fades"])
+
+    jianying_adjust_volume(str(draft_with_audio), "audio_bgm", volume_level=0.35,
+                           fade_in_seconds=2.0, fade_out_seconds=3.0)
+    second = json.loads(draft_with_audio.read_text(encoding="utf-8"))
+    assert len(second["materials"]["audio_fades"]) == n_first

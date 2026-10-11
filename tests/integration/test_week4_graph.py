@@ -117,11 +117,13 @@ def test_week4_checkpoint3_normal_path(tmp_path: Path, monkeypatch: pytest.Monke
     g.invoke(state, config=config)
     assert _is_interrupted(g, config), "节点 6 应挂起"
 
-    # resume 关卡① → 节点 7 → 节点 8-11 → 节点 12 interrupt
+    # resume 关卡① → 节点 7 → 08 →〔中文线 ‖ 英文线〕→ 汇合 → 尾链 09 → 11 → 节点 12 interrupt
     g.invoke(__import__("langgraph.types", fromlist=["Command"]).Command(resume=True), config=config)
     assert _is_interrupted(g, config), "节点 12 应挂起"
 
-    # resume 关卡② → 节点 13 → 14 → 15 → [fork → 16(不 interrupt)→ 17] → join → END
+    # resume 关卡② → 尾链 09 → 11 → 13 → join(QA)→ END
+    # (2026-10 调序后:① 之后走 08 →〔中文线 10→14→15 ‖ 英文线 fork→16a→08b→10b→(③)→17〕
+    #  两条线汇合后才进尾链 09→11→12(②)→13→join;正常路径 ③ 不触发,关卡② 仍是第 2 次也是最后一次挂起)
     final = g.invoke(
         __import__("langgraph.types", fromlist=["Command"]).Command(resume=True),
         config=config,

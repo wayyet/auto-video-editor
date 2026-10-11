@@ -323,20 +323,44 @@ result = await resume_all_pending(
 - 单 interrupt + payload 缺 `checkpoint` 字段 → 走 `fallback_key="default"` 单值兼容
 - ≥2 个挂起 → 必须按 id 传 dict(否则 RuntimeError)
 
-### 4.6 Week 5 关卡③ 拓扑变化 — 节点 16 拆分
+### 4.6 双分支拓扑 — 节点 16 拆分 + 2026-10 调序
 
-Week 5 把 `node_16_translate_subtitles`(翻译 + interrupt + 写 SRT 三合一)拆成两个独立节点:
+Week 5 把 `node_16_translate_subtitles`(翻译 + interrupt + 写 SRT 三合一)拆成两个独立节点;
+2026-10 调序后英文线又补了 `node_08b` / `node_10b`,关卡③ 的挂载点后移到 `node_10b` 之后:
 
 ```
-bridge_snapshot2 → fork → node_16a_translate_and_check
-                                  ├─→ node_checkpoint3_layout_review ⏸ interrupt("③")(条件触发)
-                                  └─→ node_17_inject_english_tts → join_before_delivery → END
+bridge_snapshot2
+  ├─→ [中文线] node_08_add_subtitles → node_10_inject_text_fx → node_14_make_covers
+  │                                      → node_15_localize_covers_en ───────────┐
+  └─→ [英文线] fork_draft_for_english_branch(显式依赖 08 产出的 asr_segments_zh)  │
+               → node_16a_translate_and_check                                     │
+               → node_08b_add_subtitles_en    (英文字幕写入英文分支草稿)          │
+               → node_10b_inject_text_fx_en   (英文花字,先于人工校对)             │
+               → 🔁 条件边(route_after_translate)                                 │
+                    ├─→ node_checkpoint3_layout_review ⏸ interrupt("③")(条件触发)│
+                    │      └─→ node_17_inject_english_tts ──────────────────────┤
+                    └─→ node_17_inject_english_tts ─────────────────────────────┤
+                                                                                ▼
+     ⇒ node_09_inject_fx(汇合屏障:15 与 17 都完成才触发,只触发一次)
+     → node_11_inject_sticker → node_12_human_add_bgm ⏸ interrupt("②")
+     → node_13_adjust_volume → join_before_delivery(交付前 QA 闸门)→ END
 ```
 
 - **`node_16a_translate_and_check`**:翻译 + 写 marker + 写 `state["subtitle_segments_en"]` + 写 `layout_issues` / `layout_issues_detected` + **不调 interrupt**(Week 5 计划 §2.1 "关键发现①")。完全幂等,resume 重放由 `_marker_exists` 守住。
+- **`node_08b_add_subtitles_en`**:把英文字幕写进英文分支草稿。此前英文草稿里没有任何文本素材,关卡③ 无物可校对、resume 后 SRT 会被重写成空文件。整表替换 `materials.texts`,天然幂等。
+- **`node_10b_inject_text_fx_en`**:英文花字。**排在关卡③ 之前**,人工校对时在剪映里看到的就是带花字的最终效果。
 - **`node_checkpoint3_layout_review`**:只读 `layout_issues`,做 `interrupt({"checkpoint": "③", ...})`,resume 后重写 SRT(Week 5 修订:不写 `subtitle_segments_en`,避免与 16a 在同一 superstep 触发 LastValue 并发写)。
-- **`route_after_translate`**:根据 `state["layout_issues_detected"]` 二选一走向 c3 或 17。
+- **`route_after_translate`**:挂载点是 **`node_10b_inject_text_fx_en` 之后**(2026-10 从 08b 后移过来),根据 `state["layout_issues_detected"]` 二选一走向 ③ 或 17。
 - **`node_17_inject_english_tts_stub`**:Week 5 升级为在 `draft_dir_en_branch` 下写 `en_dub.wav` 空 wav 占位(>5KB),产出 `en_audio_path` 字段,让阶段五 `acceptance_check.py` "英文配音音轨非空" 断言通过。真实 FireRedTTS2 留 Week 6+。
+
+**尾链 09 / 11 / 12 / 13 同时作用于中英两份草稿**:这四个节点被推迟到 `node_17` 之后,此时两份草稿
+都已定稿,因此每个节点内部各跑一遍中文主草稿(`state["draft_path"]`)与英文分支草稿
+(`state["draft_dir_en_branch"]/draft_content.json`),公共定位逻辑收敛在 `nodes/_dual_draft.py`。
+
+- 不新增 09b/11b/12b/13b 四个英文实例节点:同一超步内并排写两份整份 state 会撞 LangGraph 的 LastValue 通道(`InvalidUpdateError`),而且关卡② 会被迫挂起两次(人工选两次曲)。改成**同一节点内部顺序处理**后,既不新增并发写冲突,关卡② 也只需人工做一次。
+- 关卡② 仍只 `interrupt()` 一次;`post_resume` 之后把中文草稿里的 BGM 轨(含被引用的 `materials.audios`)**整轨复制**进英文草稿,segment id 不 remap(两份草稿视频时间轴相同)。英文侧音量随后由 13 统一处理。
+- **英文草稿缺失 / 目录不存在 / 文件不存在时一律降级只处理中文草稿**并写 `error_log`,不抛异常 —— 与尾链既有的"模板库缺失降级""无音轨降级"同一档。
+- ⚠️ 已知边界(R2):`node_17` 目前只合成音频文件、不写草稿,所以英文草稿没有主音轨 `audio_main`。13 对英文草稿只能调到关卡② 镜像过去的 BGM 轨;英文主音轨音量要等 node_17 落地写草稿后才生效。
 
 ### 4.7 关卡 payload 字段统一 — "①" / "②" / "③"
 

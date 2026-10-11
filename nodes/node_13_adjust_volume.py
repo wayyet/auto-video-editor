@@ -34,9 +34,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from uuid import uuid4
 
 from nodes._draft_io import jianying_running_tags, load_draft, write_draft
+from nodes._dual_draft import dual_draft_targets, missing_en_note
 from state import WorkflowState
 
 
@@ -83,15 +83,24 @@ def _apply_fade(
     fade_in_seconds: float,
     fade_out_seconds: float,
 ) -> dict:
-    """追加一条 audio_fade 条目,返回新条目(便于 state 记录)。"""
+    """写入一条 audio_fade 条目(按 ``track_id`` 覆盖而非 append),返回该条目。
+
+    2026-10 K2=B 幂等加固:本节点现在横跨关卡②,resume 后可能重跑;原实现用
+    ``uuid4()`` 生成 id 且纯 append,重放会让同一音轨叠出多条 fade。改为**按
+    ``track_id`` 覆盖**,同一条音轨永远只有一条 fade 配置。
+    """
     entry = {
-        "id": f"audio-fade-{uuid4().hex[:8]}",
+        "id": f"audio-fade-{audio_segment_id}",
         _PLACEHOLDER_TRACK_ID_KEY: audio_segment_id,
         _PLACEHOLDER_FADE_IN_KEY: int(fade_in_seconds * 1_000_000),
         _PLACEHOLDER_FADE_OUT_KEY: int(fade_out_seconds * 1_000_000),
         "_fade_in_curve_type": "linear",     # FIXME 曲线类型枚举待逆向
         "_fade_out_curve_type": "linear",    # FIXME 曲线类型枚举待逆向
     }
+    for idx, existing in enumerate(audio_fades):
+        if existing.get(_PLACEHOLDER_TRACK_ID_KEY) == audio_segment_id:
+            audio_fades[idx] = entry
+            return entry
     audio_fades.append(entry)
     return entry
 
@@ -191,16 +200,23 @@ def _try_audio_track(
     volume_level: float,
     fade_in_seconds: float = 0.0,
     fade_out_seconds: float = 0.0,
+    draft_file: str | Path | None = None,
+    log_prefix: str = "node_13",
 ) -> tuple[dict | None, dict | None]:
     """包装音量调整,失败时把错误写到 state.error_log。
+
+    Args:
+        draft_file: 目标草稿文件。``None`` 时用 ``state["draft_path"]``(保持
+            重构前行为,单测可直接调本函数)。K2=B 用它对英文草稿复用同一逻辑。
 
     Returns:
         ``(written_entry, write_result)``;草稿文件不存在时返回 ``(None, None)``
         并已把错误写进 ``state.error_log``。
     """
+    target = draft_file if draft_file is not None else state.get("draft_path")
     try:
         return _adjust_volume_with_write(
-            state["draft_path"],
+            target,
             track_selector,
             volume_level=volume_level,
             fade_in_seconds=fade_in_seconds,
@@ -208,13 +224,23 @@ def _try_audio_track(
         )
     except FileNotFoundError:
         err = list(state.get("error_log", []) or [])
-        err.append(f"[node_13] 草稿文件不存在: {state.get('draft_path')}")
+        err.append(f"[{log_prefix}] 草稿文件不存在: {target}")
         state["error_log"] = err  # type: ignore[index]
         return None, None
 
 
 def adjust_volume(state: WorkflowState) -> dict:
-    """LangGraph 节点函数:对主音轨 + BGM 各执行一次音量/淡入淡出。"""
+    """LangGraph 节点函数:对主音轨 + BGM 各执行一次音量/淡入淡出。
+
+    K2=B(2026-10):对**中文主草稿 + 英文分支草稿**各跑一遍
+    (见 ``nodes/_dual_draft.py``)。两份草稿在同一节点内顺序处理,不跨超步,
+    ``volume_adjusted`` / ``status_log`` / ``audio_fade_targets`` 的语义不变。
+
+    R2 已知限制:英文草稿目前**没有** ``audio_main`` 音轨(``node_17`` 只合成音频
+    文件、不写草稿,见计划 §6 R2),所以本轮英文草稿上**只有关卡② 镜像过去的 BGM 轨
+    会被调音量**;英文主音轨音量要等 ``node_17`` 写草稿后才生效。无音轨时降级通过 +
+    ``error_log``,不抛异常。
+    """
     draft_path = state.get("draft_path")
     audio_fade_targets: list[dict] = list(state.get("audio_fade_targets", []) or [])
     status_log = list(state.get("status_log", []) or [])
@@ -230,22 +256,43 @@ def adjust_volume(state: WorkflowState) -> dict:
             "audio_fade_targets": audio_fade_targets,
         }
 
-    # 主音轨:音量 1.0,无淡入淡出(占位惯例 — 计划文档 §4.8)
-    main_entry, main_write = _try_audio_track(state, "audio_main", volume_level=1.0)
+    targets = dual_draft_targets(state)
+    if not targets:
+        state.setdefault("error_log", []).append("[node_13] state.draft_path 缺失,跳过音量调整")
+        status_log.append("node_13_adjust_volume_skipped")
+        return {
+            **state,
+            "volume_adjusted": False,
+            "status_log": status_log,
+            "audio_fade_targets": audio_fade_targets,
+        }
 
-    # BGM:音量 0.35,fade-in 2s,fade-out 3s(计划文档 §4.8)
-    bgm_entry, bgm_write = _try_audio_track(
-        state,
-        "audio_bgm",
-        volume_level=0.35,
-        fade_in_seconds=2.0,
-        fade_out_seconds=3.0,
-    )
-    if bgm_entry is not None:
-        audio_fade_targets.append(bgm_entry)
+    has_en_dir = bool(state.get("draft_dir_en_branch"))
+    adjusted_any = False
+    write_results: list[dict | None] = []
 
-    # 仅当任一通道实际写入成功时,volume_adjusted=True
-    adjusted = main_entry is not None or bgm_entry is not None
+    for tag, draft_file in targets:
+        # 主音轨:音量 1.0,无淡入淡出(占位惯例 — 计划文档 §4.8)
+        main_entry, main_write = _try_audio_track(
+            state, "audio_main", volume_level=1.0,
+            draft_file=draft_file, log_prefix=f"node_13_{tag}",
+        )
+        # BGM:音量 0.35,fade-in 2s,fade-out 3s(计划文档 §4.8)
+        bgm_entry, bgm_write = _try_audio_track(
+            state,
+            "audio_bgm",
+            volume_level=0.35,
+            fade_in_seconds=2.0,
+            fade_out_seconds=3.0,
+            draft_file=draft_file,
+            log_prefix=f"node_13_{tag}",
+        )
+        if bgm_entry is not None:
+            audio_fade_targets.append(bgm_entry)
+        adjusted_any = adjusted_any or main_entry is not None or bgm_entry is not None
+        write_results.extend((main_write, bgm_write))
+
+    adjusted = adjusted_any
     if not adjusted:
         # 不覆盖 _try_audio_track 已写入的错误信息(如 FileNotFoundError)
         existing_errors = list(state.get("error_log", []) or [])
@@ -253,12 +300,19 @@ def adjust_volume(state: WorkflowState) -> dict:
             existing_errors.append("[node_13] 草稿无 audio track(可能关卡②未添加),降级通过")
             state["error_log"] = existing_errors  # type: ignore[index]
 
+    if len(targets) == 1 and has_en_dir:
+        err = list(state.get("error_log", []) or [])
+        err.append(missing_en_note(state))
+        state["error_log"] = err  # type: ignore[index]
+
     status_log.append(
         "node_13_adjust_volume_done" if adjusted else "node_13_adjust_volume_no_audio_track"
     )
+    if len(targets) == 2 and adjusted:
+        status_log.append("node_13_adjust_volume_en_done")
     # R2 行为对齐:本节点此前做了同样的 safe_write_draft 双写,却漏了这条告警 ——
-    # 节点 08/09/10/11 都有。两次写入(主音轨 + BGM)只产出一条告警。
-    status_log.extend(jianying_running_tags("node_13", (main_write, bgm_write)))
+    # 节点 08/09/10/11 都有。多次写入(主音轨 + BGM × 中英两份)只产出一条告警。
+    status_log.extend(jianying_running_tags("node_13", write_results))
     return {
         **state,
         "volume_adjusted": adjusted,

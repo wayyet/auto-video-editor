@@ -27,23 +27,35 @@
       ├─→ node_07_speed_fit      (未达标,retry_counts < MAX_RETRY)
       └─→ escalate_guardrail_failure → END  (重试超限)
     → bridge_snapshot2                 (写 snapshot2_path)
-    → node_08_add_subtitles            (Week 4 同步写 asr_segments_zh 到 state)
-    → node_09_inject_fx
-    → node_10_inject_text_fx
-    → node_11_inject_sticker
-    → node_12_human_add_bgm            ⏸ interrupt("②")
+    → node_08_add_subtitles            (同步写 asr_segments_zh 到 state)
+    ├─→ [中文线] node_10_inject_text_fx
+    │              → node_14_make_covers
+    │              → node_15_localize_covers_en ──────────────┐
+    └─→ [英文线] fork_draft_for_english_branch                  │
+                   → node_16a_translate_and_check  (显式依赖 node_08 的 asr_segments_zh)
+                   → node_08b_add_subtitles_en     (英文字幕写入英文分支草稿)
+                   → node_10b_inject_text_fx_en    (英文花字/字幕动画,先于人工校对)
+                   → 🔁 条件边(route_after_translate):          │
+                       ├─→ node_checkpoint3_layout_review ⏸ interrupt("③")(条件触发)
+                       │         └─→ node_17_inject_english_tts │
+                       └─→ node_17_inject_english_tts ───────────┤
+                                                                ▼
+    ⇒ node_09_inject_fx              (汇合屏障:node_15 与 node_17 都完成才触发)
+    → node_11_inject_sticker         (尾链 09/11/12/13 同时作用于中英两份草稿)
+    → node_12_human_add_bgm          ⏸ interrupt("②")
     → node_13_adjust_volume
-    ├─→ node_14_make_covers            (中文主线尾段)
-    │     → node_15_localize_covers_en
-    │           └─────────────┐
-    │                         ▼
-    └─→ [parallel fork_draft → node_16a_translate_and_check
-                                ├─→ node_checkpoint3_layout_review ⏸ interrupt("③")(条件触发)
-                                └─→ node_17_inject_english_tts
-                                                                 │
-                                                  join_before_delivery
-                                                                 ▼
-                                                                END
+    → join_before_delivery           (交付前 QA 闸门,单前驱,不再承担 fan-in)
+    → END
+
+2026-10 调序(见《auto-video-editor节点调序与全量工作流设计执行计划》):
+- 英文线补 ``node_08b_add_subtitles_en`` / ``node_10b_inject_text_fx_en``:此前英文分支草稿里
+  没有任何字幕文本素材,关卡③ 无物可校对、resume 后 SRT 会被重写成空文件。
+- ``node_09/11/12/13`` 全部推迟到 ``node_17`` 之后(列表型 fan-in 保证先后,不再靠超步碰巧)。
+- K3=B:``node_10b`` 在关卡③ **之前** —— 人工校对时看到的已是带花字的最终效果。
+- K2=B:尾链四个节点内部各跑一遍中文主草稿 + 英文分支草稿(``nodes/_dual_draft.py``),
+  关卡② 只需人工选曲一次,BGM 由 post_resume 镜像到英文草稿。
+- ``node_08 → fork`` 显式依赖:16a 读 node_08 产出的 asr_segments_zh。
+- ②与③ 永不同时挂起(②在尾链,③在英文线)。
 
 2026-09 关键改动(对照 plan §4/§5):
 - OpenStoryline 改为本地 uvicorn 子进程 + 读盘(node_02 不再有 MCP 链路,
@@ -95,9 +107,9 @@ Week 5 关键改动(保留):
 - ``node_17_inject_english_tts`` 调真实 FireRedTTS2(Week 6+ 阶段三,9 工具迁移 §6.3) +
   失败时 ``en_audio_path=None``,不阻塞主链;``en_audio_path`` / ``en_dub_audio_path`` 字段。
 
-汇合:node_15 与 node_17 通过 ``add_edge([...], "join_before_delivery")`` 单次调用汇入,
-LangGraph fan-in 自动等齐两条分支后才触发 join(避免多次独立 ``add_edge`` 造成的
-重复触发,见验证报告 §5.1)。
+汇合:node_15 与 node_17 通过 ``add_edge([...], "node_09_inject_fx")`` 单次调用汇入,
+LangGraph fan-in 自动等齐两条分支后才触发尾链首节点(避免多次独立 ``add_edge`` 造成的
+重复触发,见验证报告 §5.1);``join_before_delivery`` 调序后只做交付前 QA。
 
 关卡①/②/③ 使用 ``langgraph.types.interrupt``,需要 checkpointer(Week 3 用
 SqliteSaver 做持久化,覆盖多日挂起恢复;Week 5 切到 PostgresSaver)。
@@ -139,8 +151,9 @@ from nodes.node_05_generate_draft import generate_initial_jianying_draft
 from nodes.node_06_human_reorder import human_reorder
 from nodes.node_07_speed_fit import get_snapshot2_path, route_after_speed_fit, speed_fit
 from nodes.node_08_add_subtitles import add_subtitles
+from nodes.node_08b_add_subtitles_en import add_subtitles_en
 from nodes.node_09_inject_fx import inject_fx
-from nodes.node_10_inject_text_fx import inject_text_fx
+from nodes.node_10_inject_text_fx import inject_text_fx, inject_text_fx_en
 from nodes.node_11_inject_sticker import inject_sticker
 from nodes.node_12_human_add_bgm import human_add_bgm
 from nodes.node_13_adjust_volume import adjust_volume
@@ -289,13 +302,16 @@ def _storyline_route_after_split_shots(state: WorkflowState) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Week 5 条件边:步骤 16a 之后是否触发关卡③
+# Week 5 条件边:步骤 10b 之后是否触发关卡③
 # ---------------------------------------------------------------------------
 def route_after_translate(state: WorkflowState) -> str:
-    """node_16a_translate_and_check 之后的条件路由。
+    """node_10b_inject_text_fx_en 之后的条件路由(K3=B:花字先于人工校对)。
 
     - ``layout_issues_detected`` 为真 → 关卡③(``node_checkpoint3_layout_review``)
     - 否则 → ``node_17_inject_english_tts``
+
+    挂载点 2026-10 从 08b 后移到 10b 后:花字(描边/入场动画)先落地,人工在关卡③
+    打开剪映看到的就是带花字的最终效果,而不是"改完还要再等一步才有花字"。
     """
     if state.get("layout_issues_detected"):
         return "node_checkpoint3_layout_review"
@@ -486,6 +502,7 @@ def _build_state_graph():
     g.add_node("node_08_add_subtitles", add_subtitles)
     g.add_node("node_09_inject_fx", inject_fx)
     g.add_node("node_10_inject_text_fx", inject_text_fx)
+    g.add_node("node_10b_inject_text_fx_en", inject_text_fx_en)
     g.add_node("node_11_inject_sticker", inject_sticker)
     g.add_node("node_12_human_add_bgm", human_add_bgm)
     g.add_node("node_13_adjust_volume", adjust_volume)
@@ -506,6 +523,7 @@ def _build_state_graph():
     g.add_node("node_14_make_covers", node_14_make_covers)
     g.add_node("node_15_localize_covers_en", node_15_localize_covers_en)
     g.add_node("node_16a_translate_and_check", node_16a_translate_and_check)
+    g.add_node("node_08b_add_subtitles_en", add_subtitles_en)
     g.add_node("node_checkpoint3_layout_review", node_checkpoint3_layout_review)
     g.add_node("node_17_inject_english_tts", node_17_inject_english_tts)
     g.add_node("join_before_delivery", join_before_delivery)
@@ -629,23 +647,21 @@ def _build_state_graph():
     g.add_edge("escalate_guardrail_failure", END)
     g.add_edge("bridge_snapshot2", "node_08_add_subtitles")
 
-    # 8 → 9 → 10 → 11 → 12 → 13
-    g.add_edge("node_08_add_subtitles", "node_09_inject_fx")
-    g.add_edge("node_09_inject_fx", "node_10_inject_text_fx")
-    g.add_edge("node_10_inject_text_fx", "node_11_inject_sticker")
-    g.add_edge("node_11_inject_sticker", "node_12_human_add_bgm")
-    g.add_edge("node_12_human_add_bgm", "node_13_adjust_volume")
-
-    # ---- Week 4 双分支 + 汇合 ----
-    # 中文主线尾段:13 → 14 → 15 → join
-    g.add_edge("node_13_adjust_volume", "node_14_make_covers")
+    # ---- 2026-10 调序:中文线 08 → 10 → 14 → 15;英文线 fork → 16a → 08b → 10b → [③] → 17;
+    #      两线汇合后才跑尾链 09 → 11 → 12(②) → 13 → join_before_delivery(QA)→ END ----
+    # 中文线
+    g.add_edge("node_08_add_subtitles", "node_10_inject_text_fx")
+    g.add_edge("node_10_inject_text_fx", "node_14_make_covers")
     g.add_edge("node_14_make_covers", "node_15_localize_covers_en")
 
-    # Week 5 英文分支:bridge_snapshot2 → fork → 16a → [checkpoint3 ⏸ | 17] → join
-    g.add_edge("bridge_snapshot2", "fork_draft_for_english_branch")
+    # 英文线:显式依赖 08(16a 读 08 产出的 asr_segments_zh)——不再靠"超步顺序碰巧满足"
+    g.add_edge("node_08_add_subtitles", "fork_draft_for_english_branch")
     g.add_edge("fork_draft_for_english_branch", "node_16a_translate_and_check")
+    g.add_edge("node_16a_translate_and_check", "node_08b_add_subtitles_en")
+    # K3=B:花字(10b)先于人工校对(③)。人工在剪映里看到的就是带花字的最终效果。
+    g.add_edge("node_08b_add_subtitles_en", "node_10b_inject_text_fx_en")
     g.add_conditional_edges(
-        "node_16a_translate_and_check",
+        "node_10b_inject_text_fx_en",
         route_after_translate,
         {
             "node_checkpoint3_layout_review": "node_checkpoint3_layout_review",
@@ -654,12 +670,17 @@ def _build_state_graph():
     )
     g.add_edge("node_checkpoint3_layout_review", "node_17_inject_english_tts")
 
-    # 汇合:中文主线(node_15)与英文分支(node_17)都到达才触发 join。
-    # 用列表语法,fan-in 自动等齐,join 只跑一次(对照验证报告 §5.1)。
+    # 汇合 + 尾链起点:列表语法 → 中文线(15)与英文线(17)都到才触发 node_09,只触发一次
     g.add_edge(
         ["node_15_localize_covers_en", "node_17_inject_english_tts"],
-        "join_before_delivery",
+        "node_09_inject_fx",
     )
+    # 尾链(K2=B:四个节点内部同时处理中文主草稿与英文分支草稿)
+    g.add_edge("node_09_inject_fx", "node_11_inject_sticker")
+    g.add_edge("node_11_inject_sticker", "node_12_human_add_bgm")
+    g.add_edge("node_12_human_add_bgm", "node_13_adjust_volume")
+    # 交付前 QA 闸门:单前驱,不再承担 fan-in
+    g.add_edge("node_13_adjust_volume", "join_before_delivery")
 
     # join → END
     g.add_edge("join_before_delivery", END)

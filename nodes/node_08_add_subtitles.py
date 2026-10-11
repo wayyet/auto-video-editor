@@ -26,6 +26,7 @@ import config
 from assembly_capabilities.run_context import RunContext
 from jy_common.asr_client import call_asr2s
 from nodes._draft_io import apply_and_write, load_draft
+from nodes._subtitle_texts import make_text_material
 from state import SubtitleSegment, WorkflowState
 from video_edit_capabilities import subtitle_style as sty
 from video_edit_capabilities.subtitle_scout import subtitle_scout
@@ -230,17 +231,15 @@ def add_subtitles(state: WorkflowState) -> dict:
         start_s = float(seg.get("start_s", 0.0))
         end_s = float(seg.get("end_s", start_s + 1.0))
         text_content = seg.get("text", "")
-        texts.append({
-            "id": f"text-{i + 1}",
-            "content": text_content,
-            "target_timerange": {
-                "start": int(start_s * 1_000_000),
-                "duration": int((end_s - start_s) * 1_000_000),
-            },
-            # 每条字幕一份独立副本:换算逻辑若日后就地修改也不会互相污染。
-            "style": copy.deepcopy(subtitle_style),
-            "track_name": "Subtitles",
-        })
+        # 每条字幕一份独立副本(deepcopy 在 make_text_material 内)。
+        texts.append(make_text_material(
+            index=i,
+            content=text_content,
+            start_us=int(start_s * 1_000_000),
+            duration_us=int((end_s - start_s) * 1_000_000),
+            style=subtitle_style,
+            track_name="Subtitles",
+        ))
         # Week 4 §3.1:同步把毫秒版写进 state,供节点 16 使用
         asr_zh.append({
             "index": i,

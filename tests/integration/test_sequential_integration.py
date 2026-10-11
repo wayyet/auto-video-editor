@@ -135,13 +135,13 @@ def test_sequential_full_run_no_reruns(seeded_state, tmp_path: Path) -> None:
     except GraphInterrupt:
         pass
 
-    # resume 关卡① → 节点 7 → 条件边 → 节点 8-11 → 节点 12 interrupt
+    # resume 关卡① → 节点 7 → 08 →〔中文线 10/14/15 ‖ 英文线 fork/16a/08b/10b/17〕→ 汇合 → 尾链 09 → 11 → 节点 12 interrupt
     try:
         g.invoke(Command(resume=True), config={"configurable": {"thread_id": thread_id}})
     except GraphInterrupt:
         pass
 
-    # resume 关卡② → 节点 13 → END
+    # resume 关卡② → 节点 13 → join(QA)→ END
     final = g.invoke(Command(resume=True), config={"configurable": {"thread_id": thread_id}})
 
     log = final["status_log"]

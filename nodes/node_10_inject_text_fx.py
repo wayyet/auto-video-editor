@@ -36,9 +36,20 @@ def _pick_default_intro_animation(template_lib) -> dict | None:
     return template_lib.pick_text_animation("intro", intro_list[0])
 
 
-def inject_text_fx(state: WorkflowState) -> dict:
-    """读取草稿 → 为每条字幕追加描边/投影/入场动画字段 → 原子写回。"""
-    draft_path = Path(state["draft_path"])
+def apply_text_fx(
+    draft_path: Path,
+    status_log: list[str] | None,
+    *,
+    node_tag: str,
+    done_tag: str,
+) -> list[str]:
+    """读取草稿 → 为每条字幕追加描边/投影/入场动画字段 → 原子写回。
+
+    中文主线(``inject_text_fx``)与英文分支(``inject_text_fx_en``)共用的核心。
+
+    Returns:
+        新的 status_log 列表(= 传入的 status_log + done_tag + 可能的剪映告警)。
+    """
     draft = load_draft(draft_path)
     template_lib = load_resource_libraries(
         fx_template="templates/fx_template.json",
@@ -74,13 +85,42 @@ def inject_text_fx(state: WorkflowState) -> dict:
         style.update(default_style)
 
     # Week 5:参数从 draft_path 提升为 draft_path.parent,safe_write_draft 双写
-    log = list(state.get("status_log", []) or [])
-    log.extend(
-        apply_and_write(
-            draft_path,
-            draft,
-            "node_10",
-            done_tag="node_10_inject_text_fx_done",
-        )
+    log = list(status_log or [])
+    log.extend(apply_and_write(draft_path, draft, node_tag, done_tag=done_tag))
+    return log
+
+
+def inject_text_fx(state: WorkflowState) -> dict:
+    """中文主线节点 10:对中文草稿(``state["draft_path"]``)的字幕加花字/动画。
+
+    对外行为与重构前完全一致(返回整份 state + 新 status_log)。
+    """
+    log = apply_text_fx(
+        Path(state["draft_path"]),
+        state.get("status_log"),
+        node_tag="node_10",
+        done_tag="node_10_inject_text_fx_done",
     )
     return {**state, "status_log": log}
+
+
+def inject_text_fx_en(state: WorkflowState) -> dict:
+    """英文分支节点 10b:对英文分支草稿的字幕加花字/动画(与中文共用同一核心)。
+
+    - 目标草稿:``state["draft_dir_en_branch"]/draft_content.json``。
+    - **只返回 delta**:与中文主线节点同一超步并行,不能返回整份 state。
+    - done_tag 用独立名字,避免被 status_log 的去重 reducer 与中文 node_10 合并成一条。
+    """
+    draft_dir_raw = state.get("draft_dir_en_branch")
+    if not draft_dir_raw:
+        return {"error_log": ["[node_10b] draft_dir_en_branch 缺失,跳过英文花字"]}
+    draft_file = Path(draft_dir_raw) / "draft_content.json"
+    if not draft_file.exists():
+        return {"error_log": [f"[node_10b] 英文分支草稿不存在,跳过: {draft_file}"]}
+    log = apply_text_fx(
+        draft_file,
+        [],
+        node_tag="node_10b",
+        done_tag="node_10b_inject_text_fx_en_done",
+    )
+    return {"status_log": log}
