@@ -1,0 +1,65 @@
+flowchart TD
+  END_([END])
+  storyline_load_media["加载素材"]
+  storyline_search_media["搜索素材"]
+  storyline_split_shots["镜头切分"]
+  storyline_understand_clips["理解片段"]
+  storyline_filter_clips["筛选片段"]
+  storyline_group_clips["分组"]
+  storyline_generate_script["生成文案"]
+  storyline_script_template_recommendation["文案模板推荐<br/>(叶子,无出边)"]
+  storyline_generate_voiceover["生成配音"]
+  storyline_select_bgm["选 BGM"]
+  storyline_recommend_transition["推荐转场"]
+  storyline_recommend_text["推荐花字"]
+  storyline_plan_timeline_pro["排时间线(pro)"]
+  storyline_qa_gate["QA 闸门"]
+  storyline_render_video["渲染视频"]
+  storyline_join["汇合 → 反序列化到 storyline_plan"]
+  open_preview["node_03 打开预览"]
+  generate_draft["node_05 生成剪映初始草稿"]
+  subgraph DEAD["未接线 / 路由永不选中(5 节点)"]
+    direction TB
+    storyline_local_asr["本地 ASR<br/>(路由永不选中)"]
+    storyline_speech_rough_cut["口播粗剪<br/>(路由永不选中)"]
+    storyline_search_web_topic["搜索话题<br/>(无任何边)"]
+    storyline_generate_ai_transition["AI 转场生成<br/>(无任何边)"]
+    storyline_plan_timeline_ai_transition["排时间线(AI 转场)<br/>(无任何边)"]
+  end
+  open_preview -.->|"auto"| storyline_load_media
+  storyline_load_media -.->|"已配 Pexels Key"| storyline_search_media
+  storyline_load_media -.->|"默认"| storyline_split_shots
+  storyline_search_media --> storyline_split_shots
+  storyline_split_shots -.->|"默认"| storyline_understand_clips
+  storyline_split_shots -.->|"(永不选中)"| storyline_local_asr
+  storyline_local_asr --> storyline_speech_rough_cut
+  storyline_understand_clips --> storyline_filter_clips
+  storyline_filter_clips --> storyline_group_clips
+  storyline_group_clips --> storyline_generate_script
+  storyline_group_clips --> storyline_recommend_transition
+  storyline_generate_script --> storyline_script_template_recommendation
+  storyline_generate_script --> storyline_generate_voiceover
+  storyline_generate_script --> storyline_select_bgm
+  storyline_generate_script --> storyline_recommend_text
+  storyline_generate_voiceover --> storyline_select_bgm
+  storyline_select_bgm --> storyline_recommend_transition
+  storyline_split_shots ==>|"汇合"| storyline_plan_timeline_pro
+  storyline_group_clips ==>|"汇合"| storyline_plan_timeline_pro
+  storyline_generate_script ==>|"汇合"| storyline_plan_timeline_pro
+  storyline_generate_voiceover ==>|"汇合"| storyline_plan_timeline_pro
+  storyline_select_bgm ==>|"汇合"| storyline_plan_timeline_pro
+  storyline_plan_timeline_pro ==>|"汇合"| storyline_qa_gate
+  storyline_recommend_transition ==>|"汇合"| storyline_qa_gate
+  storyline_recommend_text ==>|"汇合"| storyline_qa_gate
+  storyline_qa_gate -.->|"QA 触发回退重跑"| storyline_group_clips
+  storyline_qa_gate -.->|"通过 / 失败 / 空 plan"| storyline_render_video
+  storyline_render_video --> storyline_join
+  storyline_join -.->|"有计划"| generate_draft
+  storyline_join -.->|"无计划"| END_
+  classDef same fill:#e8f1fb,stroke:#3b6ea5,color:#111
+  classDef gate fill:#ffe0b2,stroke:#e65100,color:#111
+  classDef newn fill:#c8f7c5,stroke:#2e7d32,stroke-width:2px,color:#111
+  classDef moved fill:#fff3b0,stroke:#b8860b,stroke-width:2px,color:#111
+  classDef dead fill:#eeeeee,stroke:#888,stroke-dasharray:4 3,color:#555
+  class storyline_load_media,storyline_search_media,storyline_split_shots,storyline_understand_clips,storyline_filter_clips,storyline_group_clips,storyline_generate_script,storyline_script_template_recommendation,storyline_generate_voiceover,storyline_select_bgm,storyline_recommend_transition,storyline_recommend_text,storyline_plan_timeline_pro,storyline_qa_gate,storyline_render_video,storyline_join same
+  class storyline_local_asr,storyline_speech_rough_cut,storyline_search_web_topic,storyline_generate_ai_transition,storyline_plan_timeline_ai_transition dead

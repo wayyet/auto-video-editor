@@ -1,0 +1,123 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.16, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/claude/ave_verify
+configfile: pyproject.toml
+plugins: anyio-4.14.2, langsmith-0.11.2, asyncio-1.4.0, mock-3.15.1
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 82 items / 5 deselected / 77 selected
+
+tests/integration/test_assembly_qc_graph.py .......                      [  9%]
+tests/integration/test_auto_mode_end_to_end.py ............              [ 24%]
+tests/integration/test_e2e_tc01_to_tc06.py XXXXxx                        [ 32%]
+tests/integration/test_e2e_tc07_audio_fades.py ...                       [ 36%]
+tests/integration/test_graph_compiles.py .......                         [ 45%]
+tests/integration/test_interrupt_resume.py .....                         [ 51%]
+tests/integration/test_no_auto_import_video.py ...F.                     [ 58%]
+tests/integration/test_no_autoclean_cache.py ..                          [ 61%]
+tests/integration/test_phase5_e2e.py ...                                 [ 64%]
+tests/integration/test_postgres_checkpointer.py sss                      [ 68%]
+tests/integration/test_preflight_windows.py sss                          [ 72%]
+tests/integration/test_reorder_topology.py ....                          [ 77%]
+tests/integration/test_sequential_integration.py ...x                    [ 83%]
+tests/integration/test_state_field_compatability.py ....                 [ 88%]
+tests/integration/test_week4_graph.py .....                              [ 94%]
+tests/integration/test_week5_resilience.py ....                          [100%]
+
+=================================== FAILURES ===================================
+_____________ test_button_click_unblocks_graph_and_import_succeeds _____________
+
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-9/test_button_click_unblocks_gra0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f7af8343310>
+
+    def test_button_click_unblocks_graph_and_import_succeeds(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """图在 ``import_video`` 阻塞 → 网页端回写结果 → 图自动继续到 ``imported``。
+    
+        这里**不启动浏览器**,而是直接调用端点内部用的那两个函数
+        (``find_pending_request`` + ``write_import_result``),也就是
+        ``POST /api/system/import-video`` 的全部实质逻辑。这样 CI 就能守住
+        "点一次按钮 ⇒ 导入完成 + 图自动继续"(验收 A5)这条端到端契约。
+        """
+        import threading
+    
+        outputs_root = tmp_path / "outputs"
+        monkeypatch.setattr(config, "storyline_outputs_root", lambda: outputs_root)
+        # 这次要真的等一会儿(而不是被 conftest 压成 0)
+        monkeypatch.setattr(config, "IMPORT_VIDEO_WAIT_TIMEOUT_S", 30)
+        monkeypatch.setattr(config, "IMPORT_VIDEO_POLL_INTERVAL_S", 0.05)
+    
+        import nodes.node_checkpoint0_storyline_plan as cp0
+        import graph as _graph
+    
+        passthrough = lambda state: cp0._post_resume(state)  # noqa: E731
+        monkeypatch.setattr(cp0, "checkpoint0_wait_storyline_plan", passthrough)
+        if hasattr(_graph, "checkpoint0_wait_storyline_plan"):
+            monkeypatch.setattr(_graph, "checkpoint0_wait_storyline_plan", passthrough)
+    
+        job_id = "e2e-import"
+        g = build_graph(checkpointer=InMemorySaver(), start_heartbeat_thread=False)
+        cfg = {"configurable": {"thread_id": job_id}}
+        result: dict = {}
+    
+        def run_graph() -> None:
+            result["out"] = g.invoke(
+                {
+                    "session_id": job_id,
+                    "video_input_path": str(tmp_path / "demo.mp4"),
+                    "error_log": [],
+                },
+                config=cfg,
+            )
+    
+        t = threading.Thread(target=run_graph, daemon=True)
+        t.start()
+    
+        # 等图的 import_video 节点发出请求(这正是网页按钮被点后的第一步)
+        import nodes.node_04a_import_video as n4a
+    
+        deadline = time.monotonic() + 20
+        pending = None
+        while time.monotonic() < deadline:
+            pending = n4a.find_pending_request(root=outputs_root)
+            if pending is not None:
+                break
+            time.sleep(0.05)
+        assert pending is not None, "图没有在 20s 内发出 import_video_request.json"
+    
+        # === 模拟 POST /api/system/import-video 的实质逻辑 ===
+        answered_job, _req = pending
+        assert answered_job == job_id
+        n4a.write_import_result(
+            answered_job,
+            {
+                "ok": True,
+                "web_session_id": "websid-e2e",
+                "media_id": "media_0001",
+                "filename": "demo.mp4",
+                "stored_path": str(tmp_path / "media" / "media_0001.mp4"),
+                "triggered_by": "import_video_button",
+            },
+            root=outputs_root,
+        )
+    
+        t.join(timeout=30)
+        assert not t.is_alive(), "回写结果后图应自动继续,不该继续阻塞"
+    
+        out = result["out"]
+        assert out.get("import_video_status") == "imported"
+        assert out.get("import_video_web_session_id") == "websid-e2e"
+        assert out.get("import_video_media_path") == str(tmp_path / "media" / "media_0001.mp4")
+        assert out.get("import_video_filename") == "demo.mp4"
+        assert "import_video_done" in out.get("status_log", [])
+        # 图继续走完了后面的节点(不是卡在 import_video)
+>       assert "get_storyboard_plan" in str(out) or out.get("storyline_session_id") is not None
+E       assert ('get_storyboard_plan' in "{'session_id': 'e2e-import', 'video_input_path': '/tmp/pytest-of-root/pytest-9/test_button_click_unblocks_gra0/demo.m...afts/default/draft_content.json', 'instructions': '请在剪映客户端手动调整分镜顺序,完成后确认继续'}, id='53940811ff85058cf5bc191174cf9a11')]}" or None is not None)
+E        +  where "{'session_id': 'e2e-import', 'video_input_path': '/tmp/pytest-of-root/pytest-9/test_button_click_unblocks_gra0/demo.m...afts/default/draft_content.json', 'instructions': '请在剪映客户端手动调整分镜顺序,完成后确认继续'}, id='53940811ff85058cf5bc191174cf9a11')]}" = str({'session_id': 'e2e-import', 'video_input_path': '/tmp/pytest-of-root/pytest-9/test_button_click_unblocks_gra0/demo.mp4', 'openstoryline_pid': None, 'openstoryline_mcp_endpoint': 'http://127.0.0.1:8001/mcp', ...})
+E        +  and   None = <built-in method get of dict object at 0x7f7ade74c580>('storyline_session_id')
+E        +    where <built-in method get of dict object at 0x7f7ade74c580> = {'session_id': 'e2e-import', 'video_input_path': '/tmp/pytest-of-root/pytest-9/test_button_click_unblocks_gra0/demo.mp4', 'openstoryline_pid': None, 'openstoryline_mcp_endpoint': 'http://127.0.0.1:8001/mcp', ...}.get
+
+tests/integration/test_no_auto_import_video.py:242: AssertionError
+=========================== short test summary info ============================
+FAILED tests/integration/test_no_auto_import_video.py::test_button_click_unblocks_graph_and_import_succeeds
+= 1 failed, 63 passed, 6 skipped, 5 deselected, 3 xfailed, 4 xpassed in 13.59s =

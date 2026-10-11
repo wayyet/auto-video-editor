@@ -1,0 +1,373 @@
+[
+ {
+  "n": 1,
+  "name": "clean_cache",
+  "file": "nodes/node_01_clean_cache.py",
+  "fn": "clean_cache",
+  "doc": ""
+ },
+ {
+  "n": 2,
+  "name": "launch_openstoryline",
+  "file": "nodes/node_02_launch_openstoryline.py",
+  "fn": "launch_openstoryline_service",
+  "doc": "启动 OpenStoryline Web 服务并等待 ``GET /`` 健康检查通过。"
+ },
+ {
+  "n": 3,
+  "name": "open_preview",
+  "file": "nodes/node_03_open_preview.py",
+  "fn": "open_preview",
+  "doc": "打开 OpenStoryline Web 预览。"
+ },
+ {
+  "n": 4,
+  "name": "checkpoint0_storyline_plan",
+  "file": "nodes/node_checkpoint0_storyline_plan.py",
+  "fn": "checkpoint0_wait_storyline_plan",
+  "doc": "LangGraph 节点:关卡⓪ — 仅做 interrupt + resume 后写 status_log。"
+ },
+ {
+  "n": 5,
+  "name": "import_video",
+  "file": "nodes/node_04a_import_video.py",
+  "fn": "import_video_node",
+  "doc": "发请求 + 等结果。图节点名即 ``import_video``。"
+ },
+ {
+  "n": 6,
+  "name": "get_storyboard_plan",
+  "file": "nodes/node_04b_get_storyboard_plan.py",
+  "fn": "get_storyboard_plan",
+  "doc": "读 :func:`read_latest_plan_timeline_pro` 产物,拍平为 CanonicalTime"
+ },
+ {
+  "n": 7,
+  "name": "generate_draft",
+  "file": "graph.py",
+  "fn": "generate_draft_wrapped",
+  "doc": ""
+ },
+ {
+  "n": 8,
+  "name": "node_06_human_reorder",
+  "file": "nodes/node_06_human_reorder.py",
+  "fn": "human_reorder",
+  "doc": "关卡①:挂起等待用户确认,resume 后发通知并通过。"
+ },
+ {
+  "n": 9,
+  "name": "node_07_speed_fit",
+  "file": "nodes/node_07_speed_fit.py",
+  "fn": "speed_fit",
+  "doc": "读取 draft → 校验时长 → 若超时则变速 → 原子写回。"
+ },
+ {
+  "n": 10,
+  "name": "escalate_guardrail_failure",
+  "file": "graph.py",
+  "fn": "escalate_guardrail_failure",
+  "doc": "节点 7 连续 3 次重试仍未达 35s 时的兜底:写 error_log + 终止。"
+ },
+ {
+  "n": 11,
+  "name": "bridge_snapshot2",
+  "file": "graph.py",
+  "fn": "bridge_snapshot2",
+  "doc": "条件边不能改 state —— 把 snapshot2 路径读出写到 state,再交给节点 8。"
+ },
+ {
+  "n": 12,
+  "name": "node_08_add_subtitles",
+  "file": "nodes/node_08_add_subtitles.py",
+  "fn": "add_subtitles",
+  "doc": "读取草稿 → 调 ASR → 注入字幕 → 原子写回 + 写 ``asr_segments_zh`` 到 state。"
+ },
+ {
+  "n": 13,
+  "name": "node_09_inject_fx",
+  "file": "nodes/node_09_inject_fx.py",
+  "fn": "inject_fx",
+  "doc": "读取草稿 → 加载模板 → 在分镜边界注入转场 → 原子写回。"
+ },
+ {
+  "n": 14,
+  "name": "node_10_inject_text_fx",
+  "file": "nodes/node_10_inject_text_fx.py",
+  "fn": "inject_text_fx",
+  "doc": "中文主线节点 10:对中文草稿(``state[\"draft_path\"]``)的字幕加花字/动画。"
+ },
+ {
+  "n": 15,
+  "name": "node_10b_inject_text_fx_en",
+  "file": "nodes/node_10_inject_text_fx.py",
+  "fn": "inject_text_fx_en",
+  "doc": "英文分支节点 10b:对英文分支草稿的字幕加花字/动画(与中文共用同一核心)。"
+ },
+ {
+  "n": 16,
+  "name": "node_11_inject_sticker",
+  "file": "nodes/node_11_inject_sticker.py",
+  "fn": "inject_sticker",
+  "doc": "读取草稿 → 为每条字幕解析贴纸 resource_id → 注入贴纸 material → 原子写回。"
+ },
+ {
+  "n": 17,
+  "name": "node_12_human_add_bgm",
+  "file": "nodes/node_12_human_add_bgm.py",
+  "fn": "human_add_bgm",
+  "doc": "关卡②:挂起等待用户确认,resume 后发通知并通过。"
+ },
+ {
+  "n": 18,
+  "name": "node_13_adjust_volume",
+  "file": "nodes/node_13_adjust_volume.py",
+  "fn": "adjust_volume",
+  "doc": "LangGraph 节点函数:对主音轨 + BGM 各执行一次音量/淡入淡出。"
+ },
+ {
+  "n": 19,
+  "name": "assembly_discover_and_probe",
+  "file": "nodes/assembly/node_discover_and_probe.py",
+  "fn": "assembly_discover_and_probe_node",
+  "doc": ""
+ },
+ {
+  "n": 20,
+  "name": "assembly_asr_and_visual_observe",
+  "file": "nodes/assembly/node_asr_and_visual_observe.py",
+  "fn": "assembly_asr_and_visual_observe_node",
+  "doc": ""
+ },
+ {
+  "n": 21,
+  "name": "assembly_build_timeline",
+  "file": "nodes/assembly/node_build_timeline.py",
+  "fn": "assembly_build_timeline_node",
+  "doc": ""
+ },
+ {
+  "n": 22,
+  "name": "assembly_validate_render_qc",
+  "file": "nodes/assembly/node_validate_render_qc.py",
+  "fn": "assembly_validate_render_qc_node",
+  "doc": ""
+ },
+ {
+  "n": 23,
+  "name": "assembly_repair_loop",
+  "file": "nodes/assembly/node_repair_loop.py",
+  "fn": "assembly_repair_loop_node",
+  "doc": ""
+ },
+ {
+  "n": 24,
+  "name": "assembly_write_report",
+  "file": "nodes/assembly/node_write_report.py",
+  "fn": "assembly_write_report_node",
+  "doc": ""
+ },
+ {
+  "n": 25,
+  "name": "fork_draft_for_english_branch",
+  "file": "nodes/node_fork_english_branch.py",
+  "fn": "fork_draft_for_english_branch",
+  "doc": "LangGraph 节点:复制 snapshot② 到 en_branch 目录,写 state。"
+ },
+ {
+  "n": 26,
+  "name": "node_14_make_covers",
+  "file": "nodes/node_14_make_covers.py",
+  "fn": "node_14_make_covers",
+  "doc": "LangGraph 节点:三比例并发渲染,写 ``covers`` 到 state。"
+ },
+ {
+  "n": 27,
+  "name": "node_15_localize_covers_en",
+  "file": "nodes/node_15_localize_covers_en.py",
+  "fn": "node_15_localize_covers_en",
+  "doc": "LangGraph 节点:并发本地化 3 张封面。"
+ },
+ {
+  "n": 28,
+  "name": "node_16a_translate_and_check",
+  "file": "nodes/node_16a_translate_and_check.py",
+  "fn": "node_16a_translate_and_check",
+  "doc": "LangGraph 节点(Week 5 新增):翻译 + 写 marker + layout 校验。"
+ },
+ {
+  "n": 29,
+  "name": "node_08b_add_subtitles_en",
+  "file": "nodes/node_08b_add_subtitles_en.py",
+  "fn": "add_subtitles_en",
+  "doc": "英文字幕 → 英文分支草稿 ``materials.texts``。"
+ },
+ {
+  "n": 30,
+  "name": "node_checkpoint3_layout_review",
+  "file": "nodes/node_checkpoint3_layout_review.py",
+  "fn": "node_checkpoint3_layout_review",
+  "doc": "LangGraph 节点(Week 5 新增):关卡③ — 仅做 interrupt + resume 后写 SRT。"
+ },
+ {
+  "n": 31,
+  "name": "node_17_inject_english_tts",
+  "file": "nodes/node_17_inject_english_tts.py",
+  "fn": "node_17_inject_english_tts",
+  "doc": "LangGraph 节点(Week 6+):真实调 TTS → 写 ``en_audio_path`` / ``en_d"
+ },
+ {
+  "n": 32,
+  "name": "join_before_delivery",
+  "file": "nodes/node_join_before_delivery.py",
+  "fn": "join_before_delivery",
+  "doc": "LangGraph 节点(汇合点):做轻量 QA 闸门。"
+ },
+ {
+  "n": 33,
+  "name": "storyline_load_media",
+  "file": "nodes/storyline/node_load_media.py",
+  "fn": "storyline_load_media_node",
+  "doc": ""
+ },
+ {
+  "n": 34,
+  "name": "storyline_search_media",
+  "file": "nodes/storyline/node_search_media.py",
+  "fn": "storyline_search_media_node",
+  "doc": ""
+ },
+ {
+  "n": 35,
+  "name": "storyline_search_web_topic",
+  "file": "nodes/storyline/node_search_web_topic.py",
+  "fn": "storyline_search_web_topic_node",
+  "doc": ""
+ },
+ {
+  "n": 36,
+  "name": "storyline_split_shots",
+  "file": "nodes/storyline/node_split_shots.py",
+  "fn": "storyline_split_shots_node",
+  "doc": ""
+ },
+ {
+  "n": 37,
+  "name": "storyline_local_asr",
+  "file": "nodes/storyline/node_local_asr.py",
+  "fn": "storyline_local_asr_node",
+  "doc": ""
+ },
+ {
+  "n": 38,
+  "name": "storyline_speech_rough_cut",
+  "file": "nodes/storyline/node_speech_rough_cut.py",
+  "fn": "storyline_speech_rough_cut_node",
+  "doc": ""
+ },
+ {
+  "n": 39,
+  "name": "storyline_generate_ai_transition",
+  "file": "nodes/storyline/node_generate_ai_transition.py",
+  "fn": "storyline_generate_ai_transition_node",
+  "doc": ""
+ },
+ {
+  "n": 40,
+  "name": "storyline_understand_clips",
+  "file": "nodes/storyline/node_understand_clips.py",
+  "fn": "storyline_understand_clips_node",
+  "doc": ""
+ },
+ {
+  "n": 41,
+  "name": "storyline_filter_clips",
+  "file": "nodes/storyline/node_filter_clips.py",
+  "fn": "storyline_filter_clips_node",
+  "doc": ""
+ },
+ {
+  "n": 42,
+  "name": "storyline_group_clips",
+  "file": "nodes/storyline/node_group_clips.py",
+  "fn": "storyline_group_clips_node",
+  "doc": ""
+ },
+ {
+  "n": 43,
+  "name": "storyline_generate_script",
+  "file": "nodes/storyline/node_generate_script.py",
+  "fn": "storyline_generate_script_node",
+  "doc": ""
+ },
+ {
+  "n": 44,
+  "name": "storyline_script_template_recommendation",
+  "file": "nodes/storyline/node_script_template_recommendation.py",
+  "fn": "storyline_script_template_recommendation_node",
+  "doc": ""
+ },
+ {
+  "n": 45,
+  "name": "storyline_generate_voiceover",
+  "file": "nodes/storyline/node_generate_voiceover.py",
+  "fn": "storyline_generate_voiceover_node",
+  "doc": ""
+ },
+ {
+  "n": 46,
+  "name": "storyline_select_bgm",
+  "file": "nodes/storyline/node_select_bgm.py",
+  "fn": "storyline_select_bgm_node",
+  "doc": ""
+ },
+ {
+  "n": 47,
+  "name": "storyline_recommend_transition",
+  "file": "nodes/storyline/node_recommend_transition.py",
+  "fn": "storyline_recommend_transition_node",
+  "doc": ""
+ },
+ {
+  "n": 48,
+  "name": "storyline_recommend_text",
+  "file": "nodes/storyline/node_recommend_text.py",
+  "fn": "storyline_recommend_text_node",
+  "doc": ""
+ },
+ {
+  "n": 49,
+  "name": "storyline_plan_timeline_pro",
+  "file": "nodes/storyline/node_plan_timeline_pro.py",
+  "fn": "storyline_plan_timeline_pro_node",
+  "doc": ""
+ },
+ {
+  "n": 50,
+  "name": "storyline_plan_timeline_ai_transition",
+  "file": "nodes/storyline/node_plan_timeline_ai_transition.py",
+  "fn": "storyline_plan_timeline_ai_transition_node",
+  "doc": ""
+ },
+ {
+  "n": 51,
+  "name": "storyline_render_video",
+  "file": "nodes/storyline/node_render_video.py",
+  "fn": "storyline_render_video_node",
+  "doc": ""
+ },
+ {
+  "n": 52,
+  "name": "storyline_qa_gate",
+  "file": "nodes/storyline/qa_gate.py",
+  "fn": "_qa_gate_mod.storyline_qa_gate_node",
+  "doc": "QA 闸门主入口(纯函数副作用:仅写 status_log / error_log / 重试计数)。"
+ },
+ {
+  "n": 53,
+  "name": "storyline_join",
+  "file": "nodes/storyline/join_storyline.py",
+  "fn": "_join_storyline_mod.storyline_join_node",
+  "doc": "auto-mode 19 节点收尾:把 timeline_plan 反序列化到 storyline_plan。"
+ }
+]

@@ -1,0 +1,11 @@
+# 实证1:英文分支草稿里有没有英文字幕文本素材(调序前 main)
+
+[fork] en_branch = en_branch_proofsess_20261009_2 ...
+[fork] 英文草稿 materials.texts 条数 = 0
+[16a ] 返回键 = ['layout_issues', 'layout_issues_detected', 'layout_issues_source', 'status_log', 'subtitle_segments_en', 'subtitle_srt_path']
+[16a ] subtitle_segments_en 条数 = 2
+[16a ] 之后英文草稿 materials.texts 条数 = 0   <-- 关键
+[16a ] 之后英文草稿 tracks 条数 = 0
+[16a ] subtitle_en.srt 存在 = True | 行数 = 7
+[cp3 ] resume 后从草稿还原的字幕段数 = 0
+[cp3 ] 重写后 subtitle_en.srt 字节数 = 0

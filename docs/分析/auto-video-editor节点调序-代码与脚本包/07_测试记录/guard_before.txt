@@ -1,0 +1,127 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.16, pytest-9.1.1, pluggy-1.6.0 -- /home/claude/venv_ave/bin/python
+rootdir: /home/claude/ave_before
+configfile: pyproject.toml
+plugins: anyio-4.14.2, langsmith-0.11.2, asyncio-1.4.0, mock-3.15.1
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 4 items
+
+tests/integration/test_reorder_topology.py::test_new_nodes_registered FAILED [ 25%]
+tests/integration/test_reorder_topology.py::test_execution_order_after_reorder FAILED [ 50%]
+tests/integration/test_reorder_topology.py::test_english_draft_gets_subtitles_and_text_fx FAILED [ 75%]
+tests/integration/test_reorder_topology.py::test_checkpoint3_path_no_parallel_conflict_and_human_edit_survives FAILED [100%]
+
+=================================== FAILURES ===================================
+__________________________ test_new_nodes_registered ___________________________
+
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-12/test_new_nodes_registered0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f7c31306d70>
+
+    def test_new_nodes_registered(tmp_path, monkeypatch):
+        g = build_graph(checkpointer=InMemorySaver(), thread_id="t", start_heartbeat_thread=False)
+        names = set(g.get_graph().nodes)
+>       assert {"node_08b_add_subtitles_en", "node_10b_inject_text_fx_en"} <= names
+E       AssertionError: assert {'node_08b_ad...t_text_fx_en'} <= {'__end__', '...ir_loop', ...}
+E         
+E         Extra items in the left set:
+E         'node_10b_inject_text_fx_en'
+E         'node_08b_add_subtitles_en'
+
+tests/integration/test_reorder_topology.py:117: AssertionError
+______________________ test_execution_order_after_reorder ______________________
+
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-12/test_execution_order_after_reo0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f7c31306c40>
+
+    def test_execution_order_after_reorder(tmp_path, monkeypatch):
+        steps, stops, _ = _drive(_seed(tmp_path, monkeypatch))
+        s = lambda n: _first_step(steps, n)  # noqa: E731
+    
+        # 中文线:08 → 10 → 14 → 15
+        assert s("node_08_add_subtitles") < s("node_10_inject_text_fx") < s("node_14_make_covers") < s("node_15_localize_covers_en")
+        # 英文线:16a → 08b → 10b → 17;且 16a 严格晚于 08(显式依赖 asr_segments_zh)
+>       assert s("node_08_add_subtitles") < s("fork_draft_for_english_branch") < s("node_16a_translate_and_check")
+E       AssertionError: assert 17 < 17
+E        +  where 17 = <function test_execution_order_after_reorder.<locals>.<lambda> at 0x7f7c30c68220>('node_08_add_subtitles')
+E        +  and   17 = <function test_execution_order_after_reorder.<locals>.<lambda> at 0x7f7c30c68220>('fork_draft_for_english_branch')
+
+tests/integration/test_reorder_topology.py:127: AssertionError
+----------------------------- Captured stdout call -----------------------------
+[notify] checkpoint1 thread=reorder draft=/tmp/pytest-of-root/pytest-12/test_execution_order_after_reo0/drafts/demo/draft_content.json assembly_report=/home/claude/ave_before/outputs/reorder/assembly/report.md
+[notify] checkpoint2 thread=reorder draft=/tmp/pytest-of-root/pytest-12/test_execution_order_after_reo0/drafts/demo/draft_content.json
+________________ test_english_draft_gets_subtitles_and_text_fx _________________
+
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-12/test_english_draft_gets_subtit0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f7c30ed0ef0>
+
+    def test_english_draft_gets_subtitles_and_text_fx(tmp_path, monkeypatch):
+        _, _, final = _drive(_seed(tmp_path, monkeypatch))
+        en = json.loads((Path(final["draft_dir_en_branch"]) / "draft_content.json").read_text(encoding="utf-8"))
+        texts = en["materials"]["texts"]
+>       assert len(texts) == len(final["subtitle_segments_en"]) > 0
+E       AssertionError: assert 0 == 5
+E        +  where 0 = len([])
+E        +  and   5 = len([{'index': 0, 'start_ms': 0, 'end_ms': 2000, 'text_en': '[EN] Mock 字幕 1 (seed=1)'}, {'index': 1, 'start_ms': 2000, 'end_ms': 4000, 'text_en': '[EN] Mock 字幕 2 (seed=1)'}, {'index': 2, 'start_ms': 4000, 'end_ms': 6000, 'text_en': '[EN] Mock 字幕 3 (seed=1)'}, {'index': 3, 'start_ms': 6000, 'end_ms': 8000, 'text_en': '[EN] Mock 字幕 4 (seed=1)'}, {'index': 4, 'start_ms': 8000, 'end_ms': 10000, 'text_en': '[EN] Mock 字幕 5 (seed=1)'}])
+
+tests/integration/test_reorder_topology.py:146: AssertionError
+----------------------------- Captured stdout call -----------------------------
+[notify] checkpoint1 thread=reorder draft=/tmp/pytest-of-root/pytest-12/test_english_draft_gets_subtit0/drafts/demo/draft_content.json assembly_report=/home/claude/ave_before/outputs/reorder/assembly/report.md
+[notify] checkpoint2 thread=reorder draft=/tmp/pytest-of-root/pytest-12/test_english_draft_gets_subtit0/drafts/demo/draft_content.json
+______ test_checkpoint3_path_no_parallel_conflict_and_human_edit_survives ______
+
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-12/test_checkpoint3_path_no_paral0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f7c30e7b240>
+
+    def test_checkpoint3_path_no_parallel_conflict_and_human_edit_survives(tmp_path, monkeypatch):
+>       steps, stops, final = _drive(_seed(tmp_path, monkeypatch),
+                                     force_layout_issue=True, human_edit="HUMAN FIXED LINE")
+
+tests/integration/test_reorder_topology.py:156: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+state = {'session_id': 'reorder', 'video_input_path': 'C:/tmp/fake.mp4', 'draft_path': '/tmp/pytest-of-root/pytest-12/test_checkpoint3_path_no_paral0/drafts/demo/draft_content.json', 'draft_encryption_status': 'plaintext', ...}
+force_layout_issue = True, human_edit = 'HUMAN FIXED LINE'
+
+    def _drive(state: dict, *, force_layout_issue: bool = False, human_edit: str | None = None):
+        """整图跑到 END,遇到 interrupt 就批量 resume。
+    
+        Returns:
+            (steps, stops, final_values)
+            steps: [(step, node_name)];stops: 每次挂起的关卡标签列表;
+        """
+        g = build_graph(checkpointer=InMemorySaver(), thread_id="reorder", start_heartbeat_thread=False)
+        config = {"configurable": {"thread_id": "reorder"}}
+        steps: list[tuple[int, str]] = []
+        stops: list[list[str]] = []
+        issues = [{"index": 0, "reason": "text_too_wide", "width_px": 9999, "max_width_px": 1500}]
+        ctx = (patch("nodes.node_16a_translate_and_check.validate_layout", return_value=issues)
+               if force_layout_issue else contextlib.nullcontext())
+        with ctx:
+            inp: object = state
+            for _ in range(14):
+                for ev in g.stream(inp, config, stream_mode="debug"):
+                    if ev["type"] == "task":
+                        steps.append((ev["step"], ev["payload"]["name"]))
+                snap = g.get_state(config)
+                if not snap.next:
+                    break
+                pend = list(snap.interrupts)
+                labels = [str((i.value or {}).get("checkpoint")) if isinstance(i.value, dict) else "?" for i in pend]
+                stops.append(labels)
+                if human_edit and "③" in labels:
+                    en_dir = Path(snap.values["draft_dir_en_branch"])
+                    f = en_dir / "draft_content.json"
+                    d = json.loads(f.read_text(encoding="utf-8"))
+>                   d["materials"]["texts"][0]["content"] = human_edit  # 模拟人工在剪映里校对
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+E                   IndexError: list index out of range
+
+tests/integration/test_reorder_topology.py:102: IndexError
+----------------------------- Captured stdout call -----------------------------
+[notify] checkpoint1 thread=reorder draft=/tmp/pytest-of-root/pytest-12/test_checkpoint3_path_no_paral0/drafts/demo/draft_content.json assembly_report=/home/claude/ave_before/outputs/reorder/assembly/report.md
+=========================== short test summary info ============================
+FAILED tests/integration/test_reorder_topology.py::test_new_nodes_registered
+FAILED tests/integration/test_reorder_topology.py::test_execution_order_after_reorder
+FAILED tests/integration/test_reorder_topology.py::test_english_draft_gets_subtitles_and_text_fx
+FAILED tests/integration/test_reorder_topology.py::test_checkpoint3_path_no_parallel_conflict_and_human_edit_survives
+============================== 4 failed in 2.03s ===============================

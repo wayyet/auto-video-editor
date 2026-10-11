@@ -1,0 +1,37 @@
+# 实证2:整图超步顺序(调序前 main / 正常路径)
+
+===== 仓库 ave_before | 场景 normal =====
+挂起序列(每次 interrupt 的关卡标签): [['⓪'], ['①'], ['②']]
+--- 超步表(同一 step 内并行) ---
+step  1: ['launch_openstoryline']
+step  2: ['open_preview']
+step  3: ['checkpoint0_storyline_plan', 'checkpoint0_storyline_plan']
+step  4: ['import_video']
+step  5: ['get_storyboard_plan']
+step  6: ['generate_draft']
+step  7: ['assembly_discover_and_probe']
+step  8: ['assembly_asr_and_visual_observe']
+step  9: ['assembly_build_timeline']
+step 10: ['assembly_validate_render_qc']
+step 11: ['assembly_repair_loop']
+step 12: ['assembly_validate_render_qc']
+step 13: ['assembly_write_report']
+step 14: ['node_06_human_reorder', 'node_06_human_reorder']
+step 15: ['node_07_speed_fit']
+step 16: ['bridge_snapshot2']
+step 17: ['fork_draft_for_english_branch', 'node_08_add_subtitles']
+step 18: ['node_09_inject_fx', 'node_16a_translate_and_check']
+step 19: ['node_10_inject_text_fx', 'node_17_inject_english_tts']
+step 20: ['node_11_inject_sticker']
+step 21: ['node_12_human_add_bgm', 'node_12_human_add_bgm']
+step 22: ['node_13_adjust_volume']
+step 23: ['node_14_make_covers']
+step 24: ['node_15_localize_covers_en']
+step 25: ['join_before_delivery']
+--- 关键节点执行次数 --- {'node_08_add_subtitles': 1, 'node_10_inject_text_fx': 1, 'node_10b_inject_text_fx_en': 0, 'node_08b_add_subtitles_en': 0, 'node_09_inject_fx': 1, 'node_16a_translate_and_check': 1, 'node_17_inject_english_tts': 1, 'join_before_delivery': 1}
+--- 英文草稿 materials.texts 条数 = 0
+--- subtitle_en.srt 字节数 = 304
+    首行内容: [EN] Mock 字幕 1 (seed=1)
+--- 中文草稿 materials.texts 条数 = 5 | transitions=1 | video_effects=1 | stickers=5
+--- status_log(_done 标记顺序) ---
+     ['node_05_generate_draft_done', 'node_02_launch_openstoryline_done', 'assembly_write_report_done', 'node_08_add_subtitles_done', 'node_09_inject_fx_done', 'node_16a_translate_done', 'node_10_inject_text_fx_done', 'node_17_inject_english_tts_done', 'node_11_inject_sticker_done', 'node_14_make_covers_done', 'node_15_localize_covers_en_done', 'join_before_delivery_done']

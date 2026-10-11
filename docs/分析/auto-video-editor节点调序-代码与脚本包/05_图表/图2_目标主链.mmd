@@ -1,0 +1,85 @@
+flowchart TD
+  START([START])
+  END_([END])
+  clean_cache["node_01 清理缓存<br/>(START 无入边)"]
+  launch_openstoryline["node_02 启动 OpenStoryline"]
+  open_preview["node_03 打开预览"]
+  checkpoint0_storyline_plan{{"关卡⓪ 确认分镜计划"}}
+  import_video["node_04a 导入视频<br/>等网页按钮<br/>(默认最长 600s)"]
+  get_storyboard_plan["node_04b 读取分镜<br/>规划产物"]
+  generate_draft["node_05 生成剪映初始草稿"]
+  node_06_human_reorder{{"关卡① node_06<br/>人工调整分镜顺序"}}
+  node_07_speed_fit["node_07 变速适配≤35s"]
+  escalate_guardrail_failure["护栏失败升级"]
+  bridge_snapshot2["快照②"]
+  AUTO[["storyline 自动模式子图<br/>21 节点(见图4)"]]
+  QC[["素材 QC 子图<br/>6 节点(见图3)"]]
+  subgraph ZH["中文线(4 节点)"]
+    direction TB
+    node_08_add_subtitles["node_08 中文字幕写入"]
+    node_10_inject_text_fx["node_10 花字/字幕动画(中)"]
+    node_14_make_covers["node_14 三比例封面"]
+    node_15_localize_covers_en["node_15 封面英文本地化"]
+  end
+  subgraph EN["英文线(6 节点,与中文线并行)"]
+    direction TB
+    fork_draft_for_english_branch["fork 复制英文分支草稿"]
+    node_16a_translate_and_check["node_16a 英文字幕翻译<br/>+ 布局检查"]
+    node_08b_add_subtitles_en["node_08b 英文字幕写入<br/>英文草稿(新增)"]
+    node_checkpoint3_layout_review{{"关卡③ 人工校对<br/>英文字幕排版"}}
+    node_10b_inject_text_fx_en["node_10b 花字/字幕动画<br/>(英,新增)"]
+    node_17_inject_english_tts["node_17 英文配音<br/>(产出音频文件)"]
+  end
+  subgraph TAIL["尾链(两线汇合后串行,作用于中文主草稿)"]
+    direction TB
+    node_09_inject_fx["node_09 转场/视频特效"]
+    node_11_inject_sticker["node_11 贴纸"]
+    node_12_human_add_bgm{{"关卡② node_12<br/>人工添加 BGM"}}
+    node_13_adjust_volume["node_13 音量/淡入淡出"]
+    join_before_delivery["join_before_delivery<br/>交付前 QA 闸门"]
+  end
+  START --> launch_openstoryline
+  launch_openstoryline --> open_preview
+  open_preview -.->|"human(默认)"| checkpoint0_storyline_plan
+  open_preview -.->|"auto"| AUTO
+  checkpoint0_storyline_plan --> import_video
+  import_video --> get_storyboard_plan
+  get_storyboard_plan -.->|"有计划"| generate_draft
+  get_storyboard_plan -.->|"无计划"| END_
+  AUTO --> generate_draft
+  generate_draft -->|"QC 开关开(默认)"| QC
+  QC --> node_06_human_reorder
+  generate_draft -.->|"QC 开关关闭时直达"| node_06_human_reorder
+  node_06_human_reorder --> node_07_speed_fit
+  node_07_speed_fit -.->|"未达标重试"| node_07_speed_fit
+  node_07_speed_fit -.->|"重试耗尽"| escalate_guardrail_failure
+  escalate_guardrail_failure --> END_
+  node_07_speed_fit -.->|"达标"| bridge_snapshot2
+  bridge_snapshot2 --> node_08_add_subtitles
+  node_08_add_subtitles --> node_10_inject_text_fx
+  node_10_inject_text_fx --> node_14_make_covers
+  node_14_make_covers --> node_15_localize_covers_en
+  node_08_add_subtitles -->|"显式依赖 asr_segments_zh"| fork_draft_for_english_branch
+  fork_draft_for_english_branch --> node_16a_translate_and_check
+  node_16a_translate_and_check --> node_08b_add_subtitles_en
+  node_08b_add_subtitles_en -.->|"有排版异常"| node_checkpoint3_layout_review
+  node_08b_add_subtitles_en -.->|"无异常"| node_10b_inject_text_fx_en
+  node_checkpoint3_layout_review --> node_10b_inject_text_fx_en
+  node_10b_inject_text_fx_en --> node_17_inject_english_tts
+  node_15_localize_covers_en ==>|"汇合屏障:两线都完成才触发"| node_09_inject_fx
+  node_17_inject_english_tts ==>|"汇合屏障"| node_09_inject_fx
+  node_09_inject_fx --> node_11_inject_sticker
+  node_11_inject_sticker --> node_12_human_add_bgm
+  node_12_human_add_bgm --> node_13_adjust_volume
+  node_13_adjust_volume --> join_before_delivery
+  join_before_delivery --> END_
+  classDef same fill:#e8f1fb,stroke:#3b6ea5,color:#111
+  classDef gate fill:#ffe0b2,stroke:#e65100,color:#111
+  classDef newn fill:#c8f7c5,stroke:#2e7d32,stroke-width:2px,color:#111
+  classDef moved fill:#fff3b0,stroke:#b8860b,stroke-width:2px,color:#111
+  classDef dead fill:#eeeeee,stroke:#888,stroke-dasharray:4 3,color:#555
+  class launch_openstoryline,open_preview,import_video,get_storyboard_plan,generate_draft,node_07_speed_fit,escalate_guardrail_failure,bridge_snapshot2,node_08_add_subtitles,node_16a_translate_and_check,node_17_inject_english_tts same
+  class checkpoint0_storyline_plan,node_06_human_reorder,node_12_human_add_bgm,node_checkpoint3_layout_review gate
+  class node_08b_add_subtitles_en,node_10b_inject_text_fx_en newn
+  class node_09_inject_fx,node_11_inject_sticker,node_12_human_add_bgm,node_13_adjust_volume,node_10_inject_text_fx,node_14_make_covers,node_15_localize_covers_en,join_before_delivery,fork_draft_for_english_branch moved
+  class clean_cache,AUTO,QC dead

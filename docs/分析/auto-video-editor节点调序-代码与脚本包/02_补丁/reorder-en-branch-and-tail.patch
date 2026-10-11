@@ -1,0 +1,605 @@
+diff --git a/graph.py b/graph.py
+index 9177c44..2d50737 100644
+--- a/graph.py
++++ b/graph.py
+@@ -27,23 +27,32 @@
+       ├─→ node_07_speed_fit      (未达标,retry_counts < MAX_RETRY)
+       └─→ escalate_guardrail_failure → END  (重试超限)
+     → bridge_snapshot2                 (写 snapshot2_path)
+-    → node_08_add_subtitles            (Week 4 同步写 asr_segments_zh 到 state)
+-    → node_09_inject_fx
+-    → node_10_inject_text_fx
+-    → node_11_inject_sticker
+-    → node_12_human_add_bgm            ⏸ interrupt("②")
+-    → node_13_adjust_volume
+-    ├─→ node_14_make_covers            (中文主线尾段)
+-    │     → node_15_localize_covers_en
+-    │           └─────────────┐
+-    │                         ▼
+-    └─→ [parallel fork_draft → node_16a_translate_and_check
+-                                ├─→ node_checkpoint3_layout_review ⏸ interrupt("③")(条件触发)
+-                                └─→ node_17_inject_english_tts
+-                                                                 │
+-                                                  join_before_delivery
++    → node_08_add_subtitles            (同步写 asr_segments_zh 到 state)
++    ├─→ [中文线] node_10_inject_text_fx
++    │              → node_14_make_covers
++    │              → node_15_localize_covers_en ──────────────┐
++    └─→ [英文线] fork_draft_for_english_branch                  │
++                   → node_16a_translate_and_check  (显式依赖 node_08 的 asr_segments_zh)
++                   → node_08b_add_subtitles_en     (英文字幕写入英文分支草稿)
++                   → 🔁 条件边(route_after_translate):          │
++                       ├─→ node_checkpoint3_layout_review ⏸ interrupt("③")(条件触发)
++                       │         └─→ node_10b_inject_text_fx_en  │
++                       └─→ node_10b_inject_text_fx_en  (英文花字/字幕动画)
++                                 → node_17_inject_english_tts ───┤
+                                                                  ▼
+-                                                                END
++    ⇒ node_09_inject_fx              (汇合屏障:node_15 与 node_17 都完成才触发)
++    → node_11_inject_sticker         (09/11/12/13 尾链作用于中文主草稿 draft_path)
++    → node_12_human_add_bgm          ⏸ interrupt("②")
++    → node_13_adjust_volume
++    → join_before_delivery           (交付前 QA 闸门,单前驱,不再承担 fan-in)
++    → END
++
++2026-10 调序(见《auto-video-editor节点调序与全量工作流设计执行计划》):
++- 英文线补 ``node_08b_add_subtitles_en`` / ``node_10b_inject_text_fx_en``:此前英文分支草稿里
++  没有任何字幕文本素材,关卡③ 无物可校对、resume 后 SRT 会被重写成空文件。
++- ``node_09/11/12/13`` 全部推迟到 ``node_17`` 之后(列表型 fan-in 保证先后,不再靠超步碰巧)。
++- ``node_08 → fork`` 显式依赖:16a 读 node_08 产出的 asr_segments_zh。
++- ②与③ 永不同时挂起(②在尾链,③在英文线)。
+ 
+ 2026-09 关键改动(对照 plan §4/§5):
+ - OpenStoryline 改为本地 uvicorn 子进程 + 读盘(node_02 不再有 MCP 链路,
+@@ -95,9 +104,9 @@ Week 5 关键改动(保留):
+ - ``node_17_inject_english_tts`` 调真实 FireRedTTS2(Week 6+ 阶段三,9 工具迁移 §6.3) +
+   失败时 ``en_audio_path=None``,不阻塞主链;``en_audio_path`` / ``en_dub_audio_path`` 字段。
+ 
+-汇合:node_15 与 node_17 通过 ``add_edge([...], "join_before_delivery")`` 单次调用汇入,
+-LangGraph fan-in 自动等齐两条分支后才触发 join(避免多次独立 ``add_edge`` 造成的
+-重复触发,见验证报告 §5.1)。
++汇合:node_15 与 node_17 通过 ``add_edge([...], "node_09_inject_fx")`` 单次调用汇入,
++LangGraph fan-in 自动等齐两条分支后才触发尾链首节点(避免多次独立 ``add_edge`` 造成的
++重复触发,见验证报告 §5.1);``join_before_delivery`` 调序后只做交付前 QA。
+ 
+ 关卡①/②/③ 使用 ``langgraph.types.interrupt``,需要 checkpointer(Week 3 用
+ SqliteSaver 做持久化,覆盖多日挂起恢复;Week 5 切到 PostgresSaver)。
+@@ -139,8 +148,9 @@ from nodes.node_05_generate_draft import generate_initial_jianying_draft
+ from nodes.node_06_human_reorder import human_reorder
+ from nodes.node_07_speed_fit import get_snapshot2_path, route_after_speed_fit, speed_fit
+ from nodes.node_08_add_subtitles import add_subtitles
++from nodes.node_08b_add_subtitles_en import add_subtitles_en
+ from nodes.node_09_inject_fx import inject_fx
+-from nodes.node_10_inject_text_fx import inject_text_fx
++from nodes.node_10_inject_text_fx import inject_text_fx, inject_text_fx_en
+ from nodes.node_11_inject_sticker import inject_sticker
+ from nodes.node_12_human_add_bgm import human_add_bgm
+ from nodes.node_13_adjust_volume import adjust_volume
+@@ -292,14 +302,14 @@ def _storyline_route_after_split_shots(state: WorkflowState) -> str:
+ # Week 5 条件边:步骤 16a 之后是否触发关卡③
+ # ---------------------------------------------------------------------------
+ def route_after_translate(state: WorkflowState) -> str:
+-    """node_16a_translate_and_check 之后的条件路由。
++    """node_08b_add_subtitles_en 之后的条件路由(原挂在 16a 后,2026-10 调序后后移)。
+ 
+     - ``layout_issues_detected`` 为真 → 关卡③(``node_checkpoint3_layout_review``)
+-    - 否则 → ``node_17_inject_english_tts``
++    - 否则 → ``node_10b_inject_text_fx_en``(英文花字/动画)
+     """
+     if state.get("layout_issues_detected"):
+         return "node_checkpoint3_layout_review"
+-    return "node_17_inject_english_tts"
++    return "node_10b_inject_text_fx_en"
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -486,6 +496,7 @@ def _build_state_graph():
+     g.add_node("node_08_add_subtitles", add_subtitles)
+     g.add_node("node_09_inject_fx", inject_fx)
+     g.add_node("node_10_inject_text_fx", inject_text_fx)
++    g.add_node("node_10b_inject_text_fx_en", inject_text_fx_en)
+     g.add_node("node_11_inject_sticker", inject_sticker)
+     g.add_node("node_12_human_add_bgm", human_add_bgm)
+     g.add_node("node_13_adjust_volume", adjust_volume)
+@@ -506,6 +517,7 @@ def _build_state_graph():
+     g.add_node("node_14_make_covers", node_14_make_covers)
+     g.add_node("node_15_localize_covers_en", node_15_localize_covers_en)
+     g.add_node("node_16a_translate_and_check", node_16a_translate_and_check)
++    g.add_node("node_08b_add_subtitles_en", add_subtitles_en)
+     g.add_node("node_checkpoint3_layout_review", node_checkpoint3_layout_review)
+     g.add_node("node_17_inject_english_tts", node_17_inject_english_tts)
+     g.add_node("join_before_delivery", join_before_delivery)
+@@ -629,37 +641,39 @@ def _build_state_graph():
+     g.add_edge("escalate_guardrail_failure", END)
+     g.add_edge("bridge_snapshot2", "node_08_add_subtitles")
+ 
+-    # 8 → 9 → 10 → 11 → 12 → 13
+-    g.add_edge("node_08_add_subtitles", "node_09_inject_fx")
+-    g.add_edge("node_09_inject_fx", "node_10_inject_text_fx")
+-    g.add_edge("node_10_inject_text_fx", "node_11_inject_sticker")
+-    g.add_edge("node_11_inject_sticker", "node_12_human_add_bgm")
+-    g.add_edge("node_12_human_add_bgm", "node_13_adjust_volume")
+-
+-    # ---- Week 4 双分支 + 汇合 ----
+-    # 中文主线尾段:13 → 14 → 15 → join
+-    g.add_edge("node_13_adjust_volume", "node_14_make_covers")
++    # ---- 2026-10 调序:中文线 08 → 10 → 14 → 15;英文线 fork → 16a → 08b → [③] → 10b → 17;
++    #      两线汇合后才跑尾链 09 → 11 → 12(②) → 13 → join_before_delivery(QA)→ END ----
++    # 中文线
++    g.add_edge("node_08_add_subtitles", "node_10_inject_text_fx")
++    g.add_edge("node_10_inject_text_fx", "node_14_make_covers")
+     g.add_edge("node_14_make_covers", "node_15_localize_covers_en")
+ 
+-    # Week 5 英文分支:bridge_snapshot2 → fork → 16a → [checkpoint3 ⏸ | 17] → join
+-    g.add_edge("bridge_snapshot2", "fork_draft_for_english_branch")
++    # 英文线:显式依赖 08(16a 读 08 产出的 asr_segments_zh)——不再靠"超步顺序碰巧满足"
++    g.add_edge("node_08_add_subtitles", "fork_draft_for_english_branch")
+     g.add_edge("fork_draft_for_english_branch", "node_16a_translate_and_check")
++    g.add_edge("node_16a_translate_and_check", "node_08b_add_subtitles_en")
+     g.add_conditional_edges(
+-        "node_16a_translate_and_check",
++        "node_08b_add_subtitles_en",
+         route_after_translate,
+         {
+             "node_checkpoint3_layout_review": "node_checkpoint3_layout_review",
+-            "node_17_inject_english_tts": "node_17_inject_english_tts",
++            "node_10b_inject_text_fx_en": "node_10b_inject_text_fx_en",
+         },
+     )
+-    g.add_edge("node_checkpoint3_layout_review", "node_17_inject_english_tts")
++    g.add_edge("node_checkpoint3_layout_review", "node_10b_inject_text_fx_en")
++    g.add_edge("node_10b_inject_text_fx_en", "node_17_inject_english_tts")
+ 
+-    # 汇合:中文主线(node_15)与英文分支(node_17)都到达才触发 join。
+-    # 用列表语法,fan-in 自动等齐,join 只跑一次(对照验证报告 §5.1)。
++    # 汇合 + 尾链起点:列表语法 → 中文线(15)与英文线(17)都到才触发 node_09,只触发一次
+     g.add_edge(
+         ["node_15_localize_covers_en", "node_17_inject_english_tts"],
+-        "join_before_delivery",
++        "node_09_inject_fx",
+     )
++    # 尾链(作用于中文主草稿 state["draft_path"])
++    g.add_edge("node_09_inject_fx", "node_11_inject_sticker")
++    g.add_edge("node_11_inject_sticker", "node_12_human_add_bgm")
++    g.add_edge("node_12_human_add_bgm", "node_13_adjust_volume")
++    # 交付前 QA 闸门:单前驱,不再承担 fan-in
++    g.add_edge("node_13_adjust_volume", "join_before_delivery")
+ 
+     # join → END
+     g.add_edge("join_before_delivery", END)
+diff --git a/nodes/_subtitle_texts.py b/nodes/_subtitle_texts.py
+new file mode 100644
+index 0000000..74cdc84
+--- /dev/null
++++ b/nodes/_subtitle_texts.py
+@@ -0,0 +1,44 @@
++"""字幕文本素材构造 — node_08(中文)与 node_08b(英文)共用。
++
++只负责"一条 materials.texts 条目长什么样",不碰 I/O、不碰 state。
++字段顺序/取值与重构前 node_08 内联写法逐项一致(id/content/target_timerange/style/track_name)。
++"""
++
++from __future__ import annotations
++
++import copy
++from typing import Any
++
++
++def make_text_material(
++    *,
++    index: int,
++    content: str,
++    start_us: int,
++    duration_us: int,
++    style: dict[str, Any],
++    track_name: str,
++    id_prefix: str = "text",
++    extra: dict[str, Any] | None = None,
++) -> dict[str, Any]:
++    """构造一条 ``materials.texts`` 条目(微秒时间轴)。
++
++    Args:
++        index: 从 0 开始的序号,生成 id 为 ``f"{id_prefix}-{index + 1}"``。
++        content: 字幕文本。
++        start_us / duration_us: ``target_timerange`` 起点与时长(微秒)。
++        style: 样式 dict;内部做 deepcopy,每条字幕互不污染。
++        track_name: 轨道名(中文 ``"Subtitles"``,英文 ``"Subtitles_en"``)。
++        id_prefix: id 前缀(中文 ``"text"``,英文 ``"text-en"``)。
++        extra: 追加字段(英文用来写 ``text_en``,与 16a 的 marker 约定一致)。
++    """
++    item: dict[str, Any] = {
++        "id": f"{id_prefix}-{index + 1}",
++        "content": content,
++        "target_timerange": {"start": start_us, "duration": duration_us},
++        "style": copy.deepcopy(style),
++        "track_name": track_name,
++    }
++    if extra:
++        item.update(extra)
++    return item
+diff --git a/nodes/node_08_add_subtitles.py b/nodes/node_08_add_subtitles.py
+index 8016258..5fe7183 100644
+--- a/nodes/node_08_add_subtitles.py
++++ b/nodes/node_08_add_subtitles.py
+@@ -26,6 +26,7 @@ import config
+ from assembly_capabilities.run_context import RunContext
+ from jy_common.asr_client import call_asr2s
+ from nodes._draft_io import apply_and_write, load_draft
++from nodes._subtitle_texts import make_text_material
+ from state import SubtitleSegment, WorkflowState
+ from video_edit_capabilities import subtitle_style as sty
+ from video_edit_capabilities.subtitle_scout import subtitle_scout
+@@ -230,17 +231,15 @@ def add_subtitles(state: WorkflowState) -> dict:
+         start_s = float(seg.get("start_s", 0.0))
+         end_s = float(seg.get("end_s", start_s + 1.0))
+         text_content = seg.get("text", "")
+-        texts.append({
+-            "id": f"text-{i + 1}",
+-            "content": text_content,
+-            "target_timerange": {
+-                "start": int(start_s * 1_000_000),
+-                "duration": int((end_s - start_s) * 1_000_000),
+-            },
+-            # 每条字幕一份独立副本:换算逻辑若日后就地修改也不会互相污染。
+-            "style": copy.deepcopy(subtitle_style),
+-            "track_name": "Subtitles",
+-        })
++        # 每条字幕一份独立副本(deepcopy 在 make_text_material 内)。
++        texts.append(make_text_material(
++            index=i,
++            content=text_content,
++            start_us=int(start_s * 1_000_000),
++            duration_us=int((end_s - start_s) * 1_000_000),
++            style=subtitle_style,
++            track_name="Subtitles",
++        ))
+         # Week 4 §3.1:同步把毫秒版写进 state,供节点 16 使用
+         asr_zh.append({
+             "index": i,
+diff --git a/nodes/node_08b_add_subtitles_en.py b/nodes/node_08b_add_subtitles_en.py
+new file mode 100644
+index 0000000..5612364
+--- /dev/null
++++ b/nodes/node_08b_add_subtitles_en.py
+@@ -0,0 +1,74 @@
++"""节点 08b:add_subtitles_en — 把英文字幕写入英文分支草稿(与 node_08 同类)。
++
++背景(2026-10 在 main@4c5b042 实测):英文分支草稿 fork 自快照②,而快照②早于
++node_08,所以草稿里 ``materials.texts`` 为空;16a 的 ``_write_marker`` 只按 index 往
++**已存在**的 texts 里补 ``text_en``,空表时什么都不写。结果英文草稿里没有任何字幕
++文本素材,关卡③ resume 后 ``_read_segments_from_draft`` 读到 0 段、SRT 被重写成 0 字节。
++
++本节点补上这一步:读 ``state["subtitle_segments_en"]``(16a 产出),把每段英文写成
++一条 ``materials.texts`` 素材。
++
++设计要点:
++- **只返回变更字段(delta)**:本节点与中文主线节点同一超步并行,返回整份 state 会让
++  LastValue 通道在同一超步被写两次(InvalidUpdateError)。
++- **幂等**:整表替换 ``materials.texts``(不是 append),重放得到同一结果。
++- ``content`` 与 ``text_en`` 都写英文:``content`` 供剪映显示与
++  ``_read_segments_from_draft`` 还原;``text_en`` 与 16a 的 marker 约定一致。
++"""
++
++from __future__ import annotations
++
++from pathlib import Path
++
++from nodes._draft_io import apply_and_write, load_draft
++from nodes._subtitle_texts import make_text_material
++from nodes.node_08_add_subtitles import _style_from_scout
++from state import WorkflowState
++
++
++def add_subtitles_en(state: WorkflowState) -> dict:
++    """英文字幕 → 英文分支草稿 ``materials.texts``。"""
++    draft_dir_raw = state.get("draft_dir_en_branch")
++    segments = list(state.get("subtitle_segments_en") or [])
++
++    if not draft_dir_raw:
++        return {"error_log": ["[node_08b] draft_dir_en_branch 缺失,跳过英文字幕写入"]}
++    if not segments:
++        return {"error_log": ["[node_08b] subtitle_segments_en 为空,跳过英文字幕写入"]}
++
++    draft_file = Path(draft_dir_raw) / "draft_content.json"
++    if not draft_file.exists():
++        return {"error_log": [f"[node_08b] 英文分支草稿不存在,跳过: {draft_file}"]}
++
++    draft = load_draft(draft_file)
++    # 英文字幕用默认基础样式。注:node_08 把 scout 报告写到 state["subtitle_scout_report"],
++    # 但该键没有在 state.py 里声明,图运行时会被丢弃,这里拿不到。
++    # 如需与中文字幕同一份 scout 样式:先在 state.py 声明该键,再把 None 换成 state.get(...)。
++    style, _notes = _style_from_scout(None)
++
++    texts = []
++    for i, seg in enumerate(segments):
++        start_ms = int(seg.get("start_ms", 0))
++        end_ms = int(seg.get("end_ms", start_ms + 1_000))
++        text_en = str(seg.get("text_en") or "")
++        texts.append(make_text_material(
++            index=i,
++            content=text_en,
++            start_us=start_ms * 1_000,
++            duration_us=(end_ms - start_ms) * 1_000,
++            style=style,
++            track_name="Subtitles_en",
++            id_prefix="text-en",
++            extra={"text_en": text_en},
++        ))
++
++    # 整表替换 = 幂等(重放不会叠出重复字幕)
++    draft.setdefault("materials", {})["texts"] = texts
++
++    log = apply_and_write(
++        draft_file,
++        draft,
++        "node_08b",
++        done_tag="node_08b_add_subtitles_en_done",
++    )
++    return {"status_log": log}
+diff --git a/nodes/node_10_inject_text_fx.py b/nodes/node_10_inject_text_fx.py
+index 80ef2aa..a384053 100644
+--- a/nodes/node_10_inject_text_fx.py
++++ b/nodes/node_10_inject_text_fx.py
+@@ -36,9 +36,20 @@ def _pick_default_intro_animation(template_lib) -> dict | None:
+     return template_lib.pick_text_animation("intro", intro_list[0])
+ 
+ 
+-def inject_text_fx(state: WorkflowState) -> dict:
+-    """读取草稿 → 为每条字幕追加描边/投影/入场动画字段 → 原子写回。"""
+-    draft_path = Path(state["draft_path"])
++def apply_text_fx(
++    draft_path: Path,
++    status_log: list[str] | None,
++    *,
++    node_tag: str,
++    done_tag: str,
++) -> list[str]:
++    """读取草稿 → 为每条字幕追加描边/投影/入场动画字段 → 原子写回。
++
++    中文主线(``inject_text_fx``)与英文分支(``inject_text_fx_en``)共用的核心。
++
++    Returns:
++        新的 status_log 列表(= 传入的 status_log + done_tag + 可能的剪映告警)。
++    """
+     draft = load_draft(draft_path)
+     template_lib = load_resource_libraries(
+         fx_template="templates/fx_template.json",
+@@ -74,13 +85,42 @@ def inject_text_fx(state: WorkflowState) -> dict:
+         style.update(default_style)
+ 
+     # Week 5:参数从 draft_path 提升为 draft_path.parent,safe_write_draft 双写
+-    log = list(state.get("status_log", []) or [])
+-    log.extend(
+-        apply_and_write(
+-            draft_path,
+-            draft,
+-            "node_10",
+-            done_tag="node_10_inject_text_fx_done",
+-        )
++    log = list(status_log or [])
++    log.extend(apply_and_write(draft_path, draft, node_tag, done_tag=done_tag))
++    return log
++
++
++def inject_text_fx(state: WorkflowState) -> dict:
++    """中文主线节点 10:对中文草稿(``state["draft_path"]``)的字幕加花字/动画。
++
++    对外行为与重构前完全一致(返回整份 state + 新 status_log)。
++    """
++    log = apply_text_fx(
++        Path(state["draft_path"]),
++        state.get("status_log"),
++        node_tag="node_10",
++        done_tag="node_10_inject_text_fx_done",
+     )
+     return {**state, "status_log": log}
++
++
++def inject_text_fx_en(state: WorkflowState) -> dict:
++    """英文分支节点 10b:对英文分支草稿的字幕加花字/动画(与中文共用同一核心)。
++
++    - 目标草稿:``state["draft_dir_en_branch"]/draft_content.json``。
++    - **只返回 delta**:与中文主线节点同一超步并行,不能返回整份 state。
++    - done_tag 用独立名字,避免被 status_log 的去重 reducer 与中文 node_10 合并成一条。
++    """
++    draft_dir_raw = state.get("draft_dir_en_branch")
++    if not draft_dir_raw:
++        return {"error_log": ["[node_10b] draft_dir_en_branch 缺失,跳过英文花字"]}
++    draft_file = Path(draft_dir_raw) / "draft_content.json"
++    if not draft_file.exists():
++        return {"error_log": [f"[node_10b] 英文分支草稿不存在,跳过: {draft_file}"]}
++    log = apply_text_fx(
++        draft_file,
++        [],
++        node_tag="node_10b",
++        done_tag="node_10b_inject_text_fx_en_done",
++    )
++    return {"status_log": log}
+diff --git a/nodes/node_join_before_delivery.py b/nodes/node_join_before_delivery.py
+index 4f17548..86bd47e 100644
+--- a/nodes/node_join_before_delivery.py
++++ b/nodes/node_join_before_delivery.py
+@@ -3,8 +3,9 @@
+ 职责:轻量 QA 闸门,**不**做深度校验。失败时仅记录到 ``join_qa_issues`` 与
+ ``error_log``,流程仍走到 END(便于联调观察,深度闸门留 Week 5)。
+ 
+-汇合条件:两条分支(中文尾段 → node_15、英文分支 → node_17)的输出都到本节点时
+-自动触发(LangGraph fan-in)。
++位置(2026-10 调序后):尾链 node_09 → 11 → 12 → 13 的**最后一站**,单前驱。
++两条分支的汇合屏障已前移到 ``node_09_inject_fx``(``add_edge([node_15, node_17], node_09)``);
++本节点只检查"交付物是否齐全",此时尾链(含 BGM/音量)已全部完成。
+ """
+ 
+ from __future__ import annotations
+diff --git a/tests/integration/test_reorder_topology.py b/tests/integration/test_reorder_topology.py
+new file mode 100644
+index 0000000..2a275c9
+--- /dev/null
++++ b/tests/integration/test_reorder_topology.py
+@@ -0,0 +1,166 @@
++"""2026-10 调序守护测试:英文线补 08b/10b,09/11/12/13 推迟到 node_17 之后。
++
++用真实节点整图运行(仅屏蔽节点 2/3 的进程拉起;ASR/翻译/TTS 走仓库默认 Mock),
++用 ``stream_mode="debug"`` 的 task 事件还原超步(step)顺序。
++
++这组测试专门补"测试盲区":原有集成测试几乎不断言节点顺序(例如
++``test_week5_resilience.py::test_checkpoint3_interrupt_and_resume_path`` 里的
++``c3_seen`` 只赋值、从未断言)。
++"""
++
++from __future__ import annotations
++
++import contextlib
++import json
++from pathlib import Path
++from unittest.mock import patch
++
++import pytest
++from langgraph.checkpoint.memory import InMemorySaver
++from langgraph.types import Command
++
++from graph import build_graph
++
++
++class _StubProc:
++    pid = 11111
++
++
++@pytest.fixture(autouse=True)
++def _patch_external(monkeypatch: pytest.MonkeyPatch) -> None:
++    """屏蔽节点 2/3 的真实进程拉起(与 test_week4_graph 同一写法)。"""
++    import nodes.node_02_launch_openstoryline as m2
++    import nodes.node_03_open_preview as m3
++
++    monkeypatch.setattr(
++        m2, "subprocess",
++        type("S", (), {"Popen": staticmethod(lambda *a, **k: _StubProc()), "PIPE": -1}),
++    )
++    monkeypatch.setattr(m2, "_wait_for_ready", lambda url, t: True)
++    monkeypatch.setattr(
++        m3, "subprocess",
++        type("S", (), {"Popen": staticmethod(lambda *a, **k: _StubProc())}),
++    )
++
++
++def _seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
++    """预置 35s 草稿;**不**预置 asr_segments_zh —— 必须由 node_08 自己产出。"""
++    draft_dir = tmp_path / "drafts" / "demo"
++    draft_dir.mkdir(parents=True)
++    dur = 35_000_000
++    draft_file = draft_dir / "draft_content.json"
++    draft_file.write_text(json.dumps({
++        "canvas_config": {"width": 1080, "height": 1920},
++        "duration": dur,
++        "materials": {"videos": [{"id": "v1"}]},
++        "tracks": [{"type": "video", "fps": 30,
++                    "segments": [{"id": "s1", "target_timerange": {"start": 0, "duration": dur}}]}],
++    }, ensure_ascii=False), encoding="utf-8")
++    monkeypatch.setenv("AUTO_VIDEO_EDITOR_DRAFT_DIR", str(draft_dir))
++    return {
++        "session_id": "reorder",
++        "video_input_path": "C:/tmp/fake.mp4",
++        "draft_path": str(draft_file),
++        "draft_encryption_status": "plaintext",
++        "draft_version_strategy": "strategy_a_version_lock",
++        "shot_plan": {"video_path": "", "shots": [{"id": "sh1", "start_s": 0.0, "end_s": 5.0}]},
++        "error_log": [],
++        "status_log": ["node_05_generate_draft_done"],
++    }
++
++
++def _drive(state: dict, *, force_layout_issue: bool = False, human_edit: str | None = None):
++    """整图跑到 END,遇到 interrupt 就批量 resume。
++
++    Returns:
++        (steps, stops, final_values)
++        steps: [(step, node_name)];stops: 每次挂起的关卡标签列表;
++    """
++    g = build_graph(checkpointer=InMemorySaver(), thread_id="reorder", start_heartbeat_thread=False)
++    config = {"configurable": {"thread_id": "reorder"}}
++    steps: list[tuple[int, str]] = []
++    stops: list[list[str]] = []
++    issues = [{"index": 0, "reason": "text_too_wide", "width_px": 9999, "max_width_px": 1500}]
++    ctx = (patch("nodes.node_16a_translate_and_check.validate_layout", return_value=issues)
++           if force_layout_issue else contextlib.nullcontext())
++    with ctx:
++        inp: object = state
++        for _ in range(14):
++            for ev in g.stream(inp, config, stream_mode="debug"):
++                if ev["type"] == "task":
++                    steps.append((ev["step"], ev["payload"]["name"]))
++            snap = g.get_state(config)
++            if not snap.next:
++                break
++            pend = list(snap.interrupts)
++            labels = [str((i.value or {}).get("checkpoint")) if isinstance(i.value, dict) else "?" for i in pend]
++            stops.append(labels)
++            if human_edit and "③" in labels:
++                en_dir = Path(snap.values["draft_dir_en_branch"])
++                f = en_dir / "draft_content.json"
++                d = json.loads(f.read_text(encoding="utf-8"))
++                d["materials"]["texts"][0]["content"] = human_edit  # 模拟人工在剪映里校对
++                f.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
++            inp = Command(resume={i.id: True for i in pend})
++        else:  # pragma: no cover
++            pytest.fail("14 轮仍未结束:疑似死循环")
++    return steps, stops, g.get_state(config).values
++
++
++def _first_step(steps: list[tuple[int, str]], name: str) -> int:
++    return min(s for s, n in steps if n == name)
++
++
++def test_new_nodes_registered(tmp_path, monkeypatch):
++    g = build_graph(checkpointer=InMemorySaver(), thread_id="t", start_heartbeat_thread=False)
++    names = set(g.get_graph().nodes)
++    assert {"node_08b_add_subtitles_en", "node_10b_inject_text_fx_en"} <= names
++
++
++def test_execution_order_after_reorder(tmp_path, monkeypatch):
++    steps, stops, _ = _drive(_seed(tmp_path, monkeypatch))
++    s = lambda n: _first_step(steps, n)  # noqa: E731
++
++    # 中文线:08 → 10 → 14 → 15
++    assert s("node_08_add_subtitles") < s("node_10_inject_text_fx") < s("node_14_make_covers") < s("node_15_localize_covers_en")
++    # 英文线:16a → 08b → 10b → 17;且 16a 严格晚于 08(显式依赖 asr_segments_zh)
++    assert s("node_08_add_subtitles") < s("fork_draft_for_english_branch") < s("node_16a_translate_and_check")
++    assert s("node_16a_translate_and_check") < s("node_08b_add_subtitles_en") < s("node_10b_inject_text_fx_en") < s("node_17_inject_english_tts")
++    # 尾链:09 必须晚于 15 和 17(汇合屏障),之后严格 09 → 11 → 12 → 13 → QA
++    assert s("node_09_inject_fx") > max(s("node_15_localize_covers_en"), s("node_17_inject_english_tts"))
++    assert (s("node_09_inject_fx") < s("node_11_inject_sticker") < s("node_12_human_add_bgm")
++            < s("node_13_adjust_volume") < s("join_before_delivery"))
++    # 各节点只执行一次(interrupt 重放的 12 号节点除外,它按 task 事件会出现两次)
++    for n in ("node_09_inject_fx", "node_11_inject_sticker", "node_13_adjust_volume", "join_before_delivery",
++              "node_16a_translate_and_check", "node_08b_add_subtitles_en", "node_10b_inject_text_fx_en"):
++        assert sum(1 for _, x in steps if x == n) == 1, n
++    # 正常路径:依次挂起 ① → ②。关卡⓪ 被 tests/conftest.py 的 autouse 夹具
++    # (_skip_checkpoint0_for_pre_migration_tests)旁路,所以这里不会出现 ⓪。
++    assert stops == [["①"], ["②"]]
++
++
++def test_english_draft_gets_subtitles_and_text_fx(tmp_path, monkeypatch):
++    _, _, final = _drive(_seed(tmp_path, monkeypatch))
++    en = json.loads((Path(final["draft_dir_en_branch"]) / "draft_content.json").read_text(encoding="utf-8"))
++    texts = en["materials"]["texts"]
++    assert len(texts) == len(final["subtitle_segments_en"]) > 0
++    assert all(t["track_name"] == "Subtitles_en" for t in texts)
++    assert all(t["content"] == t["text_en"] for t in texts)
++    assert all(t["style"].get("outline") for t in texts)          # 10b 的花字已生效
++    # 中文草稿不受英文节点影响
++    zh = json.loads(Path(final["draft_path"]).read_text(encoding="utf-8"))
++    assert all(t["track_name"] == "Subtitles" for t in zh["materials"]["texts"])
++
++
++def test_checkpoint3_path_no_parallel_conflict_and_human_edit_survives(tmp_path, monkeypatch):
++    steps, stops, final = _drive(_seed(tmp_path, monkeypatch),
++                                 force_layout_issue=True, human_edit="HUMAN FIXED LINE")
++    s = lambda n: _first_step(steps, n)  # noqa: E731
++    # ③ 与 ② 永不同时挂起:先 ③(英文线),尾链走到 BGM 时才 ②。⓪ 同上被旁路。
++    assert stops == [["①"], ["③"], ["②"]]
++    # ③ 之后才跑 10b/17,屏障之后才跑 09
++    assert s("node_checkpoint3_layout_review") < s("node_10b_inject_text_fx_en") < s("node_17_inject_english_tts") < s("node_09_inject_fx")
++    # 人工校对的内容保住了,SRT 不再被重写成空文件
++    srt = Path(final["draft_dir_en_branch"]) / "subtitle_en.srt"
++    assert srt.stat().st_size > 0
++    assert "HUMAN FIXED LINE" in srt.read_text(encoding="utf-8")

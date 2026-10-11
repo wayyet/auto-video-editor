@@ -1,0 +1,629 @@
+{
+ "nodes": [
+  {
+   "name": "clean_cache",
+   "fn": "$clean_cache",
+   "line": 472
+  },
+  {
+   "name": "launch_openstoryline",
+   "fn": "$launch_openstoryline_service",
+   "line": 473
+  },
+  {
+   "name": "open_preview",
+   "fn": "$open_preview",
+   "line": 474
+  },
+  {
+   "name": "checkpoint0_storyline_plan",
+   "fn": "$checkpoint0_wait_storyline_plan",
+   "line": 476
+  },
+  {
+   "name": "import_video",
+   "fn": "$import_video_node",
+   "line": 477
+  },
+  {
+   "name": "get_storyboard_plan",
+   "fn": "$get_storyboard_plan",
+   "line": 478
+  },
+  {
+   "name": "generate_draft",
+   "fn": "$generate_draft_wrapped",
+   "line": 479
+  },
+  {
+   "name": "node_06_human_reorder",
+   "fn": "$human_reorder",
+   "line": 482
+  },
+  {
+   "name": "node_07_speed_fit",
+   "fn": "$speed_fit",
+   "line": 483
+  },
+  {
+   "name": "escalate_guardrail_failure",
+   "fn": "$escalate_guardrail_failure",
+   "line": 484
+  },
+  {
+   "name": "bridge_snapshot2",
+   "fn": "$bridge_snapshot2",
+   "line": 485
+  },
+  {
+   "name": "node_08_add_subtitles",
+   "fn": "$add_subtitles",
+   "line": 486
+  },
+  {
+   "name": "node_09_inject_fx",
+   "fn": "$inject_fx",
+   "line": 487
+  },
+  {
+   "name": "node_10_inject_text_fx",
+   "fn": "$inject_text_fx",
+   "line": 488
+  },
+  {
+   "name": "node_11_inject_sticker",
+   "fn": "$inject_sticker",
+   "line": 489
+  },
+  {
+   "name": "node_12_human_add_bgm",
+   "fn": "$human_add_bgm",
+   "line": 490
+  },
+  {
+   "name": "node_13_adjust_volume",
+   "fn": "$adjust_volume",
+   "line": 491
+  },
+  {
+   "name": "assembly_discover_and_probe",
+   "fn": "$assembly_discover_and_probe_node",
+   "line": 497
+  },
+  {
+   "name": "assembly_asr_and_visual_observe",
+   "fn": "$assembly_asr_and_visual_observe_node",
+   "line": 498
+  },
+  {
+   "name": "assembly_build_timeline",
+   "fn": "$assembly_build_timeline_node",
+   "line": 499
+  },
+  {
+   "name": "assembly_validate_render_qc",
+   "fn": "$assembly_validate_render_qc_node",
+   "line": 500
+  },
+  {
+   "name": "assembly_repair_loop",
+   "fn": "$assembly_repair_loop_node",
+   "line": 501
+  },
+  {
+   "name": "assembly_write_report",
+   "fn": "$assembly_write_report_node",
+   "line": 502
+  },
+  {
+   "name": "fork_draft_for_english_branch",
+   "fn": "$fork_draft_for_english_branch",
+   "line": 505
+  },
+  {
+   "name": "node_14_make_covers",
+   "fn": "$node_14_make_covers",
+   "line": 506
+  },
+  {
+   "name": "node_15_localize_covers_en",
+   "fn": "$node_15_localize_covers_en",
+   "line": 507
+  },
+  {
+   "name": "node_16a_translate_and_check",
+   "fn": "$node_16a_translate_and_check",
+   "line": 508
+  },
+  {
+   "name": "node_checkpoint3_layout_review",
+   "fn": "$node_checkpoint3_layout_review",
+   "line": 509
+  },
+  {
+   "name": "node_17_inject_english_tts",
+   "fn": "$node_17_inject_english_tts",
+   "line": 510
+  },
+  {
+   "name": "join_before_delivery",
+   "fn": "$join_before_delivery",
+   "line": 511
+  },
+  {
+   "name": "storyline_load_media",
+   "fn": "$storyline_load_media_node",
+   "line": 517
+  },
+  {
+   "name": "storyline_search_media",
+   "fn": "$storyline_search_media_node",
+   "line": 518
+  },
+  {
+   "name": "storyline_search_web_topic",
+   "fn": "$storyline_search_web_topic_node",
+   "line": 523
+  },
+  {
+   "name": "storyline_split_shots",
+   "fn": "$storyline_split_shots_node",
+   "line": 524
+  },
+  {
+   "name": "storyline_local_asr",
+   "fn": "$storyline_local_asr_node",
+   "line": 528
+  },
+  {
+   "name": "storyline_speech_rough_cut",
+   "fn": "$storyline_speech_rough_cut_node",
+   "line": 529
+  },
+  {
+   "name": "storyline_generate_ai_transition",
+   "fn": "$storyline_generate_ai_transition_node",
+   "line": 532
+  },
+  {
+   "name": "storyline_understand_clips",
+   "fn": "$storyline_understand_clips_node",
+   "line": 534
+  },
+  {
+   "name": "storyline_filter_clips",
+   "fn": "$storyline_filter_clips_node",
+   "line": 535
+  },
+  {
+   "name": "storyline_group_clips",
+   "fn": "$storyline_group_clips_node",
+   "line": 536
+  },
+  {
+   "name": "storyline_generate_script",
+   "fn": "$storyline_generate_script_node",
+   "line": 537
+  },
+  {
+   "name": "storyline_script_template_recommendation",
+   "fn": "$storyline_script_template_recommendation_node",
+   "line": 538
+  },
+  {
+   "name": "storyline_generate_voiceover",
+   "fn": "$storyline_generate_voiceover_node",
+   "line": 540
+  },
+  {
+   "name": "storyline_select_bgm",
+   "fn": "$storyline_select_bgm_node",
+   "line": 541
+  },
+  {
+   "name": "storyline_recommend_transition",
+   "fn": "$storyline_recommend_transition_node",
+   "line": 542
+  },
+  {
+   "name": "storyline_recommend_text",
+   "fn": "$storyline_recommend_text_node",
+   "line": 543
+  },
+  {
+   "name": "storyline_plan_timeline_pro",
+   "fn": "$storyline_plan_timeline_pro_node",
+   "line": 544
+  },
+  {
+   "name": "storyline_plan_timeline_ai_transition",
+   "fn": "$storyline_plan_timeline_ai_transition_node",
+   "line": 548
+  },
+  {
+   "name": "storyline_render_video",
+   "fn": "$storyline_render_video_node",
+   "line": 550
+  },
+  {
+   "name": "storyline_qa_gate",
+   "fn": "$_qa_gate_mod.storyline_qa_gate_node",
+   "line": 551
+  },
+  {
+   "name": "storyline_join",
+   "fn": "$_join_storyline_mod.storyline_join_node",
+   "line": 552
+  }
+ ],
+ "edges": [
+  {
+   "src": "$START",
+   "dst": "launch_openstoryline",
+   "line": 559,
+   "ctx": []
+  },
+  {
+   "src": "launch_openstoryline",
+   "dst": "open_preview",
+   "line": 560,
+   "ctx": []
+  },
+  {
+   "src": "checkpoint0_storyline_plan",
+   "dst": "import_video",
+   "line": 576,
+   "ctx": []
+  },
+  {
+   "src": "import_video",
+   "dst": "get_storyboard_plan",
+   "line": 577,
+   "ctx": []
+  },
+  {
+   "src": "generate_draft",
+   "dst": "assembly_discover_and_probe",
+   "line": 599,
+   "ctx": [
+    "_config.ASSEMBLY_QC_GATE_ENABLED"
+   ]
+  },
+  {
+   "src": "assembly_discover_and_probe",
+   "dst": "assembly_asr_and_visual_observe",
+   "line": 600,
+   "ctx": [
+    "_config.ASSEMBLY_QC_GATE_ENABLED"
+   ]
+  },
+  {
+   "src": "assembly_asr_and_visual_observe",
+   "dst": "assembly_build_timeline",
+   "line": 601,
+   "ctx": [
+    "_config.ASSEMBLY_QC_GATE_ENABLED"
+   ]
+  },
+  {
+   "src": "assembly_build_timeline",
+   "dst": "assembly_validate_render_qc",
+   "line": 602,
+   "ctx": [
+    "_config.ASSEMBLY_QC_GATE_ENABLED"
+   ]
+  },
+  {
+   "src": "assembly_repair_loop",
+   "dst": "assembly_validate_render_qc",
+   "line": 611,
+   "ctx": [
+    "_config.ASSEMBLY_QC_GATE_ENABLED"
+   ]
+  },
+  {
+   "src": "assembly_write_report",
+   "dst": "node_06_human_reorder",
+   "line": 612,
+   "ctx": [
+    "_config.ASSEMBLY_QC_GATE_ENABLED"
+   ]
+  },
+  {
+   "src": "generate_draft",
+   "dst": "node_06_human_reorder",
+   "line": 615,
+   "ctx": [
+    "not(_config.ASSEMBLY_QC_GATE_ENABLED)"
+   ]
+  },
+  {
+   "src": "node_06_human_reorder",
+   "dst": "node_07_speed_fit",
+   "line": 617,
+   "ctx": []
+  },
+  {
+   "src": "escalate_guardrail_failure",
+   "dst": "$END",
+   "line": 629,
+   "ctx": []
+  },
+  {
+   "src": "bridge_snapshot2",
+   "dst": "node_08_add_subtitles",
+   "line": 630,
+   "ctx": []
+  },
+  {
+   "src": "node_08_add_subtitles",
+   "dst": "node_09_inject_fx",
+   "line": 633,
+   "ctx": []
+  },
+  {
+   "src": "node_09_inject_fx",
+   "dst": "node_10_inject_text_fx",
+   "line": 634,
+   "ctx": []
+  },
+  {
+   "src": "node_10_inject_text_fx",
+   "dst": "node_11_inject_sticker",
+   "line": 635,
+   "ctx": []
+  },
+  {
+   "src": "node_11_inject_sticker",
+   "dst": "node_12_human_add_bgm",
+   "line": 636,
+   "ctx": []
+  },
+  {
+   "src": "node_12_human_add_bgm",
+   "dst": "node_13_adjust_volume",
+   "line": 637,
+   "ctx": []
+  },
+  {
+   "src": "node_13_adjust_volume",
+   "dst": "node_14_make_covers",
+   "line": 641,
+   "ctx": []
+  },
+  {
+   "src": "node_14_make_covers",
+   "dst": "node_15_localize_covers_en",
+   "line": 642,
+   "ctx": []
+  },
+  {
+   "src": "bridge_snapshot2",
+   "dst": "fork_draft_for_english_branch",
+   "line": 645,
+   "ctx": []
+  },
+  {
+   "src": "fork_draft_for_english_branch",
+   "dst": "node_16a_translate_and_check",
+   "line": 646,
+   "ctx": []
+  },
+  {
+   "src": "node_checkpoint3_layout_review",
+   "dst": "node_17_inject_english_tts",
+   "line": 655,
+   "ctx": []
+  },
+  {
+   "src": [
+    "node_15_localize_covers_en",
+    "node_17_inject_english_tts"
+   ],
+   "dst": "join_before_delivery",
+   "line": 659,
+   "ctx": []
+  },
+  {
+   "src": "join_before_delivery",
+   "dst": "$END",
+   "line": 665,
+   "ctx": []
+  },
+  {
+   "src": "storyline_search_media",
+   "dst": "storyline_split_shots",
+   "line": 684,
+   "ctx": []
+  },
+  {
+   "src": "storyline_local_asr",
+   "dst": "storyline_speech_rough_cut",
+   "line": 697,
+   "ctx": []
+  },
+  {
+   "src": "storyline_understand_clips",
+   "dst": "storyline_filter_clips",
+   "line": 700,
+   "ctx": []
+  },
+  {
+   "src": "storyline_filter_clips",
+   "dst": "storyline_group_clips",
+   "line": 701,
+   "ctx": []
+  },
+  {
+   "src": "storyline_group_clips",
+   "dst": "storyline_generate_script",
+   "line": 707,
+   "ctx": []
+  },
+  {
+   "src": "storyline_group_clips",
+   "dst": "storyline_recommend_transition",
+   "line": 708,
+   "ctx": []
+  },
+  {
+   "src": "storyline_generate_script",
+   "dst": "storyline_script_template_recommendation",
+   "line": 715,
+   "ctx": []
+  },
+  {
+   "src": "storyline_generate_script",
+   "dst": "storyline_generate_voiceover",
+   "line": 716,
+   "ctx": []
+  },
+  {
+   "src": "storyline_generate_script",
+   "dst": "storyline_select_bgm",
+   "line": 717,
+   "ctx": []
+  },
+  {
+   "src": "storyline_generate_script",
+   "dst": "storyline_recommend_text",
+   "line": 718,
+   "ctx": []
+  },
+  {
+   "src": "storyline_generate_voiceover",
+   "dst": "storyline_select_bgm",
+   "line": 721,
+   "ctx": []
+  },
+  {
+   "src": "storyline_select_bgm",
+   "dst": "storyline_recommend_transition",
+   "line": 724,
+   "ctx": []
+  },
+  {
+   "src": [
+    "storyline_split_shots",
+    "storyline_group_clips",
+    "storyline_generate_script",
+    "storyline_generate_voiceover",
+    "storyline_select_bgm"
+   ],
+   "dst": "storyline_plan_timeline_pro",
+   "line": 731,
+   "ctx": []
+  },
+  {
+   "src": [
+    "storyline_plan_timeline_pro",
+    "storyline_recommend_transition",
+    "storyline_recommend_text"
+   ],
+   "dst": "storyline_qa_gate",
+   "line": 743,
+   "ctx": []
+  },
+  {
+   "src": "storyline_render_video",
+   "dst": "storyline_join",
+   "line": 763,
+   "ctx": []
+  }
+ ],
+ "cond": [
+  {
+   "src": "open_preview",
+   "router": "$_route_mode",
+   "map": {
+    "checkpoint0_storyline_plan": "checkpoint0_storyline_plan",
+    "storyline_load_media": "storyline_load_media"
+   },
+   "line": 563,
+   "ctx": []
+  },
+  {
+   "src": "get_storyboard_plan",
+   "router": "$_route_after_import",
+   "map": {
+    "generate_draft": "generate_draft",
+    "$END": "$END"
+   },
+   "line": 578,
+   "ctx": []
+  },
+  {
+   "src": "assembly_validate_render_qc",
+   "router": "$route_after_assembly_qc",
+   "map": {
+    "assembly_repair_loop": "assembly_repair_loop",
+    "assembly_write_report": "assembly_write_report"
+   },
+   "line": 603,
+   "ctx": [
+    "_config.ASSEMBLY_QC_GATE_ENABLED"
+   ]
+  },
+  {
+   "src": "node_07_speed_fit",
+   "router": "$route_after_speed_fit",
+   "map": {
+    "node_08_add_subtitles": "bridge_snapshot2",
+    "node_07_speed_fit": "node_07_speed_fit",
+    "escalate_guardrail_failure": "escalate_guardrail_failure"
+   },
+   "line": 620,
+   "ctx": []
+  },
+  {
+   "src": "node_16a_translate_and_check",
+   "router": "$route_after_translate",
+   "map": {
+    "node_checkpoint3_layout_review": "node_checkpoint3_layout_review",
+    "node_17_inject_english_tts": "node_17_inject_english_tts"
+   },
+   "line": 647,
+   "ctx": []
+  },
+  {
+   "src": "storyline_load_media",
+   "router": "$_storyline_route_after_load_media",
+   "map": {
+    "storyline_search_media": "storyline_search_media",
+    "storyline_split_shots": "storyline_split_shots"
+   },
+   "line": 676,
+   "ctx": []
+  },
+  {
+   "src": "storyline_split_shots",
+   "router": "$_storyline_route_after_split_shots",
+   "map": {
+    "storyline_understand_clips": "storyline_understand_clips",
+    "storyline_local_asr": "storyline_local_asr"
+   },
+   "line": 689,
+   "ctx": []
+  },
+  {
+   "src": "storyline_qa_gate",
+   "router": "$_qa_gate_mod.route_after_storyline_qa",
+   "map": {
+    "storyline_group_clips": "storyline_group_clips",
+    "storyline_render_video": "storyline_render_video"
+   },
+   "line": 753,
+   "ctx": []
+  },
+  {
+   "src": "storyline_join",
+   "router": "$_route_after_storyline_join",
+   "map": {
+    "generate_draft": "generate_draft",
+    "$END": "$END"
+   },
+   "line": 766,
+   "ctx": []
+  }
+ ]
+}

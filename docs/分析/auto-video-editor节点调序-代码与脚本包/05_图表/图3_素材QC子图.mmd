@@ -1,0 +1,28 @@
+flowchart TD
+  generate_draft["node_05 生成剪映初始草稿"]
+  node_06_human_reorder["关卡① node_06"]
+  subgraph QCG["素材 QC 子图(ASSEMBLY_QC_GATE_ENABLED,默认开)"]
+    direction TB
+    assembly_discover_and_probe["1/6 发现与探测素材"]
+    assembly_asr_and_visual_observe["2/6 ASR 与视觉观察"]
+    assembly_build_timeline["3/6 构建时间线"]
+    assembly_validate_render_qc["4/6 校验 / 渲染 / QC"]
+    assembly_repair_loop["5/6 修复循环"]
+    assembly_write_report["6/6 写 QC 报告"]
+  end
+  generate_draft --> assembly_discover_and_probe
+  assembly_discover_and_probe --> assembly_asr_and_visual_observe
+  assembly_asr_and_visual_observe --> assembly_build_timeline
+  assembly_build_timeline --> assembly_validate_render_qc
+  assembly_validate_render_qc -.->|"未通过且未到重试上限"| assembly_repair_loop
+  assembly_validate_render_qc -.->|"通过,或重试已达上限<br/>(软降级)"| assembly_write_report
+  assembly_repair_loop --> assembly_validate_render_qc
+  assembly_write_report --> node_06_human_reorder
+  generate_draft -.->|"QC 开关关闭时直达"| node_06_human_reorder
+  classDef same fill:#e8f1fb,stroke:#3b6ea5,color:#111
+  classDef gate fill:#ffe0b2,stroke:#e65100,color:#111
+  classDef newn fill:#c8f7c5,stroke:#2e7d32,stroke-width:2px,color:#111
+  classDef moved fill:#fff3b0,stroke:#b8860b,stroke-width:2px,color:#111
+  classDef dead fill:#eeeeee,stroke:#888,stroke-dasharray:4 3,color:#555
+  class generate_draft,assembly_discover_and_probe,assembly_asr_and_visual_observe,assembly_build_timeline,assembly_validate_render_qc,assembly_repair_loop,assembly_write_report same
+  class node_06_human_reorder gate

@@ -1,0 +1,131 @@
+........................................................................ [  8%]
+........................................................................ [ 17%]
+........................................................................ [ 26%]
+........................................................................ [ 35%]
+........................................................................ [ 44%]
+........FF.............................................................. [ 52%]
+........................................................................ [ 61%]
+......ss................................................................ [ 70%]
+........................................................................ [ 79%]
+........................................................................ [ 88%]
+.......................sss..s.......ss............................s.s.ss [ 96%]
+sFs.ss...sss.s....ss.sss.                                                [100%]
+=================================== FAILURES ===================================
+_______________ test_resolved_cache_paths_excludes_venv_pycache ________________
+
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-10/test_resolved_cache_paths_excl1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f469e237e70>
+
+    def test_resolved_cache_paths_excludes_venv_pycache(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``__pycache__`` 递归必须排除 ``venv/`` 与 ``.venv/`` 内部。
+    
+        在 tmp_path 下造两个被排除的 pycache,断言它们不在 ``resolved_cache_paths()`` 中。
+        """
+        # 在 tmp_path 下造 venv/.venv 各自的 __pycache__
+        venv_root = tmp_path / "venv"
+        dotvenv_root = tmp_path / ".venv"
+        real_pkg = tmp_path / "myproj" / "mypkg"
+        for root in (venv_root, dotvenv_root, real_pkg):
+            (root / "__pycache__").mkdir(parents=True)
+            (root / "__pycache__" / "module.cpython-313.pyc").write_bytes(b"")
+            (root / "__pycache__" / "sub").mkdir()  # 多嵌一层验证递归也跳过
+    
+        # 把 __pycache__ 这一条 spec 的 root 指向 tmp_path,保留其 exclude_substr
+        from config import CacheGlobSpec, _expand_spec
+    
+        spec = next(s for s in CACHE_GLOB_SPECS if s.pattern == "__pycache__")
+        patched = CacheGlobSpec(
+            root=str(tmp_path),  # 用绝对路径,绕开环境变量展开
+            kind=spec.kind,
+            pattern=spec.pattern,
+            exclude_substr=spec.exclude_substr,
+            description=spec.description,
+        )
+        found = _expand_spec(patched)
+    
+        # venv 与 .venv 内部的所有 __pycache__ 必须全部被排除
+        assert all("\\venv\\__pycache__" not in str(p) and "\\.venv\\__pycache__" not in str(p) for p in found), (
+            f"venv 内 __pycache__ 应被排除,实际找到:{[str(p) for p in found]}"
+        )
+        # 真包里的 __pycache__ 必须出现(并含 sub 子目录,验证递归生效)
+        real_hits = [p for p in found if "\\myproj\\mypkg\\__pycache__" in str(p)]
+>       assert real_hits, f"myproj/mypkg 下的 __pycache__ 应被命中,实际找到:{[str(p) for p in found]}"
+E       AssertionError: myproj/mypkg 下的 __pycache__ 应被命中,实际找到:['/tmp/pytest-of-root/pytest-10/test_resolved_cache_paths_excl1/venv/__pycache__', '/tmp/pytest-of-root/pytest-10/test_resolved_cache_paths_excl1/.venv/__pycache__', '/tmp/pytest-of-root/pytest-10/test_resolved_cache_paths_excl1/myproj/mypkg/__pycache__']
+E       assert []
+
+tests/unit/test_node_01_clean_cache.py:143: AssertionError
+_______________ test_resolved_cache_paths_includes_real_pycache ________________
+
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-10/test_resolved_cache_paths_incl0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f4699f9fe00>
+
+    def test_resolved_cache_paths_includes_real_pycache(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """非 venv 路径下的 ``__pycache__`` 必须出现在结果中(供实际清理)。"""
+        from config import CacheGlobSpec, _expand_spec
+    
+        real_pkg = tmp_path / "auto-video-editor" / "mypkg"
+        (real_pkg / "__pycache__").mkdir(parents=True)
+        (real_pkg / "__pycache__" / "module.cpython-313.pyc").write_bytes(b"")
+    
+        spec = next(s for s in CACHE_GLOB_SPECS if s.pattern == "__pycache__")
+        patched = CacheGlobSpec(
+            root=str(tmp_path),
+            kind=spec.kind,
+            pattern=spec.pattern,
+            exclude_substr=spec.exclude_substr,
+            description=spec.description,
+        )
+        found = _expand_spec(patched)
+    
+>       assert any(str(p).endswith("auto-video-editor\\mypkg\\__pycache__") for p in found), (
+            f"真包 __pycache__ 应出现,实际找到:{[str(p) for p in found]}"
+        )
+E       AssertionError: 真包 __pycache__ 应出现,实际找到:['/tmp/pytest-of-root/pytest-10/test_resolved_cache_paths_incl0/auto-video-editor/mypkg/__pycache__']
+E       assert False
+E        +  where False = any(<generator object test_resolved_cache_paths_includes_real_pycache.<locals>.<genexpr> at 0x7f4699f86260>)
+
+tests/unit/test_node_01_clean_cache.py:166: AssertionError
+_________________ test_build_jieba_does_not_split_inside_word __________________
+
+    def test_build_jieba_does_not_split_inside_word():
+        """``plan_breaks`` 评分要求:不在中文词中间切;这里用单元级的判断,
+        不真起 ffmpeg。
+        """
+        # 简单断言 jieba 对中文切词粒度比拆分字幕更细;真实业务里跑 build
+        # 的 stats['cps'] 守护,这里只验证模块入口可调用不抛 jieba 相关异常。
+>       import jieba
+E       ModuleNotFoundError: No module named 'jieba'
+
+tests/unit/video_edit_capabilities/test_subtitle.py:166: ModuleNotFoundError
+=============================== warnings summary ===============================
+tests/unit/test_two_level_timeout.py::test_node_timeout_error_can_be_raised_manually
+  /home/claude/venv_ave/lib/python3.13/site-packages/_pytest/threadexception.py:58: PytestUnhandledThreadExceptionWarning: Exception in thread timeout-watchdog
+  
+  Traceback (most recent call last):
+    File "/usr/lib/python3.13/threading.py", line 1044, in _bootstrap_inner
+      self.run()
+      ~~~~~~~~^^
+    File "/usr/lib/python3.13/threading.py", line 995, in run
+      self._target(*self._args, **self._kwargs)
+      ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/claude/ave_before/monitoring/timeout_watchdog.py", line 133, in _loop
+      on_timeout()
+      ~~~~~~~~~~^^
+    File "/home/claude/ave_before/tests/unit/test_two_level_timeout.py", line 149, in raise_it
+      raise NodeTimeoutError("forced")
+  monitoring.timeout_watchdog.NodeTimeoutError: forced
+  
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+    warnings.warn(pytest.PytestUnhandledThreadExceptionWarning(msg))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/unit/test_node_01_clean_cache.py::test_resolved_cache_paths_excludes_venv_pycache
+FAILED tests/unit/test_node_01_clean_cache.py::test_resolved_cache_paths_includes_real_pycache
+FAILED tests/unit/video_edit_capabilities/test_subtitle.py::test_build_jieba_does_not_split_inside_word
+3 failed, 789 passed, 25 skipped, 1 warning in 9.67s

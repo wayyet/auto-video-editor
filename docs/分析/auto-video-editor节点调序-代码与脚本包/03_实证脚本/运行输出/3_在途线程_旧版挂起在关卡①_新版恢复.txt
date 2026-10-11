@@ -1,0 +1,10 @@
+# 实证3:旧版本线程挂起在关卡① → 用调序后版本恢复
+
+[ave_before] 已在关卡①挂起并退出进程;挂起序列=[['⓪'], ['①']];已跑到 step 14
+   已执行节点: ['node_06_human_reorder']
+
+[ave_verify] 新进程读到挂起快照:next=['node_06_human_reorder']
+   恢复后依次执行: [['node_06_human_reorder'], ['node_07_speed_fit'], ['bridge_snapshot2'], ['node_08_add_subtitles'], ['fork_draft_for_english_branch', 'node_10_inject_text_fx'], ['node_14_make_covers', 'node_16a_translate_and_check'], ['node_08b_add_subtitles_en', 'node_15_localize_covers_en'], ['node_10b_inject_text_fx_en'], ['node_17_inject_english_tts'], ['node_09_inject_fx'], ['node_11_inject_sticker'], ['node_12_human_add_bgm', 'node_12_human_add_bgm'], ['node_13_adjust_volume'], ['join_before_delivery']]
+   结束: True | 后续又挂起: [['②']]
+   covers 条数 = 3 | 英文封面齐全 = True
+   join_qa_issues = []

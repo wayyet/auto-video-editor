@@ -1,0 +1,5 @@
+# 实证2:整图超步顺序(调序前 main / 关卡③触发路径)
+
+[人工] 英文草稿 materials.texts 为空 —— 剪映里没有任何英文字幕可校对
+!! 运行中断: InvalidUpdateError At key 'subtitle_srt_path': Can receive only one value per step. Use an Annotated key to handle multiple values.
+!! 出错时最后记录的超步 step 19 = ['node_10_inject_text_fx', 'node_checkpoint3_layout_review', 'node_10_inject_text_fx', 'node_checkpoint3_layout_review']

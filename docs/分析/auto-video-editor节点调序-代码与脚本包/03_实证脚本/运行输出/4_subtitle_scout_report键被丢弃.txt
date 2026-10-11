@@ -1,0 +1,4 @@
+# 实证4:node_08 写出的 subtitle_scout_report 在整图运行后是否还在(调序后)
+
+state.py 是否声明 subtitle_scout_report: False
+整图运行后 state 里的 subtitle_scout_report = None

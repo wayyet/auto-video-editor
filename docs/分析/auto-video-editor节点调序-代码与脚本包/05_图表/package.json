@@ -1,0 +1,10 @@
+{
+  "name": "mermaid-validate",
+  "private": true,
+  "type": "module",
+  "description": "用 mermaid 官方解析器校验 .mmd / .md 中的 Mermaid 语法",
+  "dependencies": {
+    "jsdom": "24.1.3",
+    "mermaid": "11.17.2"
+  }
+}

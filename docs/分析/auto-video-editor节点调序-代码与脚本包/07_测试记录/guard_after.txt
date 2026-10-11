@@ -1,0 +1,14 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.16, pytest-9.1.1, pluggy-1.6.0 -- /home/claude/venv_ave/bin/python
+rootdir: /home/claude/ave_verify
+configfile: pyproject.toml
+plugins: anyio-4.14.2, langsmith-0.11.2, asyncio-1.4.0, mock-3.15.1
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 4 items
+
+tests/integration/test_reorder_topology.py::test_new_nodes_registered PASSED [ 25%]
+tests/integration/test_reorder_topology.py::test_execution_order_after_reorder PASSED [ 50%]
+tests/integration/test_reorder_topology.py::test_english_draft_gets_subtitles_and_text_fx PASSED [ 75%]
+tests/integration/test_reorder_topology.py::test_checkpoint3_path_no_parallel_conflict_and_human_edit_survives PASSED [100%]
+
+============================== 4 passed in 1.84s ===============================
