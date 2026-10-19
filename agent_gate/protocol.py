@@ -13,6 +13,15 @@ DEFAULT_POLL_S = 0.5         # 轮询结果文件的间隔
 DEFAULT_MAX_ATTEMPTS = 3     # Agent 提交不合格结果的最大次数
 HEARTBEAT_S = float(os.environ.get("AGENT_GATE_HEARTBEAT_S", "5"))      # worker 心跳间隔
 STALE_AFTER_S = float(os.environ.get("AGENT_GATE_STALE_AFTER_S", "30"))  # 心跳超过这么久没更新 = worker 已死
+#: ``starting`` 状态的宽限期。worker 刚被拉起时,``spawn_worker`` 先写一份
+#: ``state="starting"`` 的 status,真正的 worker 进程还要一会儿才能 import 完
+#: graph 并写出第一次心跳(Windows 上实测要好几秒)。这段时间里如果沿用
+#: ``STALE_AFTER_S``(默认 30s,测试里被调到 1.5s)去判心跳过期,会把
+#: **正在正常启动**的 worker 误判成 "crashed" → drive 误报退出码 5,
+#: 甚至去重启一个本来好好的 worker。所以 starting 用自己的、更宽的阈值。
+STARTING_STALE_AFTER_S = float(
+    os.environ.get("AGENT_GATE_STARTING_STALE_AFTER_S", "120")
+)
 
 # worker 状态(status.json 的 state 字段)
 STATE_STARTING = "starting"

@@ -162,15 +162,21 @@ def test_cli_drive_warns_when_mcode_is_not_locked(tmp_path):
 
 
 def test_launcher_commands(tmp_path):
+    # 注意:executable 会被 resolve_agent_bin() 解析成**能直接 CreateProcess 的路径**。
+    # Windows 上裸名 "claude" / "mcode" 会因 CreateProcess 不做 PATHEXT 补全而拉不起来
+    # (见 test_agent_bin.py),所以这里断言「解析后的路径 + 同一个 basename」,
+    # 而不是断言裸名。
     cl = ClaudeLauncher(project_dir=tmp_path, executable="claude", model="m1", max_turns=7).command()
-    assert cl[:3] == ["claude", "-p", "--output-format"] and cl[cl.index("--tools") + 1] == ""
+    assert Path(cl[0]).name.lower().startswith("claude")
+    assert cl[1:4] == ["-p", "--output-format", "json"] and cl[cl.index("--tools") + 1] == ""
     assert cl[cl.index("--mcp-config") + 1] == str(tmp_path / ".mcp.json") and "--strict-mcp-config" in cl
     assert cl[cl.index("--allowedTools") + 1] == "mcp__video-agent__*" and cl[cl.index("--max-turns") + 1] == "7"
     assert ClaudeLauncher(project_dir=tmp_path).env()["CLAUDE_CODE_MCP_STARTUP_WAIT_MS"] == "30000"
 
     mc = McodeLauncher(project_dir=tmp_path, executable="mcode", permission="full", max_steps=9,
                        session_timeout_s=60).command()
-    assert mc[:4] == ["mcode", "exec", "--input", "-"] and mc[mc.index("--permission") + 1] == "full"
+    assert Path(mc[0]).name.lower().startswith("mcode")
+    assert mc[1:4] == ["exec", "--input", "-"] and mc[mc.index("--permission") + 1] == "full"
     assert mc[mc.index("--max-steps") + 1] == "9" and mc[mc.index("--timeout") + 1] == "60s"
     assert mc[mc.index("--cwd") + 1] == str(tmp_path) and "--config" not in mc
     locked = McodeLauncher(project_dir=tmp_path, executable="mcode", config=tmp_path / "l.yaml").command()

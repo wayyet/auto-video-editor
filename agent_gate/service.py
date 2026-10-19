@@ -10,6 +10,7 @@ from agent_gate.mailbox import Mailbox
 from agent_gate.protocol import (
     DEFAULT_MAX_ATTEMPTS,
     STALE_AFTER_S,
+    STARTING_STALE_AFTER_S,
     STATE_COMPLETED,
     STATE_CRASHED,
     STATE_FAILED,
@@ -195,7 +196,11 @@ def status_summary(mb: Mailbox, *, thread_id: str) -> dict[str, Any]:
         return out
 
     state = st.get("state")
-    if state in (STATE_STARTING, STATE_RUNNING) and _heartbeat_age_s(st) > STALE_AFTER_S:
+    if state == STATE_STARTING:
+        # starting 有自己的宽限期:worker 还没写出第一次心跳(见 protocol 说明)
+        if _heartbeat_age_s(st) > STARTING_STALE_AFTER_S:
+            state = STATE_CRASHED
+    elif state == STATE_RUNNING and _heartbeat_age_s(st) > STALE_AFTER_S:
         state = STATE_CRASHED
     out["worker_state"] = state
     out["interrupts"] = st.get("interrupts", [])

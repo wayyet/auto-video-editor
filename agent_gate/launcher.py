@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -20,6 +21,24 @@ from typing import Any, Optional, Sequence
 from agent_gate.cli_client import CLIBackendFailed, CLIBackendTimeout, run_process
 
 MCP_SERVER_NAME = "video-agent"   # 必须与 .mcp.json 里的服务名一致
+
+
+def resolve_agent_bin(name: str) -> str:
+    """把 Agent 可执行文件名解析成**能直接交给 CreateProcess** 的路径。
+
+    Windows 上 ``CreateProcess`` 不做 PATHEXT 补全:裸名 ``mcode`` 一定
+    ``WinError 2``,即使 ``mcode.CMD`` 就在 PATH 里(本机
+    ``C:\\Users\\wayyet\\.minimax-code\\mcode.CMD`` 就是这种情况)。
+    ``shutil.which`` 会按 PATHEXT 找到真正的 ``.CMD`` / ``.EXE``。
+
+    解析不到就原样返回,让调用方看到「找不到可执行文件」的真实错误。
+    """
+    if not name:
+        return name
+    if os.path.sep in name or (os.path.altsep and os.path.altsep in name):
+        return name
+    found = shutil.which(name)
+    return found or name
 
 
 @dataclass
@@ -47,7 +66,9 @@ class AgentLauncher:
         clean_env: bool = False,
     ) -> None:
         self.project_dir = str(project_dir)
-        self.executable = executable or os.environ.get(self.env_bin) or self.default_bin
+        self.executable = resolve_agent_bin(
+            executable or os.environ.get(self.env_bin) or self.default_bin
+        )
         self.model = model
         self.session_timeout_s = session_timeout_s
         self.extra_args = list(extra_args)
