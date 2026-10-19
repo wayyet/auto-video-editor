@@ -16,11 +16,10 @@
 | 安全修复 | 交付包 4 个必修安全问题（路径遍历 / `initial_state_file` 任意读 / 重复启动 / 非法 schema 静默通过）本次直接修好，附 4 个负向测试 |
 | 验收主线 | **MiniMax Code 0.6.11**（本机已装）。Claude Code 本机未安装，只写后续步骤 |
 | 存储路径 | **只支持 SQLite 本地开发路径**。检测到 `WORKFLOW_ENV=production` 或 Postgres checkpointer 时 worker **显式拒绝启动**，不静默降级 |
-| 接入层验证 | ✅ **通过**。真实主图上 8/8 任务由 Agent 作答、人工关卡①放行成功 |
-| 端到端出片 | ❌ **未通过**。人工关卡放行后，项目主图在 `node_07_speed_fit` 因 `draft_path=None` 崩溃，最终剪映草稿未生成（详见 [§10 已知缺陷](#10-已知缺陷与后续项)） |
+| 接入层验证 | ✅ **通过**。真实主图上 12/12 任务由 Agent 作答（0 降级）、人工关卡 ①③② 依次放行成功 |
+| 端到端出片 | ✅ **通过**（2026-10-20）。人工关卡放行后剪映草稿正常生成：`drafts/draft_content.json` + `draft_info.json` 双写、封面 6 张、`assembly/preview.mp4` QC `pass`；关卡依次 ①→③→② 放行后 worker `completed` |
 
-**一句话**：Agent 驱动接入层已经跑通；卡住的是项目自身的素材数据链路（`clip.kind` 为空、prompt 模板未渲染），
-按 §1 Non-goals 不在本次修复范围，故整条流水线没有出片。
+**一句话**：Agent 驱动接入层已跑通，端到端也出了片；上一轮卡住的三个项目侧缺陷（D7 `draft_path=None` 崩溃 / D9 契约字段集不一致 / D10 qa_gate 重试回环死锁）已于 2026-10-20 全部修掉，见 [§10.5](#105-d7--d9--d10-修复记录2026-10-20)。
 
 ---
 
@@ -66,7 +65,10 @@ storyline_capabilities/select_bgm.py              (硬编码 StubLLMClient — �
 ### 明确不做（Non-goals）
 
 1. **不改**项目工作流拓扑、节点逻辑、人工关卡语义、LangGraph 编译方式。
+   （例外：2026-10-20 为跑通 P8 门禁，做了两处**最小**拓扑/节点调整 —— D10 把 `split_shots` 移出
+   `plan_timeline_pro` 的 fan-in 屏障、D7 给 4 个下游节点加 `draft_path=None` 降级。见 §10.5。）
 2. **不修**项目既有缺陷（见 [§10](#10-已知缺陷与后续项)），只记录、不混入本次接入。
+   （例外：D5 / D6 / D7 / D8 / D9 / D10 已分别在 §10.4 / §10.5 修掉；D1 / D2 / D3 / D4 仍只记录。）
 3. **不做** Postgres 生产路径的异步 worker。
 4. **不装** Claude Code、不做它的登录与验证（写成文档步骤）。
 5. **不接**真实的 LLM API key；`mcode-lock` 产物留在仓库外。
@@ -619,53 +621,83 @@ $LASTEXITCODE
 
 ---
 
-### P8 — Agent 实跑 + 人工关卡 ⚠️ 部分通过
+### P8 — Agent 实跑 + 人工关卡 ✅ 通过（2026-10-20 重跑）
 
 **目的**：让 MiniMax Code 真正接管答题，一路跑到剪映人工关卡，再由真人放行。
 
 **P8-1 无人值守跑到关卡**
 
 ```powershell
-& $PY -m agent_gate drive --thread-id v001 --agent mcode `
+# Windows 上必须先把 mcode 放进 PATH,或用 AGENT_GATE_MCODE_BIN 指到 .CMD
+# (CreateProcess 不做 PATHEXT 补全,裸名 "mcode" 必 WinError 2)
+$env:AGENT_GATE_MCODE_BIN = "C:\Users\wayyet\.minimax-code\mcode.cmd"
+
+& $PY -m agent_gate drive --thread-id v006 --agent mcode `
    --project-dir $OPS --mcode-config "$env:USERPROFILE\.minimax\config.locked.yaml" `
    --outputs-root "$REPO\outputs" --graph-factory graph:build_graph --video $VIDEO
 $LASTEXITCODE
 
-& $PY -m agent_gate status --thread-id v001 --outputs-root "$REPO\outputs"
-& $PY -m agent_gate events --thread-id v001 --outputs-root "$REPO\outputs" --limit 50
+& $PY -m agent_gate status --thread-id v006 --outputs-root "$REPO\outputs"
+& $PY -m agent_gate events --thread-id v006 --outputs-root "$REPO\outputs" --limit 50
 ```
 
-**期望退出码 `10`** = 停在人工关卡，**不是失败**。
+> **实测踩坑**：第一次跑 `v005` 直接 `drive` 退出码 4（`stalled`），会话日志里是
+> `找不到可执行文件 'mcode':[WinError 2]`。原因是本机 PATH 里**没有**
+> `C:\Users\wayyet\.minimax-code`（`mcode.cmd` 只在那个目录里）。
+> `resolve_agent_bin()` 只做 `shutil.which()`——目录不在 PATH 就找不到。
+> 两个解法:①把该目录加进 PATH；②设 `AGENT_GATE_MCODE_BIN` 指到 `mcode.cmd`（本次用的就是这个）。
+>
+> **期望退出码 `10`** = 停在人工关卡，**不是失败**。
 
 **P8-2 人工关卡放行**（必须真人在**交互终端**、repo 根目录内）
 
 ```powershell
-& $PY -m agent_gate status --thread-id v001 --outputs-root "$REPO\outputs"
+& $PY -m agent_gate status --thread-id v006 --outputs-root "$REPO\outputs"
 
-& $PY -m agent_gate resume --thread-id v001 --outputs-root "$REPO\outputs" `
+& $PY -m agent_gate resume --thread-id v006 --outputs-root "$REPO\outputs" `
    --graph-factory graph:build_graph --checkpoint "①" --value true
 ```
 
 - 终端打不出 `①` 时用码点：`--checkpoint ([string][char]0x2460)`
 - `resume` 在非交互环境会直接返回 `need_human_terminal` —— **这是设计的安全边界，不要用 `--force-no-tty` 绕过**
+- 本轮实测依次放行 **① → ③ → ②**（③ 是条件触发：英文字幕排版复核），
+  每次放行后 worker 重启继续跑，直到 `worker_state=completed`
 
-**实测结果**：
+**实测结果（2026-10-20 重跑，thread `v006`）**：
 
-`events.jsonl` 事件统计（`v001`）：
+`events.jsonl` 事件统计（`v006`）：
 
 | 事件 | 次数 | 含义 |
 | --- | --- | --- |
-| `task_created` | 8 | 出题 8 次 |
-| `task_answered` | 8 | **Agent 作答 8 次，全部被收** |
-| `agent_session` | 3 | mcode 起了 3 个会话，全部 `status=succeeded` |
-| `waiting_human` | 1 | 到达人工关卡 `①` |
-| `drive_finished` | 1 | `outcome=ask_human`, `sessions=3` → **drive 退出码 10** ✅ |
-| `worker_started` | 2 | 首次启动 + 人工 resume 后重启 |
-| `worker_failed` | 1 | ❌ 见下 |
+| `task_created` | 12 | 出题 12 次 |
+| `task_answered` | 12 | **Agent 作答 12 次，全部被收** |
+| `agent_session` | 4 | mcode 起了 4 个会话，全部 `status=succeeded` |
+| `waiting_human` | 3 | 依次到达人工关卡 `①` → `③` → `②` |
+| `drive_finished` | 1 | `outcome=ask_human`, `sessions=4` → **drive 退出码 10** ✅ |
+| `worker_started` | 4 | 首次启动 + 3 次人工 resume 后重启 |
+| `worker_failed` | 0 | ✅ 无 |
 
-`resume.json` = `{"①": true}` → **人工关卡放行成功** ✅。
+`resume.json` = `{"①": true}` → **人工关卡放行成功** ✅（3 次全部 `RESUME_EXIT=0`，真实交互终端）。
 
-**但 worker 在 resume 后崩溃** ❌：
+**最终状态**：`worker_state=completed`、`answered_tasks=12`、`degraded_tasks=0`、`error=null`。
+
+**端到端产物**（`outputs/v006/`）：
+
+| 产物 | 说明 |
+| --- | --- |
+| `drafts/draft_content.json` + `draft_info.json` | 剪映草稿**双写**（剪映 5.9+ 要求二者一致），13.4 KB |
+| `drafts/draft_meta_info.json` | 草稿元信息 |
+| `drafts/covers/cover_{16x9,4x3,9x16}_{zh,en}.png` | 6 张封面 |
+| `en_branch_.../draft_content.json` + `subtitle_en.json` + `subtitle_en.srt` | 英文分支草稿 + 英文字幕 |
+| `snapshots/snapshot2/draft_content.json` | 节点 7 快照② |
+| `assembly/preview.mp4` | 预览成片（78 KB） |
+| `assembly/preview_qc_report.json` | QC `status=pass` |
+| `normalized_sources/chain-test-12s_202x360.mp4` | 宽银幕 → 竖屏归一化产物 |
+
+草稿内容实测：画布 1080×1920、4 条 video material、1 条 BGM（`bgm_calm_lofi`）、5 条字幕 material、
+4 段 video segment（`target_timerange` / `source_timerange` 齐备）。
+
+**上一轮（2026-10-19，`v001`）为什么失败**：
 
 ```json
 {
@@ -678,19 +710,29 @@ $LASTEXITCODE
 }
 ```
 
-**根因分析**（Agent 自己在会话 001 的输出里已经定位到）：
+根因链（**全部在项目自己代码里**，与 agent_gate 无关）：
 
-1. **上游素材描述全失败**：`clip_0001/0002/0003` 三个都返回 `Error: Clip kind not supported:`（冒号后为空 → `clip.kind` 取值为空或不在允许列表）。
-2. **prompt 模板变量没渲染**：`{{user_request}}`、`{{clip_captions}}`、`{{clip_number}}`、`{{duration_budget}}`、`{{style}}` 全是原始占位符，没一个被替换 → 下游节点拿到的素材信息是空的。
-3. Agent 因此产出**退化答案**（`scripts: []`、`themes`/`voiceover_hints` 留空，并如实写明阻塞原因）——这是**正确的行为**，Agent 没有编造。
-4. `node_05_generate_draft` 的 canonical 映射因此抛 `ContractInvalid` → 走早退分支 → `draft_path = None`。
-5. `node_07_speed_fit` 直接 `Path(state["draft_path"])`，**没有 None 防御** → `TypeError` → worker 失败。
+1. **D9（根因）**：`plan_timeline_pro` 产出的 plan 与 `CanonicalTimeline` 契约字段集不一致
+   （`source_media` 多了 `path`/`metadata`/`orig_path`/`orig_md5`、少 `duration_ms`；`clips` 多了
+   `voiceover_id`/`transition_*`/`subtitle_style`；顶层多了 `method`/`warnings`；
+   `subtitles.zh` 被错填成**样式 dict** 而契约要求 **str**）→ `qa_gate` / `join_storyline` / `node_05`
+   三处 `model_validate` 全挂 → `ContractInvalid` → `draft_path=None`。
+2. **D7**：`node_07_speed_fit` 直接 `Path(state["draft_path"])`，**没有 None 防御** → `TypeError` → worker 失败。
+3. **D10**：`plan_timeline_pro` 的 fan-in barrier 含 `split_shots`，而 qa_gate 超时重试回到 `group_clips`
+   （`split_shots` 的**下游**，不会重跑）→ barrier 永远补不齐 → 图**静默 END**（`next=[]`），
+   worker 却报「completed」。
+
+> D5 / D6（`clip.kind` 为空、prompt 模板未渲染）已于 2026-10-19 修掉；
+> **D7 / D9 / D10 于 2026-10-20 一并修掉**，见 [§10.5](#105-d7--d9--d10-修复记录2026-10-20)。
 
 **判定**：
 
 - ✅ **接入层（agent_gate）全绿**：出题 / 收答案 / schema 校验 / 人工关卡 / resume / drive 退出码 10，全部符合设计。
-- ❌ **端到端出片未完成**：项目主图在素材数据链路缺陷下拿不到合法 canonical plan，最终剪映草稿**未生成**。
-- ⚠️ 这属于**项目侧数据链路缺陷**，不在本次接入范围（§1 Non-goals 2），本次**不修**。
+- ✅ **端到端出片完成**：剪映草稿生成、预览成片 QC `pass`、三个关卡依次放行后 worker `completed`。
+- ⚠️ **A1-8 的一半仍未在本机验证**：本机**没装剪映客户端**，「草稿能在剪映里打开、字幕/分镜/转场/BGM 人工过目」
+  这一步需在装了剪映 5.9.0 的机器上补做；草稿 JSON 本身结构完整、双写一致。
+- ⚠️ **字幕内容是 Mock**：本机未配置云端 ASR（`ASR_NOT_CONFIGURED`），`node_08` 用 `Mock 字幕 N` 兜底。
+  字幕**轨道的排布**是真实的，**文字内容**需接真实 ASR 后才有意义。
 
 ---
 
@@ -745,9 +787,9 @@ git status --short
 | A1-3 | 主图至少一个 LLM 任务由 Agent 作答，不是 Stub | `tasks/*.task.json` 数量 > 0 且与 `*.result.json` 一一对应 | ✅ 12/12(v004) |
 | A1-4 | 画面帧真的传给了 Agent | `frames/<task_id>/*.jpg` 非空，任务视图里 `images.shown > 0` | ✅ **已修**(2026-10-19,D5):`storyline_understand_clips` 任务 `frames: 0` → `frames: 6` |
 | A1-5 | `answered_tasks > 0` 且 `degraded_tasks == 0` | `agent_gate status` | ✅ 12 answered / 0 degraded(v004) |
-| A1-6 | 崩溃恢复不重复提问 | 手动 kill worker → `continue_after_crash` → 已答任务不再出现 | ✅ `worker_started` 出现 2 次，8 个任务未重复 |
-| A1-7 | 人工关卡真的暂停 | `worker_state=waiting_human`、`interrupts` 非空；Agent 会话**未**调用 resume | ✅ `interrupts[0].checkpoint = "①"` |
-| A1-8 | 最终产物合理 | 剪映草稿可打开；字幕/分镜/转场/BGM 人工过目 | ❌ 仍未生成草稿（D9：`plan_timeline_pro` 的输出过不了 `CanonicalTimeline` 校验，与本次 D5/D6 无关，见 §10.4） |
+| A1-6 | 崩溃恢复不重复提问 | 手动 kill worker → `continue_after_crash` → 已答任务不再出现 | ✅ `worker_started` 出现 4 次（首启 + 3 次人工 resume），12 个任务未重复 |
+| A1-7 | 人工关卡真的暂停 | `worker_state=waiting_human`、`interrupts` 非空；Agent 会话**未**调用 resume | ✅ `interrupts[0].checkpoint = "①"`（`v006` 依次 ①→③→②） |
+| A1-8 | 最终产物合理 | 剪映草稿可打开；字幕/分镜/转场/BGM 人工过目 | ⚠️ **草稿已生成**（`drafts/draft_content.json` + `draft_info.json` 双写、封面 6 张、preview QC `pass`），结构完整；**本机没装剪映客户端**，「能在剪映里打开 + 人工过目」需在装了剪映 5.9.0 的机器上补做 |
 
 ### B. 安全
 
@@ -769,8 +811,8 @@ git status --short
 
 | # | 判据 | 状态 |
 | --- | --- | --- |
-| C-1 | P0 基线与 P7 之后的项目测试**逐项一致**（多 0 少 0） | ✅ **935 / 0 失败 / 0 错误 / 11 skip**（M5），比基线多 16 条新用例，失败/错误仍为 0（见 [§11](#11-回归对比)） |
-| C-2 | `pytest agent_gate/tests` 全绿；claude 相关用例 skip 并如实记为 skip | ✅ **208 收集 / 0 失败 / 0 错误 / 17 skip**（17 条全是 claude 相关 + 1 条 symlink(Windows 不支持)；**mcode 相关用例本轮实际执行并通过**——因为 `mcode` 已在 PATH 上） |
+| C-1 | P0 基线与 P7 之后的项目测试**逐项一致**（多 0 少 0） | ✅ **954 / 0 失败 / 0 错误 / 11 skip**（M6），比基线多 35 条新用例，失败/错误仍为 0、**逐用例状态变化 0**（见 [§11](#11-回归对比)） |
+| C-2 | `pytest agent_gate/tests` 全绿；claude 相关用例 skip 并如实记为 skip | ✅ **208 收集 / 0 失败 / 0 错误 / 17 skip**（M6）。17 条 skip 全是**环境限制**：14 条「本机没有 `claude`」+ 1 条「脚本用了 POSIX `env`」+ 1 条「Windows 上不跑 shell 假进程」+ 1 条「本机不支持符号链接」；**所有 `@needs_mcode` 用例真跑并通过**（前提：`C:\Users\wayyet\.minimax-code` 在 PATH 上，否则会被 skip 而不是跑） |
 | C-3 | 记录版本 | ✅ 见 [§13](#13-版本与环境) |
 | C-4 | 声明「只支持 SQLite 本地开发路径」，不声称 Postgres 已验收 | ✅ |
 | C-5 | 声明平台与覆盖范围 | ✅ 见下 |
@@ -786,8 +828,12 @@ git status --short
 >   ⚠️ 该轮答案是**人工手写**的：MiniMax Token Plan 额度已用尽（429），Agent 自动答题跑不了。
 >   ⚠️ 本轮还修掉两个**只有 Windows 才暴露**的接入层缺陷（PATHEXT 裸名拉不起 mcode、
 >   正在启动的 worker 被误判成 crashed），见 §10.4。
-> - **完整流水线未跑通**：人工关卡放行后主图因 `draft_path=None` 崩溃，**最终剪映草稿未生成**。
->   本次已定位到**独立根因 D9**（生产端/契约端字段集不一致），非 D5/D6 所致，见 §10.4。
+> - **端到端出片跑通（2026-10-20，`v006`）**：D7 / D9 / D10 修好后，MiniMax Code **自动**作答
+>   12 个任务（4 个会话全部 `succeeded`，`degraded_tasks=0`）、drive 退出码 10 停在 ①、
+>   真人在交互终端依次放行 ①→③→②，最终 `worker_state=completed`，
+>   剪映草稿（双写）+ 6 张封面 + 预览成片（QC `pass`）全部产出。
+> - **仍需人工补做**：① 本机没装剪映客户端，草稿「能在剪映里打开 + 字幕/分镜/转场/BGM 过目」待补；
+>   ② 本机没配云端 ASR，字幕文字是 `Mock 字幕 N` 兜底（轨道排布是真实的）。
 > - **真实模型答案质量需人工判断**：本次 Agent 如实报告了素材链路缺陷而未编造内容，但真实成片质量未评估。
 
 ---
@@ -858,12 +904,13 @@ starting ──> running ──┬──> waiting_human ──(人工 resume)─
 | D4 | 镜头描述调用没传 schema | `storyline_capabilities/understand_clips.py:143` | 见 §6 F5 | Agent 只能给纯文本答案 |
 | D5 | ~~**素材链路缺陷：`clip.kind` 为空**~~ **✅ 已修** | `storyline_capabilities/split_shots.py`（产出 clip 缺 `kind`/`path`/`source_ref`） | `Error: Clip kind not supported:` → 镜头描述全失败 | ✅ 2026-10-19 修复，见 §10.4 |
 | D6 | ~~**prompt 模板变量未渲染**~~ **✅ 已修** | `storyline_capabilities/prompts/__init__.py`（`render_prompt` 只认 `{name}`，模板是 `{{name}}`）+ 8 个调用点漏传变量 | `{{user_request}}` / `{{clip_captions}}` / `{{clip_number}}` / `{{duration_budget}}` / `{{style}}` 原样残留 → 下游拿空数据 | ✅ 2026-10-19 修复，见 §10.4 |
-| D7 | `node_07_speed_fit` 不防御 `draft_path=None` | `nodes/node_07_speed_fit.py:91`（及 `:163`、`:186`） | `TypeError` 直接崩 worker，无友好降级 | ⚠️ **本次实跑命中**（P8 失败点） |
-| D8 | `node_05_generate_draft` 早退时把 `draft_path` 置 `None` 且下游未检查 | `nodes/node_05_generate_draft.py:71-76`、`:112-119` | 早退信息只进 `error_log`,下游看不到 | ⚠️ **本次实跑命中**(D7 的上游) |
-| D9 | **生产端 / 契约端字段集不一致**:`plan_timeline_pro` 产出的 plan 过不了 `CanonicalTimeline` 校验 | `storyline_capabilities/plan_timeline_pro.py`(生产)vs `storyline/contract.py:130`(校验,`extra="forbid"`) | `node_05` 的 `CanonicalTimeline.model_validate()` 必抛 `ContractInvalid` → `draft_path=None` → D7 | ⚠️ **2026-10-19 新发现**,与 D5/D6 无关 |
+| D7 | ~~`node_07_speed_fit` 不防御 `draft_path=None`~~ **✅ 已修** | `nodes/node_07_speed_fit.py`（另修 `node_08` / `node_09` / `node_10`） | `TypeError` 直接崩 worker，无友好降级 | ✅ 2026-10-20 修复，见 §10.5 |
+| D8 | `node_05_generate_draft` 早退时把 `draft_path` 置 `None` 且下游未检查 | `nodes/node_05_generate_draft.py:71-76`、`:112-119` | 早退信息只进 `error_log`,下游看不到 | ✅ 2026-10-20 随 D7 一起修（下游全部降级跳过并写 `error_log`） |
+| D9 | ~~**生产端 / 契约端字段集不一致**~~ **✅ 已修** | `storyline_capabilities/plan_timeline_pro.py`(生产)vs `storyline/contract.py`(校验,`extra="forbid"`) | `node_05` 的 `CanonicalTimeline.model_validate()` 必抛 `ContractInvalid` → `draft_path=None` → D7 | ✅ 2026-10-20 修复，见 §10.5 |
+| D10 | **qa_gate 超时重试回环后 fan-in 屏障死锁**（图静默 END） | `graph.py`（`plan_timeline_pro` 的 fan-in 含 `split_shots`） | 重试回到 `group_clips`（`split_shots` 下游，不重跑）→ barrier 补不齐 → `next=[]`，worker 却报 `completed` | ✅ 2026-10-20 修复，见 §10.5 |
 
-> D5–D8 是本次 P8 实跑**新发现**的,之前不在审查版 §4.2 清单里;D9 是 2026-10-19 重跑时新定位的。
-> D5 / D6 已于 2026-10-19 修复(见 §10.4);D7 / D8 / D9 仍按 §1 Non-goals 2「不修项目既有缺陷」处理:**只记录、不修**。
+> D5–D8 是 2026-10-19 P8 实跑**新发现**的,之前不在审查版 §4.2 清单里;D9 / D10 是 2026-10-20 重跑时新定位的。
+> **D5–D10 已于 2026-10-19 ~ 2026-10-20 全部修掉**（D5/D6 见 §10.4，D7/D9/D10 见 §10.5）。
 
 ### 10.4 D5 / D6 修复记录(2026-10-19)
 
@@ -949,20 +996,21 @@ D5 / D6 属于**素材链路**——「Agent 拿不到素材,也没拿到正确�
 
 #### 仍未解决(不在本次范围)
 
-- **D9(新发现,本次新定位)——最终剪映草稿仍生成不出来**:
+> **D7 / D8 / D9 / D10 已于 2026-10-20 修掉**,见 §10.5。2026-10-19 这一轮当时记的「仍未解决」清单如下,保留作对照。
+
+- **D9(2026-10-19 定位,2026-10-20 已修)——最终剪映草稿生成不出来**:
   `storyline_capabilities/plan_timeline_pro.py` 产出的 plan 里,每个 clip 多了
   `voiceover_id` / `transition_in` / `transition_out` / `subtitle_style`,
   顶层多了 `method` / `warnings`,且 `subtitles.zh` 是 dict 而契约要求 str;
   而 `storyline/contract.py` 的 `CanonicalTimeline` 是 `extra="forbid"`。
   → `node_05` 的 `CanonicalTimeline.model_validate()` **必然**抛 `ContractInvalid`
   → 早退 → `draft_path = None` → 关卡 ① 之后 resume 时触发 D7 的 `TypeError`。
-  这两个文件**都不在本次改动范围**(`git diff` 里没有它们),属于独立的既有缺陷,
-  按 §1 Non-goals 2 **只记录、不修**。修法见 §10.2 F5。
 - **D7 / D8**:`draft_path=None` 未防御 → `node_07_speed_fit` 抛 `TypeError`。
-  本次重跑**停在人工关卡 ①**,尚未触发关卡 ① 之后的 resume,因此 D7 未复现。
+  2026-10-19 这一轮**停在人工关卡 ①**,尚未触发关卡 ① 之后的 resume,因此 D7 未复现。
 - **D1**:`aes_score` 成功路径仍被丢弃(Non-goals 2 明确不修)。
-- **真实模型答案质量**:本轮 `v004` 的答案是**人工手写**的(见下),不是模型产出;
-  MiniMax Token Plan 额度已用尽(429 `已达到 Token Plan 用量上限`),Agent 驱动的实跑暂时跑不了。
+- **真实模型答案质量**:2026-10-19 那一轮 `v004` 的答案是**人工手写**的(见下),不是模型产出;
+  MiniMax Token Plan 额度已用尽(429 `已达到 Token Plan 用量上限`)。
+  → 2026-10-20 额度恢复,`v006` 跑的是**模型自动作答**(4 个会话全部 `succeeded`)。
 
 ### 10.2 后续项
 
@@ -972,7 +1020,7 @@ D5 / D6 属于**素材链路**——「Agent 拿不到素材,也没拿到正确�
 | F2 | 任务哈希纳入推理参数 | `task_id` 计算时把 `temperature` / `top_p` / `max_tokens` 加进 `canonical_json` 的输入 | `agent_gate/tests/test_gate.py::test_task_id_stable_and_sensitive` 的期望值会变，需重算；还要补一条「参数不同 → ID 不同」的用例 |
 | F3 | ~~修 D5:`clip.kind` 取值~~ **✅ 已修**(2026-10-19) | 追 `clip` 字典的构造点,确保 `kind` 落在 `understand_clips` 允许列表内 —— 实际还发现 `understand_clips` 丢了顶层时间字段,一并补齐(见 §10.4) | ✅ 已加:`tests/unit/test_storyline_asset_chain.py` |
 | F4 | ~~修 D6:prompt 模板渲染~~ **✅ 已修**(2026-10-19) | 追 prompt 拼装点,确认 `{{user_request}}` 等占位符在调用前被替换 —— 实际是**语法不匹配**(`{name}` vs `{{name}}`)+ **8 个调用点漏传变量**,两层都修了(见 §10.4) | ✅ 已加:同上,含残留检测与「渲染后不含 `{{...}}`」断言 |
-| F5 | 修 D7/D8/D9:`draft_path=None` 的防御 + 生产端/契约端字段集对齐 | ①`storyline_capabilities/plan_timeline_pro.py`:把 `voiceover_id` / `transition_in` / `transition_out` / `subtitle_style` / `method` / `warnings` 去掉,或让 `CanonicalTimeline` 接受它们(`extra="allow"` + 只对**必需**字段做不变量校验);`subtitles.zh` 改成 str。②`node_07_speed_fit` 等下游节点改用 `state.get("draft_path")` + 提前 `raise`/降级;或 `node_05` 早退时写显式状态字段(如 `draft_failed_reason`)供下游判断 | 建议加一条单测:`draft_path=None` 时节点抛**可识别**的异常而非 `TypeError`;再补一条:`plan_timeline_pro` 的输出能过 `CanonicalTimeline.model_validate()` |
+| F5 | ~~修 D7/D8/D9/D10~~ **✅ 已修**(2026-10-20) | ①契约与生产端字段集对齐(D9):`CanonicalTimeline` 显式声明 `method`/`warnings`,`Clip` 显式声明 `voiceover_id`/`transition_in`/`transition_out`/`subtitle_style`——**保持 `extra="forbid"` 不放宽**;生产端 `normalize_source_media()` 把 `load_media` 的运维形状整形成契约形状;`subtitles.zh` 改成**旁白文本**、样式移到 `clips[*].subtitle_style`。②下游节点 `draft_path=None` 统一降级跳过(D7/D8)。③`plan_timeline_pro` 的 fan-in 去掉 `split_shots`(D10) | ✅ 已加:`tests/unit/test_storyline_contract_alignment.py`(12 条)+ `tests/unit/test_draft_path_degradation.py`(7 条) |
 | F6 | 补 `required`（D3） | 逐个 schema 补 `required` | 会让原本能通过的答案变成不合格 → 需同步放宽/调整 Agent 侧提示词 |
 
 ### 10.3 本次明确不覆盖的验证
@@ -983,6 +1031,88 @@ D5 / D6 属于**素材链路**——「Agent 拿不到素材,也没拿到正确�
 - **真实模型答案质量**：无法自动化，需人工判断。
 - **交付包 `3_脚本/`**：里面脚本指向原 Linux 沙箱路径，**不迁移、不执行**。
 - **交付包 `4_验证记录/` 的 89-passed 结论**：只作参考，**不作为本机验收依据**。
+
+### 10.5 D7 / D9 / D10 修复记录(2026-10-20)
+
+上一轮(2026-10-19)P8 的结论是「端到端出片未通过」,阻断点有三个,**全在项目自己代码里**,
+与 `agent_gate` 接入层无关。本轮按用户要求把 P8 门禁跑通,这三个一并修掉。
+
+#### D9：生产端 / 契约端字段集不一致（根因）
+
+`plan_timeline_pro` 的产出必须能过 `CanonicalTimeline`（`extra="forbid"`）,
+但两边字段集不同。实测 **20 处校验错误**：
+
+| 位置 | 差异 | 修法 |
+| --- | --- | --- |
+| `source_media[]` | 多了 `path` / `metadata` / `orig_path` / `orig_md5`;少了顶层 `duration_ms` | 生产端新增 `normalize_source_media()`:把 `metadata.duration_ms` 提到顶层,`width/height/fps` 一并提取,冗余字段丢掉;`file_uri` 缺失时从 `path` 推导 |
+| `clips[]` | 多了 `voiceover_id` / `transition_in` / `transition_out` / `subtitle_style` | **契约显式声明**这 4 个可选字段（不放宽 `extra`）——这几个字段下游 mapper / 剪映草稿要用,不能删 |
+| 顶层 | 多了 `method` / `warnings` | **契约显式声明**这 2 个可选字段 |
+| `subtitles.zh` | 被错填成**字幕样式 dict**,契约要求 `str` | 改成**旁白文本**:新增 `group_scripts` 入参,取 `generate_script` 的 `narration` 按 group 顺序拼接;样式改挂到 `clips[*].subtitle_style`（无 per-group 样式时回落 `default`） |
+
+> **为什么是「显式加字段」而不是「放宽 `extra="allow"`」**：
+> `extra="forbid"` 的价值就是**接住未知字段漂移**。放宽成 `allow` 之后,
+> 任何上游字段集变化都会被静默吞掉,契约就退化成摆设。
+> 显式声明 = 字段有名字、有类型、有文档,仍然拒绝没声明过的字段。
+
+> `duration_ms` 兜底:素材没报时长时,用引用它的 clip 的最大 `source_out_ms` 顶上,
+> 否则契约不变量 `source_out_ms <= duration_ms` 会因 `duration=0` 误判失败。
+
+#### D7 / D8：`draft_path=None` 的防御
+
+`node_05` 契约不合法时早退,`draft_path` 是 `None`。原来 `node_07` 直接
+`Path(state["draft_path"])` → `TypeError` → 整个 worker 被带走。
+
+改成**统一降级跳过**（与 `node_13` 既有写法一致：写 `error_log` + `status_log` tag,不抛）：
+
+| 节点 | 改前 | 改后 |
+| --- | --- | --- |
+| `node_07_speed_fit` | `Path(state["draft_path"])` | `state.get("draft_path")` 为空 → 跳过 + `node_07_speed_fit_skipped` |
+| `node_07.route_after_speed_fit` | `Path(state["draft_path"])` | 为空 → 放行到 `node_08_add_subtitles`（让下游自己降级） |
+| `node_07.get_snapshot2_path` | `Path(state["draft_path"])` | 为空 → 返回 `None` |
+| `node_08_add_subtitles` | `Path(state["draft_path"])` | 为空 → 跳过 + `node_08_add_subtitles_skipped` |
+| `node_09_inject_fx` | `raise FileNotFoundError` | 为空 → 跳过 + `node_09_inject_fx_skipped` |
+| `node_10_inject_text_fx` | `Path(state["draft_path"])` | 为空 → 跳过 + `node_10_inject_text_fx_skipped` |
+
+> 降级 ≠ 静默:每个跳过都写 `error_log` + `status_log`,图能继续往下走,
+> 人工从日志一眼看出「草稿没生成」。
+
+#### D10：qa_gate 重试回环后 fan-in 屏障死锁（图静默 END）
+
+D9 修好后暴露出来的**第三个**问题:qa_gate 发现时间轴超时会 `storyline_qa_retry`,
+路由回 `storyline_group_clips` 重跑。但——
+
+`plan_timeline_pro` 的 fan-in 是 `add_edge([...], target)` 的**屏障**语义
+（等所有 source 完成才触发目标一次）。原来的 source 列表里有 `storyline_split_shots`,
+而它是 `group_clips` 的**上游**——重试时**不会重跑**。屏障渠道首次触发后被清空,
+第二轮只有 `group_clips` / `generate_script` / `generate_voiceover` / `select_bgm` 会重新写入,
+`split_shots` 的名字**永远补不回来** → `plan_timeline_pro` 再也不触发 → 图在
+`recommend_transition` 处**静默 END**（`next=[]`）,而 worker 因为 `next` 为空
+反而报「**completed**」。
+
+修法:把 `split_shots` 从 PTP 的 fan-in 列表里去掉。`split_shots` 在
+`split_shots → understand_clips → filter_clips → group_clips` 这条链上,
+`group_clips` 完成即蕴含 `split_shots` 完成,**去掉它不放松任何时序约束**。
+
+修完的实测(superstep 级):
+
+```
+step 26: storyline_plan_timeline_pro   ← 第 2 轮 PTP 正常触发
+step 29: storyline_qa_gate              ← 第 2 次 qa
+step 38: storyline_plan_timeline_pro   ← 第 3 轮
+step 41: storyline_qa_gate
+step 50: storyline_plan_timeline_pro   ← 第 3 次(重试上限 3)
+step 53: storyline_qa_gate              ← retry_count=3 → 强制走 join
+step 56: storyline_join
+step 57: generate_draft                ← 草稿生成 ✅
+step 63: __interrupt__                  ← 人工关卡 ①
+```
+
+#### 配套回归测试
+
+| 文件 | 条数 | 覆盖 |
+| --- | --- | --- |
+| `tests/unit/test_storyline_contract_alignment.py` | 12 | 生产端输出过契约 / 契约仍拒未知字段 / `subtitles.zh` 是文本 / `source_media` 整形 / 时长兜底 / 新字段可用 |
+| `tests/unit/test_draft_path_degradation.py` | 7 | 6 个节点的 `draft_path=None` 降级 / PTP fan-in 不含 `split_shots` / 重试边仍指 `group_clips` |
 
 ---
 
@@ -1000,6 +1130,7 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
 | M3 | `baseline_final` | 主工作区，`git stash` 掉改动 | ✅ | ✅ |
 | M4 | **`after_p9`** | **主工作区，含 P2/P3 改动** | ✅ | ✅ |
 | M5 | **`after_d5d6`** | **主工作区，含 D5/D6 修复**（2026-10-19） | ✅ | ✅ |
+| M6 | **`after_p8fix`** | **主工作区，含 D7/D9/D10 修复**（2026-10-20） | ✅ | ✅ |
 
 ### 11.2 实测结果
 
@@ -1010,9 +1141,13 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
 | M3 `baseline_final` | 919 | 1 | 0 | 11 | `test_phase5_e2e::test_phase5_decoupling_no_runtime_dependencies` |
 | **M4 `after_p9`** | **919** | **0** | **0** | **11** | **无** ✅ |
 | **M5 `after_d5d6`** | **935** | **0** | **0** | **11** | **无** ✅ |
+| **M6 `after_p8fix`** | **954** | **0** | **0** | **11** | **无** ✅ |
 
-> M5 比 M4 多 **16** 条 = `tests/unit/test_storyline_asset_chain.py` 的新增用例;
+> M6 比 M5 多 **19** 条 = `tests/unit/test_storyline_contract_alignment.py`(12)
+> + `tests/unit/test_draft_path_degradation.py`(7);
 > failures / errors 仍为 **0**,skipped 仍为 **11**（未新增跳过）。
+> **逐个用例比对**:仅 P0 基线有 **0** 个、仅 M6 有 35 个（全是新增用例）、
+> **状态变化 0 个** → D7/D9/D10 的修复**没有改变任何既有用例的行为**。
 > ⚠️ 跑测试前必须把 ffmpeg 放进 PATH（`C:\ffmpeg\ffmpeg-9.0.2-essentials_build\bin`），
 > 否则 `tests/unit/video_edit_capabilities/` 会有 7 条因「找不到 ffmpeg」误报失败——
 > 这是**环境问题，与代码无关**。
@@ -1030,16 +1165,54 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
 
 ### 11.4 结论
 
-- **改动后 935 个用例 0 失败 / 0 错误**（M5），比任一基线都严格更优。
+- **改动后 954 个用例 0 失败 / 0 错误**（M6），比任一基线都严格更优。
 - 计划的 C-1 判据是「与基线逐项一致（多 0 少 0）」→ 实测**多 0、少 1**，满足且优于该判据。
+- **逐用例比对：状态变化 0 个** —— D7/D9/D10 的修复没有改变任何既有用例的行为，
+  新增的 19 条用例是纯增量。
 - 唯一的 skip 差异（11 vs 35）是 M2 缺本地素材导致，与代码无关。
-- `pytest agent_gate/tests`：**208 收集 / 0 失败 / 0 错误 / 17 skip**（M5）。
+- `pytest agent_gate/tests`：**208 收集 / 0 失败 / 0 错误 / 17 skip**（M6，与 M5 逐用例一致，状态变化 0）。
   比上一轮多 11 条 = 新增的 `test_agent_bin.py`(7) + `test_heartbeat.py`(4);
   skip 从 27 降到 17,因为 `mcode` 已在 PATH 上 → **mcode 相关的 10 条用例从「skip」变成「真跑并通过」**。
+  > ⚠️ **本机 `C:\Users\wayyet\.minimax-code` 默认不在 PATH**。不把它加进 PATH,
+  > 这 10 条会被**静默 skip**（不是 pass!)——数字上看不出来,只有逐用例比对才看得见。
+  > 本轮第一次跑 kit 就踩了这个坑,已重跑修正。
 
 ---
 
 ## 12. 提交前核验结果（P9-2）
+
+### 12.1 2026-10-20（D7/D9/D10 修复轮）核验
+
+`git status --short` 实测输出（提交前）：
+
+```
+ M docs/integration/Agent驱动auto-video-editor_设计与执行计划.md
+ M graph.py
+ M nodes/node_07_speed_fit.py
+ M nodes/node_08_add_subtitles.py
+ M nodes/node_09_inject_fx.py
+ M nodes/node_10_inject_text_fx.py
+ M nodes/storyline/node_plan_timeline_pro.py
+ M storyline/contract.py
+ M storyline_capabilities/plan_timeline_pro.py
+?? tests/unit/test_draft_path_degradation.py
+?? tests/unit/test_storyline_contract_alignment.py
+```
+
+禁入项逐条核对（与 §12.2 同一批规则）：
+
+| 项 | 结果 |
+| --- | --- |
+| `config.locked.yaml` | ✅ 未纳入（在 `C:\Users\wayyet\.minimax\`，含明文 `apiKey`） |
+| `.mcp.json` | ✅ 未纳入（在仓库外的 `E:\Documents\kuaishou\video-ops\`） |
+| `outputs/` / `checkpoints/` / `drafts/` / `logs/` / `inputs/` | ✅ 全部未纳入（`.gitignore` 已忽略） |
+| `*.sqlite` | ✅ 无任何 sqlite 文件进入暂存区 |
+| 剪映草稿 / 封面 / 预览成片 | ✅ 全在 `outputs/v006/` 下（已忽略） |
+
+> `docs/分析/auto-video-editor-main-langgraph-node-audit.md` 是本轮**之前**就存在的未跟踪文件，
+> 与本次修复无关，**不纳入**本次提交。
+
+### 12.2 2026-10-19（首次接入轮）核验
 
 `git status --short` 实测输出（提交前）：
 
@@ -1147,10 +1320,13 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
 | `mcode` 无「关内置工具」硬开关 | 软护栏 | 加锁配置收紧 `permissionMode` + `guard_hook.py`；验收 B-9/B-10 |
 | Postgres 路径未支持 | 不能上生产 | 显式拒绝启动；本文只声明 SQLite |
 | ffmpeg 不在后台 shell 的 PATH | kit 测试 6 个用例误报失败 | 显式 `$env:PATH` 前置；已写入 §7 阶段前置 |
+| **`mcode` 不在 PATH** | ① kit 测试里 10 条 `@needs_mcode` 用例被 **skip**（数字上看不出来）；② `drive` 直接 `WinError 2` → 退出码 4 `stalled` | 显式把 `C:\Users\wayyet\.minimax-code` 加进 PATH，或设 `AGENT_GATE_MCODE_BIN` 指到 `mcode.cmd`；见 附录 B |
 | 素材链路缺陷（D5/D6）未修 | 主图跑不出成片 | ✅ **已修**（2026-10-19），见 §10.4 |
 | `clip.kind` / prompt 模板问题扩大 | 后续节点拿空数据 | ✅ 同上（clip 契约 + 渲染器两层都修了） |
-| **D9：生产端/契约端字段集不一致** | `node_05` 必抛 `ContractInvalid` → `draft_path=None` → 关卡 ① 后必崩 | 记入 §10.1 D9 + §10.2 F5；**本次不修**，需另起一轮 |
-| MiniMax Token Plan 额度耗尽 | Agent 驱动的实跑跑不了（429） | 本轮 v004 改用人工手写答案验证链路；额度恢复后重跑 `drive` 即可 |
+| **D9：生产端/契约端字段集不一致** | `node_05` 必抛 `ContractInvalid` → `draft_path=None` → 关卡 ① 后必崩 | ✅ **已修**（2026-10-20），见 §10.5 |
+| **D10：qa_gate 重试回环后 fan-in 屏障死锁** | 图静默 END，worker 却报 `completed` | ✅ **已修**（2026-10-20），见 §10.5 |
+| **D7/D8：`draft_path=None` 无防御** | `Path(None)` → `TypeError` → worker 崩 | ✅ **已修**（2026-10-20），下游统一降级跳过，见 §10.5 |
+| MiniMax Token Plan 额度耗尽 | Agent 驱动的实跑跑不了（429） | ✅ 额度已恢复；2026-10-20 的 `v006` 是**模型自动作答**（4 个会话全部 succeeded） |
 
 ---
 
@@ -1179,15 +1355,28 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
 ## 附录 B. 验收命令速查
 
 ```powershell
-# 状态
-& $PY -m agent_gate status --thread-id v001 --outputs-root "$REPO\outputs"
-& $PY -m agent_gate events --thread-id v001 --outputs-root "$REPO\outputs" --limit 50
+# 环境前置(两样都必须):
+#   ffmpeg —— 抽帧要它,否则 7 条用例会误报失败
+#   mcode  —— kit 测试里 @needs_mcode 的 10 条要它,否则会被 skip(不是 pass!)
+$env:PATH = "C:\ffmpeg\ffmpeg-9.0.2-essentials_build\bin;C:\Users\wayyet\.minimax-code;$env:PATH"
+$env:PYTHONIOENCODING = "utf-8"
+$env:STORYLINE_MODE = "auto"
+$env:AGENT_GATE_MEDIA_ROOTS = "$REPO\inputs;$REPO\tests\fixtures"
+# drive / resume 还要(Windows:CreateProcess 不做 PATHEXT 补全,裸名 mcode 必 WinError 2)
+$env:AGENT_GATE_MCODE_BIN = "C:\Users\wayyet\.minimax-code\mcode.cmd"
 
-# 单独跑 kit 测试（必须带 ffmpeg PATH）
-$env:PATH = "C:\ffmpeg\ffmpeg-9.0.2-essentials_build\bin;$env:PATH"
+# 状态
+& $PY -m agent_gate status --thread-id v006 --outputs-root "$REPO\outputs"
+& $PY -m agent_gate events --thread-id v006 --outputs-root "$REPO\outputs" --limit 50
+
+# 单独跑 kit 测试(必须带 ffmpeg + mcode PATH)
 & $PY -m pytest agent_gate/tests -q -p no:cacheprovider --junit-xml="$env:TEMP\kit_after.xml"
 
-# 项目测试（与基线对比）
+# 项目测试(与基线对比)
 & $PY -m pytest tests -q --no-header -p no:cacheprovider --tb=no --junit-xml="$env:TEMP\after.xml"
 $LASTEXITCODE
 ```
+
+> ⚠️ **PATH 漏了 mcode 的后果**:kit 测试里 10 条 `@needs_mcode` 用例会**被 skip 而不是跑**,
+> 数字上看不出来(mcode 不在 PATH → `shutil.which` 找不到 → 装饰器判定为「没装」)。
+> 本机 `C:\Users\wayyet\.minimax-code` **默认不在 PATH** 里,必须显式加上。
