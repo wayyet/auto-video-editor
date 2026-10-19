@@ -467,6 +467,12 @@ def case_checkpoint1_notification(state_with_report: dict[str, Any]) -> dict[str
 # ---------------------------------------------------------------------------
 # 解耦验证
 # ---------------------------------------------------------------------------
+
+# 唯一允许 ``import mcp`` 的包:MCP 文件信箱,让 Agent 程序驱动本项目。
+# 例外仅对 ``mcp`` 生效,``video_agent_kit`` / ``video_edit_server`` 不在其列。
+_MCP_EXEMPT_DIRS = frozenset({"agent_gate"})
+
+
 def case_decoupling() -> dict[str, Any]:
     """解耦验证:全仓库不应再有 **运行时** ``video-agent-kit`` / ``mcp`` 依赖
     (plan §11 解耦验收)。
@@ -482,6 +488,14 @@ def case_decoupling() -> dict[str, Any]:
 
     注释 / 文档字符串 / 设计文档中提及 ``video-agent-kit`` 是合法的引用
     (plan §13 参考源码就引用 video-agent-kit 的 GitHub URL),不视为违规。
+
+    ``mcp`` 受控例外(agent_gate 落地后):
+    ``agent_gate/`` 是 MCP 文件信箱,让 Agent 程序(MiniMax Code / Claude Code)
+    直接驱动本项目,因此它是全仓**唯一**允许 ``import mcp`` 的包,
+    ``requirements.txt`` 里的 ``mcp==1.26.0`` 也随之放行。
+    例外只对 ``mcp`` 生效 —— ``video_agent_kit`` 与 ``video_edit_server``
+    在 ``agent_gate/`` 内同样禁止。``agent_gate/`` 不存在时,``mcp`` 自动回到
+    禁止名单,守卫不会因为这条豁免而失效。
     """
     _print_banner("Case E:解耦验证 (无残留 video-agent-kit/MCP 运行时依赖)")
     violations: list[dict[str, str]] = []
@@ -508,13 +522,22 @@ def case_decoupling() -> dict[str, Any]:
         except OSError:
             continue
         for m in import_re.finditer(text):
+            # 4 个分支各带一个捕获组,取第一个非 None 的即包名
+            pkg = next(g for g in m.groups() if g is not None).lower()
+            # mcp 受控例外:只有 agent_gate/(MCP 文件信箱)可以 import 它。
+            # video_agent_kit / video_edit_server 旧链路在 agent_gate 内同样禁止。
+            if pkg == "mcp" and rel.parts and rel.parts[0] in _MCP_EXEMPT_DIRS:
+                continue
             violations.append({"file": str(rel), "kind": "import", "snippet": m.group(0).strip()})
 
     # ---- 2. pip 依赖声明 ----
     pip_files = ["requirements.txt", "pyproject.toml", "setup.py", "setup.cfg"]
+    # mcp 只在 agent_gate/ 落地时才放行;不在了就回到禁止名单。
+    _forbidden_pkg = r"video[-_]agent[-_]kit|video[-_]edit[-_]server"
+    if not (ROOT / "agent_gate").is_dir():
+        _forbidden_pkg += r"|mcp"
     pkg_re = re.compile(
-        r"^\s*(?:video[-_]agent[-_]kit|mcp|video[-_]edit[-_]server)"
-        r"\s*[\[>=<~!;]",
+        rf"^\s*(?:{_forbidden_pkg})\s*[\[>=<~!;]",
         re.MULTILINE | re.IGNORECASE,
     )
     for name in pip_files:
@@ -553,7 +576,8 @@ def case_decoupling() -> dict[str, Any]:
     return {
         "case": "decoupling",
         "checked": "import statements + pip dependencies + video_edit_server calls "
-                   "(comments / docstrings / historical docs are intentionally excluded)",
+                   "(comments / docstrings / historical docs are intentionally excluded; "
+                   "mcp is allowed only under agent_gate/)",
         "violations": violations,
         "all_ok": len(violations) == 0,
     }
