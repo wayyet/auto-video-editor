@@ -22,6 +22,7 @@ from storyline_capabilities.vlm_client import (
     StubLLMClient,
     chat_json,
     chat_text,
+    get_default_client,
     parse_json_loose,
 )
 from storyline_capabilities.prompts import render_prompt
@@ -104,6 +105,8 @@ def understand_clips(
 
     sys_detail = render_prompt("understand_clips", _SYSTEM_DETAIL, lang=lang)
     user_detail = render_prompt("understand_clips", _USER_DETAIL, lang=lang)
+    # 没传 client 时用全局默认 client(Agent 闸门从这里接入)。默认仍是 StubLLMClient,旧行为不变。
+    effective = client or get_default_client()
 
     captions: list[dict[str, Any]] = []
     parse_errors: list[str] = []
@@ -140,7 +143,7 @@ def understand_clips(
         last_exc: Optional[BaseException] = None
         for attempt in range(max_retries + 1):
             try:
-                raw = (client or StubLLMClient()).chat(
+                raw = effective.chat(
                     system_prompt=sys_detail,
                     user_prompt=user_detail,
                     media=media,
@@ -180,7 +183,7 @@ def understand_clips(
         f"- {d.get('clip_id', '?')}: {d.get('caption', '')}" for d in captions
     ]
     overall: str = ""
-    if desc_lines and client is not None:
+    if desc_lines and (client is not None or not isinstance(effective, StubLLMClient)):
         sys_overall = render_prompt(
             "understand_clips", _SYSTEM_OVERALL, lang=lang
         )

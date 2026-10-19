@@ -40,7 +40,7 @@ from storyline_capabilities.bgm_selector import (
     rank_candidates,
     rank_candidates_with_llm,
 )
-from storyline_capabilities.vlm_client import LLMClient, StubLLMClient
+from storyline_capabilities.vlm_client import LLMClient, StubLLMClient, get_default_client
 
 logger = logging.getLogger(__name__)
 
@@ -101,8 +101,11 @@ def select_bgm(
     if candidates:
         llm_client = client
         if llm_client is None:
-            # 默认走 StubLLMClient,行为:无 key → 返回 default_caption 文本
-            llm_client = StubLLMClient(default_caption='{"bgm_id": ""}')
+            # 全局默认 client 不是 Stub(例如 Agent 闸门)就用它;
+            # 否则保持旧行为:无 key → Stub 返回空 bgm_id
+            llm_client = get_default_client()
+            if isinstance(llm_client, StubLLMClient):
+                llm_client = StubLLMClient(default_caption='{"bgm_id": ""}')
         try:
             chosen = rank_candidates_with_llm(
                 candidates=candidates,
