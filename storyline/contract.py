@@ -76,6 +76,16 @@ class Clip(BaseModel):
         default_factory=list, description="understand_clips 给出的语义标签"
     )
     content_hash: Optional[str] = Field(None, description="可选 content_hash,用于幂等键")
+    # 2026-10-20 修 D9:生产端 plan_timeline_pro 本来就带这四个字段,
+    # 但契约没声明 → extra="forbid" 直接判 extra_forbidden,草稿永远生成不出来。
+    # 显式声明成可选字段,既保住契约的严格性(未知字段仍然拒绝),
+    # 又不丢生产端已经产出的信息。
+    voiceover_id: Optional[str] = Field(None, description="该片段所属配音 ID(剪映配音轨映射)")
+    transition_in: Optional[str] = Field(None, description="入场转场(fade_in / cut 等)")
+    transition_out: Optional[str] = Field(None, description="出场转场(fade_out / cut 等)")
+    subtitle_style: Optional[dict[str, Any]] = Field(
+        None, description="该片段的字幕样式(recommend_text 产出)"
+    )
 
     @model_validator(mode="after")
     def _validate_ranges(self) -> "Clip":
@@ -144,6 +154,10 @@ class CanonicalTimeline(BaseModel):
     audio: TimelineAudio = Field(default_factory=TimelineAudio)
     subtitles: TimelineSubtitles = Field(default_factory=TimelineSubtitles)
     options: TimelineOptions = Field(default_factory=TimelineOptions)
+    # 2026-10-20 修 D9:producer 记录的排期方法与告警,节点会读它们写
+    # status_log。显式声明,不再靠 extra 透传。
+    method: Optional[str] = Field(None, description="时间线分配方法名(tts_align / empty 等)")
+    warnings: list[str] = Field(default_factory=list, description="producer 产出的告警列表")
 
     @model_validator(mode="after")
     def _validate_timeline_invariants(self) -> "CanonicalTimeline":

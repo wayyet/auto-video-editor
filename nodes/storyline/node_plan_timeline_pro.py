@@ -26,7 +26,10 @@ import logging
 
 from state import WorkflowState
 from storyline.contract import StorylineErrorCode
-from storyline_capabilities.plan_timeline_pro import plan_timeline_pro
+from storyline_capabilities.plan_timeline_pro import (
+    normalize_source_media,
+    plan_timeline_pro,
+)
 from nodes.storyline._common import (
     _read_groups,
     _read_json_artifact,
@@ -47,6 +50,7 @@ def storyline_plan_timeline_pro_node(state: WorkflowState) -> dict:
     source_media = _read_media(state)
 
     voiceover_doc = _read_json_artifact(state, "storyline_voiceover_artifact")
+    script_doc = _read_json_artifact(state, "storyline_script_artifact")
     bgm_selection = state.get("storyline_bgm_selection") or {}
     transition_plan = state.get("storyline_transition_plan") or {}
     text_style_plan = state.get("storyline_text_style_plan") or {}
@@ -63,16 +67,19 @@ def storyline_plan_timeline_pro_node(state: WorkflowState) -> dict:
                     "schema_version": "1.0",
                     "job_id": job_id,
                     "created_at_ms": 0,
-                    "source_media": source_media or [
-                        {
-                            "media_id": "media_0001",
-                            "file_uri": "file:///unknown",
-                            "duration_ms": 35000,
-                            "media_type": "video",
-                        }
-                    ],
+                    "source_media": normalize_source_media(
+                        source_media
+                        or [
+                            {
+                                "media_id": "media_0001",
+                                "file_uri": "file:///unknown",
+                                "duration_ms": 35000,
+                                "media_type": "video",
+                            }
+                        ]
+                    ),
                     "clips": [],
-                    "audio": {"bgm_ref": None, "voiceover": {}},
+                    "audio": {"bgm_ref": None, "voiceover": None},
                     "subtitles": {"zh": None, "en": None},
                     "options": {
                         "enable_ai_transition": False,
@@ -98,6 +105,7 @@ def storyline_plan_timeline_pro_node(state: WorkflowState) -> dict:
         timeline = plan_timeline_pro(
             groups=groups,
             voiceover=voiceover_doc if isinstance(voiceover_doc, dict) else None,
+            group_scripts=script_doc if isinstance(script_doc, dict) else None,
             bgm_selection=bgm_selection if isinstance(bgm_selection, dict) else None,
             transition_plan=transition_plan if isinstance(transition_plan, dict) else None,
             text_style_plan=text_style_plan if isinstance(text_style_plan, dict) else None,
