@@ -8,8 +8,7 @@ starting 的 status,而真正的 worker 进程还要好几秒才能 import 完 g
 """
 from __future__ import annotations
 
-import json
-import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from agent_gate import service
@@ -29,13 +28,23 @@ def _mailbox(tmp_path: Path) -> Mailbox:
 
 
 def _write(mb: Mailbox, state: str, heartbeat_age_s: float) -> None:
-    ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - heartbeat_age_s))
+    """写一份心跳年龄为 ``heartbeat_age_s`` 的 status。
+
+    时间戳必须用**微秒精度**(= :func:`agent_gate.protocol.utc_now` 的格式):
+    早先这里用 ``time.strftime("%Y-%m-%dT%H:%M:%S")``,只有秒级精度,
+    解析时会丢掉不足一秒的部分 —— 标称 0.5s 的心跳实际可能已经 1.4s 老,
+    再叠加上跑用例的耗时,就会越过 1.5s 的阈值被误判成 crashed
+    (2026-10-20 实测:机器负载一高就随机挂)。
+    """
+    ts = (datetime.now(timezone.utc) - timedelta(seconds=heartbeat_age_s)).strftime(
+        "%Y-%m-%dT%H:%M:%S.%fZ"
+    )
     mb.write_status({
         "thread_id": "t1",
         "state": state,
         "pid": 1,
-        "started_at": ts + ".000000Z",
-        "heartbeat_at": ts + ".000000Z",
+        "started_at": ts,
+        "heartbeat_at": ts,
         "interrupts": [],
         "error": None,
     })
@@ -68,7 +77,9 @@ def test_running_worker_uses_the_tighter_threshold(tmp_path: Path) -> None:
     assert st["worker_state"] == "crashed"
 
     mb2 = _mailbox(tmp_path / "b")
-    _write(mb2, STATE_RUNNING, min(STALE_AFTER_S - 1.0, 1.0))
+    # 留出足够的余量:阈值 1.5s,这里用 0.1s 的心跳 —— 机器负载高时
+    # 「写完 status → 读 status」本身就要几十毫秒,不能贴着阈值写。
+    _write(mb2, STATE_RUNNING, min(STALE_AFTER_S - 1.0, 0.1))
     st2 = service.status_summary(mb2, thread_id="t1")
     assert st2["worker_state"] == STATE_RUNNING
 

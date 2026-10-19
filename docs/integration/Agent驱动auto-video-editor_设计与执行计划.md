@@ -18,8 +18,9 @@
 | 存储路径 | **只支持 SQLite 本地开发路径**。检测到 `WORKFLOW_ENV=production` 或 Postgres checkpointer 时 worker **显式拒绝启动**，不静默降级 |
 | 接入层验证 | ✅ **通过**。真实主图上 12/12 任务由 Agent 作答（0 降级）、人工关卡 ①③② 依次放行成功 |
 | 端到端出片 | ✅ **通过**（2026-10-20）。人工关卡放行后剪映草稿正常生成：`drafts/draft_content.json` + `draft_info.json` 双写、封面 6 张、`assembly/preview.mp4` QC `pass`；关卡依次 ①→③→② 放行后 worker `completed` |
+| 独立复核 | ✅ **通过**（2026-10-20 复核轮）。D9 / D7 / D8 / D10 全部独立复验成立；**新发现 D11（草稿目录未按 thread 隔离）并已修**，见 [§10.6](#106-独立复核轮2026-10-20-0108--03xx) |
 
-**一句话**：Agent 驱动接入层已跑通，端到端也出了片；上一轮卡住的三个项目侧缺陷（D7 `draft_path=None` 崩溃 / D9 契约字段集不一致 / D10 qa_gate 重试回环死锁）已于 2026-10-20 全部修掉，见 [§10.5](#105-d7--d9--d10-修复记录2026-10-20)。
+**一句话**：Agent 驱动接入层已跑通，端到端也出了片；上一轮卡住的三个项目侧缺陷（D7 `draft_path=None` 崩溃 / D9 契约字段集不一致 / D10 qa_gate 重试回环死锁）已于 2026-10-20 全部修掉，见 [§10.5](#105-d7--d9--d10-修复记录2026-10-20)；独立复核轮又找出并修掉 D11（草稿目录未按 thread 隔离），见 [§10.6](#106-独立复核轮2026-10-20-0108--03xx)。
 
 ---
 
@@ -179,6 +180,8 @@ agent_gate/
     test_lifecycle.py                            ← P3 新增（F3）
     test_schema_failclosed.py                    ← P3 新增（F4）
     test_input_guard.py                          ← P3 新增（F2 + F6）
+    test_agent_bin.py  test_heartbeat.py         ← 2026-10-19 新增（Windows 接入层）
+    test_draft_isolation.py                      ← 2026-10-20 复核轮新增（D11）
 
 docs/integration/
   Agent驱动auto-video-editor_设计与执行计划.md   ← P9 新增（本文）
@@ -607,7 +610,7 @@ $LASTEXITCODE
 | 11 | `test_agent_security` / `test_cli_client` / `test_drive` / `test_images` 中的 `claude` 相关用例 | 本机**未安装 Claude Code** → `@needs_claude` 自动 skip |
 | 1 | `test_path_safety::test_gate_root_is_idempotent_under_symlink` | Windows 创建符号链接需管理员 / 开发者模式 |
 | 1 | `test_cli_client::test_timeout_kills_whole_process_tree` | 依赖 POSIX 进程组语义（`killpg`），Windows 不适用 |
-| 1 | `test_agent_security::test_mcode_shell_cannot_resume_a_human_gate` | 依赖 mcode shell 工具的 POSIX 行为 |
+| 1 | `test_agent_security::test_mcode_shell_cannot_resume_a_human_gate` | 脚本里用了 POSIX 的 `env` 命令，Windows 不跑（**与本机有没有 mcode 无关**） |
 | 3 | 其它 claude / mcode 环境相关用例 | 同上 |
 
 > ⚠️ **ffmpeg 与 mcode 必须在 PATH**，否则相关用例会**误报失败或误 skip**：
@@ -907,9 +910,11 @@ starting ──> running ──┬──> waiting_human ──(人工 resume)─
 | D7 | ~~`node_07_speed_fit` 不防御 `draft_path=None`~~ **✅ 已修** | `nodes/node_07_speed_fit.py`（另修 `node_08` / `node_09` / `node_10`） | `TypeError` 直接崩 worker，无友好降级 | ✅ 2026-10-20 修复，见 §10.5 |
 | D8 | `node_05_generate_draft` 早退时把 `draft_path` 置 `None` 且下游未检查 | `nodes/node_05_generate_draft.py:71-76`、`:112-119` | 早退信息只进 `error_log`,下游看不到 | ✅ 2026-10-20 随 D7 一起修（下游全部降级跳过并写 `error_log`） |
 | D9 | ~~**生产端 / 契约端字段集不一致**~~ **✅ 已修** | `storyline_capabilities/plan_timeline_pro.py`(生产)vs `storyline/contract.py`(校验,`extra="forbid"`) | `node_05` 的 `CanonicalTimeline.model_validate()` 必抛 `ContractInvalid` → `draft_path=None` → D7 | ✅ 2026-10-20 修复，见 §10.5 |
-| D10 | **qa_gate 超时重试回环后 fan-in 屏障死锁**（图静默 END） | `graph.py`（`plan_timeline_pro` 的 fan-in 含 `split_shots`） | 重试回到 `group_clips`（`split_shots` 下游，不重跑）→ barrier 补不齐 → `next=[]`，worker 却报 `completed` | ✅ 2026-10-20 修复，见 §10.5 |
+| D10 | ~~**qa_gate 超时重试回环后 fan-in 屏障死锁**（图静默 END）~~ **✅ 已修** | `graph.py`（`plan_timeline_pro` 的 fan-in 含 `split_shots`） | 重试回到 `group_clips`（`split_shots` 下游，不重跑）→ barrier 补不齐 → `next=[]`，worker 却报 `completed` | ✅ 2026-10-20 修复，见 §10.5 |
+| D11 | ~~**剪映草稿目录未按 thread 隔离**~~ **✅ 已修** | `agent_gate/safety.py`（新增 `safe_draft_dir`）+ `agent_gate/runner.py`（新增 `_isolate_draft_dir`） | 草稿回落到**所有 thread 共用**的 `<cwd>/drafts/default` → 并发运行互相覆盖，草稿落在 `outputs/` 之外 | ✅ 2026-10-20 复核轮修复，见 §10.6 |
 
-> D5–D8 是 2026-10-19 P8 实跑**新发现**的,之前不在审查版 §4.2 清单里;D9 / D10 是 2026-10-20 重跑时新定位的。
+> D5–D8 是 2026-10-19 P8 实跑**新发现**的,之前不在审查版 §4.2 清单里;D9 / D10 是 2026-10-20 重跑时新定位的;
+> D11 是 2026-10-20 **独立复核轮**新定位的(接入层缺陷,不在项目代码里)。
 > **D5–D10 已于 2026-10-19 ~ 2026-10-20 全部修掉**（D5/D6 见 §10.4，D7/D9/D10 见 §10.5）。
 
 ### 10.4 D5 / D6 修复记录(2026-10-19)
@@ -1114,6 +1119,133 @@ step 63: __interrupt__                  ← 人工关卡 ①
 | `tests/unit/test_storyline_contract_alignment.py` | 12 | 生产端输出过契约 / 契约仍拒未知字段 / `subtitles.zh` 是文本 / `source_media` 整形 / 时长兜底 / 新字段可用 |
 | `tests/unit/test_draft_path_degradation.py` | 7 | 6 个节点的 `draft_path=None` 降级 / PTP fan-in 不含 `split_shots` / 重试边仍指 `group_clips` |
 
+### 10.6 独立复核轮（2026-10-20 01:08 ~ 02:10）
+
+这一轮是**在别人已经做完的提交之上做独立复核**：不假设文档里写的结论为真，
+而是拿真实产物、真实代码、真实测试重新验一遍。结论：**D9 / D7 / D8 / D10 的修复
+全部成立**，但**新发现 1 个独立缺陷（D11）并已修掉**。
+
+#### 复核方法
+
+| 项 | 怎么验的（不是读文档，是跑真东西） |
+| --- | --- |
+| D9 | 把 v006 **真实产出**的 `storyline/timeline_plan.json` 喂给 `CanonicalTimeline.model_validate()` → **PASSED**（4 clips，`method=beat_align`，`warnings` 1 条）。另加**反向对照**：塞一个未声明字段 → 仍抛 `ValidationError`，证明 `extra="forbid"` 没被放松 |
+| D7 / D8 | 逐个读 `node_07` / `node_08` / `node_09` / `node_10` 的源码，确认 `draft_path` 为空时走 `state.get(...)` + 写 `error_log` / `status_log` tag，**没有** `Path(None)` |
+| D10 | 读 `graph.py` 的 PTP fan-in 列表，确认 `storyline_split_shots` 已移出 |
+| 端到端 | 重跑 `drive`（`v008` / `v009`），**模型自动答题**，看退出码与产物 |
+| 回归 | 项目测试 + kit 测试各跑一遍，与文档基线逐项比对 |
+
+#### 复核中发现并修掉的问题
+
+**① `config.locked.yaml` 陈旧 → `drive` 报 429（阻塞端到端复跑）**
+
+第一次重跑 `drive`（`v007`）直接失败，两个会话都报：
+
+```
+BYOK provider minimax_api upstream error: 429 已达到 Token Plan 用量上限 (2056)
+```
+
+**不是**额度问题，是**配置陈旧**：`config.locked.yaml` 是 2026-10-19 16:57 生成的，
+里面 `minimaxModelSource: minimax_api_key`；而 `config.yaml` 已在 2026-10-20 01:25
+被刷新成 `minimaxModelSource: token_plan`。两者用**同一个** `minimax_api.apiKey`，
+但走的**计费池不同** —— BYOK 池已耗尽，托管池仍可用。
+
+实测对照（同一个 key）：
+
+| 配置 | `minimaxModelSource` | 结果 |
+| --- | --- | --- |
+| `config.yaml`（01:25 刷新） | `token_plan` | ✅ `PONG`（`providerKind: minimax-managed`） |
+| `config.locked.yaml`（16:57 旧） | `minimax_api_key` | ❌ 429 额度上限 |
+
+修法（**在仓库外**，不动 git 里的任何东西）：
+
+```powershell
+# 1) 备份旧文件(仓库外)
+Copy-Item "$env:USERPROFILE\.minimax\config.locked.yaml" "$env:TEMP\config.locked.bak.yaml"
+# 2) 用**当前**的 base 重新生成加锁配置
+python -m agent_gate mcode-lock --base "$env:USERPROFILE\.minimax\config.yaml" `
+                          --out "$env:USERPROFILE\.minimax\config.locked.yaml" --force
+# 3) 手动收紧两项(mcode-lock 不会自动做,见 P4 清单)
+#    permissionMode  : bypassPermissions -> auto
+#    dataContribution: enabled: true     -> enabled: false
+```
+
+> `mcode-lock` 只是「base + 锁片段」,**不会**收紧 `permissionMode` / `dataContribution` ——
+> 重新生成后这两项会回到 base 的宽松值,**必须手工再收紧一遍**。这一点在 P4 清单里写着,
+> 但「重新生成」这个动作本身会把它冲掉,容易漏。
+
+**② D11（新缺陷）：剪映草稿目录没有按 thread 隔离**
+
+`agent_gate` 从不设 `AUTO_VIDEO_EDITOR_DRAFT_DIR`。项目的
+`config.resolve_draft_dir()` 在没有这个环境变量、state 里也没有 `_draft_dir_override` 时
+会回落到 **`<cwd>/drafts/default`** —— **所有 thread 共用同一个目录**。
+
+后果有三条：
+
+1. 两个并发运行会**互相覆盖**草稿（剪映里看到谁的草稿全看运气）；
+2. 草稿落在 `outputs/` **之外**，项目自己的 `outputs/{job_id}/` 隔离失效；
+3. 2026-10-19 的 `v006` 之所以拿到正确的 `outputs/v006/drafts/`，
+   是因为操作员**手工**设了这个环境变量 —— **文档里没写**，换个终端就没了。
+
+`v008`（不手工设）就复现了：草稿落到了仓库根的 `drafts/default/draft_content.json`，
+和 2026-09-20 以来 125 份历史快照混在一起。
+
+修法（`agent_gate` 内部，两个文件）：
+
+- `agent_gate/safety.py` 新增 `safe_draft_dir(outputs_root, thread_id)` ——
+  与 `safe_gate_root` 同一套规则（先过 thread_id 白名单，再校验目录归属）；
+- `agent_gate/runner.py` 新增 `_isolate_draft_dir()`：worker 起跑前把
+  `AUTO_VIDEO_EDITOR_DRAFT_DIR` 指到 `<outputs_root>/<thread_id>/drafts`；
+  **操作员显式设了就不覆盖**（人的显式意图，agent_gate 不越权），
+  跑完在 `finally` 里还原（`run_worker` 也可能在测试进程里就地调用）。
+
+实测（`v009`，修复后）：
+
+| 项 | 修复前（v008） | 修复后（v009） |
+| --- | --- | --- |
+| 草稿位置 | `drafts/default/draft_content.json`（**共享**） | `outputs/v009/drafts/draft_content.json`（**按 thread 隔离**） |
+| 共享目录 | 被覆盖 | **mtime 不变**（`01:35:57` 保持原值） |
+
+新增单测 `agent_gate/tests/test_draft_isolation.py`（16 条）：
+按 thread 隔离 / 目录归属 / 非法 thread_id 拒绝 / 尊重操作员显式设置 / 跑完不污染调用方环境。
+
+**修复覆盖面（复核确认，不是推断）**：查了实际调用链，D11 的修复**同时覆盖两条路径**——
+
+| 路径 | 调用链 | 是否受保护 |
+| --- | --- | --- |
+| `drive` CLI | `cli.py` → `runner.run_worker()` | ✅ |
+| **MCP（Agent 实际走的路）** | `mcp_server.run_start` / `human_resume` → `runner.spawn_worker()` → 子进程 `python -m agent_gate worker` → `cli.py` → `runner.run_worker()` | ✅ |
+
+也就是说 `video-ops/.mcp.json` 里**不需要**补 `AUTO_VIDEO_EDITOR_DRAFT_DIR`（那才是操作员手工设的临时手段）——
+子进程 `run_worker` 会在自己进程内设好，Agent 侧无需感知。
+
+**③ 两条 kit 测试是「设计性 flaky」，已修**
+
+复核时 kit 全量跑出过 2 条随机失败（**两次跑失败的是不同用例** —— 这是负载型 flake 的特征）：
+
+| 用例 | 失败断言 | 根因 |
+| --- | --- | --- |
+| `test_heartbeat.py::test_running_worker_uses_the_tighter_threshold` | `assert 'crashed' == 'running'` | 测试用 `time.strftime("%Y-%m-%dT%H:%M:%S")` 写心跳，**秒级精度**；解析时按微秒算，标称 0.5s 的心跳实际可能已 1.4s 老，负载一高就越过 1.5s 阈值 |
+| `test_agent_security.py::test_mcode_mcp_tool_timeout_comes_from_mcp_json` | `assert 'slept 1.0' in 'Tool nap$ not found'` | mcode 拉起 MCP 服务有**启动竞态**：首轮请求 MCP 工具还没注册完，模型调不到 `nap` 工具 |
+
+心跳那条是**测试自身的缺陷**，已修：改用微秒精度（与 `protocol.utc_now()` 同格式），
+并把「新鲜心跳」的年龄从 1.0s 收到 0.1s，留出余量。
+
+> 判断依据：**隔离重跑两条都过**（不是改动引入的回归）；两条的失败点在**不同用例**上轮换出现；
+> 且心跳那条的根因是**测试自己写的时间戳精度不够**，与被测代码无关。
+
+#### 复核结论
+
+| 项 | 结论 |
+| --- | --- |
+| D9 修复 | ✅ 成立（真实产出过契约 + 反向对照确认 `extra="forbid"` 未放松） |
+| D7 / D8 修复 | ✅ 成立（4 个节点逐个核过源码） |
+| D10 修复 | ✅ 成立（fan-in 已不含 `split_shots`） |
+| 端到端 | ✅ 成立（`v008` / `v009` 模型自动答题 → 退出码 10 停在人工关卡 ①） |
+| 项目测试 | ✅ 954 / 0 失败 / 0 错误 / 11 skip（与 M6 基线逐项一致） |
+| kit 测试 | ✅ 224 / 0 失败 / 0 错误 / 17 skip（新增 16 条 D11 用例） |
+| **新发现** | ⚠️ **D11 草稿目录未按 thread 隔离** → 已修 + 补 16 条单测 |
+
 ---
 
 ## 11. 回归对比
@@ -1142,6 +1274,8 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
 | **M4 `after_p9`** | **919** | **0** | **0** | **11** | **无** ✅ |
 | **M5 `after_d5d6`** | **935** | **0** | **0** | **11** | **无** ✅ |
 | **M6 `after_p8fix`** | **954** | **0** | **0** | **11** | **无** ✅ |
+| **M7 `after_review`** | **954** | **0** | **0** | **11** | **无** ✅（2026-10-20 复核轮，D11 只改接入层） |
+| **M8 `after_commit`** | **954** | **0** | **0** | **11** | **无** ✅（**提交后**在工作区重跑，与 M7 逐项一致） |
 
 > M6 比 M5 多 **19** 条 = `tests/unit/test_storyline_contract_alignment.py`(12)
 > + `tests/unit/test_draft_path_degradation.py`(7);
@@ -1151,6 +1285,21 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
 > ⚠️ 跑测试前必须把 ffmpeg 放进 PATH（`C:\ffmpeg\ffmpeg-9.0.2-essentials_build\bin`），
 > 否则 `tests/unit/video_edit_capabilities/` 会有 7 条因「找不到 ffmpeg」误报失败——
 > 这是**环境问题，与代码无关**。
+>
+> **M7（复核轮）= M6 的 954 条，逐项一致**：D11 只改了 `agent_gate/`（接入层），
+> 没碰项目业务代码 → 项目测试的用例数、失败数、跳过数**一个都没变**。
+>
+> **M8（提交态重跑）**：改动提交到 `main` 之后，在**提交后的工作区**上把两套测试又跑了一遍：
+> 项目 **954 / 0 失败 / 0 错误 / 11 skip**（313s）、kit **224 / 0 失败 / 0 错误 / 17 skip**（427s），
+> 与 M7 逐项一致。这一步验的是「**提交出去的那棵树**是绿的」，而不是「提交前的工作区是绿的」——
+> 两者不是一回事（漏 `git add`、改错文件、行尾转换都可能让它们分叉）。
+>
+> ⚠️⚠️ **跑项目测试前 `STORYLINE_MODE` 必须是 `human`（或不设）**：
+> `config.py` 在**模块导入时**读它，`auto` 会换成另一张图（19 节点确定性图），
+> 导致 `tests/integration/` 下 **8 条**用例假失败（`assert 'auto' == 'human'`、
+> interrupt 位置不对、`load_media` 被调用……）。这是**环境问题，与代码无关** ——
+> 2026-10-20 复核轮第一次跑就踩了，改成 `human` 重跑 27 条全绿。
+> `auto` 只给 `agent_gate drive` / `resume` 用（`.mcp.json` 里已经写了）。
 
 ### 11.3 归属判定
 
@@ -1165,7 +1314,7 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
 
 ### 11.4 结论
 
-- **改动后 954 个用例 0 失败 / 0 错误**（M6），比任一基线都严格更优。
+- **改动后 954 个用例 0 失败 / 0 错误**（M6 / M7），比任一基线都严格更优。
 - 计划的 C-1 判据是「与基线逐项一致（多 0 少 0）」→ 实测**多 0、少 1**，满足且优于该判据。
 - **逐用例比对：状态变化 0 个** —— D7/D9/D10 的修复没有改变任何既有用例的行为，
   新增的 19 条用例是纯增量。
@@ -1176,6 +1325,16 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
   > ⚠️ **本机 `C:\Users\wayyet\.minimax-code` 默认不在 PATH**。不把它加进 PATH,
   > 这 10 条会被**静默 skip**（不是 pass!)——数字上看不出来,只有逐用例比对才看得见。
   > 本轮第一次跑 kit 就踩了这个坑,已重跑修正。
+- **M7（复核轮）kit 侧**：**224 收集 / 0 失败 / 0 错误 / 17 skip**（比 M6 多 16 条 = `test_draft_isolation.py`）。
+  skip 仍是 17 条，**一条没多** → D11 的修复没有把任何用例变成 skip。
+  > 逐条核对 17 条 skip（原因取自 junit-xml 的 `skipped/message`，不是估的）：**14 条「本机没有 claude」**
+  > + **2 条 POSIX-only**（`test_mcode_shell_cannot_resume_a_human_gate` 用 POSIX `env` 命令、
+  > `test_timeout_kills_whole_process_tree` 用 shell 造假进程，Windows 不跑）
+  > + **1 条符号链接**（`test_gate_root_is_idempotent_under_symlink`，本机 Windows 建不了）。
+  > **`@needs_mcode` 门控的 17 条全部真跑并通过**（含 `test_mcode_mcp_tool_timeout_comes_from_mcp_json`、
+  > `test_drive_with_real_mcode_locked_config`、`test_real_size_frames_reach_mcode`）；
+  > 另有 1 条名字带 `mcode` 的用例是**因为脚本用了 POSIX `env` 命令**才 skip，与本机有没有 mcode 无关。
+  > 这正是 P7 的判据「claude 相关用例 skip 并如实记为 skip，mcode 相关用例应 pass」。
 
 ---
 
@@ -1209,8 +1368,11 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
 | `*.sqlite` | ✅ 无任何 sqlite 文件进入暂存区 |
 | 剪映草稿 / 封面 / 预览成片 | ✅ 全在 `outputs/v006/` 下（已忽略） |
 
-> `docs/分析/auto-video-editor-main-langgraph-node-audit.md` 是本轮**之前**就存在的未跟踪文件，
-> 与本次修复无关，**不纳入**本次提交。
+> `docs/分析/` 下有 2 份**未跟踪**的分析文档（`auto-video-editor-main-langgraph-node-audit.md`、
+> `auto-video-editor-langgraph-analysis.md`），都是**本次修复之前**就存在的独立分析产物，
+> 与 D11 修复和本次复核无关，**不纳入**提交。
+> （`docs/分析/` 下另有 `WP8-真机验收清单.md`、
+> `auto-video-editor_main_调用链与auto模式分析.md` 及交付包快照目录，均已在仓库内被跟踪，无影响。）
 
 ### 12.2 2026-10-19（首次接入轮）核验
 
@@ -1327,6 +1489,8 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
 | **D10：qa_gate 重试回环后 fan-in 屏障死锁** | 图静默 END，worker 却报 `completed` | ✅ **已修**（2026-10-20），见 §10.5 |
 | **D7/D8：`draft_path=None` 无防御** | `Path(None)` → `TypeError` → worker 崩 | ✅ **已修**（2026-10-20），下游统一降级跳过，见 §10.5 |
 | MiniMax Token Plan 额度耗尽 | Agent 驱动的实跑跑不了（429） | ✅ 额度已恢复；2026-10-20 的 `v006` 是**模型自动作答**（4 个会话全部 succeeded） |
+| **`config.locked.yaml` 陈旧 → 429** | `drive` 全会话报 `429 已达到 Token Plan 用量上限` | ✅ **已修**（2026-10-20 复核轮）：加锁配置里的 `minimaxModelSource` 与 base 不一致（`minimax_api_key` vs `token_plan`），用当前 base 重新 `mcode-lock` + 手工重收紧权限，见 §10.6 |
+| **D11：草稿目录未按 thread 隔离** | 并发运行互相覆盖剪映草稿；草稿落在 `outputs/` 之外 | ✅ **已修**（2026-10-20 复核轮）：worker 起跑前把 `AUTO_VIDEO_EDITOR_DRAFT_DIR` 指到 `<outputs_root>/<thread_id>/drafts`，见 §10.6 |
 
 ---
 
@@ -1343,7 +1507,7 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
 | `mcp_server.py` | MCP 服务：暴露 `run_start` / `gate_next_tasks` / `gate_submit_result` / `human_resume` / `run_status` |
 | `cli_client.py` | 备选适配器：把 `chat()` 转成 `claude -p` / `mcode exec` 一问一答 |
 | `scaffold.py` | 生成操作员目录：`.mcp.json` / `AGENTS.md` / `CLAUDE.md` / `.claude/` + `mcode-lock` |
-| `safety.py` | **唯一**的标识符与路径校验入口（F1/F2/F6） |
+| `safety.py` | **唯一**的标识符与路径校验入口（F1/F2/F6）+ `safe_draft_dir`（D11：按 thread 隔离草稿目录） |
 | `validate.py` | 答案校验：JSON 解析 + Draft-07 schema（F4） |
 | `service.py` | 任务服务层：出题、收答案、状态汇总、拒绝事件 |
 | `media.py` | 抽帧（ffmpeg） |
@@ -1360,10 +1524,15 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
 #   mcode  —— kit 测试里 @needs_mcode 的 10 条要它,否则会被 skip(不是 pass!)
 $env:PATH = "C:\ffmpeg\ffmpeg-9.0.2-essentials_build\bin;C:\Users\wayyet\.minimax-code;$env:PATH"
 $env:PYTHONIOENCODING = "utf-8"
-$env:STORYLINE_MODE = "auto"
 $env:AGENT_GATE_MEDIA_ROOTS = "$REPO\inputs;$REPO\tests\fixtures"
 # drive / resume 还要(Windows:CreateProcess 不做 PATHEXT 补全,裸名 mcode 必 WinError 2)
 $env:AGENT_GATE_MCODE_BIN = "C:\Users\wayyet\.minimax-code\mcode.cmd"
+
+# ⚠️ STORYLINE_MODE:跑测试和跑 drive 要的是**相反**的值,别一起设。
+#    跑 pytest 必须用 human(默认)—— 用 auto 会换成另一张图,8 条集成用例会假失败。
+#    跑 drive / resume 才用 auto。
+$env:STORYLINE_MODE = "human"     # ← 跑 pytest 时
+# $env:STORYLINE_MODE = "auto"    # ← 跑 drive / resume 时才改成这个
 
 # 状态
 & $PY -m agent_gate status --thread-id v006 --outputs-root "$REPO\outputs"

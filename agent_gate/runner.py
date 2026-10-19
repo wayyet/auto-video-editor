@@ -28,7 +28,13 @@ from agent_gate.protocol import (
     STATE_WAITING_HUMAN,
     utc_now,
 )
-from agent_gate.safety import UnsafeIdentifier, UnsafePath, safe_gate_root, safe_thread_id
+from agent_gate.safety import (
+    UnsafeIdentifier,
+    UnsafePath,
+    safe_draft_dir,
+    safe_gate_root,
+    safe_thread_id,
+)
 
 
 def load_callable(spec: str) -> Callable[..., Any]:
@@ -47,6 +53,42 @@ def gate_root(outputs_root: Path | str, thread_id: str) -> Path:
     :class:`agent_gate.safety.UnsafePath`。
     """
     return safe_gate_root(outputs_root, thread_id)
+
+
+def draft_dir(outputs_root: Path | str, thread_id: str) -> Path:
+    """<outputs_root>/<thread_id>/drafts —— 本 thread 的剪映草稿目录。
+
+    worker 启动时把这个目录写进 ``AUTO_VIDEO_EDITOR_DRAFT_DIR``,
+    项目的 ``config.resolve_draft_dir()`` 就会用它,而不是回落到
+    **所有 thread 共用的** ``<cwd>/drafts/default``。
+    """
+    return safe_draft_dir(outputs_root, thread_id)
+
+
+def _isolate_draft_dir(outputs_root: Path | str, thread_id: str) -> tuple[Path, Optional[str], bool]:
+    """把本 thread 的剪映草稿目录写进 ``AUTO_VIDEO_EDITOR_DRAFT_DIR``。
+
+    项目的 ``config.resolve_draft_dir()`` 解析顺序是:
+    ``state["_draft_dir_override"]`` → env ``AUTO_VIDEO_EDITOR_DRAFT_DIR``
+    → ``<cwd>/drafts/default``。
+
+    最后那档是**所有 thread 共用**的:两个并发运行会互相覆盖草稿,
+    草稿也会落在 ``outputs/`` 之外(项目自己的 ``outputs/{job_id}/`` 隔离
+    就失效了)。所以在跑图之前显式指到 ``<outputs_root>/<thread_id>/drafts``。
+
+    操作员已经显式设了 ``AUTO_VIDEO_EDITOR_DRAFT_DIR`` 时**不覆盖** ——
+    那是人的显式意图,agent_gate 不越权。
+
+    返回 ``(实际生效的目录, 旧值, 是否是本次设的)``。
+    旧值是 None 表示原来没设过;调用方负责按 ``是否本次设的`` 决定还原方式,
+    否则会把操作员的显式设置误删。
+    """
+    prev = os.environ.get("AUTO_VIDEO_EDITOR_DRAFT_DIR")
+    if prev:
+        return Path(prev), prev, False
+    d = draft_dir(outputs_root, thread_id)
+    os.environ["AUTO_VIDEO_EDITOR_DRAFT_DIR"] = str(d)
+    return d, None, True
 
 
 def checkpoint_path(thread_id: str) -> Path:
@@ -180,6 +222,7 @@ def run_worker(
     """返回进程退出码:0=正常停下(挂起/完成),1=失败,3=生产环境被护栏拦下。"""
     safe_thread_id(thread_id)
     mb = Mailbox(gate_root(outputs_root, thread_id))
+    _draft_dir, _prev_draft_env, _draft_env_set_by_us = _isolate_draft_dir(outputs_root, thread_id)
     w = _StatusWriter(mb, {"thread_id": thread_id, "pid": os.getpid(),
                            "started_at": utc_now(), "interrupts": [], "error": None})
     w.set(STATE_STARTING)
@@ -236,6 +279,14 @@ def run_worker(
         return 1
     finally:
         stop.set()
+        # 还原草稿目录环境变量:run_worker 也可能在测试进程里就地调用,
+        # 不还原会污染同进程后续用例(以及同进程的第二个 thread)。
+        # 只有本次确实是 agent_gate 设的才动 —— 操作员显式设的值要原样留下。
+        if _draft_env_set_by_us:
+            if _prev_draft_env is None:
+                os.environ.pop("AUTO_VIDEO_EDITOR_DRAFT_DIR", None)
+            else:
+                os.environ["AUTO_VIDEO_EDITOR_DRAFT_DIR"] = _prev_draft_env
 
 
 # ------------------------------------------------------------------ 父进程:拉起 worker

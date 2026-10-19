@@ -84,6 +84,24 @@ def safe_gate_root(outputs_root: Union[Path, str], thread_id: str) -> Path:
     return root
 
 
+def safe_draft_dir(outputs_root: Union[Path, str], thread_id: str) -> Path:
+    """<outputs_root>/<thread_id>/drafts —— 每个 thread 自己的剪映草稿目录。
+
+    为什么必须有它:项目的 ``config.resolve_draft_dir()`` 在没有
+    ``AUTO_VIDEO_EDITOR_DRAFT_DIR``、state 里也没有 ``_draft_dir_override`` 时,
+    会回落到 ``<cwd>/drafts/default`` —— **所有 thread 共用同一个目录**。
+    两个并发运行会互相覆盖草稿,草稿也会跑到 ``outputs/`` 之外。
+
+    规则与 :func:`safe_gate_root` 一致:先过 thread_id 白名单,再校验目录归属。
+    """
+    safe_thread_id(thread_id)
+    base = Path(outputs_root).resolve()
+    draft = (base / thread_id / "drafts").resolve()
+    if not _contained(base, draft):
+        raise UnsafePath("draft_dir_escape")
+    return draft
+
+
 def safe_task_path(mailbox: "MailboxLike", task_id: str) -> Path:  # noqa: F821
     """信箱里某个任务的文件路径。task_id 过白名单,且结果仍在 tasks/ 内。"""
     safe_task_id(task_id)
@@ -171,6 +189,7 @@ CODES: dict[str, str] = {
     "bad_thread_id": "bad_thread_id",
     "bad_task_id": "bad_task_id",
     "gate_root_escape": "gate_root_escape",
+    "draft_dir_escape": "draft_dir_escape",
     "task_path_escape": "task_path_escape",
     "frames_escape": "frames_escape",
     "empty_media_path": "empty_media_path",
@@ -188,6 +207,7 @@ MESSAGES: dict[str, str] = {
     "bad_thread_id": "thread_id 不合法:只允许字母数字开头,后接字母数字/下划线/连字符,总长 1-64。",
     "bad_task_id": "task_id 不合法:必须是 t_ 加 16 位小写十六进制。",
     "gate_root_escape": "thread_id 解析后落在 outputs 根目录之外,已拒绝。",
+    "draft_dir_escape": "thread_id 解析后落在草稿目录之外,已拒绝。",
     "task_path_escape": "task_id 解析后落在任务目录之外,已拒绝。",
     "frames_escape": "task_id 解析后落在抽帧目录之外,已拒绝。",
     "empty_media_path": "video_path 为空。给一个位于允许的素材目录内的视频文件绝对路径。",
