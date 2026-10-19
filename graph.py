@@ -745,13 +745,20 @@ def _build_state_graph():
     g.add_edge("storyline_select_bgm", "storyline_recommend_transition")
 
     # 所有 PTP 上游都到 plan_timeline_pro(plan §2.2):
-    #   SS, GC, GS, GV, SB 都到 PTP(fan-in)。用 list 形式语义(对照
+    #   GC, GS, GV, SB 都到 PTP(fan-in)。用 list 形式语义(对照
     #   ``join_before_delivery`` 注释),LangGraph 0.2 才会等所有 sources 完成才
     #   触发目标一次;独立 ``add_edge`` 是「任一 source 完成就触发」,会导致
     #   PTP 在 SS 完成时就跑,GS/GV/SB 还没产出 — 与 plan §2.2 拓扑不符。
+    #
+    # 2026-10-20 修 D10:**SS(split_shots)被移出这个 barrier**。
+    #   原因:qa_gate 超时重试会回到 storyline_group_clips 重跑,SS 在重试点
+    #   **上游**、不会重跑。barrier 渠道在首次触发后被清空,第二轮只有
+    #   GC/GS/GV/SB 会重新写入,SS 的名字永远补不回来 → PTP 再也不触发 →
+    #   图在 recommend_transition 处**静默 END**(next=[]),worker 还报
+    #   "completed"。SS 在 SS→understand_clips→filter_clips→GC 这条链上,
+    #   GC 完成即蕴含 SS 完成,去掉它不放松任何时序约束。
     g.add_edge(
         [
-            "storyline_split_shots",
             "storyline_group_clips",
             "storyline_generate_script",
             "storyline_generate_voiceover",

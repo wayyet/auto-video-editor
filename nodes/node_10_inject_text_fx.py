@@ -95,8 +95,17 @@ def inject_text_fx(state: WorkflowState) -> dict:
 
     对外行为与重构前完全一致(返回整份 state + 新 status_log)。
     """
+    raw_draft_path = state.get("draft_path")
+    if not raw_draft_path:
+        # node_05 早退时草稿不存在(D7,2026-10-20 修):降级跳过,别抛 TypeError
+        state.setdefault("error_log", []).append(
+            "[node_10] state.draft_path 缺失,跳过字幕花字/动画注入"
+        )
+        status_log = list(state.get("status_log", []) or [])
+        status_log.append("node_10_inject_text_fx_skipped")
+        return {**state, "status_log": status_log}
     log = apply_text_fx(
-        Path(state["draft_path"]),
+        Path(raw_draft_path),
         state.get("status_log"),
         node_tag="node_10",
         done_tag="node_10_inject_text_fx_done",

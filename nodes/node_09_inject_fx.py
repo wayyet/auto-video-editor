@@ -192,7 +192,11 @@ def inject_fx(state: WorkflowState) -> dict:
 
     targets = dual_draft_targets(state)
     if not targets:
-        raise FileNotFoundError(f"[node_09] state.draft_path 缺失,无法注入转场")
+        # node_05 早退时草稿不存在(D7,2026-10-20 修):降级跳过,别抛 FileNotFoundError
+        # 把整个 worker 带走。
+        error_log.append("[node_09] state.draft_path 缺失,跳过转场注入(降级通过)")
+        status_log.append("node_09_inject_fx_skipped")
+        return {**state, "status_log": status_log, "error_log": error_log}
 
     shot_plan = state.get("shot_plan")
     en_file = Path(state["draft_dir_en_branch"]) / "draft_content.json" if state.get("draft_dir_en_branch") else None

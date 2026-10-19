@@ -210,7 +210,16 @@ def _run_subtitle_scout(video_path: str) -> dict | None:
 
 def add_subtitles(state: WorkflowState) -> dict:
     """读取草稿 → 调 ASR → 注入字幕 → 原子写回 + 写 ``asr_segments_zh`` 到 state。"""
-    draft_path = Path(state["draft_path"])
+    raw_draft_path = state.get("draft_path")
+    if not raw_draft_path:
+        # node_05 早退时草稿不存在(D7,2026-10-20 修):降级跳过,别抛 TypeError
+        state.setdefault("error_log", []).append(
+            "[node_08] state.draft_path 缺失,跳过字幕注入"
+        )
+        status_log = list(state.get("status_log", []) or [])
+        status_log.append("node_08_add_subtitles_skipped")
+        return {**state, "status_log": status_log}
+    draft_path = Path(raw_draft_path)
     # 优先读 snapshot2,缺失时退化到 draft_path
     snapshot2 = state.get("snapshot2_path")
     src = Path(snapshot2) if snapshot2 and Path(snapshot2).exists() else draft_path

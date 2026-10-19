@@ -88,7 +88,17 @@ def _frame_aligned_durations(
 # ---------------------------------------------------------------------------
 def speed_fit(state: WorkflowState) -> dict:
     """读取 draft → 校验时长 → 若超时则变速 → 原子写回。"""
-    draft_path = Path(state["draft_path"])
+    raw_draft_path = state.get("draft_path")
+    if not raw_draft_path:
+        # node_05 因契约不合法早退时 draft_path 是 None(D7,2026-10-20 修)。
+        # 降级跳过,不让 Path(None) 抛 TypeError 把整个 worker 带走。
+        state.setdefault("error_log", []).append(
+            "[node_07] state.draft_path 缺失,跳过变速处理"
+        )
+        status_log = list(state.get("status_log", []) or [])
+        status_log.append("node_07_speed_fit_skipped")
+        return {**state, "status_log": status_log}
+    draft_path = Path(raw_draft_path)
     draft = load_draft(draft_path)
     video_track = _find_video_track(draft)
 
@@ -160,7 +170,12 @@ def speed_fit(state: WorkflowState) -> dict:
 # ---------------------------------------------------------------------------
 def route_after_speed_fit(state: WorkflowState) -> str:
     """节点 7 之后的条件边:达标 → 产出 snapshot2 + node_08;未达标 → 自循环 / 升级。"""
-    draft_path = Path(state["draft_path"])
+    raw_draft_path = state.get("draft_path")
+    if not raw_draft_path:
+        # draft 没生成(D7,2026-10-20 修):没有可调的对象,直接放行到 node_08
+        # 让它自己降级,而不是在这里抛 TypeError。
+        return "node_08_add_subtitles"
+    draft_path = Path(raw_draft_path)
     draft = load_draft(draft_path)
     duration = draft.get("duration", 0)
 
@@ -183,6 +198,9 @@ def route_after_speed_fit(state: WorkflowState) -> str:
 
 def get_snapshot2_path(state: WorkflowState) -> str | None:
     """节点 8 之前调用:从文件系统读 snapshot2 路径,写入 state 供后续节点使用。"""
-    draft_path = Path(state["draft_path"])
+    raw_draft_path = state.get("draft_path")
+    if not raw_draft_path:
+        return None
+    draft_path = Path(raw_draft_path)
     snap = draft_path.parent.parent / "snapshots" / "snapshot2" / "draft_content.json"
     return str(snap) if snap.exists() else None
