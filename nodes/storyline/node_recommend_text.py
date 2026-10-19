@@ -6,7 +6,12 @@ from pathlib import Path
 
 from state import WorkflowState
 from storyline_capabilities.recommend_text import recommend_text
-from nodes.storyline._common import append_status_tag, _resolve_outputs_root
+from nodes.storyline._common import (
+    append_status_tag,
+    extract_user_request,
+    resolve_lang,
+    _resolve_outputs_root,
+)
 
 
 def storyline_recommend_text_node(state: WorkflowState) -> dict:
@@ -40,6 +45,10 @@ def storyline_recommend_text_node(state: WorkflowState) -> dict:
         result = recommend_text(
             groups=groups,
             group_scripts=group_scripts,
+            lang=resolve_lang(state),
+            user_request=extract_user_request(
+                state, "text_request", "font_request", "user_request"
+            ),
         )
     except Exception as e:  # noqa: BLE001
         return {

@@ -7,7 +7,10 @@ from state import WorkflowState
 from storyline_capabilities.generate_script import generate_script
 from nodes.storyline._common import (
     _read_groups,
+    _read_json_artifact,
     append_status_tag,
+    extract_user_request,
+    resolve_lang,
     _resolve_outputs_root,
 )
 
@@ -23,8 +26,21 @@ def storyline_generate_script_node(state: WorkflowState) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     groups = _read_groups(state)
+    # ``{{overall}}`` = 素材整体概述,来自 understand_clips 的产物(D6:此前没传,
+    # 占位符原样残留,模型拿不到素材全貌)。
+    understanding = _read_json_artifact(state, "storyline_understanding_artifact")
+    overall = ""
+    if isinstance(understanding, dict):
+        overall = str(understanding.get("overall") or "")
     try:
-        result = generate_script(groups=groups)
+        result = generate_script(
+            groups=groups,
+            lang=resolve_lang(state),
+            user_request=extract_user_request(
+                state, "script_request", "style_request", "user_request"
+            ),
+            overall=overall,
+        )
     except Exception as e:  # noqa: BLE001
         return {
             "error_log": [

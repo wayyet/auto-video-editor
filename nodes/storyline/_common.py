@@ -124,6 +124,65 @@ def _read_media(state: WorkflowState) -> list[dict]:
     return []
 
 
+# ---------------------------------------------------------------------------
+# storyline_targets 解析(集成文档 D6 配套)
+# ---------------------------------------------------------------------------
+# B/C 类能力的 prompt 模板需要 ``{{user_request}}`` / ``{{duration_budget}}`` 等
+# 变量。此前这些变量没人传,占位符原样残留进 prompt(见 D6)。
+# 数据统一从 ``state.storyline_targets`` 取,取不到就用中性默认值。
+DEFAULT_TARGET_DURATION_MS: int = 35000
+
+
+def resolve_lang(state: WorkflowState, default: str = "zh") -> str:
+    """prompt 语言:``storyline_targets.lang`` → default。
+
+    与 ``node_understand_clips`` 原有解析规则一致(原先只有它读 lang),
+    现在 19 节点子图里所有会拼 prompt 的节点统一走这里。
+    """
+    targets = state.get("storyline_targets")
+    if isinstance(targets, dict) and isinstance(targets.get("lang"), str):
+        lang = targets["lang"].strip()
+        if lang:
+            return lang
+    return default
+
+
+def extract_user_request(state: WorkflowState, *keys: str) -> str:
+    """从 ``storyline_targets`` 取用户要求,按 ``keys`` 顺序回退。
+
+    ``keys`` 省略时依次尝试 ``user_request`` / ``script_request`` /
+    ``style_request``。取不到返回空串(调用方会填中性默认文案)。
+    """
+    if not keys:
+        keys = ("user_request", "script_request", "style_request")
+    targets = state.get("storyline_targets") or {}
+    if not isinstance(targets, dict):
+        return ""
+    for k in keys:
+        v = targets.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
+
+
+def target_duration_ms(
+    state: WorkflowState, default: int = DEFAULT_TARGET_DURATION_MS
+) -> int:
+    """成片目标总时长(毫秒)。
+
+    规则与 ``nodes/storyline/qa_gate.py`` 的 ``_target_ms`` 一致:
+    ``storyline_targets.target_duration_ms`` 缺省时用 35000(剪映总时长上限)。
+    选料/分组阶段据此生成 ``{{duration_budget}}`` 文本,避免后面才发现超时。
+    """
+    targets = state.get("storyline_targets") or {}
+    raw = targets.get("target_duration_ms") if isinstance(targets, dict) else None
+    try:
+        ms = int(raw) if raw else 0
+    except (TypeError, ValueError):
+        ms = 0
+    return ms if ms > 0 else default
+
+
 __all__ = [
     "_resolve_outputs_root",
     "append_status_tag",
@@ -131,4 +190,8 @@ __all__ = [
     "_read_json_artifact",
     "_read_groups",
     "_read_media",
+    "DEFAULT_TARGET_DURATION_MS",
+    "resolve_lang",
+    "extract_user_request",
+    "target_duration_ms",
 ]

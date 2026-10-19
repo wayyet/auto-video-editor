@@ -121,6 +121,31 @@ def understand_clips(
 
         out: dict[str, Any] = {"clip_id": clip_id}
 
+        # clip 契约要**整条链路都带着走**(D5):下游 filter_clips → group_clips →
+        # plan_timeline_pro 读的是顶层 ``media_id`` / ``source_in_ms`` /
+        # ``source_out_ms``;之前 understand_clips 只留 clip_id/caption,
+        # 时间轴拿不到源片段区间(source_media_id=null、source_in_ms=0)。
+        if media_id:
+            out["media_id"] = media_id
+        for key in ("source_in_ms", "source_out_ms", "timeline_in_ms", "timeline_out_ms"):
+            val = clip.get(key)
+            if val is None and isinstance(src, dict):
+                # source_ref 里也有 start/end(毫秒),可作为回退
+                alt = {"source_in_ms": "start", "source_out_ms": "end"}.get(key)
+                if alt:
+                    val = src.get(alt)
+            if val is not None:
+                out[key] = val
+
+        # source_ref 原样带到 caption(带 start/end 毫秒),下游 filter_clips /
+        # group_clips 要靠它算素材总时长,填 ``{{duration_budget}}``(D6)。
+        ref: dict[str, Any] = {"media_id": media_id}
+        if src.get("start") is not None:
+            ref["start"] = src.get("start")
+        if src.get("end") is not None:
+            ref["end"] = src.get("end")
+        out["source_ref"] = ref
+
         if not media_item:
             out["caption"] = f"Error: Media not found for media_id={media_id}"
             out["aes_score"] = -1.0
@@ -175,7 +200,6 @@ def understand_clips(
             continue
 
         out["caption"] = str(obj.get("caption", "") or "").strip()
-        out["source_ref"] = {"media_id": media_id}
         captions.append(out)
 
     # Overall summary

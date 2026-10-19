@@ -27,6 +27,42 @@ DEFAULT_DIFF_THRESHOLD: float = 12.0  # 0~255 像素平均差阈值
 
 
 # ---------------------------------------------------------------------------
+# clip 契约(vendored ``open_storyline.nodes.core_nodes.split_shots`` 对齐)
+# ---------------------------------------------------------------------------
+# 上游 split_shots 产出的每个 clip 必带:
+#   kind      —— "video" / "image",``understand_clips`` 靠它决定 media 形态
+#   path      —— 素材路径
+#   source_ref —— {media_id, start, end, duration}(毫秒)
+# 本地帧差版此前**只产出 clip_id / source_in_ms / source_out_ms / timeline_* /
+# split_method**,缺 kind 与 source_ref → understand_clips 走到
+# "Error: Clip kind not supported: "(集成文档 D5),整条素材链路拿不到画面。
+def _make_clip(
+    clip_id: str,
+    start_ms: int,
+    end_ms: int,
+    *,
+    method: str,
+    video_path: str,
+) -> dict[str, Any]:
+    """构造一个符合 vendored 契约的 clip dict。"""
+    return {
+        "clip_id": clip_id,
+        "kind": "video",
+        "path": video_path,
+        "source_in_ms": start_ms,
+        "source_out_ms": end_ms,
+        "timeline_in_ms": start_ms,
+        "timeline_out_ms": end_ms,
+        "split_method": method,
+        "source_ref": {
+            "start": start_ms,
+            "end": end_ms,
+            "duration": max(0, end_ms - start_ms),
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
 # 简单帧差切分(plan §5 阶段 1 决策:本地版 / 无 torch)
 # ---------------------------------------------------------------------------
 def _run_ffmpeg_extract_frames(
@@ -182,37 +218,34 @@ def frame_difference_split_shots(
             while cur + max_shot_ms < e:
                 nxt = cur + max_shot_ms
                 clips.append(
-                    {
-                        "clip_id": f"clip_{len(clips) + 1:04d}",
-                        "source_in_ms": cur,
-                        "source_out_ms": nxt,
-                        "timeline_in_ms": cur,
-                        "timeline_out_ms": nxt,
-                        "split_method": "frame_diff_max_split",
-                    }
+                    _make_clip(
+                        f"clip_{len(clips) + 1:04d}",
+                        cur,
+                        nxt,
+                        method="frame_diff_max_split",
+                        video_path=str(video),
+                    )
                 )
                 cur = nxt
             if e - cur > 0:
                 clips.append(
-                    {
-                        "clip_id": f"clip_{len(clips) + 1:04d}",
-                        "source_in_ms": cur,
-                        "source_out_ms": e,
-                        "timeline_in_ms": cur,
-                        "timeline_out_ms": e,
-                        "split_method": "frame_diff_max_split",
-                    }
+                    _make_clip(
+                        f"clip_{len(clips) + 1:04d}",
+                        cur,
+                        e,
+                        method="frame_diff_max_split",
+                        video_path=str(video),
+                    )
                 )
             continue
         clips.append(
-            {
-                "clip_id": f"clip_{len(clips) + 1:04d}",
-                "source_in_ms": s,
-                "source_out_ms": e,
-                "timeline_in_ms": s,
-                "timeline_out_ms": e,
-                "split_method": "frame_diff",
-            }
+            _make_clip(
+                f"clip_{len(clips) + 1:04d}",
+                s,
+                e,
+                method="frame_diff",
+                video_path=str(video),
+            )
         )
     # 最小长度回填(把第一个 <min_shot_ms 的 clip 短片合并到下一个)
     final_clips: list[dict[str, Any]] = []
@@ -221,10 +254,19 @@ def frame_difference_split_shots(
             c["timeline_out_ms"] - c["timeline_in_ms"] < min_shot_ms
             and final_clips
         ):
-            final_clips[-1]["timeline_out_ms"] = c["timeline_out_ms"]
-            final_clips[-1]["source_out_ms"] = c["timeline_out_ms"]
+            merged = final_clips[-1]
+            merged["timeline_out_ms"] = c["timeline_out_ms"]
+            merged["source_out_ms"] = c["timeline_out_ms"]
+            # source_ref 必须同步,否则画面抽取区间与 clip 时间对不上(D5)
+            ref = merged.get("source_ref") or {}
+            ref["end"] = merged["source_out_ms"]
+            ref["duration"] = max(0, merged["source_out_ms"] - merged["source_in_ms"])
+            merged["source_ref"] = ref
         else:
-            final_clips.append(dict(c))
+            copied = dict(c)
+            # source_ref 是嵌套 dict,浅拷贝会与原 clip 共享引用 → 单独复制一份
+            copied["source_ref"] = dict(c.get("source_ref") or {})
+            final_clips.append(copied)
     # 重排 clip_id
     for i, c in enumerate(final_clips, start=1):
         c["clip_id"] = f"clip_{i:04d}"
@@ -310,9 +352,13 @@ def split_shots(
         min_shot_ms=min_shot_ms,
         max_shot_ms=max_shot_ms,
     )
-    # 关联 media_id
+    # 关联 media_id 与权威 path(understand_clips 靠 source_ref.media_id 找素材)
     for c in result.get("clips", []):
         c["media_id"] = media_id
+        c["path"] = str(video_path)
+        ref = c.get("source_ref") or {}
+        ref["media_id"] = media_id
+        c["source_ref"] = ref
     result["media_id"] = media_id
     return result
 

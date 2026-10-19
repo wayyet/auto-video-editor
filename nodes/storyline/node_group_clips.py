@@ -6,7 +6,13 @@ from pathlib import Path
 
 from state import WorkflowState
 from storyline_capabilities.group_clips import group_clips
-from nodes.storyline._common import append_status_tag, _resolve_outputs_root
+from nodes.storyline._common import (
+    append_status_tag,
+    extract_user_request,
+    resolve_lang,
+    target_duration_ms,
+    _resolve_outputs_root,
+)
 
 
 def storyline_group_clips_node(state: WorkflowState) -> dict:
@@ -37,7 +43,12 @@ def storyline_group_clips_node(state: WorkflowState) -> dict:
 
     try:
         result = group_clips(
-            filtered_clips=filtered_doc.get("filtered_clips") or []
+            filtered_clips=filtered_doc.get("filtered_clips") or [],
+            lang=resolve_lang(state),
+            user_request=extract_user_request(
+                state, "group_request", "user_request"
+            ),
+            target_duration_ms=target_duration_ms(state),
         )
     except Exception as e:  # noqa: BLE001
         return {

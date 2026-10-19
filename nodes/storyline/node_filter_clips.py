@@ -6,7 +6,13 @@ from pathlib import Path
 
 from state import WorkflowState
 from storyline_capabilities.filter_clips import filter_clips
-from nodes.storyline._common import append_status_tag, _resolve_outputs_root
+from nodes.storyline._common import (
+    append_status_tag,
+    extract_user_request,
+    resolve_lang,
+    target_duration_ms,
+    _resolve_outputs_root,
+)
 
 
 def storyline_filter_clips_node(state: WorkflowState) -> dict:
@@ -36,7 +42,14 @@ def storyline_filter_clips_node(state: WorkflowState) -> dict:
         }
 
     try:
-        result = filter_clips(understanding_artifact=understanding)
+        result = filter_clips(
+            understanding_artifact=understanding,
+            lang=resolve_lang(state),
+            user_request=extract_user_request(
+                state, "filter_request", "user_request"
+            ),
+            target_duration_ms=target_duration_ms(state),
+        )
     except Exception as e:  # noqa: BLE001
         return {
             "error_log": [

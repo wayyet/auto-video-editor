@@ -15,11 +15,18 @@ from storyline_capabilities.vlm_client import (
 from storyline_capabilities.prompts import render_prompt
 
 
+def _default_user_request(lang: str) -> str:
+    return (
+        "无其他要求" if str(lang).lower().startswith("zh") else "No additional requirements"
+    )
+
+
 def recommend_transition(
     *,
     groups: list[dict[str, Any]],
     bgm_selection: dict[str, Any] | None = None,
     lang: str = "zh",
+    user_request: str = "",
     client: Optional[LLMClient] = None,
 ) -> dict[str, Any]:
     """每段间推荐转场类型。
@@ -36,11 +43,14 @@ def recommend_transition(
     if not groups:
         return {"items": [], "default": "fade_in", "method": "no_input"}
 
+    # 模板需要 user_request(D6:此前没传,占位符原样残留);
+    # groups / bgm 仍一并传入,便于将来模板加字段时不用再改这里。
     sys_p = render_prompt("generate_ai_transition", "system", lang=lang)
     user_p = render_prompt(
         "generate_ai_transition",
         "user",
         lang=lang,
+        user_request=str(user_request or "").strip() or _default_user_request(lang),
         groups="\n".join(
             f"- {g.get('group_id', '?')}: {g.get('theme', '')}"
             for g in groups

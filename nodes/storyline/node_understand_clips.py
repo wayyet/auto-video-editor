@@ -6,7 +6,7 @@ from pathlib import Path
 
 from state import WorkflowState
 from storyline_capabilities.understand_clips import understand_clips
-from nodes.storyline._common import append_status_tag, _resolve_outputs_root
+from nodes.storyline._common import append_status_tag, resolve_lang, _resolve_outputs_root
 
 
 def storyline_understand_clips_node(state: WorkflowState) -> dict:
@@ -42,11 +42,8 @@ def storyline_understand_clips_node(state: WorkflowState) -> dict:
         }
 
     try:
-        # lang 解析(顺序:state.storyline_targets.lang → "zh" 默认)
-        targets = state.get("storyline_targets")
-        lang = "zh"
-        if isinstance(targets, dict) and isinstance(targets.get("lang"), str):
-            lang = targets["lang"]
+        # lang 解析:统一走 _common.resolve_lang(与其它会拼 prompt 的节点一致)
+        lang = resolve_lang(state)
 
         result = understand_clips(
             split_shots_artifact=shots_artifact,

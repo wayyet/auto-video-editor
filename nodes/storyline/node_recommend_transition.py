@@ -6,7 +6,12 @@ from pathlib import Path
 
 from state import WorkflowState
 from storyline_capabilities.recommend_transition import recommend_transition
-from nodes.storyline._common import append_status_tag, _resolve_outputs_root
+from nodes.storyline._common import (
+    append_status_tag,
+    extract_user_request,
+    resolve_lang,
+    _resolve_outputs_root,
+)
 
 
 def storyline_recommend_transition_node(state: WorkflowState) -> dict:
@@ -32,7 +37,14 @@ def storyline_recommend_transition_node(state: WorkflowState) -> dict:
         bgm_selection = bgm_field
 
     try:
-        result = recommend_transition(groups=groups, bgm_selection=bgm_selection)
+        result = recommend_transition(
+            groups=groups,
+            bgm_selection=bgm_selection,
+            lang=resolve_lang(state),
+            user_request=extract_user_request(
+                state, "transition_request", "user_request"
+            ),
+        )
     except Exception as e:  # noqa: BLE001
         return {
             "error_log": [
