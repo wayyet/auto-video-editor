@@ -75,7 +75,8 @@ def drive(
             if initial_state_file is None:
                 return finish("need_input", message="还没有这个 thread 的运行记录:请给初始 state 文件或 --video")
             res = runner.spawn_worker(thread_id=thread_id, outputs_root=outputs_root,
-                                      graph_factory=graph_factory, initial_state_file=initial_state_file)
+                                      graph_factory=graph_factory,
+                                      initial_state_file=initial_state_file, mode="start")
             if not res["ok"] and res.get("code") != "already_running":
                 return finish("failed", message=str(res))
             continue
@@ -85,8 +86,11 @@ def drive(
                 return finish("crashed", message="worker 心跳过期,且已自动恢复过 1 次或被禁用")
             restarts += 1
             mb.log_event("drive_restart_worker")
-            runner.spawn_worker(thread_id=thread_id, outputs_root=outputs_root,
-                                graph_factory=graph_factory)   # 不给初始 state:从最近检查点继续
+            # F3:显式声明这是「崩溃后从检查点继续」,不带初始 state
+            res = runner.spawn_worker(thread_id=thread_id, outputs_root=outputs_root,
+                                      graph_factory=graph_factory, mode="continue_after_crash")
+            if not res["ok"]:
+                return finish("crashed", message=f"自动重启被拒:{res}")
             continue
 
         if clock() - t0 > max_wall_s:

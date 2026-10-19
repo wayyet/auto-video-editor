@@ -15,8 +15,12 @@ from agent_gate import guard_hook, runner
 from agent_gate.mailbox import Mailbox
 from agent_gate.scaffold import MCODE_LOCK_FILE, MCODE_LOCK_SNIPPET, RULES_TEXT, build_mcode_locked_config, init_project
 
-ROOT = Path(__file__).resolve().parent.parent
-FIX = ROOT / "fixtures"
+# 包布局是 <repo>/agent_gate/{tests,fixtures},所以仓库根比包根高一层。
+# 交付包原样拷贝过来时 ROOT 指的是包根,下面两处(读 agent_gate/service.py、
+# 给 worker 当 cwd)会因此找不到文件 —— 这里按实际布局修正。
+PKG = Path(__file__).resolve().parent.parent
+ROOT = PKG.parent                      # 仓库根
+FIX = PKG / "fixtures"
 GRAPH = "toy_graph:build_graph"
 
 
@@ -243,7 +247,8 @@ def test_worker_runs_in_repo_root(tmp_path, monkeypatch):
     mb = Mailbox(runner.gate_root(out, "r1"))
     init = mb.root / "initial_state.json"
     init.write_text(json.dumps({"session_id": "r1", "video_input_path": "", "error_log": []}), encoding="utf-8")
-    res = runner.spawn_worker(thread_id="r1", outputs_root=out, graph_factory=GRAPH, initial_state_file=init)
+    res = runner.spawn_worker(thread_id="r1", outputs_root=out, graph_factory=GRAPH,
+                              initial_state_file=init, mode="start")
     assert res["ok"], res
     try:
         deadline = time.monotonic() + 30

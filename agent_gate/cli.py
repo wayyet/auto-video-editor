@@ -20,6 +20,14 @@ from typing import Any, Optional
 
 from agent_gate import runner, service
 from agent_gate.mailbox import Mailbox
+from agent_gate.safety import (
+    UnsafeIdentifier,
+    UnsafePath,
+    media_roots,
+    rejection,
+    safe_media_path,
+    safe_state_file,
+)
 
 
 def _emit(obj: Any, code: int = 0) -> int:
@@ -61,6 +69,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--initial-state-file", help="初始 state 的 JSON 文件")
     p.add_argument("--video", help="视频路径;没给 --initial-state-file 时用它生成最小初始 state")
     p.add_argument("--backend", default="gate", choices=["gate", "claude-cli", "mcode-cli", "stub"])
+    p.add_argument("--require-preflight", action="store_true",
+                   help="让图跑 preflight(默认跳过)")
     p.add_argument("--continue", dest="cont", action="store_true",
                    help="worker 崩溃后,从最近检查点继续(不传初始 state)")
 
@@ -89,6 +99,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--initial-state-file")
     p.add_argument("--resume-file")
     p.add_argument("--backend", default="gate")
+    p.add_argument("--require-preflight", action="store_true")
 
     p = sub.add_parser("status", help="查看运行状态和下一步该做什么")
     _common(p)
@@ -129,7 +140,34 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _mb(args: argparse.Namespace) -> Mailbox:
+    """按 --outputs-root / --thread-id 拿信箱。thread_id 走 F1 的白名单。"""
     return Mailbox(runner.gate_root(args.outputs_root, args.thread_id))
+
+
+def _state_file_roots(args: argparse.Namespace) -> list[Path]:
+    """``--initial-state-file`` 的允许目录(F2 纵深防御)。
+
+    合法位置只有两类:
+    - **outputs 根之内**(gate_root 就在它下面;``initial_state.json`` 默认也写在那儿);
+    - **素材白名单之内**(操作员把初始 state 和素材放一起)。
+
+    注意这跟 ``AGENT_GATE_MEDIA_ROOTS`` 的语义不同:那个是给**视频素材**用的,
+    这里管的是**初始 state 文件**,所以额外放行 outputs 根。
+    """
+    roots = [Path(r).resolve() for r in media_roots()]
+    roots.insert(0, Path(args.outputs_root).resolve())
+    return roots
+
+
+def _write_initial_state(mb: Mailbox, thread_id: str, video: str) -> Path:
+    """按 --video 生成最小初始 state。video 也要过素材白名单(F2 纵深防御)。"""
+    safe = safe_media_path(video)
+    p = mb.root / "initial_state.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(
+        {"session_id": thread_id, "video_input_path": str(safe), "error_log": []},
+        ensure_ascii=False), encoding="utf-8")
+    return p
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -141,17 +179,22 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
 
     if args.cmd == "worker":
-        initial = None
-        if args.initial_state_file:
-            initial = json.loads(Path(args.initial_state_file).read_text(encoding="utf-8-sig"))
-        resume = None
-        if args.resume_file:
-            resume = json.loads(Path(args.resume_file).read_text(encoding="utf-8-sig"))
-        return runner.run_worker(
-            thread_id=args.thread_id, outputs_root=args.outputs_root,
-            graph_factory=args.graph_factory, initial_state=initial,
-            resume_values=resume, backend=args.backend,
-        )
+        try:
+            initial = None
+            if args.initial_state_file:
+                initial = json.loads(safe_state_file(
+                    args.initial_state_file, roots=_state_file_roots(args)).read_text(encoding="utf-8-sig"))
+            resume = None
+            if args.resume_file:
+                resume = json.loads(Path(args.resume_file).read_text(encoding="utf-8-sig"))
+            return runner.run_worker(
+                thread_id=args.thread_id, outputs_root=args.outputs_root,
+                graph_factory=args.graph_factory, initial_state=initial,
+                resume_values=resume, backend=args.backend,
+                require_preflight=args.require_preflight,
+            )
+        except (UnsafeIdentifier, UnsafePath, OSError, ValueError) as e:
+            return _emit(rejection(e), 1)
 
     if args.cmd == "init":
         from agent_gate.scaffold import init_project, parse_env_pairs
@@ -181,7 +224,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         return _emit({"ok": True, "out": str(out),
                       "note": "输出文件里有和 --base 一样的 API key,别放进 git;drive 时用 --mcode-config 指向它"})
 
-    mb = _mb(args)
+    try:
+        mb = _mb(args)
+    except (UnsafeIdentifier, UnsafePath) as e:
+        return _emit(rejection(e), 1)
 
     if args.cmd == "drive":
         from agent_gate.drive import drive
@@ -189,11 +235,15 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         init_file: Optional[Path] = Path(args.initial_state_file) if args.initial_state_file else None
         if init_file is None and args.video:
-            init_file = mb.root / "initial_state.json"
-            init_file.parent.mkdir(parents=True, exist_ok=True)
-            init_file.write_text(json.dumps(
-                {"session_id": args.thread_id, "video_input_path": args.video, "error_log": []},
-                ensure_ascii=False), encoding="utf-8")
+            try:
+                init_file = _write_initial_state(mb, args.thread_id, args.video)
+            except (UnsafeIdentifier, UnsafePath) as e:
+                return _emit(rejection(e), 1)
+        if init_file is not None:
+            try:
+                init_file = safe_state_file(init_file, roots=_state_file_roots(args))
+            except (UnsafeIdentifier, UnsafePath) as e:
+                return _emit(rejection(e), 1)
         kw: dict[str, Any] = {"project_dir": args.project_dir, "executable": args.agent_bin,
                               "model": args.model, "session_timeout_s": args.session_timeout_s}
         warnings: list[str] = []
@@ -212,20 +262,25 @@ def main(argv: Optional[list[str]] = None) -> int:
         return _emit(res, res["exit_code"])
 
     if args.cmd == "start":
+        mode = "continue_after_crash" if args.cont else "start"
         init_file = Path(args.initial_state_file) if args.initial_state_file else None
         if init_file is None and not args.cont:
             if not args.video:
                 return _emit({"ok": False, "code": "need_input",
                               "message": "要么给 --initial-state-file,要么给 --video,要么用 --continue"}, 1)
-            init_file = mb.root / "initial_state.json"
-            init_file.parent.mkdir(parents=True, exist_ok=True)
-            init_file.write_text(json.dumps(
-                {"session_id": args.thread_id, "video_input_path": args.video, "error_log": []},
-                ensure_ascii=False), encoding="utf-8")
+            try:
+                init_file = _write_initial_state(mb, args.thread_id, args.video)
+            except (UnsafeIdentifier, UnsafePath) as e:
+                return _emit(rejection(e), 1)
+        if init_file is not None:
+            try:
+                init_file = safe_state_file(init_file, roots=_state_file_roots(args))
+            except (UnsafeIdentifier, UnsafePath) as e:
+                return _emit(rejection(e), 1)
         res = runner.spawn_worker(
             thread_id=args.thread_id, outputs_root=args.outputs_root,
             graph_factory=args.graph_factory, initial_state_file=init_file,
-            backend=args.backend,
+            backend=args.backend, mode=mode, require_preflight=args.require_preflight,
         )
         return _emit(res, 0 if res["ok"] else 1)
 
@@ -266,7 +321,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         res = runner.spawn_worker(
             thread_id=args.thread_id, outputs_root=args.outputs_root,
             graph_factory=args.graph_factory, resume_values={args.checkpoint: value},
-            backend=args.backend,
+            backend=args.backend, mode="resume",
         )
         return _emit(res, 0 if res["ok"] else 1)
 

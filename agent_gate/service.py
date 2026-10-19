@@ -19,7 +19,8 @@ from agent_gate.protocol import (
     parse_utc,
     utc_now,
 )
-from agent_gate.validate import NotJSON, parse_json_value, validate_result
+from agent_gate.safety import UnsafeIdentifier, UnsafePath, rejection, safe_task_id
+from agent_gate.validate import InvalidSchema, NotJSON, parse_json_value, validate_result
 
 
 # ---------------------------------------------------------------- 任务视图
@@ -87,12 +88,24 @@ def pending(mb: Mailbox, *, limit: int = 5, max_chars: Optional[int] = 6000) -> 
 
 
 def get_task(mb: Mailbox, tid: str) -> Optional[dict[str, Any]]:
-    task = mb.read_task(tid)
+    """取单个任务视图。task_id 不过白名单 → 返回 None(调用方报 unknown_task)。"""
+    try:
+        safe_task_id(tid)
+        task = mb.read_task(tid)
+    except (UnsafeIdentifier, UnsafePath):
+        return None
     return task_view(task) if task is not None else None
 
 
 # ---------------------------------------------------------------- 提交
 def submit_result(mb: Mailbox, tid: str, answer: Any) -> dict[str, Any]:
+    # task_id 由 Agent 传进来,先过白名单(F1):非法一律拒,不碰文件系统。
+    try:
+        safe_task_id(tid)
+    except (UnsafeIdentifier, UnsafePath) as e:
+        mb.log_event("input_rejected", code="bad_task_id")
+        return rejection(e)
+
     task = mb.read_task(tid)
     if task is None:
         return {"ok": False, "code": "unknown_task", "message": f"没有这个任务:{tid}"}
@@ -113,7 +126,17 @@ def submit_result(mb: Mailbox, tid: str, answer: Any) -> dict[str, Any]:
             except NotJSON as e:
                 errors = [str(e)]
         if not errors:
-            errors = validate_result(task.get("json_schema"), value)
+            try:
+                errors = validate_result(task.get("json_schema"), value)
+            except InvalidSchema as e:
+                # F4 fail closed:schema 非法是代码 bug,重试多少次都没用,
+                # 所以直接关任务,而且**不消耗 attempts 配额**。
+                mb.log_event("input_rejected", task_id=tid, code="schema_invalid")
+                mb.write_error(tid, "bad_schema", str(e))
+                mb.log_event("task_closed_bad_schema", task_id=tid)
+                return {"ok": False, "code": "schema_invalid",
+                        "message": "这个任务的 json_schema 本身不合法,属于流水线代码 bug,不是你的问题。"
+                                   "该任务已关闭,不要重试。"}
     else:
         value = answer if isinstance(answer, str) else json.dumps(answer, ensure_ascii=False)
         if not value.strip():

@@ -22,6 +22,12 @@ from pathlib import Path
 from typing import Any, Optional
 
 from agent_gate.protocol import utc_now
+from agent_gate.safety import (
+    UnsafeIdentifier,
+    UnsafePath,
+    safe_frame_dir,
+    safe_task_id,
+)
 
 _LOCK = threading.Lock()
 
@@ -52,6 +58,15 @@ def read_json(path: Path) -> Optional[dict[str, Any]]:
     return None
 
 
+def _under(base: Path, name: str, filename: str) -> Path:
+    """在 base 下拼一个文件名,并确认 resolve 之后仍在 base 内。"""
+    root = Path(base).resolve()
+    p = (root / filename).resolve()
+    if p != root and not p.is_relative_to(root):
+        raise UnsafePath("task_path_escape")
+    return p
+
+
 class Mailbox:
     def __init__(self, root: Path | str) -> None:
         self.root = Path(root)
@@ -60,20 +75,24 @@ class Mailbox:
         self.tasks_dir.mkdir(parents=True, exist_ok=True)
 
     # ---- 路径 ----
+    # 所有按 task_id 拼出来的路径都**重复**过一遍白名单 + 目录归属(F1)。
+    # 入口层(service / mcp_server / cli)已经校验过一次,这里再过一次是纵深防御:
+    # 任何绕过入口的直接调用(mailbox 是公开类)也拿不到越界路径。
     def task_path(self, tid: str) -> Path:
-        return self.tasks_dir / f"{tid}.task.json"
+        return _under(self.tasks_dir, safe_task_id(tid), f"{tid}.task.json")
 
     def result_path(self, tid: str) -> Path:
-        return self.tasks_dir / f"{tid}.result.json"
+        return _under(self.tasks_dir, safe_task_id(tid), f"{tid}.result.json")
 
     def error_path(self, tid: str) -> Path:
-        return self.tasks_dir / f"{tid}.error.json"
+        return _under(self.tasks_dir, safe_task_id(tid), f"{tid}.error.json")
 
     def attempts_path(self, tid: str) -> Path:
-        return self.tasks_dir / f"{tid}.attempts.json"
+        return _under(self.tasks_dir, safe_task_id(tid), f"{tid}.attempts.json")
 
     def frames_dir(self, tid: str) -> Path:
-        return self.frames_root / tid
+        safe_task_id(tid)
+        return safe_frame_dir(self, tid)
 
     @property
     def status_path(self) -> Path:
@@ -111,6 +130,10 @@ class Mailbox:
         n = 0
         for p in list(self.tasks_dir.glob("*.error.json")):
             tid = p.name[: -len(".error.json")]
+            try:
+                safe_task_id(tid)        # 目录里混入的怪文件直接跳过,不要拿它拼路径
+            except UnsafeIdentifier:
+                continue
             for q in (p, self.attempts_path(tid)):
                 try:
                     q.unlink()
@@ -138,7 +161,12 @@ class Mailbox:
         found: list[tuple[int, str]] = []
         for p in self.tasks_dir.glob("*.task.json"):
             tid = p.name[: -len(".task.json")]
-            if self.result_path(tid).exists() or self.error_path(tid).exists():
+            try:
+                safe_task_id(tid)        # 不合法的一律不认(目录被手工塞过东西也不会炸)
+                done = self.result_path(tid).exists() or self.error_path(tid).exists()
+            except (UnsafeIdentifier, UnsafePath):
+                continue
+            if done:
                 continue
             try:
                 found.append((p.stat().st_mtime_ns, tid))

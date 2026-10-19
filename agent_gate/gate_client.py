@@ -22,6 +22,7 @@ from agent_gate.protocol import (
     task_id_for,
     utc_now,
 )
+from agent_gate.validate import InvalidSchema, check_schema
 
 
 class LLMGateError(Exception):
@@ -144,8 +145,19 @@ class GateLLMClient:
             "params": params,
             "attempt_limit": self.max_attempts,
         }
+        # F4:写盘之前先预检 schema。非法就把任务标成 schema_invalid,
+        # 让 Agent 看到明确说明,而不是反复提交、重试到配额用尽才发现白费。
+        try:
+            check_schema(identity["json_schema"])
+        except InvalidSchema as e:
+            task["schema_invalid"] = True
+            notes.append(f"这个任务的 json_schema 本身不合法(流水线代码 bug):{e}。"
+                         "不要为它提交答案,重试没有意义。")
+            task["notes"] = notes
         if self.mailbox.write_task(task):
-            self.mailbox.log_event("task_created", task_id=tid, node=task["node"], frames=len(frames))
+            self.mailbox.log_event("task_created", task_id=tid, node=task["node"],
+                                   frames=len(frames),
+                                   schema_invalid=bool(task.get("schema_invalid")))
 
     def _wait(self, tid: str) -> str:
         deadline = self._clock() + self.timeout_s

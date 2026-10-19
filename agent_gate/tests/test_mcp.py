@@ -17,8 +17,12 @@ from mcp.types import ImageContent, TextContent
 GRAPH = "toy_graph:build_graph"
 
 
-def _params(outputs, ckpt, *extra):
+def _params(outputs, ckpt, *extra, media_roots: str = ""):
     env = dict(os.environ, TOY_CKPT_DIR=str(ckpt), PYTHONUTF8="1")
+    if media_roots:
+        env["AGENT_GATE_MEDIA_ROOTS"] = media_roots
+    else:
+        env.pop("AGENT_GATE_MEDIA_ROOTS", None)
     return StdioServerParameters(
         command=sys.executable,
         args=["-m", "agent_gate.mcp_server", "--outputs-root", str(outputs),
@@ -56,7 +60,7 @@ def test_mcp_flow_with_images_and_validation(tmp_path):
     outputs, ckpt = tmp_path / "o", tmp_path / "c"
 
     async def go():
-        async with stdio_client(_params(outputs, ckpt)) as (r, w):
+        async with stdio_client(_params(outputs, ckpt, media_roots=str(tmp_path))) as (r, w):
             async with ClientSession(r, w) as s:
                 await s.initialize()
                 st = await s.call_tool("run_start", {"thread_id": "m1", "video_path": str(video)})
@@ -102,8 +106,10 @@ def test_mcp_run_start_continue_after_crash(tmp_path):
     from test_gate import _agent_answer                       # 复用:按任务内容答题的「Agent」
 
     outputs, ckpt = tmp_path / "o", tmp_path / "c"
-    init = tmp_path / "init.json"
-    init.write_text(json.dumps({"session_id": "r1", "video_input_path": "", "error_log": []}), encoding="utf-8")
+    media = tmp_path / "media"
+    media.mkdir()
+    video = media / "30s.mp4"
+    video.write_bytes(b"\x00" * 16)                          # 只要它在白名单目录里且是个文件即可
 
     async def next_tasks(s, wait_s):
         res = await s.call_tool("gate_next_tasks", {"thread_id": "r1", "wait_s": wait_s, "limit": 1})
@@ -115,13 +121,14 @@ def test_mcp_run_start_continue_after_crash(tmp_path):
         assert res.structuredContent.get("ok") is True, res.structuredContent
 
     async def go():
-        async with stdio_client(_params(outputs, ckpt)) as (r, w):
+        params = _params(outputs, ckpt, media_roots=str(media))
+        async with stdio_client(params) as (r, w):
             async with ClientSession(r, w) as s:
                 await s.initialize()
-                st = await s.call_tool("run_start", {"thread_id": "r1", "initial_state_file": str(init)})
+                st = await s.call_tool("run_start", {"thread_id": "r1", "video_path": str(video)})
                 assert st.structuredContent["ok"] is True
                 pid = st.structuredContent["pid"]
-                dup = await s.call_tool("run_start", {"thread_id": "r1", "initial_state_file": str(init)})
+                dup = await s.call_tool("run_start", {"thread_id": "r1", "video_path": str(video)})
                 assert dup.structuredContent["code"] == "already_running"       # worker 在跑:不会再起第二个
 
                 first = (await next_tasks(s, 20))["tasks"][0]
@@ -132,7 +139,7 @@ def test_mcp_run_start_continue_after_crash(tmp_path):
                         break
                 else:
                     raise AssertionError("第二个任务没有出现")
-                os.kill(pid, signal.SIGKILL)
+                os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))   # Windows 没有 SIGKILL
 
                 for _ in range(100):                                            # 心跳过期 → crashed
                     cur = (await s.call_tool("run_status", {"thread_id": "r1"})).structuredContent

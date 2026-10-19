@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
 import shutil
 import socket
 import subprocess
@@ -107,13 +108,17 @@ def make_frame_jpg(dst: Path, *, max_edge: int = 640) -> Path:
 
 def seed_tasks(mb, *, n_tasks: int, frames: int, frame_bytes: bytes = b"\xff\xd8\xff\xe0fake-jpeg",
                prefix: str = "t_seed") -> list[str]:
-    """不起 worker,直接往信箱里放 n_tasks 个 JSON 任务,每个带 frames 张图。返回 task_id 列表(按创建顺序)。"""
+    """不起 worker,直接往信箱里放 n_tasks 个 JSON 任务,每个带 frames 张图。返回 task_id 列表(按创建顺序)。
+
+    task_id 必须符合 safety.TASK_ID_RE(``t_`` + 16 位小写 hex),所以这里按
+    ``(prefix, k)`` 取哈希当 16 位 hex,而不是直接把 prefix 拼进去。
+    """
     schema = {"type": "object",
               "properties": {"caption": {"type": "string"}, "aes_score": {"type": "number"}},
               "required": ["caption", "aes_score"]}
     ids = []
     for k in range(n_tasks):
-        tid = f"{prefix}{k}"
+        tid = "t_" + hashlib.sha256(f"{prefix}:{k}".encode()).hexdigest()[:16]
         fdir = mb.frames_dir(tid)
         fdir.mkdir(parents=True, exist_ok=True)
         paths = []

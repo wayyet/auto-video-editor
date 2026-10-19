@@ -230,18 +230,18 @@ def _run_toy_graph_with_backend(tmp_path, monkeypatch, backend: str) -> None:
     monkeypatch.setenv("TOY_CKPT_DIR", str(tmp_path / "ckpt"))
     outputs = tmp_path / "outputs"
     mb = Mailbox(runner.gate_root(outputs, "b1"))
-    init = tmp_path / "init.json"
+    init = mb.root / "initial_state.json"      # 初始 state 放在 gate_root 里(工具默认也这么写)
     init.write_text(json.dumps({"session_id": "b1", "video_input_path": "", "error_log": []}), encoding="utf-8")
 
     res = runner.spawn_worker(thread_id="b1", outputs_root=outputs, graph_factory=GRAPH,
-                              initial_state_file=init, backend=backend)
+                              initial_state_file=init, backend=backend, mode="start")
     assert res["ok"], res
     st = _wait_state(mb, "b1", "waiting_human")
     assert st["interrupts"][0]["checkpoint"] == "①"
     assert st["pending_tasks"] == 0                       # 方案 B 里 Agent 不领任务,信箱里没有任务
 
     res = runner.spawn_worker(thread_id="b1", outputs_root=outputs, graph_factory=GRAPH,
-                              resume_values={"①": True}, backend=backend)
+                              resume_values={"①": True}, backend=backend, mode="resume")
     assert res["ok"], res
     _wait_state(mb, "b1", "completed")
 

@@ -19,7 +19,7 @@ from agent_gate import runner, service
 from agent_gate.gate_client import GateLLMClient, LLMGateRejected, LLMGateTimeout
 from agent_gate.mailbox import Mailbox
 from agent_gate.protocol import task_id_for
-from agent_gate.validate import NotJSON, parse_json_value, validate_result
+from agent_gate.validate import InvalidSchema, NotJSON, parse_json_value, validate_result
 
 GRAPH = "toy_graph:build_graph"
 
@@ -42,7 +42,9 @@ def test_parse_and_validate():
     errs = validate_result(schema, {"n": "x"})
     assert errs and errs[0].startswith("$.n:")
     assert validate_result(None, {"anything": 1}) == []
-    assert validate_result({"type": "nonsense-type"}, 1) == []  # 非法 schema 不拦
+    # F4:非法 schema 必须 fail closed —— 抛异常,不再「静默当成校验通过」。
+    with pytest.raises(InvalidSchema):
+        validate_result({"type": "nonsense-type"}, 1)
 
 
 def _agent_answer(task: dict) -> str:
@@ -219,7 +221,13 @@ def env(tmp_path, monkeypatch):
 
 
 def _start(outputs, thread_id, **kw):
-    res = runner.spawn_worker(thread_id=thread_id, outputs_root=outputs, graph_factory=GRAPH, **kw)
+    # F3:mode 由调用点的语义决定 —— 带初始 state 是 start,带 resume_values 是 resume,
+    # 两者都不带是从检查点继续。runner 侧会强制校验,这里只是把语义写清楚。
+    mode = ("resume" if kw.get("resume_values") is not None
+            else "start" if kw.get("initial_state_file") is not None
+            else "continue_after_crash")
+    res = runner.spawn_worker(thread_id=thread_id, outputs_root=outputs,
+                              graph_factory=GRAPH, mode=mode, **kw)
     assert res["ok"], res
     return res
 
@@ -231,7 +239,7 @@ def _state_values(outputs, thread_id):
 
 def test_e2e_agent_drives_pipeline_with_human_gate(env, tmp_path):
     outputs, tid, mb = env
-    init = tmp_path / "init.json"
+    init = mb.root / "initial_state.json"      # 初始 state 放在 gate_root 里(工具默认也这么写)
     init.write_text(json.dumps({"session_id": tid, "video_input_path": "", "error_log": []}))
     _start(outputs, tid, initial_state_file=init)
 
@@ -257,7 +265,7 @@ def test_e2e_agent_drives_pipeline_with_human_gate(env, tmp_path):
 
 def test_e2e_crash_then_continue_replays_answers(env, tmp_path):
     outputs, tid, mb = env
-    init = tmp_path / "init.json"
+    init = mb.root / "initial_state.json"      # 初始 state 放在 gate_root 里(工具默认也这么写)
     init.write_text(json.dumps({"session_id": tid, "video_input_path": "", "error_log": []}))
     res = _start(outputs, tid, initial_state_file=init)
 
@@ -272,7 +280,7 @@ def test_e2e_crash_then_continue_replays_answers(env, tmp_path):
         if first not in mb.pending_ids() and mb.pending_ids():
             break
         time.sleep(0.05)
-    os.kill(res["pid"], signal.SIGKILL)
+    os.kill(res["pid"], getattr(signal, "SIGKILL", signal.SIGTERM))   # Windows 没有 SIGKILL
 
     for _ in range(100):                                  # 心跳过期 → crashed
         s = service.status_summary(mb, thread_id=tid)
@@ -290,18 +298,17 @@ def test_e2e_crash_then_continue_replays_answers(env, tmp_path):
 
 
 def test_resume_with_wrong_checkpoint_is_rejected(env, tmp_path):
+    """F3 之后,不在挂起列表里的 checkpoint 在**拉起层**就被拒,不再把 worker 拉起来再失败。"""
     outputs, tid, mb = env
-    init = tmp_path / "init.json"
+    init = mb.root / "initial_state.json"      # 初始 state 放在 gate_root 里(工具默认也这么写)
     init.write_text(json.dumps({"session_id": tid, "video_input_path": "", "error_log": []}))
     _start(outputs, tid, initial_state_file=init)
     _drive(mb, tid, until={"waiting_human"})
-    _start(outputs, tid, resume_values={"②": True})       # 没有关卡②
-    for _ in range(100):
-        s = service.status_summary(mb, thread_id=tid)
-        if s["worker_state"] == "failed":
-            break
-        time.sleep(0.1)
-    assert s["worker_state"] == "failed" and "没有匹配的挂起" in s["error"]["message"]
+    res = runner.spawn_worker(thread_id=tid, outputs_root=outputs, graph_factory=GRAPH,
+                              mode="resume", resume_values={"②": True})   # 没有关卡②
+    assert res["ok"] is False and res["code"] == "bad_checkpoint"
+    # worker 没被重新拉起,状态还停在人工关卡
+    assert service.status_summary(mb, thread_id=tid)["worker_state"] == "waiting_human"
 
 
 def test_cli_resume_refuses_without_tty(env, tmp_path):
@@ -309,6 +316,7 @@ def test_cli_resume_refuses_without_tty(env, tmp_path):
     cp = subprocess.run(
         [sys.executable, "-m", "agent_gate", "resume", "--thread-id", tid,
          "--outputs-root", str(outputs), "--checkpoint", "①", "--graph-factory", GRAPH],
-        capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=30)
+        capture_output=True, text=True, encoding="utf-8",      # CLI 固定输出 UTF-8,别让系统代码页来解码
+        stdin=subprocess.DEVNULL, timeout=30)
     assert cp.returncode == 1
     assert json.loads(cp.stdout)["code"] == "need_human_terminal"

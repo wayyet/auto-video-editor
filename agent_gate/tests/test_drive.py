@@ -89,7 +89,7 @@ def _kill_worker(outputs: Path, thread: str) -> None:
 def _human_resume(outputs: Path, thread: str) -> None:
     """模拟真人放行(真人场景是 CLI `resume`,且要求交互终端;这里直接调库)。"""
     r = runner.spawn_worker(thread_id=thread, outputs_root=outputs, graph_factory=GRAPH,
-                            resume_values={"①": True})
+                            resume_values={"①": True}, mode="resume")
     assert r["ok"], r
 
 

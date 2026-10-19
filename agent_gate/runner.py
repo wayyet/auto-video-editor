@@ -21,12 +21,14 @@ from agent_gate.mailbox import Mailbox
 from agent_gate.protocol import (
     HEARTBEAT_S,
     STATE_COMPLETED,
+    STATE_CRASHED,
     STATE_FAILED,
     STATE_RUNNING,
     STATE_STARTING,
     STATE_WAITING_HUMAN,
     utc_now,
 )
+from agent_gate.safety import UnsafeIdentifier, UnsafePath, safe_gate_root, safe_thread_id
 
 
 def load_callable(spec: str) -> Callable[..., Any]:
@@ -38,7 +40,32 @@ def load_callable(spec: str) -> Callable[..., Any]:
 
 
 def gate_root(outputs_root: Path | str, thread_id: str) -> Path:
-    return Path(outputs_root) / thread_id / "agent_gate"
+    """<outputs_root>/<thread_id>/agent_gate。
+
+    这是 CLI / MCP / drive 三个入口的共同路径,F1 的校验放在这里一处覆盖多入口。
+    非法 thread_id 抛 :class:`agent_gate.safety.UnsafeIdentifier`,路径越界抛
+    :class:`agent_gate.safety.UnsafePath`。
+    """
+    return safe_gate_root(outputs_root, thread_id)
+
+
+def checkpoint_path(thread_id: str) -> Path:
+    """这个 thread 的 checkpoint 落盘位置。
+
+    解析顺序:``AGENT_GATE_CKPT_DIR`` → ``TOY_CKPT_DIR``(沙箱玩具图)→ 仓库
+    ``config.CHECKPOINTER_DB_DIR`` → ``<cwd>/checkpoints``。
+    """
+    safe_thread_id(thread_id)
+    for env in ("AGENT_GATE_CKPT_DIR", "TOY_CKPT_DIR"):
+        d = os.environ.get(env)
+        if d:
+            return Path(d) / f"{thread_id}.sqlite"
+    try:
+        from config import CHECKPOINTER_DB_DIR
+
+        return Path(CHECKPOINTER_DB_DIR) / f"{thread_id}.sqlite"
+    except Exception:  # noqa: BLE001 — 仓库不在 sys.path 上(纯 kit 场景)
+        return Path("checkpoints") / f"{thread_id}.sqlite"
 
 
 # ------------------------------------------------------------------ 恢复(同步版)
@@ -120,6 +147,25 @@ def install_client(client: Any) -> None:
     set_default_client(client)
 
 
+def production_blocker() -> Optional[str]:
+    """命中生产环境就返回原因,否则 None(F6 护栏)。
+
+    本方案只验收 SQLite 本地开发路径。Postgres 异步 worker 不在范围内,
+    所以这里**显式拒绝启动**而不是静默退回 SQLite。
+    """
+    if os.environ.get("WORKFLOW_ENV") == "production":
+        return "WORKFLOW_ENV=production"
+    try:
+        from config import resolve_checkpointer_backend
+
+        backend = resolve_checkpointer_backend()
+    except Exception:  # noqa: BLE001 — 仓库不在 sys.path 上就只看 env
+        backend = os.environ.get("CHECKPOINTER_BACKEND", "sqlite")
+    if str(backend).strip().lower() == "postgres":
+        return f"checkpointer backend = {backend}"
+    return None
+
+
 def run_worker(
     *,
     thread_id: str,
@@ -129,8 +175,10 @@ def run_worker(
     resume_values: Optional[dict[str, Any]] = None,
     backend: str = "gate",
     client_factory: Optional[Callable[[Mailbox], Any]] = None,
+    require_preflight: bool = False,
 ) -> int:
-    """返回进程退出码:0=正常停下(挂起/完成),1=失败。"""
+    """返回进程退出码:0=正常停下(挂起/完成),1=失败,3=生产环境被护栏拦下。"""
+    safe_thread_id(thread_id)
     mb = Mailbox(gate_root(outputs_root, thread_id))
     w = _StatusWriter(mb, {"thread_id": thread_id, "pid": os.getpid(),
                            "started_at": utc_now(), "interrupts": [], "error": None})
@@ -143,6 +191,11 @@ def run_worker(
 
     threading.Thread(target=beat_loop, daemon=True, name="agent-gate-heartbeat").start()
     try:
+        blocker = production_blocker()
+        if blocker:
+            mb.log_event("production_unsupported", reason=blocker)
+            w.set(STATE_FAILED, error={"type": "ProductionUnsupported", "message": blocker})
+            return 3
         reopened = mb.reset_errors()
         if reopened:
             mb.log_event("errors_reset", count=reopened)
@@ -151,7 +204,7 @@ def run_worker(
         client = client_factory(mb) if client_factory else build_client(backend, mb)
         install_client(client)
         graph = load_callable(graph_factory)(
-            thread_id=thread_id, start_heartbeat_thread=False, run_preflight=False
+            thread_id=thread_id, start_heartbeat_thread=False, run_preflight=require_preflight
         )
         cfg = {"configurable": {"thread_id": thread_id}}
         mb.log_event("worker_started", mode=("resume" if resume_values is not None
@@ -186,21 +239,107 @@ def run_worker(
 
 
 # ------------------------------------------------------------------ 父进程:拉起 worker
+#: 允许的启动模式。三种互斥,语义互不重叠。
+MODES = ("start", "continue_after_crash", "resume")
+
+
+def check_mode(
+    *,
+    mode: str,
+    cur: Mapping[str, Any],
+    thread_id: str,
+    has_checkpoint: Optional[bool] = None,
+    resume_values: Optional[Mapping[str, Any]] = None,
+) -> Optional[dict[str, Any]]:
+    """按 F3 的状态机判断这次启动合不合法。合法返回 None,不合法返回拒绝体。
+
+    ``cur`` 是 :func:`agent_gate.service.status_summary` 的结果(已含
+    "心跳过期即 crashed" 的推断,所以崩掉的 worker 在这里读出来就是 ``crashed``)。
+
+    拒绝码:
+
+    ==================  ==========================================================
+    ``already_used``    mode=start,但这个 thread 已经有 status 或 checkpoint
+    ``already_running`` 正在 starting / running —— 保留的第 4 条独立检查
+    ``not_restartable`` mode=continue_after_crash,但状态不是 crashed / failed
+    ``no_checkpoint``   mode=continue_after_crash,但检查点文件不存在
+    ``not_waiting_human`` mode=resume,但状态不是 waiting_human
+    ``bad_checkpoint``  mode=resume,但传入的 checkpoint 不在挂起列表里
+    ==================  ==========================================================
+    """
+    state = cur.get("worker_state")
+
+    if mode not in MODES:
+        return {"ok": False, "code": "bad_mode", "message": f"mode 只能是 {list(MODES)} 之一"}
+    if state in (STATE_STARTING, STATE_RUNNING):
+        return {"ok": False, "code": "already_running", "status": dict(cur)}
+
+    if mode == "start":
+        if state not in (None, "not_started") or has_checkpoint:
+            return {"ok": False, "code": "already_used", "status": dict(cur),
+                    "message": "这个 thread_id 已经跑过了。换一个新 ID 重跑,"
+                               "或者用 mode=continue_after_crash / mode=resume 接着跑。"}
+        return None
+
+    if mode == "continue_after_crash":
+        if state not in (STATE_CRASHED, STATE_FAILED):
+            return {"ok": False, "code": "not_restartable", "status": dict(cur),
+                    "message": f"当前状态是 {state!r},只有 crashed / failed 才可以从检查点继续。"}
+        if has_checkpoint is None:
+            has_checkpoint = checkpoint_path(thread_id).exists()
+        if not has_checkpoint:
+            return {"ok": False, "code": "no_checkpoint", "status": dict(cur),
+                    "message": "没有找到这个 thread 的检查点文件,无法从崩溃处继续。"
+                               "如果还没开始跑过,请改用 mode=start 和新的 thread_id。"}
+        return None
+
+    # mode == "resume"
+    if state != STATE_WAITING_HUMAN:
+        return {"ok": False, "code": "not_waiting_human", "status": dict(cur),
+                "message": f"当前状态是 {state!r},只有 waiting_human 才需要人工放行。"}
+    known = {i.get("checkpoint") for i in (cur.get("interrupts") or [])}
+    asked = set((resume_values or {}).keys())
+    if asked and not (asked & known):
+        return {"ok": False, "code": "bad_checkpoint", "status": dict(cur),
+                "message": f"传入的 checkpoint 不在当前挂起列表里。可用:{sorted(str(k) for k in known)}"}
+    return None
+
+
 def spawn_worker(
     *,
     thread_id: str,
     outputs_root: Path | str,
     graph_factory: str,
+    mode: str,
     initial_state_file: Optional[Path] = None,
     resume_values: Optional[dict[str, Any]] = None,
     backend: str = "gate",
     cwd: Optional[Path] = None,
     python: str = sys.executable,
+    require_preflight: bool = False,
 ) -> dict[str, Any]:
-    mb = Mailbox(gate_root(outputs_root, thread_id))
+    try:
+        safe_thread_id(thread_id)
+        mb = Mailbox(gate_root(outputs_root, thread_id))
+    except (UnsafeIdentifier, UnsafePath) as e:
+        from agent_gate.safety import rejection
+
+        return rejection(e)
+
     cur = service.status_summary(mb, thread_id=thread_id)
-    if cur["worker_state"] in (STATE_STARTING, STATE_RUNNING):
-        return {"ok": False, "code": "already_running", "status": cur}
+    if mode == "start" and initial_state_file is None and resume_values is None:
+        return {"ok": False, "code": "need_input",
+                "message": "mode=start 需要 initial_state_file(要么给 --video 生成,要么给 --initial-state-file)"}
+    if mode == "resume" and not resume_values:
+        return {"ok": False, "code": "need_input", "message": "mode=resume 需要 resume_values"}
+    if mode == "continue_after_crash" and (initial_state_file is not None or resume_values is not None):
+        return {"ok": False, "code": "bad_mode",
+                "message": "mode=continue_after_crash 不能同时带 initial_state_file 或 resume_values"}
+
+    bad = check_mode(mode=mode, cur=cur, thread_id=thread_id, resume_values=resume_values)
+    if bad is not None:
+        return bad
+
     # worker 在仓库根目录里启动:`python -m` 会把 cwd 放进 sys.path,`graph:build_graph` 才导入得到
     if cwd is None and os.environ.get("AGENT_GATE_REPO_ROOT"):
         cwd = Path(os.environ["AGENT_GATE_REPO_ROOT"])
@@ -208,6 +347,8 @@ def spawn_worker(
     args = [python, "-m", "agent_gate", "worker", "--thread-id", thread_id,
             "--outputs-root", str(outputs_root), "--graph-factory", graph_factory,
             "--backend", backend]
+    if require_preflight:
+        args.append("--require-preflight")
     if initial_state_file is not None:
         args += ["--initial-state-file", str(initial_state_file)]
     if resume_values is not None:
@@ -228,5 +369,5 @@ def spawn_worker(
     with open(mb.root / "worker.log", "ab") as logf:
         p = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=logf, stderr=logf,
                              cwd=str(cwd) if cwd else None, env=env, close_fds=True, **kw)
-    return {"ok": True, "pid": p.pid, "gate_root": str(mb.root),
+    return {"ok": True, "pid": p.pid, "gate_root": str(mb.root), "mode": mode,
             "log": str(mb.root / "worker.log")}
