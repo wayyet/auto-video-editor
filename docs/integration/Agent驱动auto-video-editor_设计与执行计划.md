@@ -742,12 +742,12 @@ git status --short
 | --- | --- | --- | --- |
 | A1-1 | `python -m agent_gate --help` 可用 | P1，退出码 0 | ✅ |
 | A1-2 | MCP 工具可被 Agent 加载 | 事件日志有成功会话；`agent_sessions/` 有输出 | ✅ 3 会话全部 succeeded |
-| A1-3 | 主图至少一个 LLM 任务由 Agent 作答，不是 Stub | `tasks/*.task.json` 数量 > 0 且与 `*.result.json` 一一对应 | ✅ 8/8 |
-| A1-4 | 画面帧真的传给了 Agent | `frames/<task_id>/*.jpg` 非空，任务视图里 `images.shown > 0` | ⚠️ v001 任务 `images.Count=0`，素材链路缺陷导致抽帧无内容 |
-| A1-5 | `answered_tasks > 0` 且 `degraded_tasks == 0` | `agent_gate status` | ✅ 8 answered |
+| A1-3 | 主图至少一个 LLM 任务由 Agent 作答，不是 Stub | `tasks/*.task.json` 数量 > 0 且与 `*.result.json` 一一对应 | ✅ 12/12(v004) |
+| A1-4 | 画面帧真的传给了 Agent | `frames/<task_id>/*.jpg` 非空，任务视图里 `images.shown > 0` | ✅ **已修**(2026-10-19,D5):`storyline_understand_clips` 任务 `frames: 0` → `frames: 6` |
+| A1-5 | `answered_tasks > 0` 且 `degraded_tasks == 0` | `agent_gate status` | ✅ 12 answered / 0 degraded(v004) |
 | A1-6 | 崩溃恢复不重复提问 | 手动 kill worker → `continue_after_crash` → 已答任务不再出现 | ✅ `worker_started` 出现 2 次，8 个任务未重复 |
 | A1-7 | 人工关卡真的暂停 | `worker_state=waiting_human`、`interrupts` 非空；Agent 会话**未**调用 resume | ✅ `interrupts[0].checkpoint = "①"` |
-| A1-8 | 最终产物合理 | 剪映草稿可打开；字幕/分镜/转场/BGM 人工过目 | ❌ 未生成草稿（见 P8 根因） |
+| A1-8 | 最终产物合理 | 剪映草稿可打开；字幕/分镜/转场/BGM 人工过目 | ❌ 仍未生成草稿（D9：`plan_timeline_pro` 的输出过不了 `CanonicalTimeline` 校验，与本次 D5/D6 无关，见 §10.4） |
 
 ### B. 安全
 
@@ -769,8 +769,8 @@ git status --short
 
 | # | 判据 | 状态 |
 | --- | --- | --- |
-| C-1 | P0 基线与 P7 之后的项目测试**逐项一致**（多 0 少 0） | ✅ **919 / 0 失败 / 0 错误 / 11 skip**，用例总数与基线完全一致，且比基线少 1 个失败（见 [§11](#11-回归对比)） |
-| C-2 | `pytest agent_gate/tests` 全绿；claude 相关用例 skip 并如实记为 skip | ✅ 197 收集 / 180 通过 / 17 skip / 0 失败 |
+| C-1 | P0 基线与 P7 之后的项目测试**逐项一致**（多 0 少 0） | ✅ **935 / 0 失败 / 0 错误 / 11 skip**（M5），比基线多 16 条新用例，失败/错误仍为 0（见 [§11](#11-回归对比)） |
+| C-2 | `pytest agent_gate/tests` 全绿；claude 相关用例 skip 并如实记为 skip | ✅ **208 收集 / 0 失败 / 0 错误 / 17 skip**（17 条全是 claude 相关 + 1 条 symlink(Windows 不支持)；**mcode 相关用例本轮实际执行并通过**——因为 `mcode` 已在 PATH 上） |
 | C-3 | 记录版本 | ✅ 见 [§13](#13-版本与环境) |
 | C-4 | 声明「只支持 SQLite 本地开发路径」，不声称 Postgres 已验收 | ✅ |
 | C-5 | 声明平台与覆盖范围 | ✅ 见下 |
@@ -779,7 +779,15 @@ git status --short
 > - **Windows 已实测**（本机 Windows 11 + PowerShell 7）。
 > - **Linux 未复测**：交付包在 Linux 沙箱跑过 89 测试（Claude Code 2.1.302 / mcode 0.6.9），该结论**不作为本机验收依据**，只作参考。
 > - **接入层端到端跑通**：真实主图上 8/8 任务由 MiniMax Code 作答、人工关卡①放行成功、drive 退出码 10。
+> - **素材链路修复后重跑通过（2026-10-19）**：D5/D6 修好后，真实主图跑完 12 个 LLM 任务
+>   （`degraded_tasks=0`）、每题 prompt **零 `{{...}}` 残留**、镜头描述**零 Error**、
+>   画面帧 `frames: 6`、时间轴 `source_media_id=media_0001`、assembly 质检
+>   `pass_with_warnings` 且 `preview.mp4` 已生成、**停在人工关卡 ①**。
+>   ⚠️ 该轮答案是**人工手写**的：MiniMax Token Plan 额度已用尽（429），Agent 自动答题跑不了。
+>   ⚠️ 本轮还修掉两个**只有 Windows 才暴露**的接入层缺陷（PATHEXT 裸名拉不起 mcode、
+>   正在启动的 worker 被误判成 crashed），见 §10.4。
 > - **完整流水线未跑通**：人工关卡放行后主图因 `draft_path=None` 崩溃，**最终剪映草稿未生成**。
+>   本次已定位到**独立根因 D9**（生产端/契约端字段集不一致），非 D5/D6 所致，见 §10.4。
 > - **真实模型答案质量需人工判断**：本次 Agent 如实报告了素材链路缺陷而未编造内容，但真实成片质量未评估。
 
 ---
@@ -840,7 +848,7 @@ starting ──> running ──┬──> waiting_human ──(人工 resume)─
 
 ## 10. 已知缺陷与后续项
 
-### 10.1 项目既有缺陷（本次**不改**，只记录）
+### 10.1 项目既有缺陷
 
 | # | 缺陷 | 位置 | 影响 | 本次实测表现 |
 | --- | --- | --- | --- | --- |
@@ -848,13 +856,113 @@ starting ──> running ──┬──> waiting_human ──(人工 resume)─
 | D2 | `storyline_local_asr` / `storyline_speech_rough_cut` 路由可能不可达 | `nodes/storyline/` | 部分节点不会被触发 | 本次未触发该路径 |
 | D3 | 多个 JSON schema 只有 `properties` 没有 `required` | 项目内多处 | 字段可缺失，Agent 可能漏填 | 8 个任务中 7 个带 schema，其中 1 个（`t_676905527d010e7d`）完全无 schema（F5） |
 | D4 | 镜头描述调用没传 schema | `storyline_capabilities/understand_clips.py:143` | 见 §6 F5 | Agent 只能给纯文本答案 |
-| D5 | **素材链路缺陷：`clip.kind` 为空** | 上游 `clip` 构造 | `Error: Clip kind not supported:` → 镜头描述全失败 | ⚠️ **本次实跑命中** |
-| D6 | **prompt 模板变量未渲染** | 上游 prompt 拼装 | `{{user_request}}` / `{{clip_captions}}` / `{{clip_number}}` / `{{duration_budget}}` / `{{style}}` 原样残留 → 下游拿空数据 | ⚠️ **本次实跑命中** |
+| D5 | ~~**素材链路缺陷：`clip.kind` 为空**~~ **✅ 已修** | `storyline_capabilities/split_shots.py`（产出 clip 缺 `kind`/`path`/`source_ref`） | `Error: Clip kind not supported:` → 镜头描述全失败 | ✅ 2026-10-19 修复，见 §10.4 |
+| D6 | ~~**prompt 模板变量未渲染**~~ **✅ 已修** | `storyline_capabilities/prompts/__init__.py`（`render_prompt` 只认 `{name}`，模板是 `{{name}}`）+ 8 个调用点漏传变量 | `{{user_request}}` / `{{clip_captions}}` / `{{clip_number}}` / `{{duration_budget}}` / `{{style}}` 原样残留 → 下游拿空数据 | ✅ 2026-10-19 修复，见 §10.4 |
 | D7 | `node_07_speed_fit` 不防御 `draft_path=None` | `nodes/node_07_speed_fit.py:91`（及 `:163`、`:186`） | `TypeError` 直接崩 worker，无友好降级 | ⚠️ **本次实跑命中**（P8 失败点） |
-| D8 | `node_05_generate_draft` 早退时把 `draft_path` 置 `None` 且下游未检查 | `nodes/node_05_generate_draft.py:71-76`、`:112-119` | 早退信息只进 `error_log`，下游看不到 | ⚠️ **本次实跑命中**（D7 的上游） |
+| D8 | `node_05_generate_draft` 早退时把 `draft_path` 置 `None` 且下游未检查 | `nodes/node_05_generate_draft.py:71-76`、`:112-119` | 早退信息只进 `error_log`,下游看不到 | ⚠️ **本次实跑命中**(D7 的上游) |
+| D9 | **生产端 / 契约端字段集不一致**:`plan_timeline_pro` 产出的 plan 过不了 `CanonicalTimeline` 校验 | `storyline_capabilities/plan_timeline_pro.py`(生产)vs `storyline/contract.py:130`(校验,`extra="forbid"`) | `node_05` 的 `CanonicalTimeline.model_validate()` 必抛 `ContractInvalid` → `draft_path=None` → D7 | ⚠️ **2026-10-19 新发现**,与 D5/D6 无关 |
 
-> D5–D8 是本次 P8 实跑**新发现**的，之前不在审查版 §4.2 清单里。
-> 按 §1 Non-goals 2「不修项目既有缺陷」处理：**只记录、不修**，但 P8 的失败结论必须如实写明。
+> D5–D8 是本次 P8 实跑**新发现**的,之前不在审查版 §4.2 清单里;D9 是 2026-10-19 重跑时新定位的。
+> D5 / D6 已于 2026-10-19 修复(见 §10.4);D7 / D8 / D9 仍按 §1 Non-goals 2「不修项目既有缺陷」处理:**只记录、不修**。
+
+### 10.4 D5 / D6 修复记录(2026-10-19)
+
+D5 / D6 属于**素材链路**——「Agent 拿不到素材,也没拿到正确的问题」,是端到端出片的
+前置条件,因此本次一并修掉(计划里的 F3 / F4 两项后续项)。
+
+#### D5：clip 契约不完整 → 画面全丢
+
+| 环节 | 修复前 | 修复后 |
+| --- | --- | --- |
+| `split_shots` 产出的 clip | 只有 `clip_id` / `source_in_ms` / `source_out_ms` / `timeline_*` / `split_method` | 追加 `kind="video"`、`path`、`source_ref{media_id,start,end,duration}` |
+| `split_shots` 关联 media | 只写 `media_id` 到顶层 | 顶层 `media_id` + `path` + `source_ref.media_id` 都写全 |
+| `understand_clips` 产出的 caption | 只有 `clip_id` / `caption` / `source_ref` | 追加顶层 `media_id` / `source_in_ms` / `source_out_ms` / `timeline_*`(**必须**:`plan_timeline_pro` 读的就是这几个顶层字段,少了时间轴就退化成 `source_media_id=null` + `source_in_ms=0`,剪映草稿绑不上源素材) |
+
+改的文件:`storyline_capabilities/split_shots.py`、`storyline_capabilities/understand_clips.py`。
+
+#### D6：prompt 模板变量一个都没渲染
+
+根因有两层,**缺一不可**:
+
+1. **语法不匹配**：模板正文用 **双花括号** `{{name}}`(与 vendored
+   `open_storyline.utils.prompts.get_prompt` 的 `re.sub(r"{{(.*?)}}")` 一致),
+   而本地 `render_prompt` 只替换 **单花括号** `{name}` → 所有占位符原样残留。
+2. **调用点漏传变量**：即使语法对了,8 个 `render_prompt` 调用点里
+   `filter_clips` 传 `captions=`(模板要的是 `clip_captions`)、`group_clips` 传
+   `groups=`(模板要的是 `clip_captions` / `clip_number` / `duration_budget` /
+   `selected_clips`)、`generate_script` 少传 `user_request` / `overall`、
+   `recommend_text` 少传 `candidates` / `user_request`、
+   `recommend_transition` 少传 `user_request` —— **变量名对不上,值也没给全**。
+
+修复:
+
+| 改动 | 说明 |
+| --- | --- |
+| `storyline_capabilities/prompts/__init__.py` | `render_prompt` 一次正则同时支持 `{{name}}` 与 `{name}` / `{name:?}`;**未提供的变量保持原样**(宁可让调用方看到残留,也不静默把空数据喂给模型);新增 `unresolved_placeholders()` 自检函数 |
+| `storyline_capabilities/duration_budget.py`(新增) | 本地化 vendored `utils/duration_budget.py`( storyline 能力层要求无 vendored 依赖),产出 `{{duration_budget}}` 文本 |
+| `filter_clips` / `group_clips` / `generate_script` / `recommend_text` / `recommend_transition` | 补齐模板需要的全部变量;新增 `user_request` / `target_duration_ms` 入参 |
+| `nodes/storyline/_common.py` | 新增 `resolve_lang` / `extract_user_request` / `target_duration_ms`,把 `state.storyline_targets` 里的用户要求与目标时长透传给能力层 |
+| 5 个节点壳子 | 透传 `lang` / `user_request` / `target_duration_ms`;`node_generate_script` 额外读 `understanding.overall` 填 `{{overall}}` |
+
+#### 修复后的实测证据
+
+| 证据 | 修复前(v001) | 修复后(v004) |
+| --- | --- | --- |
+| `storyline_understand_clips` 任务帧数 | `frames: 0` | `frames: 6` |
+| 镜头描述 caption | 3 条 `Error: Clip kind not supported:` | 4 条真实描述,**0 条 Error** |
+| 传给 Agent 的 media | 空 | `{"path": "...mp4", "in_sec": 0.0, "out_sec": 3.0}` |
+| 各任务 prompt 残留 `{{...}}` | 5 类占位符原样残留 | **0**(`residue=[]`) |
+| 任务总数 / 降级 | 8 题 / — | 12 题 / `degraded_tasks=0` |
+| 时间轴 `source_media_id` | — | `media_0001`(修复前是 `null`) |
+| 到达人工关卡 ① | ✅ | ✅ `waiting_human` / `next_action=ask_human` |
+| assembly 质检 | 未跑到 | `pass_with_warnings`,`preview.mp4` 已生成 |
+
+新增单测:`tests/unit/test_storyline_asset_chain.py`(16 条)——
+覆盖 clip 契约、占位符两种语法、残留检测、以及「clip 时间区间一路带到时间轴」。
+
+> **冒烟素材**:本轮用的是 `inputs/chain-test-12s.mp4`(ffmpeg lavfi 合成的 12 秒 4 场景测试片,
+> `inputs/` 已被 `.gitignore` 忽略,不入库)。生成命令见下,可用它复现:
+>
+> ```powershell
+> ffmpeg -y -f lavfi -i "testsrc=size=640x360:rate=10:duration=3" `
+>        -f lavfi -i "smptebars=size=640x360:rate=10:duration=3" `
+>        -f lavfi -i "color=c=navy:size=640x360:rate=10:duration=3" `
+>        -f lavfi -i "gradients=size=640x360:rate=10:duration=3" `
+>        -filter_complex "[0:v][1:v][2:v][3:v]concat=n=4:v=1:a=0" -pix_fmt yuv420p `
+>        inputs/chain-test-12s.mp4
+> ```
+>
+> 它在 `AGENT_GATE_MEDIA_ROOTS` 白名单内,`--video` 可直接用。
+
+#### 顺带修掉的接入层缺陷(不修就跑不了重跑)
+
+| 缺陷 | 现象 | 修法 |
+| --- | --- | --- |
+| `agent_gate/launcher.py` 在 Windows 上拉不起 `mcode` | `找不到可执行文件 'mcode':[WinError 2]` → 连续 2 个会话没进展 → `drive` 退出码 4 | `CreateProcess` 不做 PATHEXT 补全,裸名必失败。新增 `resolve_agent_bin()`,用 `shutil.which()` 解析成真正的 `mcode.CMD` / `claude.exe` 再执行 |
+| `agent_gate/service.py` 把正在启动的 worker 误判成崩溃 | `spawn_worker` 先写一份 `state="starting"`,worker 进程还要好几秒才写出第一次心跳;判定却用 `STALE_AFTER_S`(测试里 1.5s)→ **正常启动被判 crashed** → `drive` 误报退出码 5,甚至去重启一个好好着的 worker | `protocol.py` 新增 `STARTING_STALE_AFTER_S`(默认 120s,可用 `AGENT_GATE_STARTING_STALE_AFTER_S` 覆盖);`status_summary` 里 `starting` 与 `running` **用不同阈值**,`running` 的崩溃检测不受影响 |
+| `.mcp.json` 的 `env` 里没有 `PATH` | worker 进程里 `ffmpeg` / `ffprobe` 不可见 → 抽帧全失败 | 在操作员目录的 `.mcp.json` `env.PATH` 里补上 ffmpeg 目录(仓库外文件,不入库) |
+
+配套回归测试:`agent_gate/tests/test_agent_bin.py`(7 条)+ `agent_gate/tests/test_heartbeat.py`(4 条)。
+
+> ⚠️ 这两条接入层缺陷**在交付包的 Linux 沙箱里测不出来**:PATHEXT 补全是 Windows 独有行为;
+> worker 启动耗时也是 Windows 明显更慢(import langgraph + 拉子进程)。
+
+#### 仍未解决(不在本次范围)
+
+- **D9(新发现,本次新定位)——最终剪映草稿仍生成不出来**:
+  `storyline_capabilities/plan_timeline_pro.py` 产出的 plan 里,每个 clip 多了
+  `voiceover_id` / `transition_in` / `transition_out` / `subtitle_style`,
+  顶层多了 `method` / `warnings`,且 `subtitles.zh` 是 dict 而契约要求 str;
+  而 `storyline/contract.py` 的 `CanonicalTimeline` 是 `extra="forbid"`。
+  → `node_05` 的 `CanonicalTimeline.model_validate()` **必然**抛 `ContractInvalid`
+  → 早退 → `draft_path = None` → 关卡 ① 之后 resume 时触发 D7 的 `TypeError`。
+  这两个文件**都不在本次改动范围**(`git diff` 里没有它们),属于独立的既有缺陷,
+  按 §1 Non-goals 2 **只记录、不修**。修法见 §10.2 F5。
+- **D7 / D8**:`draft_path=None` 未防御 → `node_07_speed_fit` 抛 `TypeError`。
+  本次重跑**停在人工关卡 ①**,尚未触发关卡 ① 之后的 resume,因此 D7 未复现。
+- **D1**:`aes_score` 成功路径仍被丢弃(Non-goals 2 明确不修)。
+- **真实模型答案质量**:本轮 `v004` 的答案是**人工手写**的(见下),不是模型产出;
+  MiniMax Token Plan 额度已用尽(429 `已达到 Token Plan 用量上限`),Agent 驱动的实跑暂时跑不了。
 
 ### 10.2 后续项
 
@@ -862,9 +970,9 @@ starting ──> running ──┬──> waiting_human ──(人工 resume)─
 | --- | --- | --- | --- |
 | F1 | 给镜头描述任务补 `json_schema`（解 F5） | 在 `understand_clips.py:143` 的调用传 `json_schema={"type":"object","properties":{"caption":{"type":"string"},"aes_score":{"type":"number"}},"required":["caption"]}` | ⚠️ 补上后 `answer_format` 从 `text` 变 `json`，**`stub` 后端行为会变**（`StubLLMClient` 改走 `_fake_obj_from_schema`，返回 `{"caption":"","aes_score":0.0}` 而非 `"no caption"`）→ 必须同步改 `tests/` 里依赖 `"no caption"` 的断言；还需新增 `required` 字段校验用例 |
 | F2 | 任务哈希纳入推理参数 | `task_id` 计算时把 `temperature` / `top_p` / `max_tokens` 加进 `canonical_json` 的输入 | `agent_gate/tests/test_gate.py::test_task_id_stable_and_sensitive` 的期望值会变，需重算；还要补一条「参数不同 → ID 不同」的用例 |
-| F3 | 修 D5：`clip.kind` 取值 | 追 `clip` 字典的构造点，确保 `kind` 落在 `understand_clips` 允许列表内 | 建议加一条单测：构造合法 `kind` 的 clip，断言不出现 `Clip kind not supported` |
-| F4 | 修 D6：prompt 模板渲染 | 追 prompt 拼装点，确认 `{{user_request}}` 等占位符在调用前被替换 | 加一条单测断言渲染后 prompt 不含 `{{...}}` 残留 |
-| F5 | 修 D7/D8：`draft_path=None` 的防御 | `node_07_speed_fit` 等下游节点改用 `state.get("draft_path")` + 提前 `raise`/降级；或 `node_05` 早退时写显式状态字段（如 `draft_failed_reason`）供下游判断 | 建议加一条单测：`draft_path=None` 时节点抛**可识别**的异常而非 `TypeError` |
+| F3 | ~~修 D5:`clip.kind` 取值~~ **✅ 已修**(2026-10-19) | 追 `clip` 字典的构造点,确保 `kind` 落在 `understand_clips` 允许列表内 —— 实际还发现 `understand_clips` 丢了顶层时间字段,一并补齐(见 §10.4) | ✅ 已加:`tests/unit/test_storyline_asset_chain.py` |
+| F4 | ~~修 D6:prompt 模板渲染~~ **✅ 已修**(2026-10-19) | 追 prompt 拼装点,确认 `{{user_request}}` 等占位符在调用前被替换 —— 实际是**语法不匹配**(`{name}` vs `{{name}}`)+ **8 个调用点漏传变量**,两层都修了(见 §10.4) | ✅ 已加:同上,含残留检测与「渲染后不含 `{{...}}`」断言 |
+| F5 | 修 D7/D8/D9:`draft_path=None` 的防御 + 生产端/契约端字段集对齐 | ①`storyline_capabilities/plan_timeline_pro.py`:把 `voiceover_id` / `transition_in` / `transition_out` / `subtitle_style` / `method` / `warnings` 去掉,或让 `CanonicalTimeline` 接受它们(`extra="allow"` + 只对**必需**字段做不变量校验);`subtitles.zh` 改成 str。②`node_07_speed_fit` 等下游节点改用 `state.get("draft_path")` + 提前 `raise`/降级;或 `node_05` 早退时写显式状态字段(如 `draft_failed_reason`)供下游判断 | 建议加一条单测:`draft_path=None` 时节点抛**可识别**的异常而非 `TypeError`;再补一条:`plan_timeline_pro` 的输出能过 `CanonicalTimeline.model_validate()` |
 | F6 | 补 `required`（D3） | 逐个 schema 补 `required` | 会让原本能通过的答案变成不合格 → 需同步放宽/调整 Agent 侧提示词 |
 
 ### 10.3 本次明确不覆盖的验证
@@ -891,6 +999,7 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
 | M2 | `baseline_rebuild` | 独立 worktree @ `61cf78d` | ❌ 缺 | ❌ |
 | M3 | `baseline_final` | 主工作区，`git stash` 掉改动 | ✅ | ✅ |
 | M4 | **`after_p9`** | **主工作区，含 P2/P3 改动** | ✅ | ✅ |
+| M5 | **`after_d5d6`** | **主工作区，含 D5/D6 修复**（2026-10-19） | ✅ | ✅ |
 
 ### 11.2 实测结果
 
@@ -900,6 +1009,13 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
 | M2 `baseline_rebuild` | 919 | 1 | 0 | 35 | 同上（另 +24 个素材相关 skip） |
 | M3 `baseline_final` | 919 | 1 | 0 | 11 | `test_phase5_e2e::test_phase5_decoupling_no_runtime_dependencies` |
 | **M4 `after_p9`** | **919** | **0** | **0** | **11** | **无** ✅ |
+| **M5 `after_d5d6`** | **935** | **0** | **0** | **11** | **无** ✅ |
+
+> M5 比 M4 多 **16** 条 = `tests/unit/test_storyline_asset_chain.py` 的新增用例;
+> failures / errors 仍为 **0**,skipped 仍为 **11**（未新增跳过）。
+> ⚠️ 跑测试前必须把 ffmpeg 放进 PATH（`C:\ffmpeg\ffmpeg-9.0.2-essentials_build\bin`），
+> 否则 `tests/unit/video_edit_capabilities/` 会有 7 条因「找不到 ffmpeg」误报失败——
+> 这是**环境问题，与代码无关**。
 
 ### 11.3 归属判定
 
@@ -914,9 +1030,12 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
 
 ### 11.4 结论
 
-- **改动后 919 个用例 0 失败 / 0 错误**，比任一基线都严格更优。
+- **改动后 935 个用例 0 失败 / 0 错误**（M5），比任一基线都严格更优。
 - 计划的 C-1 判据是「与基线逐项一致（多 0 少 0）」→ 实测**多 0、少 1**，满足且优于该判据。
 - 唯一的 skip 差异（11 vs 35）是 M2 缺本地素材导致，与代码无关。
+- `pytest agent_gate/tests`：**208 收集 / 0 失败 / 0 错误 / 17 skip**（M5）。
+  比上一轮多 11 条 = 新增的 `test_agent_bin.py`(7) + `test_heartbeat.py`(4);
+  skip 从 27 降到 17,因为 `mcode` 已在 PATH 上 → **mcode 相关的 10 条用例从「skip」变成「真跑并通过」**。
 
 ---
 
@@ -1028,8 +1147,10 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
 | `mcode` 无「关内置工具」硬开关 | 软护栏 | 加锁配置收紧 `permissionMode` + `guard_hook.py`；验收 B-9/B-10 |
 | Postgres 路径未支持 | 不能上生产 | 显式拒绝启动；本文只声明 SQLite |
 | ffmpeg 不在后台 shell 的 PATH | kit 测试 6 个用例误报失败 | 显式 `$env:PATH` 前置；已写入 §7 阶段前置 |
-| 素材链路缺陷（D5/D6）未修 | 主图跑不出成片 | 记入 §10.1 D5–D8 + §10.2 F3/F4/F5 后续项 |
-| `clip.kind` / prompt 模板问题扩大 | 后续节点拿空数据 | 同上 |
+| 素材链路缺陷（D5/D6）未修 | 主图跑不出成片 | ✅ **已修**（2026-10-19），见 §10.4 |
+| `clip.kind` / prompt 模板问题扩大 | 后续节点拿空数据 | ✅ 同上（clip 契约 + 渲染器两层都修了） |
+| **D9：生产端/契约端字段集不一致** | `node_05` 必抛 `ContractInvalid` → `draft_path=None` → 关卡 ① 后必崩 | 记入 §10.1 D9 + §10.2 F5；**本次不修**，需另起一轮 |
+| MiniMax Token Plan 额度耗尽 | Agent 驱动的实跑跑不了（429） | 本轮 v004 改用人工手写答案验证链路；额度恢复后重跑 `drive` 即可 |
 
 ---
 
