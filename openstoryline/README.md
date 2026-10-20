@@ -17,6 +17,23 @@
   永不自动导入视频。该端点跨 venv 引入
   `auto-video-editor/nodes/node_04a_import_video.py`,故该模块顶层只允许依赖
   stdlib + `config` + `storyline.output_isolation`。
+- 「📥 导入视频」支持**一次多选**多个视频(`<input type="file" multiple>`):
+  前端串行把 N 个文件传到当前会话(pending 区),然后**只发一次**握手 POST
+  (`{session_id, files:[{media_id, filename, stored_path}, ...]}`,同时保留
+  单值字段兼容旧端点)。端点有限流(burst=1 / rpm=2),分 N 次 POST 必然 429。
+
+### 「导入视频」的两阶段语义
+
+按钮在**两个阶段**都可用,行为不同:
+
+| 阶段 | 图的状态 | 握手结果 | 提示 |
+|---|---|---|---|
+| 关卡⓪ 规划阶段 | 还没到 `import_video` 节点 | `409 no_pending_import_request` | 「已上传 N 个视频到当前会话,可继续与 Agent 对话完成规划」 |
+| `import_video` 等待阶段 | 正在轮询等结果 | `200` | 「已导入 N 个视频」,图自动继续 |
+
+409 **不是错误**:素材已经进了会话,规划器(Agent)能立刻用上。
+多选后若部分文件上传失败,失败的记入失败列表,已成功的照常导入(部分成功 = 导入成功)。
+
 
 ## 安装 (Windows)
 

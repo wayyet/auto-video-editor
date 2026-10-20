@@ -185,6 +185,112 @@ def find_pending_request(
 
 
 # ---------------------------------------------------------------------------
+# 端点载荷解析 / 构造(纯函数,无 IO —— 主仓 pytest 可直接覆盖)
+# ---------------------------------------------------------------------------
+def parse_import_payload(data: dict) -> list[dict]:
+    """把 ``POST /api/system/import-video`` 的 body 归一成文件列表。
+
+    支持两种格式:
+
+    - **新(多文件)**::
+
+        {"session_id": "...", "files": [{"media_id": "m1", "filename": "a.mov",
+                                         "stored_path": "E:/a.mov"}, ...]}
+
+    - **旧(单文件,向后兼容)**::
+
+        {"session_id": "...", "media_id": "m1", "filename": "a.mov",
+         "stored_path": "E:/a.mov"}
+
+    返回 ``[{"media_id": str, "filename": str, "stored_path": str}, ...]``;
+    没有任何有效文件时返回 ``[]``。
+
+    判定"有效":``media_id`` 与 ``stored_path`` 至少有一个非空(两者都空 = 脏数据)。
+    """
+    if not isinstance(data, dict):
+        return []
+
+    def _one(item: object) -> Optional[dict]:
+        if not isinstance(item, dict):
+            return None
+        media_id = str(item.get("media_id") or "").strip()
+        stored_path = str(item.get("stored_path") or "").strip()
+        filename = str(item.get("filename") or "").strip()
+        if not media_id and not stored_path:
+            return None
+        if not filename and stored_path:
+            filename = os.path.basename(stored_path)
+        return {"media_id": media_id, "filename": filename, "stored_path": stored_path}
+
+    out: list[dict] = []
+    files = data.get("files")
+    if isinstance(files, list):
+        for item in files:
+            one = _one(item)
+            if one is not None:
+                out.append(one)
+    if not out:
+        # 没有 files(或 files 全是脏数据)→ 回退到旧的单值字段
+        one = _one(data)
+        if one is not None:
+            out.append(one)
+    return out
+
+
+def build_result_payload(
+    web_session_id: str,
+    files: list[dict],
+    *,
+    triggered_by: str = "import_video_button",
+) -> dict:
+    """构造 ``import_video_result.json`` 的载荷(列表字段 + 单值字段)。
+
+    - 列表字段 ``media_paths`` / ``filenames`` / ``media_ids``:供新节点消费,
+      三个列表**长度一致且按索引对齐**(缺失值用空串占位)。
+    - 单值字段 ``stored_path`` / ``filename`` / ``media_id``:= **第一个**文件,
+      供老节点 / 老 checkpoint 继续可读(向后兼容)。
+    """
+    items = [f for f in (files or []) if isinstance(f, dict)]
+    first = items[0] if items else {}
+    return {
+        "ok": True,
+        "web_session_id": web_session_id or None,
+        # --- 单值(兼容老读取方)= 第一个 ---
+        "media_id": str(first.get("media_id") or "") or None,
+        "filename": str(first.get("filename") or "") or None,
+        "stored_path": str(first.get("stored_path") or "") or None,
+        # --- 列表(新读取方),索引对齐 ---
+        "media_paths": [str(f.get("stored_path") or "") for f in items],
+        "filenames": [str(f.get("filename") or "") for f in items],
+        "media_ids": [str(f.get("media_id") or "") for f in items],
+        "triggered_by": triggered_by,
+        "finished_at": _utcnow_iso(),
+    }
+
+
+def extract_media_paths(result: dict) -> list[str]:
+    """从 result 载荷里取出**全部**源视频路径(去空、去重、保持顺序)。
+
+    优先读新列表字段 ``media_paths``;为空时回退旧的单值 ``stored_path``
+    (兼容手写的 / 老版本写出的 result 文件)。
+    """
+    if not isinstance(result, dict):
+        return []
+    paths: list[str] = []
+    raw = result.get("media_paths")
+    if isinstance(raw, list):
+        for p in raw:
+            s = str(p or "").strip()
+            if s and s not in paths:
+                paths.append(s)
+    if not paths:
+        single = str(result.get("stored_path") or "").strip()
+        if single:
+            paths.append(single)
+    return paths
+
+
+# ---------------------------------------------------------------------------
 # 图节点入口
 # ---------------------------------------------------------------------------
 def import_video(
@@ -220,6 +326,7 @@ def import_video(
             **state,
             "import_video_status": "failed",
             "import_video_media_path": None,
+            "import_video_media_paths": [],
             "import_video_web_session_id": None,
             "import_video_filename": None,
             "status_log": statuses + ["import_video_failed"],
@@ -237,16 +344,26 @@ def import_video(
 
     # 3. 应急回滚开关:MANUAL_REQUIRED=False 时自己把 video_input_path 当结果
     if not config.IMPORT_VIDEO_MANUAL_REQUIRED:
-        video_path = state.get("video_input_path")
-        auto_payload = {
-            "ok": True,
-            "web_session_id": None,
-            "media_id": None,
-            "filename": os.path.basename(str(video_path or "")) or None,
-            "stored_path": str(video_path) if video_path else None,
-            "triggered_by": "auto_fallback",
-            "finished_at": _utcnow_iso(),
-        }
+        # 多路径回滚:优先 state 里的显式列表,否则用单值 video_input_path
+        raw_paths = state.get("video_input_paths")
+        paths: list[str] = []
+        if isinstance(raw_paths, list):
+            paths = [str(p).strip() for p in raw_paths if str(p or "").strip()]
+        if not paths:
+            single = str(state.get("video_input_path") or "").strip()
+            paths = [single] if single else []
+        auto_payload = build_result_payload(
+            "",
+            [
+                {
+                    "media_id": "",
+                    "filename": os.path.basename(p) or None,
+                    "stored_path": p,
+                }
+                for p in paths
+            ],
+            triggered_by="auto_fallback",
+        )
         try:
             write_import_result(job_id, auto_payload, root=outputs_root)
         except OSError as e:
@@ -255,6 +372,7 @@ def import_video(
                 **state,
                 "import_video_status": "failed",
                 "import_video_media_path": None,
+                "import_video_media_paths": [],
                 "import_video_web_session_id": None,
                 "import_video_filename": None,
                 "status_log": statuses + ["import_video_failed"],
@@ -272,6 +390,7 @@ def import_video(
             **state,
             "import_video_status": "failed",
             "import_video_media_path": None,
+            "import_video_media_paths": [],
             "import_video_web_session_id": None,
             "import_video_filename": None,
             "status_log": statuses + ["import_video_failed"],
@@ -311,6 +430,7 @@ def import_video(
             **state,
             "import_video_status": "timeout",
             "import_video_media_path": None,
+            "import_video_media_paths": [],
             "import_video_web_session_id": None,
             "import_video_filename": None,
             "status_log": statuses + ["import_video_timeout"],
@@ -332,14 +452,22 @@ def _finalize(
     *,
     reused: bool,
 ) -> dict:
-    """把 result 文件内容映射成 4 个 ``import_video_*`` state 字段。"""
+    """把 result 文件内容映射成 ``import_video_*`` state 字段(多文件版)。"""
     if result.get("ok"):
+        paths = extract_media_paths(result)
+        first_path = paths[0] if paths else None
+        # 主视频 = 第一个;``video_input_paths`` = 全部源视频(单一事实源)。
+        # 单文件时 ``video_input_paths`` 长度 1,``video_input_path`` 值与旧行为
+        # 语义一致(第一个源视频)。
         return {
             **state,
             "import_video_status": "imported",
-            "import_video_media_path": result.get("stored_path"),
+            "import_video_media_path": first_path,
+            "import_video_media_paths": paths,
             "import_video_web_session_id": result.get("web_session_id"),
             "import_video_filename": result.get("filename"),
+            "video_input_paths": paths,
+            "video_input_path": first_path or state.get("video_input_path"),
             "status_log": statuses + ["import_video_done"],
             "error_log": errors,
         }
@@ -353,6 +481,7 @@ def _finalize(
         **state,
         "import_video_status": "failed",
         "import_video_media_path": None,
+        "import_video_media_paths": [],
         "import_video_web_session_id": None,
         "import_video_filename": None,
         "status_log": statuses,
@@ -367,6 +496,9 @@ __all__ = [
     "write_import_result",
     "clear_import_request",
     "find_pending_request",
+    "parse_import_payload",
+    "build_result_payload",
+    "extract_media_paths",
     "import_video_request_filename",
     "import_video_result_filename",
     "ACCEPT_EXTS",

@@ -195,3 +195,112 @@ def test_module_source_has_no_heavy_dependencies() -> None:
         assert forbidden not in body, (
             f"node_04a_import_video.py 不得依赖 {forbidden}(跨 venv 硬约束)"
         )
+
+
+# ---------------------------------------------------------------------------
+# 7. 多文件导入(2026-10 拆分 node_04 多选)
+# ---------------------------------------------------------------------------
+def test_multi_file_result_backfills_all_paths(tmp_path: Path) -> None:
+    """多文件 result → ``import_video_media_paths`` 长度 N,单值字段 = 第一个。"""
+    out_root = tmp_path / "outputs"
+    write_import_result(
+        "job-multi",
+        {
+            "ok": True,
+            "web_session_id": "websid-multi",
+            "media_id": "media_0001",
+            "filename": "a.mov",
+            "stored_path": "E:/media/a.mov",
+            "media_paths": ["E:/media/a.mov", "E:/media/b.mov", "E:/media/c.mov"],
+            "filenames": ["a.mov", "b.mov", "c.mov"],
+            "media_ids": ["media_0001", "media_0002", "media_0003"],
+        },
+        root=out_root,
+    )
+    out = import_video(
+        {"session_id": "job-multi", "error_log": []},
+        outputs_root=out_root,
+        poll_interval_s=0,
+        timeout_s=0,
+    )
+    assert out["import_video_status"] == "imported"
+    assert out["import_video_media_paths"] == [
+        "E:/media/a.mov", "E:/media/b.mov", "E:/media/c.mov"
+    ]
+    # 旧字段仍是"第一个"(向后兼容)
+    assert out["import_video_media_path"] == "E:/media/a.mov"
+    assert out["import_video_filename"] == "a.mov"
+    # 接线点:下游按 video_input_paths 拿全部源视频
+    assert out["video_input_paths"] == [
+        "E:/media/a.mov", "E:/media/b.mov", "E:/media/c.mov"
+    ]
+    assert out["video_input_path"] == "E:/media/a.mov"
+
+
+def test_legacy_single_file_result_still_backfills(tmp_path: Path) -> None:
+    """旧 result(只有 stored_path)仍能回填(向后兼容回归)。"""
+    out_root = tmp_path / "outputs"
+    write_import_result(
+        "job-legacy",
+        {
+            "ok": True,
+            "web_session_id": "websid-legacy",
+            "media_id": "media_0001",
+            "filename": "demo.mp4",
+            "stored_path": "E:/media/demo.mp4",
+        },
+        root=out_root,
+    )
+    out = import_video(
+        {"session_id": "job-legacy", "error_log": []},
+        outputs_root=out_root,
+        poll_interval_s=0,
+        timeout_s=0,
+    )
+    assert out["import_video_status"] == "imported"
+    assert out["import_video_media_paths"] == ["E:/media/demo.mp4"]
+    assert out["import_video_media_path"] == "E:/media/demo.mp4"
+    assert out["video_input_paths"] == ["E:/media/demo.mp4"]
+
+
+def test_timeout_path_produces_no_paths(tmp_path: Path) -> None:
+    """超时路径不得凭空造出媒体路径列表。"""
+    out_root = tmp_path / "outputs"
+    out = import_video(
+        {"session_id": "job-to2", "video_input_path": "/tmp/a.mp4", "error_log": []},
+        outputs_root=out_root,
+        poll_interval_s=0,
+        timeout_s=0,
+    )
+    assert out["import_video_status"] == "timeout"
+    assert out["import_video_media_path"] is None
+    assert out["import_video_media_paths"] == []
+
+
+def test_rollback_path_supports_multiple_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回滚开关:state 里有多个源视频 → 全部写进 result。"""
+    monkeypatch.setattr(config, "IMPORT_VIDEO_MANUAL_REQUIRED", False)
+    out_root = tmp_path / "outputs"
+    out = import_video(
+        {
+            "session_id": "job-auto-multi",
+            "video_input_path": "E:/clips/a.mp4",
+            "video_input_paths": ["E:/clips/a.mp4", "E:/clips/b.mp4"],
+            "error_log": [],
+        },
+        outputs_root=out_root,
+        poll_interval_s=0,
+        timeout_s=0,
+    )
+    assert out["import_video_status"] == "imported"
+    assert out["import_video_media_paths"] == ["E:/clips/a.mp4", "E:/clips/b.mp4"]
+    assert out["video_input_paths"] == ["E:/clips/a.mp4", "E:/clips/b.mp4"]
+    result = json.loads(
+        (out_root / "job-auto-multi" / import_video_result_filename).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert result["triggered_by"] == "auto_fallback"
+    assert result["media_paths"] == ["E:/clips/a.mp4", "E:/clips/b.mp4"]

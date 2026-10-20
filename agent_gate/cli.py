@@ -68,6 +68,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--graph-factory", default=gf_default)
     p.add_argument("--initial-state-file", help="初始 state 的 JSON 文件")
     p.add_argument("--video", help="视频路径;没给 --initial-state-file 时用它生成最小初始 state")
+    p.add_argument("--video-paths", nargs="+", default=None,
+                   help="多个视频路径(多视频导入);给了它就优先于 --video")
     p.add_argument("--backend", default="gate", choices=["gate", "claude-cli", "mcode-cli", "stub"])
     p.add_argument("--require-preflight", action="store_true",
                    help="让图跑 preflight(默认跳过)")
@@ -81,6 +83,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--project-dir", required=True,
                    help="放着 .mcp.json 和 CLAUDE.md / AGENTS.md 的目录(Agent 在这里启动)")
     p.add_argument("--video", help="视频路径;还没有运行记录时用它生成最小初始 state")
+    p.add_argument("--video-paths", nargs="+", default=None,
+                   help="多个视频路径(多视频导入);给了它就优先于 --video")
     p.add_argument("--initial-state-file", help="初始 state 的 JSON 文件")
     p.add_argument("--batch", type=int, default=5, help="每个 Agent 会话一次最多取几个任务")
     p.add_argument("--max-sessions", type=int, default=40, help="最多拉起几个 Agent 会话")
@@ -159,14 +163,28 @@ def _state_file_roots(args: argparse.Namespace) -> list[Path]:
     return roots
 
 
-def _write_initial_state(mb: Mailbox, thread_id: str, video: str) -> Path:
-    """按 --video 生成最小初始 state。video 也要过素材白名单(F2 纵深防御)。"""
-    safe = safe_media_path(video)
+def _write_initial_state(
+    mb: Mailbox, thread_id: str, video: str, videos: list[str] | None = None
+) -> Path:
+    """按 --video 生成最小初始 state。video 也要过素材白名单(F2 纵深防御)。
+
+    多视频:``videos`` 非空时,每个路径都过白名单,初始 state 写
+    ``video_input_paths``(``video_input_path`` 仍取第一个,保持兼容)。
+    """
+    raw_paths = [str(v) for v in (videos or []) if str(v or "").strip()]
+    if not raw_paths:
+        raw_paths = [video]
+    safe_paths = [str(safe_media_path(v)) for v in raw_paths]
     p = mb.root / "initial_state.json"
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(
-        {"session_id": thread_id, "video_input_path": str(safe), "error_log": []},
-        ensure_ascii=False), encoding="utf-8")
+    payload: dict[str, Any] = {
+        "session_id": thread_id,
+        "video_input_path": safe_paths[0],
+        "error_log": [],
+    }
+    if len(safe_paths) > 1:
+        payload["video_input_paths"] = safe_paths
+    p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     return p
 
 
@@ -234,9 +252,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         from agent_gate.launcher import build_launcher
 
         init_file: Optional[Path] = Path(args.initial_state_file) if args.initial_state_file else None
-        if init_file is None and args.video:
+        videos = getattr(args, "video_paths", None)
+        if init_file is None and (args.video or videos):
             try:
-                init_file = _write_initial_state(mb, args.thread_id, args.video)
+                init_file = _write_initial_state(mb, args.thread_id, args.video or "", videos)
             except (UnsafeIdentifier, UnsafePath) as e:
                 return _emit(rejection(e), 1)
         if init_file is not None:
@@ -265,11 +284,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         mode = "continue_after_crash" if args.cont else "start"
         init_file = Path(args.initial_state_file) if args.initial_state_file else None
         if init_file is None and not args.cont:
-            if not args.video:
+            if not args.video and not getattr(args, "video_paths", None):
                 return _emit({"ok": False, "code": "need_input",
                               "message": "要么给 --initial-state-file,要么给 --video,要么用 --continue"}, 1)
             try:
-                init_file = _write_initial_state(mb, args.thread_id, args.video)
+                init_file = _write_initial_state(
+                    mb, args.thread_id, args.video or "",
+                    getattr(args, "video_paths", None),
+                )
             except (UnsafeIdentifier, UnsafePath) as e:
                 return _emit(rejection(e), 1)
         if init_file is not None:

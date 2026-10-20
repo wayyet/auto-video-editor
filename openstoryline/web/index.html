@@ -61,9 +61,11 @@
           <span class="sidebar-action-text" data-i18n="sidebar.clean_cache">清理缓存</span>
         </button>
 
-        <!-- 「导入视频」按钮的隐藏文件选择框(hidden,无视觉) -->
+        <!-- 「导入视频」按钮的隐藏文件选择框(hidden,无视觉)
+             multiple:允许一次多选多个视频(缺它时 Windows「打开」对话框是单选模式,
+             不渲染复选框、Ctrl+A / Ctrl+点击多选全部失效)。 -->
         <input type="file" id="importVideoFileInput"
-               accept="video/*,.mp4,.mov,.mkv,.avi,.webm" hidden />
+               accept="video/*,.mp4,.mov,.mkv,.avi,.webm" multiple hidden />
       </div>
 
       <!-- 中间滚动区：长内容放这里 -->

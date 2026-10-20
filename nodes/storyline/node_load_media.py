@@ -10,15 +10,22 @@ from pathlib import Path
 
 from state import WorkflowState
 from storyline_capabilities.load_media import load_media as cap_load_media
-from nodes.storyline._common import append_status_tag
+from nodes.storyline._common import append_status_tag, resolve_video_input_paths
 
 
 def _build_inputs(state: WorkflowState) -> list[dict]:
-    """组装 inputs 列表 — 阶段 1 仅 video_input_path 一个;阶段 1+ 加 targets。
+    """组装 inputs 列表 — 源视频(可多个) + targets。
+
+    多视频:``state["video_input_paths"]`` 里的每个源视频各一个 entry
+    (``load_media`` 会按顺序分配 ``media_0001`` / ``media_0002`` ...);
+    单视频时行为与改动前完全一致(1 个 entry)。
 
     与 vendored OpenStoryline copy ``LoadMediaInput`` 兼容。
     """
-    return [{"path": state.get("video_input_path") or ""}]
+    paths = resolve_video_input_paths(state)
+    if not paths:
+        return [{"path": ""}]
+    return [{"path": p} for p in paths]
 
 
 def _outputs_root(state: WorkflowState) -> Path:

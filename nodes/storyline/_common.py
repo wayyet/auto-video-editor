@@ -125,6 +125,56 @@ def _read_media(state: WorkflowState) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# 源视频路径解析(多视频导入的单一事实源)
+# ---------------------------------------------------------------------------
+def resolve_video_input_paths(state: WorkflowState) -> list[str]:
+    """本次流水线的**全部**源视频路径。
+
+    优先级:
+    1. ``state["video_input_paths"]`` —— 显式列表。
+       写入者:``nodes/node_04a_import_video.py``(网页【导入视频】导入成功时)
+       或 ``initial_state.json`` 直接给(auto mode 多视频入口)。
+    2. ``[state["video_input_path"]]`` —— 旧行为(单视频)。
+    3. ``[]`` —— 都没有。
+
+    空串 / None / 非字符串元素一律过滤;重复路径按**首次出现**保留
+    (不排序,保持"第一个 = 主视频"的语义)。
+
+    用它的地方:``node_load_media`` / ``assembly_discover_and_probe`` /
+    ``node_08_add_subtitles`` / ``node_16a_translate_and_check`` /
+    ``join_storyline`` 等所有需要"全部源视频"的节点。
+    """
+    raw = state.get("video_input_paths")
+    paths: list[str] = []
+    if isinstance(raw, (list, tuple)):
+        for item in raw:
+            if not isinstance(item, str):
+                continue
+            s = item.strip()
+            if s and s not in paths:
+                paths.append(s)
+    if paths:
+        return paths
+
+    single = state.get("video_input_path")
+    if isinstance(single, str):
+        s = single.strip()
+        if s:
+            return [s]
+    return []
+
+
+def video_input_paths_key(paths: list[str]) -> str:
+    """把多个源视频路径压成**幂等键原料**(排序后换行拼接)。
+
+    - 单视频时结果 = 该路径本身 → 幂等键与改动前**逐字节一致**。
+    - 多视频时改任意一个 → 键变;仅顺序变化 → 键不变(排序后)。
+    """
+    cleaned = [str(p).strip() for p in (paths or []) if str(p or "").strip()]
+    return "\n".join(sorted(cleaned))
+
+
+# ---------------------------------------------------------------------------
 # storyline_targets 解析(集成文档 D6 配套)
 # ---------------------------------------------------------------------------
 # B/C 类能力的 prompt 模板需要 ``{{user_request}}`` / ``{{duration_budget}}`` 等
@@ -190,6 +240,8 @@ __all__ = [
     "_read_json_artifact",
     "_read_groups",
     "_read_media",
+    "resolve_video_input_paths",
+    "video_input_paths_key",
     "DEFAULT_TARGET_DURATION_MS",
     "resolve_lang",
     "extract_user_request",

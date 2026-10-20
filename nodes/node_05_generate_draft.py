@@ -42,6 +42,7 @@ from storyline.output_isolation import (
 )
 from video_edit_capabilities.media_operation import video_basic_operation
 from video_edit_capabilities.render import probe_video_size
+from nodes.storyline._common import resolve_video_input_paths
 
 
 def generate_initial_jianying_draft(
@@ -83,13 +84,33 @@ def generate_initial_jianying_draft(
     shot_plan = state.get("shot_plan")
     video_path = state.get("video_input_path") or ""
     job_id = state.get("session_id")
+    # 全部源视频(多视频导入)。单视频时 == [video_input_path]。
+    source_paths = resolve_video_input_paths(state)
 
     # 3a. 阶段五(§6.5)素材宽高比归一化:比例不一致先裁切,再进草稿。
     # ``video_path`` 保持原样(manifest / 幂等键记的是**输入**素材),
     # 草稿 materials 用归一化后的 ``draft_video_path``。
-    draft_video_path, normalized_path, normalize_errors = _normalize_source_video(
-        video_path, job_id=job_id
+    #
+    # 多视频:
+    # - **legacy 路径**(shot_plan 兜底):逐视频归一化,shots 轮转分配到各源。
+    # - **canonical 路径**(storyline_plan):素材引用在 timeline 里,归一化要重写
+    #   timeline(风险远大于收益)→ 只归一化第一个(与改动前行为一致),
+    #   多源素材保持原比例(已知限制,见 docs/integration 多视频导入设计 R3)。
+    normalize_targets = (
+        source_paths
+        if (not storyline_plan and source_paths)
+        else ([video_path] if video_path else [])
     )
+    draft_video_paths: list[str] = []
+    normalized_path: str | None = None
+    normalize_errors: list[str] = []
+    for src in normalize_targets:
+        dp, np_, errs = _normalize_source_video(src, job_id=job_id)
+        draft_video_paths.append(dp)
+        normalize_errors.extend(errs)
+        if np_ and normalized_path is None:
+            normalized_path = np_
+    draft_video_path = draft_video_paths[0] if draft_video_paths else video_path
     errors.extend(normalize_errors)
 
     try:
@@ -97,7 +118,7 @@ def generate_initial_jianying_draft(
             draft_content = _build_from_canonical(storyline_plan)
         elif shot_plan:
             draft_content = _build_draft_content_legacy(
-                shot_plan=shot_plan, video_path=draft_video_path
+                shot_plan=shot_plan, video_path=draft_video_paths or draft_video_path
             )
         else:
             # 两个都空:写空草稿(materials.audios 留空,tracks 给占位空)
@@ -256,8 +277,13 @@ def _build_from_canonical(storyline_plan: dict) -> dict:
     return canonical_to_draft(canonical)
 
 
-def _build_draft_content_legacy(shot_plan: dict, video_path: str) -> dict:
-    """旧 ``_build_draft_content`` 行为保留(shot_plan Mock fallback 用)。"""
+def _build_draft_content_legacy(
+    shot_plan: dict, video_path: str | list[str]
+) -> dict:
+    """旧 ``_build_draft_content`` 行为保留(shot_plan Mock fallback 用)。
+
+    ``video_path`` 可传单个路径(旧行为)或多个路径(多视频:shots 轮转分配)。
+    """
     return {
         "canvas_config": {"width": CANVAS_WIDTH, "height": CANVAS_HEIGHT},
         "materials": {"videos": _shot_plan_to_materials(shot_plan, video_path)},
@@ -270,16 +296,28 @@ def _build_draft_content_legacy(shot_plan: dict, video_path: str) -> dict:
 _build_draft_content = _build_draft_content_legacy
 
 
-def _shot_plan_to_materials(shot_plan: dict, video_path: str) -> list[dict]:
-    """最小可用版:把每个 shot 的 video_ref 转为一个 material 条目。"""
+def _shot_plan_to_materials(
+    shot_plan: dict, video_path: str | list[str]
+) -> list[dict]:
+    """最小可用版:把每个 shot 的 video_ref 转为一个 material 条目。
+
+    单路径:所有 shot 都用该路径(与改动前一致)。
+    多路径:shot 按顺序轮转分配到各源视频(每个源都至少进成片)。
+    """
     shots = shot_plan.get("shots", []) if isinstance(shot_plan, dict) else []
+    if isinstance(video_path, str):
+        paths = [video_path]
+    else:
+        paths = [str(p) for p in (video_path or []) if str(p or "").strip()]
+    if not paths:
+        paths = [""]
     materials: list[dict] = []
     for idx, shot in enumerate(shots):
         materials.append(
             {
                 "id": f"video-{idx + 1}",
                 "type": "video",
-                "path": video_path,
+                "path": paths[idx % len(paths)],
                 "shot_id": shot.get("id") if isinstance(shot, dict) else None,
                 "start_s": shot.get("start_s") if isinstance(shot, dict) else None,
                 "end_s": shot.get("end_s") if isinstance(shot, dict) else None,

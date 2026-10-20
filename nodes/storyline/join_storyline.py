@@ -27,7 +27,7 @@ from storyline.contract import (
     ContractInvalid,
     StorylineErrorCode,
 )
-from nodes.storyline._common import append_status_tag
+from nodes.storyline._common import append_status_tag, resolve_video_input_paths
 
 
 def _read_timeline_dict(state: WorkflowState) -> dict | None:
@@ -53,33 +53,42 @@ def storyline_join_node(state: WorkflowState) -> dict:
     if timeline_dict is None:
         # 没写出过文件(stub 模式产物路径是 placeholder),写入一个最小的
         # CanonicalTimeline 占位以便 mapper.canonical_to_draft 不报错。
+        # 多视频:每个源视频一条 source_media + 一个 clip。
         job_id = str(state.get("session_id") or "unknown")
-        video = state.get("video_input_path") or ""
-        timeline_dict = {
-            "schema_version": "1.0",
-            "job_id": job_id,
-            "created_at_ms": 0,
-            "source_media": [
+        videos = resolve_video_input_paths(state)
+        if not videos:
+            videos = [str(state.get("video_input_path") or "")]
+        source_media = []
+        clips = []
+        for idx, video in enumerate(videos, start=1):
+            media_id = f"media_{idx:04d}"
+            source_media.append(
                 {
-                    "media_id": "media_0001",
+                    "media_id": media_id,
                     "file_uri": f"file:///{video.replace(chr(92), '/')}"
                     if video
                     else "file:///unknown",
                     "duration_ms": 35000,
                     "media_type": "video",
                 }
-            ],
-            "clips": [
+            )
+            clips.append(
                 {
-                    "clip_id": "clip_0001",
-                    "source_media_id": "media_0001",
+                    "clip_id": f"clip_{idx:04d}",
+                    "source_media_id": media_id,
                     "source_in_ms": 0,
                     "source_out_ms": 35000,
                     "timeline_in_ms": 0,
                     "timeline_out_ms": 35000,
                     "semantic_tags": [],
                 }
-            ],
+            )
+        timeline_dict = {
+            "schema_version": "1.0",
+            "job_id": job_id,
+            "created_at_ms": 0,
+            "source_media": source_media,
+            "clips": clips,
             "audio": {"bgm_ref": None, "voiceover": None},
             "subtitles": {"zh": None, "en": None},
             "options": {

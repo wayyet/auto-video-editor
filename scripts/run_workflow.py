@@ -81,6 +81,15 @@ def _parse_args() -> argparse.Namespace:
         help="可选:从 JSON 文件读 initial state",
     )
     p.add_argument(
+        "--video-input-paths",
+        default="",
+        help=(
+            "可选:多个源视频路径(逗号分隔)。"
+            "写入 initial_state.video_input_paths —— auto mode 多视频入口。"
+            "不填时沿用单视频 video_input_path。"
+        ),
+    )
+    p.add_argument(
         "--skip-preflight-schema-setup",
         action="store_true",
         help="跳过 checkpoint 表创建(默认会确保 schema 存在)",
@@ -124,7 +133,7 @@ def _maybe_preflight(args: argparse.Namespace) -> int:
     return 0
 
 
-def _default_initial_state(thread_id: str) -> dict:
+def _default_initial_state(thread_id: str, video_input_paths: str = "") -> dict:
     """构造一个最小可用的初始 WorkflowState(便于 `--production` 模式调试)。
 
     ``video_input_path`` 取第一个存在的候选素材:
@@ -135,6 +144,9 @@ def _default_initial_state(thread_id: str) -> dict:
 
     两者都不存在时留空(下游节点会记录 error_log,而不是崩在启动阶段)。
     生产场景建议用 ``--initial-state-json`` 显式注入真实路径。
+
+    ``video_input_paths``(逗号分隔)非空时写入 ``state["video_input_paths"]``,
+    即 auto mode 的多视频入口(``video_input_path`` 仍取第一个,保持兼容)。
     """
     candidates = (
         ROOT / "inputs" / "30s.mp4",
@@ -146,6 +158,10 @@ def _default_initial_state(thread_id: str) -> dict:
         "video_input_path": video,
         "error_log": [],
     }
+    extra = [p.strip() for p in str(video_input_paths or "").split(",") if p.strip()]
+    if extra:
+        state["video_input_paths"] = extra
+        state["video_input_path"] = extra[0]
     return state
 
 
@@ -157,12 +173,13 @@ def _load_initial_state(args: argparse.Namespace) -> dict:
     都会缺失。原先这里直接 ``read_text()`` 抛裸 FileNotFoundError,只给出
     "No such file or directory",看不出下一步该做什么。
     """
+    extra_paths = str(getattr(args, "video_input_paths", "") or "")
     if not args.initial_state_json:
-        return _default_initial_state(args.thread_id)
+        return _default_initial_state(args.thread_id, extra_paths)
 
     path = args.initial_state_json
     if not path.exists():
-        state = _default_initial_state(args.thread_id)
+        state = _default_initial_state(args.thread_id, extra_paths)
         print(
             f"[state] ⚠ 找不到 initial state 文件: {path}\n"
             f"[state]   已自动生成默认 initial state 并落盘"
@@ -182,7 +199,13 @@ def _load_initial_state(args: argparse.Namespace) -> dict:
             )
         return state
 
-    return json.loads(path.read_text(encoding="utf-8"))
+    state = json.loads(path.read_text(encoding="utf-8"))
+    # 命令行显式给了多路径 → 覆盖文件里的同名字段
+    if extra_paths:
+        paths = [p.strip() for p in extra_paths.split(",") if p.strip()]
+        state["video_input_paths"] = paths
+        state["video_input_path"] = paths[0]
+    return state
 
 
 async def _invoke_async(args: argparse.Namespace) -> int:

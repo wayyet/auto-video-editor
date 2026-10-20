@@ -36,6 +36,58 @@ def _default_user_request(lang: str) -> str:
     return "无其他要求" if str(lang).lower().startswith("zh") else "No additional requirements"
 
 
+def _source_of(clip: dict[str, Any]) -> str:
+    """取 clip 所属的**源视频**标识(media_id);取不到返回空串。
+
+    多视频时按源保底要用它分组(见 :func:`filter_clips`)。
+    """
+    for key in ("media_id", "source_media_id"):
+        value = clip.get(key)
+        if value:
+            return str(value)
+    ref = clip.get("source_ref")
+    if isinstance(ref, dict) and ref.get("media_id"):
+        return str(ref["media_id"])
+    return ""
+
+
+def _apply_per_source_floor(
+    kept: list[dict[str, Any]],
+    captions: list[dict[str, Any]],
+    score_key,
+) -> tuple[list[dict[str, Any]], int]:
+    """每源保底:确保每个源视频至少有 1 个 clip 进入成片。
+
+    多视频下,纯按 ``aes_score`` 池化排序会让一个高质量视频把其它源全部挤掉。
+    这里给"没出现在 kept 里的源"补上该源得分最高的 clip。
+
+    单源时该逻辑等价于原行为(唯一源的最高分 clip 本来就在 top 里)。
+
+    Returns:
+        ``(最终保留列表, 补进来的 clip 数)``。补进数为 0 时列表原样返回。
+    """
+    kept_ids = {str(c.get("clip_id") or "") for c in kept}
+    kept_sources = {_source_of(c) for c in kept}
+    all_sources = {_source_of(c) for c in captions}
+    missing = sorted(s for s in all_sources - kept_sources if s)
+    if not missing:
+        return kept, 0
+
+    extras: list[dict[str, Any]] = []
+    for src in missing:
+        candidates = [c for c in captions if _source_of(c) == src]
+        if not candidates:
+            continue
+        best = max(candidates, key=score_key)
+        if str(best.get("clip_id") or "") not in kept_ids:
+            kept_ids.add(str(best.get("clip_id") or ""))
+            extras.append(best)
+    if not extras:
+        return kept, 0
+    # 保底 clip 按得分插回整体顺序(分数高的靠前)
+    return sorted(kept + extras, key=score_key, reverse=True), len(extras)
+
+
 def filter_clips(
     *,
     understanding_artifact: dict[str, Any],
@@ -126,6 +178,15 @@ def filter_clips(
         final_keep = top
         final_drop = dropped
         method = "score_topN"
+
+    # 多源保底:每个源视频至少保留 1 个 clip(否则高分源会把其它源全挤掉)
+    final_keep, added = _apply_per_source_floor(final_keep, captions, score_key)
+    if added:
+        # 补进了保底 clip → dropped 重算为"没被保留的全部"
+        kept_ids = {str(c.get("clip_id") or "") for c in final_keep}
+        final_drop = [
+            c for c in captions if str(c.get("clip_id") or "") not in kept_ids
+        ]
 
     return {
         "filtered_clips": final_keep,

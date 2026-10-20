@@ -117,7 +117,12 @@ class WorkflowState(TypedDict, total=False):
     # ===== Week 2 已有字段(保留不动)=====
     # 全局
     session_id: str
+    # 主视频 = 第一个源视频(向后兼容字段,类型保持 str 不变)
     video_input_path: str
+    # 本次流水线的**全部**源视频(多视频导入用)。单一事实源:
+    # ``nodes/storyline/_common.py::resolve_video_input_paths`` 优先读它,
+    # 缺失时回退 ``video_input_path``(老 checkpoint / 老 initial_state 兼容)。
+    video_input_paths: NotRequired[list[str]]
 
     # 步骤 1
     cache_cleaned: bool
@@ -279,6 +284,7 @@ class WorkflowState(TypedDict, total=False):
     # 故全部 NotRequired 无需 reducer)。老 checkpoint 恢复时缺失 = 正常。
     # "pending" | "imported" | "failed" | "timeout"
     import_video_status: NotRequired[str]
-    import_video_media_path: NotRequired[Optional[str]]      # 网页端落盘后的绝对路径
+    import_video_media_path: NotRequired[Optional[str]]      # 网页端落盘后的绝对路径(第一个)
+    import_video_media_paths: NotRequired[list[str]]           # 网页端落盘后的全部绝对路径
     import_video_web_session_id: NotRequired[Optional[str]]  # OpenStoryline 会话 id(非 job_id)
     import_video_filename: NotRequired[Optional[str]]

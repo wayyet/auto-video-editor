@@ -370,6 +370,12 @@ def split_shots_for_media_list(
     """对一组 media(``load_media`` 输出的 ``{"media": [...]}`` 风格)依次切分。
 
     Returns dict 带顶层 ``shots``(vendored 兼容),内含每个 video 的 ``clips``。
+
+    **clip_id 全局唯一**:单视频内部 ``frame_difference_split_shots`` 会把 clip
+    重编号为 ``clip_0001, clip_0002, ...``;N 个视频 → N 组同号 clip,下游
+    ``filter_clips`` 用 ``clip_id`` 当 LLM 决策标识符时会歧义(误保留/误丢弃)。
+    故在合并阶段按 media 顺序做**全局连续重编号**。
+    单视频时结果与改动前**完全一致**(``clip_0001..clip_000N``)。
     """
     shots: dict[str, list[dict[str, Any]]] = {}
     for m in media_list or []:
@@ -377,6 +383,13 @@ def split_shots_for_media_list(
             continue
         result = split_shots(m, **kwargs)
         shots[m.get("media_id", "")] = result.get("clips", [])
+
+    # 全局连续重编号(跨源唯一)
+    counter = 0
+    for clips in shots.values():
+        for c in clips:
+            counter += 1
+            c["clip_id"] = f"clip_{counter:04d}"
     return {"shots": shots, "method": "frame_diff"}
 
 

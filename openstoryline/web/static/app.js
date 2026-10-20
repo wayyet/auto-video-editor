@@ -124,6 +124,10 @@ const __OS_I18N = {
     "toast.import_video_running": "正在导入视频…",
     "toast.import_video_progress": "正在导入视频… {pct}%",
     "toast.import_video_done": "视频已导入",
+    "toast.import_video_done_multi": "已导入 {n} 个视频",
+    "toast.import_video_partial": "已导入 {ok} 个视频，{fail} 个失败",
+    "toast.import_video_uploaded_ready": "已上传 {n} 个视频到当前会话，可继续与 Agent 对话完成规划",
+    "toast.import_video_uploading_file": "正在导入第 {i}/{n} 个：{name}",
     "toast.import_video_no_request": "当前没有待导入的请求：请先启动工作流，等待到「导入视频」关卡。",
     "toast.import_video_bad_type": "仅支持视频文件。",
     "toast.import_video_failed": "导入视频失败：{msg}",
@@ -260,6 +264,10 @@ const __OS_I18N = {
     "toast.import_video_running": "Importing video…",
     "toast.import_video_progress": "Importing video… {pct}%",
     "toast.import_video_done": "Video imported",
+    "toast.import_video_done_multi": "{n} videos imported",
+    "toast.import_video_partial": "{ok} videos imported, {fail} failed",
+    "toast.import_video_uploaded_ready": "{n} videos uploaded to this session; continue chatting with the Agent to finish planning",
+    "toast.import_video_uploading_file": "Importing {i}/{n}: {name}",
     "toast.import_video_no_request": "No pending import request. Start the workflow first and wait for the “Import video” gate.",
     "toast.import_video_bad_type": "Only video files are supported.",
     "toast.import_video_failed": "Video import failed: {msg}",
@@ -2565,9 +2573,12 @@ class App {
 
   // 「📥 导入视频」按钮：这是**唯一**能让 auto-video-editor 图侧
   // import_video 节点继续往下走的入口。图自己永不自动导入视频。
-  // 链路：选文件 → 复用既有 uploadMediaChunked 上传到当前会话
+  // 链路：选文件(可多选) → 复用既有 uploadMediaChunked 上传到当前会话
   //      → POST /api/system/import-video → 端点写回握手结果文件
   //      → 图里正在轮询的 import_video 节点命中并自动继续。
+  //
+  // 注意:握手 POST **只发一次**(带全部文件)。端点有限流(burst=1/rpm=2),
+  // 分 N 次 POST 必然 429。
   async importVideo() {
     const btn = this.importVideoBtn;
     if (!btn || btn.disabled) return;
@@ -2577,20 +2588,45 @@ class App {
     input.click();      // 只弹框，不自动选
   }
 
+  // 单文件入口(向后兼容:老代码/测试可能直接调它)。
   async importVideoFile(file) {
-    if (!file) return;
+    await this.importVideoFiles(file ? [file] : []);
+  }
+
+  // 批量导入:一次选 N 个视频 → 串行上传 → 一次握手。
+  async importVideoFiles(files) {
+    const list = Array.from(files || []).filter(Boolean);
+    if (!list.length) return;
     if (!this.ui || typeof this.ui.showToastI18n !== "function") {
       console.warn("[importVideo] toast 组件未就绪");
       return;
     }
 
     // 与后端 detect_media_kind 的 video 白名单保持一致
-    const ext = ("." + String(file.name || "").split(".").pop()).toLowerCase();
-    const okExt = [".mp4", ".mov", ".mkv", ".avi", ".webm"].includes(ext);
-    if (!okExt) {
+    const okExts = [".mp4", ".mov", ".mkv", ".avi", ".webm"];
+    const candidates = [];
+    for (const f of list) {
+      const ext = ("." + String((f && f.name) || "").split(".").pop()).toLowerCase();
+      if (okExts.includes(ext)) candidates.push(f);
+    }
+    if (!candidates.length) {
       this.ui.showToastI18n("toast.import_video_bad_type", {});
       setTimeout(() => this.ui.hideToast(), 2200);
       return;
+    }
+
+    // 会话内 pending 上限:超出余量的部分截断(与 📎 上传同一套规则)
+    const maxPending = Number((this.limits && this.limits.max_pending_media_per_session) || 30);
+    const remain = Math.max(0, maxPending - (this.pendingMedia.length || 0));
+    if (remain <= 0) {
+      this.ui.showToastI18n("toast.pending_limit", { max: maxPending });
+      setTimeout(() => this.ui.hideToast(), 1600);
+      return;
+    }
+    if (candidates.length > remain) {
+      this.ui.showToastI18n("toast.pending_limit_partial", { remain, max: maxPending });
+      setTimeout(() => this.ui.hideToast(), 1400);
+      candidates = candidates.slice(0, remain);
     }
 
     const btn = this.importVideoBtn;
@@ -2601,44 +2637,85 @@ class App {
     if (iconEl) iconEl.textContent = "⏳";
     if (textEl) textEl.textContent = __t("toast.import_video_running");
 
+    // 已上传成功的文件(部分成功 = 导入成功,见 docs/integration 多视频导入设计)
+    const okFiles = [];
+    const failedNames = [];
+
     try {
-      this.ui.showToastI18n("toast.import_video_progress", { pct: 0 });
-      // 复用既有分片上传链路（与 📎 上传同一套代码）
-      const resp = await this.api.uploadMediaChunked(this.sessionId, file, {
-        chunkSize: this.limits && this.limits.upload_chunk_bytes,
-        onProgress: (loaded, total) => {
-          const pct = total ? Math.round(((loaded || 0) / total) * 100) : 0;
-          this.ui.showToastI18n("toast.import_video_progress", { pct });
-        },
-      });
+      const totalBytes = Math.max(1, candidates.reduce((s, f) => s + (f.size || 0), 0));
+      let confirmedBytesAll = 0;
 
-      const media = (resp && resp.media) || {};
-      // 素材进入 pending 区，跟 📎 上传保持一致的 UI 表现
-      this.setPending((resp && resp.pending_media) ? resp.pending_media : []);
+      for (let i = 0; i < candidates.length; i++) {
+        const f = candidates[i];
+        this.ui.showToastI18n("toast.import_video_uploading_file", {
+          i: i + 1, n: candidates.length, name: f.name || "",
+        });
+        try {
+          const resp = await this.api.uploadMediaChunked(this.sessionId, f, {
+            chunkSize: this.limits && this.limits.upload_chunk_bytes,
+            onProgress: (loaded, total) => {
+              const overallLoaded = Math.min(totalBytes, confirmedBytesAll + (loaded || 0));
+              const pct = total ? Math.round((overallLoaded / total) * 100) : 0;
+              this.ui.showToastI18n("toast.import_video_progress", { pct });
+            },
+          });
 
+          const media = (resp && resp.media) || {};
+          // 素材进入 pending 区，跟 📎 上传保持一致的 UI 表现
+          this.setPending((resp && resp.pending_media) ? resp.pending_media : []);
+
+          okFiles.push({
+            media_id: media.id || "",
+            // 后端 public_media 的字段是 name(不是 filename),两者都兜一下
+            filename: media.name || media.filename || f.name || "",
+            stored_path: media.path || media.stored_path || "",
+          });
+          confirmedBytesAll += (f.size || 0);
+        } catch (e) {
+          // 单个文件失败:记录并继续,不丢弃已成功的
+          failedNames.push(f.name || "");
+        }
+      }
+
+      if (!okFiles.length) {
+        throw new Error(failedNames.join(", ") || "upload failed");
+      }
+
+      // 一次握手:带全部已上传成功的文件(单值字段 = 第一个,兼容旧端点)
+      const first = okFiles[0];
       const r = await fetch("/api/system/import-video", {
         method: "POST",
         credentials: "same-origin",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           session_id: this.sessionId,
-          media_id: media.id || "",
-          // 后端 public_media 的字段是 name(不是 filename),两者都兜一下
-          filename: media.name || media.filename || file.name || "",
-          stored_path: media.path || media.stored_path || "",
+          files: okFiles,
+          media_id: first.media_id,
+          filename: first.filename,
+          stored_path: first.stored_path,
         }),
       });
       const data = await r.json().catch(() => ({}));
 
       if (r.status === 409) {
-        this.ui.showToastI18n("toast.import_video_no_request", {});
+        // 图还没走到 import_video 节点 → 没有待应答请求。
+        // 但素材**已经进了会话**,规划器(Agent)能立刻用上 —— 不是错误。
+        this.ui.showToastI18n("toast.import_video_uploaded_ready", { n: okFiles.length });
         setTimeout(() => this.ui.hideToast(), 3200);
         return;
       }
       if (!r.ok || !data.ok) {
         throw new Error(data.detail || data.message || `HTTP ${r.status}`);
       }
-      this.ui.showToastI18n("toast.import_video_done", {});
+      if (failedNames.length) {
+        this.ui.showToastI18n("toast.import_video_partial", {
+          ok: okFiles.length, fail: failedNames.length,
+        });
+      } else if (okFiles.length > 1) {
+        this.ui.showToastI18n("toast.import_video_done_multi", { n: okFiles.length });
+      } else {
+        this.ui.showToastI18n("toast.import_video_done", {});
+      }
       setTimeout(() => this.ui.hideToast(), 2200);
     } catch (err) {
       const msg = (err && (err.message || err)) || "unknown";
@@ -3831,8 +3908,9 @@ class App {
     }
     if (this.importVideoFileInput) {
       this.importVideoFileInput.addEventListener("change", (e) => {
-        const f = e.target.files && e.target.files[0];
-        if (f) this.importVideoFile(f);
+        // input 带 multiple → 一次可多选;整批交给 importVideoFiles
+        const list = Array.from((e.target && e.target.files) || []);
+        if (list.length) this.importVideoFiles(list);
       });
     }
 

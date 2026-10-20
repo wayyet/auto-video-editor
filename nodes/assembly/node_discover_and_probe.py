@@ -18,6 +18,7 @@ from nodes.storyline._common import (
     _resolve_outputs_root,
     append_error,
     append_status_tag,
+    resolve_video_input_paths,
 )
 from state import WorkflowState
 
@@ -40,13 +41,33 @@ def _discover_source_files(video_input_path: Path) -> list[Path]:
     return []
 
 
+def _collect_candidates(paths: list[str]) -> list[Path]:
+    """把 N 个源输入展开成候选素材列表(去重,保持顺序)。
+
+    每个输入都走 ``_discover_source_files``:单文件 → 它自己;目录 → 扫一级。
+    单视频时结果与改动前完全一致(1 个输入 → 同样的候选列表)。
+    """
+    out: list[Path] = []
+    seen: set[str] = set()
+    for raw in paths:
+        for src in _discover_source_files(Path(raw)):
+            key = str(src)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(src)
+    return out
+
+
 def assembly_discover_and_probe_node(state: WorkflowState) -> dict:
     outputs_root = _resolve_outputs_root(state)
     out_dir = outputs_root / "assembly"
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # 多视频:全部源视频都参与发现;单视频时 == [video_input_path]
+    source_paths = resolve_video_input_paths(state)
     video_input_path = state.get("video_input_path")
-    if not video_input_path:
+    if not source_paths:
         return {
             "error_log": append_error(
                 state, node_kind="assembly_discover", error_code="CONTRACT_INVALID",
@@ -55,7 +76,7 @@ def assembly_discover_and_probe_node(state: WorkflowState) -> dict:
             "status_log": append_status_tag(state, "assembly_discover_failed"),
         }
 
-    candidates = _discover_source_files(Path(str(video_input_path)))
+    candidates = _collect_candidates(source_paths)
     if not candidates:
         return {
             "error_log": append_error(

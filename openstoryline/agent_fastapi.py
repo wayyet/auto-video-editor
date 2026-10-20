@@ -13,7 +13,6 @@ import uuid
 import math
 import logging
 import shutil
-from datetime import datetime, timezone
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Set
@@ -2664,7 +2663,7 @@ async def import_video_endpoint(request: Request):
     if not ok2:
         return _rate_limit_reject_json(ra2)
 
-    # ---- 解析请求体 ----
+    # ---- 解析请求体(多文件 / 单文件都收)----
     try:
         data = await request.json()
         if not isinstance(data, dict):
@@ -2673,14 +2672,10 @@ async def import_video_endpoint(request: Request):
         data = {}
 
     web_session_id = str(data.get("session_id") or "").strip()
-    media_id = str(data.get("media_id") or "").strip()
-    filename = sanitize_filename(str(data.get("filename") or "").strip())
-    stored_path = str(data.get("stored_path") or "").strip()
-
-    if not web_session_id or not media_id:
+    if not web_session_id:
         raise HTTPException(
             status_code=400,
-            detail="session_id and media_id are required",
+            detail="session_id is required",
         )
 
     # ---- 路径解析 ----
@@ -2698,16 +2693,32 @@ async def import_video_endpoint(request: Request):
     # ---- 跨 venv 加载握手函数(幂等:首次 sys.path.insert 之后无副作用)----
     # ``node_04a_import_video`` 顶层只依赖 stdlib + config + storyline.output_isolation,
     # 本文件跑在 openstoryline/.venv 里也能安全 import(见该模块 docstring)。
+    # 载荷解析/结果构造都下沉到该模块的纯函数(``parse_import_payload`` /
+    # ``build_result_payload``),本端点只做**薄转发** —— 这样主仓 pytest
+    # (主 venv)就能覆盖协议逻辑,不必起 openstoryline venv。
     av_root = str(auto_editor_dir)
     if av_root not in sys.path:
         sys.path.insert(0, av_root)
     try:
         from nodes.node_04a_import_video import (
+            build_result_payload,
             find_pending_request,
+            parse_import_payload,
             write_import_result,
         )
     except ImportError as e:
         raise HTTPException(status_code=500, detail=f"导入 import_video 握手函数失败: {e}")
+
+    files = parse_import_payload(data)
+    if not files:
+        raise HTTPException(
+            status_code=400,
+            detail="at least one media file is required",
+        )
+    # 文件名做一次净化(防目录穿越);净化后为空则回退到原名
+    for f in files:
+        safe_name = sanitize_filename(str(f.get("filename") or "").strip())
+        f["filename"] = safe_name or str(f.get("filename") or "").strip()
 
     # ---- 找最新未应答请求 ----
     # None = 图没在等(还没跑到 import_video 节点,或已超时退出)。
@@ -2731,15 +2742,7 @@ async def import_video_endpoint(request: Request):
     try:
         write_import_result(
             job_id,
-            {
-                "ok": True,
-                "web_session_id": web_session_id,
-                "media_id": media_id,
-                "filename": filename,
-                "stored_path": stored_path or None,
-                "triggered_by": "import_video_button",
-                "finished_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            },
+            build_result_payload(web_session_id, files),
         )
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"写回导入结果失败: {e}")

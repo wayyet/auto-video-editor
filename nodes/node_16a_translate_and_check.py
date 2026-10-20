@@ -39,6 +39,7 @@ from nodes.node_16_translate_subtitles import (
 )
 from state import WorkflowState
 from video_edit_capabilities.subtitle_build import subtitle_build, subtitle_qc, subtitle_render
+from nodes.storyline._common import resolve_video_input_paths
 
 
 # 9 工具迁移 §6.4 step 2:qc 链中间产物落盘根目录(对照 RunContext.work_dir)
@@ -206,7 +207,10 @@ def node_16a_translate_and_check(state: WorkflowState) -> dict:
         }
 
     draft_dir_p = Path(draft_dir)
-    video_path = str(state.get("video_input_path") or "")
+    # 多视频:逐个源视频跑布局 QC(单视频时只跑一次,行为与改动前一致)
+    source_paths = resolve_video_input_paths(state)
+    if not source_paths:
+        source_paths = [str(state.get("video_input_path") or "")]
 
     # ----- 翻译(已有 marker 则跳过)-----
     if _marker_exists(draft_dir_p, expected_count=len(segments_zh)):
@@ -230,9 +234,25 @@ def node_16a_translate_and_check(state: WorkflowState) -> dict:
     preview_path: str | None = None
     evidence_frames: list[str] | None = None
 
-    qc_issues, qc_preview, qc_evidence = _check_layout_via_subtitle_qc(
-        list(segments_en), video_path, draft_dir_p
-    )
+    qc_issues: list[dict[str, Any]] | None = None
+    qc_preview: str | None = None
+    qc_evidence: list[str] | None = None
+    merged_issues: list[dict[str, Any]] = []
+    qc_ran = False
+    for src_path in source_paths:
+        issues_i, preview_i, evidence_i = _check_layout_via_subtitle_qc(
+            list(segments_en), src_path, draft_dir_p
+        )
+        if issues_i is None:
+            continue
+        qc_ran = True
+        merged_issues.extend(issues_i)
+        if qc_preview is None and preview_i:
+            qc_preview = preview_i
+        if qc_evidence is None and evidence_i:
+            qc_evidence = evidence_i
+    if qc_ran:
+        qc_issues = merged_issues
     if qc_issues is None:
         # qc 链失败或未跑 → 降级为旧 validate_layout(保留原 Week 5 行为)
         issues = validate_layout(

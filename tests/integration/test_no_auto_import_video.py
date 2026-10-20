@@ -264,3 +264,90 @@ def test_rollback_switch_restores_auto_import(
     assert out["import_video_media_path"] == "E:/clips/a.mp4"
     # 回滚路径没发请求,所以网页端不该有待应答 job
     assert find_pending_request(root=outputs_root) is None
+
+
+def test_multi_file_button_click_unblocks_graph(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """多文件握手端到端(2026-10 多选导入)。
+
+    图在 ``import_video`` 阻塞 → 网页端回写**多文件** result → 图自动继续,
+    ``import_video_media_paths`` 长度 N;重复点不会误命中。
+    """
+    import threading
+
+    outputs_root = tmp_path / "outputs"
+    monkeypatch.setattr(config, "storyline_outputs_root", lambda: outputs_root)
+    monkeypatch.setattr(config, "IMPORT_VIDEO_WAIT_TIMEOUT_S", 30)
+    monkeypatch.setattr(config, "IMPORT_VIDEO_POLL_INTERVAL_S", 0.05)
+
+    import nodes.node_checkpoint0_storyline_plan as cp0
+    import graph as _graph
+
+    passthrough = lambda state: cp0._post_resume(state)  # noqa: E731
+    monkeypatch.setattr(cp0, "checkpoint0_wait_storyline_plan", passthrough)
+    if hasattr(_graph, "checkpoint0_wait_storyline_plan"):
+        monkeypatch.setattr(_graph, "checkpoint0_wait_storyline_plan", passthrough)
+
+    job_id = "e2e-import-multi"
+    g = build_graph(checkpointer=InMemorySaver(), start_heartbeat_thread=False)
+    cfg = {"configurable": {"thread_id": job_id}}
+    result: dict = {}
+
+    def run_graph() -> None:
+        result["out"] = g.invoke(
+            {
+                "session_id": job_id,
+                "video_input_path": str(tmp_path / "demo.mp4"),
+                "error_log": [],
+            },
+            config=cfg,
+        )
+
+    t = threading.Thread(target=run_graph, daemon=True)
+    t.start()
+
+    import nodes.node_04a_import_video as n4a
+
+    deadline = time.monotonic() + 20
+    pending = None
+    while time.monotonic() < deadline:
+        pending = n4a.find_pending_request(root=outputs_root)
+        if pending is not None:
+            break
+        time.sleep(0.05)
+    assert pending is not None, "图没有在 20s 内发出 import_video_request.json"
+
+    answered_job, _req = pending
+    assert answered_job == job_id
+    media_paths = [
+        str(tmp_path / "media" / "media_0001.mov"),
+        str(tmp_path / "media" / "media_0002.mov"),
+        str(tmp_path / "media" / "media_0003.mov"),
+    ]
+    n4a.write_import_result(
+        answered_job,
+        {
+            "ok": True,
+            "web_session_id": "websid-e2e-multi",
+            "media_id": "media_0001",
+            "filename": "media_0001.mov",
+            "stored_path": media_paths[0],
+            "media_paths": media_paths,
+            "filenames": [f"media_000{i}.mov" for i in (1, 2, 3)],
+            "media_ids": [f"media_000{i}" for i in (1, 2, 3)],
+            "triggered_by": "import_video_button",
+        },
+        root=outputs_root,
+    )
+
+    t.join(timeout=30)
+    assert not t.is_alive(), "回写结果后图应自动继续,不该继续阻塞"
+
+    out = result["out"]
+    assert out.get("import_video_status") == "imported"
+    assert out.get("import_video_media_paths") == media_paths
+    assert out.get("import_video_media_path") == media_paths[0], "旧字段仍是第一个"
+    assert out.get("video_input_paths") == media_paths, "接线点:下游按它取全部源视频"
+    # 已应答的 job 不再是"待处理",重复点不会误命中
+    assert n4a.find_pending_request(root=outputs_root) is None

@@ -65,11 +65,15 @@ def build_server(
 
     @mcp.tool()
     def run_start(thread_id: str, video_path: str = "",
+                  video_paths: list[str] | None = None,
                   continue_after_crash: bool = False) -> dict[str, Any]:
         """开始一次新运行(后台 worker,立即返回)。
 
         给 video_path(视频文件的绝对路径)。worker 崩溃后用 continue_after_crash=true
         从最近检查点继续。
+
+        多视频:给 ``video_paths``(列表)即可,每个路径都要过素材白名单;
+        此时 ``video_path`` 会被忽略,初始 state 写入 ``video_input_paths``。
 
         ⚠️ 本工具**不接受**初始 state 文件路径:参数由 Agent 发起,不能把 Agent 提供的
         文件路径当可信配置。video_path 必须落在服务端配置的素材白名单里
@@ -84,17 +88,29 @@ def build_server(
         if continue_after_crash:
             mode = "continue_after_crash"
         else:
-            try:
-                safe = safe_media_path(video_path)
-            except (UnsafeIdentifier, UnsafePath) as e:
-                # 拒绝事件写进本机日志;**返回给 Agent 的 message 不含本机绝对路径**。
-                mb.log_event("input_rejected", code=code_of(e))
-                return rejection(e)
+            raw_paths = [str(p) for p in (video_paths or []) if str(p or "").strip()]
+            if not raw_paths:
+                raw_paths = [video_path] if str(video_path or "").strip() else []
+            safe_paths: list[str] = []
+            for raw in raw_paths:
+                try:
+                    safe_paths.append(str(safe_media_path(raw)))
+                except (UnsafeIdentifier, UnsafePath) as e:
+                    # 拒绝事件写进本机日志;**返回给 Agent 的 message 不含本机绝对路径**。
+                    mb.log_event("input_rejected", code=code_of(e))
+                    return rejection(e)
+            if not safe_paths:
+                return rejection(UnsafePath("missing video_path"))
             init = mb.root / "initial_state.json"
             init.parent.mkdir(parents=True, exist_ok=True)
-            init.write_text(json.dumps(
-                {"session_id": thread_id, "video_input_path": str(safe), "error_log": []},
-                ensure_ascii=False), encoding="utf-8")
+            payload: dict[str, Any] = {
+                "session_id": thread_id,
+                "video_input_path": safe_paths[0],
+                "error_log": [],
+            }
+            if len(safe_paths) > 1:
+                payload["video_input_paths"] = safe_paths
+            init.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         return runner.spawn_worker(thread_id=thread_id, outputs_root=outputs_root,
                                    graph_factory=graph_factory, initial_state_file=init,
                                    backend=backend, mode=mode)

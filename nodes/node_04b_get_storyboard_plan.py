@@ -42,6 +42,7 @@ from storyline.plan_reader import (
     find_latest_session_dir,
     read_latest_plan_timeline_pro,
 )
+from nodes.storyline._common import resolve_video_input_paths, video_input_paths_key
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +77,9 @@ def get_storyboard_plan(
     """
     errors = list(state.get("error_log", []) or [])
     job_id = state.get("session_id")
-    video_path = state.get("video_input_path")
+    # 幂等键原料:全部源视频(排序后换行拼接)。单视频时 == 该路径本身,
+    # 因此幂等键与改动前**逐字节一致**;多视频时改任一源 → 键变。
+    source_key = video_input_paths_key(resolve_video_input_paths(state))
 
     out_root = Path(outputs_root) if outputs_root is not None else storyline_outputs_root()
     os_outputs_root = (
@@ -98,7 +101,7 @@ def get_storyboard_plan(
     # 1. 幂等命中:manifest.json + key 一致 → 跳过
     paths = OutputJobPaths.for_job(job_id=str(job_id or "unknown"), root=out_root)
     cfg_snapshot = {"WORKFLOW_ENV": WORKFLOW_ENV}
-    input_sha = compute_input_sha256(video_path=str(video_path or ""))
+    input_sha = compute_input_sha256(video_path=source_key)
     cfg_sha = _quick_cfg_sha(cfg_snapshot)
     key = compute_idempotency_key(
         job_id=str(job_id or "unknown"),
@@ -156,7 +159,7 @@ def get_storyboard_plan(
     paths.ensure()
     manifest = build_manifest(
         job_id=str(job_id or "unknown"),
-        video_path=str(video_path or ""),
+        video_path=source_key,
         config_snapshot=cfg_snapshot,
         storyline_session_id=session_dir.name,
         storyline_artifact_ids=[plan_data.artifact_id],

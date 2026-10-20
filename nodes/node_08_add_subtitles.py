@@ -208,6 +208,140 @@ def _run_subtitle_scout(video_path: str) -> dict | None:
     return data
 
 
+# ---------------------------------------------------------------------------
+# 多视频:ASR 段 → 成片时间轴映射(2026-10 多选导入)
+# ---------------------------------------------------------------------------
+def _collect_source_spans(draft: dict) -> dict[str, list[dict[str, int]]]:
+    """从草稿里抽出「源视频路径 → 该源在成片上的落位区间」。
+
+    草稿结构(见 ``storyline/mapper.py::canonical_to_draft``):
+    - ``materials.videos[]``:``id`` / ``path`` / ``media_id``
+    - ``tracks[video].segments[]``:
+      ``material_id`` + ``source_timerange{start,duration}``
+      + ``target_timerange{start,duration}``
+
+    ``source_timerange`` = 该 clip 在**源视频**里的区间;
+    ``target_timerange`` = 该 clip 在**成片**里的区间。
+    """
+    spans: dict[str, list[dict[str, int]]] = {}
+    materials = (draft.get("materials") or {}).get("videos") or []
+    path_by_material: dict[str, str] = {}
+    for m in materials:
+        if not isinstance(m, dict):
+            continue
+        mid = str(m.get("id") or "")
+        path = str(m.get("path") or "")
+        if mid:
+            path_by_material[mid] = path
+
+    for track in draft.get("tracks") or []:
+        if not isinstance(track, dict):
+            continue
+        if str(track.get("type") or "") != "video":
+            continue
+        for seg in track.get("segments") or []:
+            if not isinstance(seg, dict):
+                continue
+            path = path_by_material.get(str(seg.get("material_id") or ""))
+            if not path:
+                continue
+            src = seg.get("source_timerange") or {}
+            tgt = seg.get("target_timerange") or {}
+            s_start = int(src.get("start", seg.get("source_in_us", 0)) or 0)
+            s_dur = int(src.get("duration", 0) or 0)
+            t_start = int(tgt.get("start", seg.get("target_start_us", 0)) or 0)
+            t_dur = int(tgt.get("duration", 0) or 0)
+            if s_dur <= 0 or t_dur <= 0:
+                # 没有可用区间 → 退化到 source_in_us/source_out_us
+                s_start = int(seg.get("source_in_us", 0) or 0)
+                s_end = int(seg.get("source_out_us", 0) or 0)
+                t_start = int(seg.get("target_start_us", 0) or 0)
+                t_end = int(seg.get("target_end_us", 0) or 0)
+                s_dur = max(0, s_end - s_start)
+                t_dur = max(0, t_end - t_start)
+            if s_dur <= 0 or t_dur <= 0:
+                continue
+            spans.setdefault(path, []).append({
+                "source_start_us": s_start,
+                "source_duration_us": s_dur,
+                "target_start_us": t_start,
+                "target_duration_us": t_dur,
+            })
+    return spans
+
+
+def _map_asr_to_target(
+    start_us: int, end_us: int, spans: list[dict[str, int]]
+) -> tuple[int, int] | None:
+    """把一条 ASR 段(源内时间)映射到成片时间轴。
+
+    - 落在某个 clip 的 source 区间内 → 按区间比例线性映射到 target 区间
+    - 只部分重叠 → 先裁到该区间再映射
+    - 完全落在任何 clip 之外 → 返回 ``None``(丢弃)
+    """
+    best: dict[str, int] | None = None
+    best_overlap = 0
+    for sp in spans:
+        s0 = sp["source_start_us"]
+        s1 = s0 + sp["source_duration_us"]
+        overlap = min(end_us, s1) - max(start_us, s0)
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best = sp
+    if best is None or best_overlap <= 0:
+        return None
+    s0 = best["source_start_us"]
+    s_dur = best["source_duration_us"]
+    c0 = max(start_us, s0)
+    c1 = min(end_us, s0 + s_dur)
+    if c1 <= c0:
+        return None
+    t0 = best["target_start_us"]
+    t_dur = best["target_duration_us"]
+    r0 = (c0 - s0) / s_dur
+    r1 = (c1 - s0) / s_dur
+    return int(t0 + r0 * t_dur), int(t0 + r1 * t_dur)
+
+
+def _multi_video_asr_segments(spans: dict[str, list[dict[str, int]]]) -> list[dict]:
+    """逐源视频 ASR → 按草稿 clip 的落位区间映射到成片时间轴。
+
+    返回的段与单视频路径同构(``start_s`` / ``end_s`` / ``text``),
+    但时间已经是**成片**时间轴上的时间。
+    """
+    out: list[dict] = []
+    for path, sp_list in spans.items():
+        try:
+            raw_segments = call_asr2s(path)
+        except Exception:
+            continue
+        for seg in raw_segments or []:
+            if not isinstance(seg, dict):
+                continue
+            text = str(seg.get("text") or "")
+            if not text.strip():
+                continue
+            try:
+                a0 = int(float(seg.get("start_s", 0.0)) * 1_000_000)
+                a1 = int(float(seg.get("end_s", 0.0)) * 1_000_000)
+            except (TypeError, ValueError):
+                continue
+            if a1 <= a0:
+                a1 = a0 + 1_000_000
+            mapped = _map_asr_to_target(a0, a1, sp_list)
+            if mapped is None:
+                continue
+            t0, t1 = mapped
+            out.append({
+                "start_s": t0 / 1_000_000,
+                "end_s": t1 / 1_000_000,
+                "text": text,
+                "source_media": path,
+            })
+    out.sort(key=lambda s: s["start_s"])
+    return out
+
+
 def add_subtitles(state: WorkflowState) -> dict:
     """读取草稿 → 调 ASR → 注入字幕 → 原子写回 + 写 ``asr_segments_zh`` 到 state。"""
     raw_draft_path = state.get("draft_path")
@@ -225,7 +359,13 @@ def add_subtitles(state: WorkflowState) -> dict:
     src = Path(snapshot2) if snapshot2 and Path(snapshot2).exists() else draft_path
 
     draft = load_draft(src)
-    asr_segments = call_asr2s(state.get("video_input_path", ""))
+    # 多视频:字幕按草稿 clip 的 source→target 区间映射到成片时间轴;
+    # 单视频(草稿只有一个源)时**完全走原逻辑**(ASR 段即源内时间)。
+    source_spans = _collect_source_spans(draft)
+    if len(source_spans) > 1:
+        asr_segments = _multi_video_asr_segments(source_spans)
+    else:
+        asr_segments = call_asr2s(state.get("video_input_path", ""))
 
     materials = draft.setdefault("materials", {})
     texts = materials.setdefault("texts", [])

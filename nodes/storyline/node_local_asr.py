@@ -50,16 +50,35 @@ def _pick_audio_media(media: list[dict]) -> dict | None:
     return None
 
 
+def _pick_audio_media_list(media: list[dict]) -> list[dict]:
+    """挑出**全部**视频素材(有音轨的排前面)。
+
+    多视频:每个源视频都参与 ASR(单源时与 ``_pick_audio_media`` 等价)。
+    """
+    with_audio: list[dict] = []
+    without_audio: list[dict] = []
+    for m in media:
+        if (m.get("media_type") or "").lower() != "video":
+            continue
+        meta = m.get("metadata") or {}
+        if isinstance(meta, dict) and meta.get("has_audio"):
+            with_audio.append(m)
+        else:
+            without_audio.append(m)
+    return with_audio + without_audio
+
+
 def storyline_local_asr_node(state: WorkflowState) -> dict:
     outputs_root = _resolve_outputs_root(state)
     out_dir = outputs_root / "storyline"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     media = _read_media(state)
-    audio = _pick_audio_media(media)
+    # 多视频:每个源视频都转写;单视频时 == [_pick_audio_media(...)]
+    videos = _pick_audio_media_list(media)
 
     # 1. 无视频 → 写空 ASR(stub),不写 error_log(因为可能根本没语音)
-    if not audio:
+    if not videos:
         empty_path = out_dir / "asr.json"
         empty_path.write_text(
             json.dumps(
@@ -73,30 +92,85 @@ def storyline_local_asr_node(state: WorkflowState) -> dict:
             "status_log": append_status_tag(state, "storyline_local_asr_skipped"),
         }
 
-    # 2. 调本地 asr_runner(默认 stub;ASR_MODE=vendored 时走 vendored 子进程)
-    try:
-        result = transcribe_media(
-            media_path=Path(str(audio.get("path") or "")),
-            output_dir=out_dir,
-        )
-    except Exception as e:  # noqa: BLE001
+    multi = len(videos) > 1
+    merged_segments: list[dict] = []
+    merged_texts: list[str] = []
+    errors: list[str] = []
+    total_segments = 0
+    artifact_path: Path | None = None
+    provider = "stub"
+
+    for idx, video in enumerate(videos):
+        media_id = str(video.get("media_id") or f"media_{idx + 1:04d}")
+        # 每个源视频用独立输出目录(否则 asr_in/asr_out 会互相覆盖)
+        target_dir = out_dir / f"asr_{media_id}" if multi else out_dir
+        try:
+            result = transcribe_media(
+                media_path=Path(str(video.get("path") or "")),
+                output_dir=target_dir,
+            )
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"[storyline:local_asr] TOOL_EXECUTION_FAILED: {e!r}")
+            continue
+
+        provider = str(result.get("provider") or provider)
+        if result.get("error"):
+            errors.append(f"[storyline:local_asr] ASR_PARTIAL: {result['error']}")
+
+        segs = result.get("segments") or []
+        total_segments += len(segs)
+        for seg in segs:
+            if not isinstance(seg, dict):
+                continue
+            item = dict(seg)
+            # 带上源标识 + 源内时间(便于下游映射到成片时间轴)
+            item["media_id"] = media_id
+            item["source_media"] = str(video.get("path") or "")
+            merged_segments.append(item)
+
+        raw_artifact = str(result.get("artifact") or "")
+        if raw_artifact and Path(raw_artifact).exists():
+            artifact_path = Path(raw_artifact)
+        elif artifact_path is None:
+            artifact_path = Path(raw_artifact or (out_dir / "asr.json"))
+
+    if errors and not total_segments:
         return {
             "error_log": [
                 *list(state.get("error_log", []) or []),
-                f"[storyline:local_asr] TOOL_EXECUTION_FAILED: {e!r}",
+                *errors,
             ],
             "status_log": append_status_tag(
                 state, "storyline_local_asr_failed"
             ),
         }
 
+    # 多视频:合并产物(asr.json),单段带 media_id + 源内时间
+    if multi:
+        merged_path = out_dir / "asr.json"
+        merged_path.write_text(
+            json.dumps(
+                {
+                    "segments": merged_segments,
+                    "text": "\n".join(merged_texts),
+                    "lang": "zh",
+                    "provider": provider,
+                    "source_count": len(videos),
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        artifact_path = merged_path
+
     # 3. 写产物 + delta
-    artifact_path = Path(result.get("artifact") or (out_dir / "asr.json"))
+    if artifact_path is None:
+        artifact_path = out_dir / "asr.json"
     if not artifact_path.exists():
         # 防御:transcribe 没写出文件 → 补一份 stub,标记 failed
         artifact_path.write_text(
             json.dumps(
-                {"segments": [], "text": "", "lang": "zh", "provider": result.get("provider", "stub")},
+                {"segments": [], "text": "", "lang": "zh", "provider": provider},
                 ensure_ascii=False,
             ),
             encoding="utf-8",
@@ -105,16 +179,16 @@ def storyline_local_asr_node(state: WorkflowState) -> dict:
     delta_log = [
         "storyline_local_asr_done",
         f"storyline_local_asr_mode={ASR_MODE}",
-        f"storyline_local_asr_segments={len(result.get('segments') or [])}",
+        f"storyline_local_asr_segments={total_segments}",
     ]
     delta: dict = {
         "storyline_asr_artifact": str(artifact_path),
         "status_log": append_status_tag(state, *delta_log),
     }
 
-    if result.get("error"):
+    if errors:
         delta["error_log"] = [
             *list(state.get("error_log", []) or []),
-            f"[storyline:local_asr] ASR_PARTIAL: {result['error']}",
+            *errors,
         ]
     return delta
