@@ -2,10 +2,10 @@
 # auto-video-editor 一键停止(生产全栈)
 #
 # 与 start_production.ps1 对称 —— 把启动时拉起的进程 / 容器按逆序停掉:
-#   Phase 1  python run_workflow.py
+#   Phase 1  python run_workflow.py + agent_gate worker
 #   Phase 2  OpenStoryline 本地进程(MCP + Web,按 PID 文件 kill + 命令行兜底)
 #   Phase 3  edb-postgres16 容器 (复用 scripts\stop_postgres.ps1)
-#   Phase 4  -StopDockerDesktop 才停 com.docker.service
+#   Phase 4  -StopDockerDesktop 才停 Docker Desktop(docker desktop stop)
 #   Phase 5  -CleanState 才删 initial_state JSON
 #   Phase 6  -CleanHeartbeat 才删 heartbeat.txt
 #
@@ -82,7 +82,7 @@ Write-Phase ('=' * 60) 'Magenta'
 # ---------------------------------------------------------------
 if ($WhatIf) {
     Write-Phase "[WhatIf] 不会执行任何修改,以下为计划:" 'Yellow'
-    Write-Phase "  Phase 1:kill python run_workflow.py (--production)"
+    Write-Phase "  Phase 1:kill python run_workflow.py (--production) + agent_gate worker"
     if ($RemoveContainers) {
         Write-Phase "  Phase 2:Stop-Process OpenStoryline MCP+Web (按 PID 文件 + 命令行兜底) + 清 PID 文件"
     } else {
@@ -94,7 +94,7 @@ if ($WhatIf) {
         Write-Phase "  Phase 3:$StopPostgres (容器保留,卷永远保留)"
     }
     if ($StopDockerDesktop) {
-        Write-Phase "  Phase 4:Stop-Service com.docker.service (需管理员)"
+        Write-Phase "  Phase 4:docker desktop stop(关 Docker Desktop 本身,免管理员)"
     } else {
         Write-Phase "  Phase 4:[跳过 -StopDockerDesktop 未传]"
     }
@@ -118,12 +118,19 @@ Write-Phase ''
 Write-Phase "Phase 1:停止 Python 工作流进程" 'Cyan'
 
 try {
+    # 本项目自产的 python 进程有两类,都要停:
+    #   a) run_workflow.py --production   —— 端到端工作流主进程
+    #   b) -m agent_gate worker           —— agent_gate 后台 worker
+    #      (agent_gate CLI 没有 stop 子命令,只能按进程停;`start` 拉起的后台 worker
+    #       若不杀会一直占着线程与 outputs 目录)
     $procs = Get-CimInstance Win32_Process -Filter "Name='python.exe'" `
         -ErrorAction SilentlyContinue |
         Where-Object {
             $_.CommandLine -and
-            $_.CommandLine -match 'run_workflow\.py' -and
-            $_.CommandLine -match '--production'
+            (
+                (($_.CommandLine -match 'run_workflow\.py') -and ($_.CommandLine -match '--production')) -or
+                ($_.CommandLine -match '-m\s+agent_gate\s+worker')
+            )
         }
     if (-not $procs -or $procs.Count -eq 0) {
         Write-PhaseWarn "未发现 run_workflow.py 进程(可能未启动 / 已完成)"
@@ -269,23 +276,45 @@ if (Test-Path $StopPostgres) {
 # ===============================================================
 Write-Phase ''
 if ($StopDockerDesktop) {
-    Write-Phase "Phase 4:停止 Docker Desktop(Stop-Service)" 'Cyan'
-    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-    if (-not $isAdmin) {
-        Write-PhaseWarn "当前不是管理员,无法 Stop-Service com.docker.service"
-        Write-Phase "    请用管理员 PowerShell 重跑 -StopDockerDesktop,或在 Docker Desktop 托盘手动 Quit" 'Yellow'
+    Write-Phase "Phase 4:停止 Docker Desktop" 'Cyan'
+
+    # 优先用官方 CLI:`docker desktop stop`
+    #   - 跨平台、免管理员
+    #   - 能真正关掉用户态进程(Docker Desktop.exe / com.docker.backend.exe)
+    # Stop-Service com.docker.service 只管 Windows 服务,本机该服务常态是
+    # Stopped(Docker Desktop 以用户态运行),所以单靠它往往关不掉。
+    $ddStopped = $false
+    $prevEA4 = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
+    $ddOut = & docker desktop stop 2>&1
+    $ddExit = $LASTEXITCODE
+    $ErrorActionPreference = $prevEA4
+    if ($ddOut) { $ddOut | ForEach-Object { Write-Phase ("    $_") } }
+    if ($ddExit -eq 0) {
+        $ddStopped = $true
+        Write-PhaseOk "Docker Desktop 已停止(docker desktop stop)"
     } else {
-        $svc = Get-Service com.docker.service -ErrorAction SilentlyContinue
-        if ($null -eq $svc) {
-            Write-PhaseWarn "服务 com.docker.service 不存在(可能 Docker Desktop 未安装)"
-        } elseif ($svc.Status -eq 'Stopped') {
-            Write-Phase "  com.docker.service 已处于 Stopped"
+        Write-PhaseWarn "docker desktop stop 退出 $ddExit,退回 Stop-Service 路径"
+    }
+
+    if (-not $ddStopped) {
+        $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        if (-not $isAdmin) {
+            Write-PhaseWarn "当前不是管理员,无法 Stop-Service com.docker.service"
+            Write-Phase "    请用管理员 PowerShell 重跑 -StopDockerDesktop,或在 Docker Desktop 托盘手动 Quit" 'Yellow'
         } else {
-            Stop-Service com.docker.service -Force -ErrorAction SilentlyContinue
-            if ($LASTEXITCODE -eq 0) {
-                Write-PhaseOk "com.docker.service 已停止"
+            $svc = Get-Service com.docker.service -ErrorAction SilentlyContinue
+            if ($null -eq $svc) {
+                Write-PhaseWarn "服务 com.docker.service 不存在(可能 Docker Desktop 未安装)"
+            } elseif ($svc.Status -eq 'Stopped') {
+                Write-Phase "  com.docker.service 已处于 Stopped"
             } else {
-                Write-PhaseWarn "Stop-Service com.docker.service 失败"
+                Stop-Service com.docker.service -Force -ErrorAction SilentlyContinue
+                if ($LASTEXITCODE -eq 0) {
+                    Write-PhaseOk "com.docker.service 已停止"
+                } else {
+                    Write-PhaseWarn "Stop-Service com.docker.service 失败"
+                }
             }
         }
     }
