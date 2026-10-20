@@ -127,22 +127,62 @@ def _maybe_preflight(args: argparse.Namespace) -> int:
 def _default_initial_state(thread_id: str) -> dict:
     """构造一个最小可用的初始 WorkflowState(便于 `--production` 模式调试)。
 
-    ``video_input_path`` 默认指向 ``tests/fixtures/30s.mp4``(若存在)。
+    ``video_input_path`` 取第一个存在的候选素材:
+
+    1. ``inputs/30s.mp4``            —— 本地真实素材(inputs/ 被 .gitignore 忽略,
+                                       新克隆后需要自己放一份)
+    2. ``tests/fixtures/30s.mp4``    —— 仓库自带 fixture
+
+    两者都不存在时留空(下游节点会记录 error_log,而不是崩在启动阶段)。
     生产场景建议用 ``--initial-state-json`` 显式注入真实路径。
     """
-    fixture = ROOT / "tests" / "fixtures" / "30s.mp4"
+    candidates = (
+        ROOT / "inputs" / "30s.mp4",
+        ROOT / "tests" / "fixtures" / "30s.mp4",
+    )
+    video = next((str(c) for c in candidates if c.exists()), "")
     state: dict = {
         "session_id": thread_id,
-        "video_input_path": str(fixture) if fixture.exists() else "",
+        "video_input_path": video,
         "error_log": [],
     }
     return state
 
 
 def _load_initial_state(args: argparse.Namespace) -> dict:
-    if args.initial_state_json:
-        return json.loads(args.initial_state_json.read_text(encoding="utf-8"))
-    return _default_initial_state(args.thread_id)
+    """加载 initial state;``--initial-state-json`` 指向的文件缺失时自动生成。
+
+    背景:``runtime/initial_state_*.json`` 被 .gitignore 排除(运行时生成物,
+    不入库),新克隆 / 执行过 ``stop_production.ps1 -CleanState`` / 手动清理后
+    都会缺失。原先这里直接 ``read_text()`` 抛裸 FileNotFoundError,只给出
+    "No such file or directory",看不出下一步该做什么。
+    """
+    if not args.initial_state_json:
+        return _default_initial_state(args.thread_id)
+
+    path = args.initial_state_json
+    if not path.exists():
+        state = _default_initial_state(args.thread_id)
+        print(
+            f"[state] ⚠ 找不到 initial state 文件: {path}\n"
+            f"[state]   已自动生成默认 initial state 并落盘"
+            f"(video_input_path={state['video_input_path'] or '空'})",
+            file=sys.stderr,
+        )
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            print(f"[state]   已写入 {path}", file=sys.stderr)
+        except OSError as e:
+            print(
+                f"[state]   ✗ 写入失败({e});继续用内存中的默认 state 运行",
+                file=sys.stderr,
+            )
+        return state
+
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 async def _invoke_async(args: argparse.Namespace) -> int:
