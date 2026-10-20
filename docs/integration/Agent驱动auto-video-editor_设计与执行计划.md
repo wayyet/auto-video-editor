@@ -19,8 +19,9 @@
 | 接入层验证 | ✅ **通过**。真实主图上 12/12 任务由 Agent 作答（0 降级）、人工关卡 ①③② 依次放行成功 |
 | 端到端出片 | ✅ **通过**（2026-10-20）。人工关卡放行后剪映草稿正常生成：`drafts/draft_content.json` + `draft_info.json` 双写、封面 6 张、`assembly/preview.mp4` QC `pass`；关卡依次 ①→③→② 放行后 worker `completed` |
 | 独立复核 | ✅ **通过**（2026-10-20 复核轮）。D9 / D7 / D8 / D10 全部独立复验成立；**新发现 D11（草稿目录未按 thread 隔离）并已修**，见 [§10.6](#106-独立复核轮2026-10-20-0108--03xx) |
+| 外部工具解析 | ✅ **已修**（2026-10-20）。`mcode` / `ffmpeg` 不在 PATH 时不再「静默 skip / WinError 2」—— 统一走 `agent_gate/agent_bin.py` 三级查找，见 [§10.7](#107-外部工具解析修复2026-10-20) |
 
-**一句话**：Agent 驱动接入层已跑通，端到端也出了片；上一轮卡住的三个项目侧缺陷（D7 `draft_path=None` 崩溃 / D9 契约字段集不一致 / D10 qa_gate 重试回环死锁）已于 2026-10-20 全部修掉，见 [§10.5](#105-d7--d9--d10-修复记录2026-10-20)；独立复核轮又找出并修掉 D11（草稿目录未按 thread 隔离），见 [§10.6](#106-独立复核轮2026-10-20-0108--03xx)。
+**一句话**：Agent 驱动接入层已跑通，端到端也出了片；上一轮卡住的三个项目侧缺陷（D7 `draft_path=None` 崩溃 / D9 契约字段集不一致 / D10 qa_gate 重试回环死锁）已于 2026-10-20 全部修掉，见 [§10.5](#105-d7--d9--d10-修复记录2026-10-20)；独立复核轮又找出并修掉 D11（草稿目录未按 thread 隔离），见 [§10.6](#106-独立复核轮2026-10-20-0108--03xx)；再一轮把「外部工具只在 PATH 里找」这个老坑根治（`mcode` 不在 PATH 时静默 skip 用例、`drive` 报 `WinError 2` 退出码 4、抽帧静默出不来图），见 [§10.7](#107-外部工具解析修复2026-10-20)。
 
 ---
 
@@ -168,6 +169,7 @@ agent_gate/
   gate_client.py  guard_hook.py  launcher.py  mailbox.py  mcp_server.py
   media.py  protocol.py  runner.py  safety.py  scaffold.py  service.py
   validate.py                                    ← safety.py 是 P3 新增
+  agent_bin.py                                   ← 2026-10-20 新增（外部工具解析唯一入口，§10.7）
   README.md                                      ← P1 新增（最短用法 + 测试隔离说明）
   fixtures/
     toy_graph.py
@@ -378,9 +380,14 @@ $env:PATH = "C:\ffmpeg\ffmpeg-9.0.2-essentials_build\bin;$env:PATH"   # ffmpeg �
 Set-Location $REPO
 ```
 
-> ⚠️ **ffmpeg 必须显式加入 PATH**。本机 ffmpeg 装在 `C:\ffmpeg\ffmpeg-9.0.2-essentials_build\bin`，
-> 但**非交互 shell / 后台任务里不在 PATH** → kit 测试中 6 个用例会报
-> `FileNotFoundError: [WinError 2] 系统找不到指定的文件`。这是环境问题，不是代码回归。
+> ⚠️ **ffmpeg 建议显式加入 PATH**。本机 ffmpeg 装在 `C:\ffmpeg\ffmpeg-9.0.2-essentials_build\bin`，
+> 但**非交互 shell / 后台任务里常常不在 PATH**。
+>
+> 2026-10-20 起，`agent_gate` 自己抽帧用的 ffmpeg/ffprobe **已经会自动解析**
+> （见 [§10.6](#106-外部工具解析修复2026-10-20)），不靠 PATH 也能找到。
+> 但**项目业务代码**（`assembly_capabilities/*`）里的 `cmd = ["ffmpeg", ...]` 仍然是裸名，
+> 跑 `pytest tests` 时 ffmpeg 必须在 PATH，否则 `tests/unit/video_edit_capabilities/`
+> 会有 7 条因「找不到 ffmpeg」误报失败 —— 这是**环境问题，不是代码回归**。
 
 ---
 
@@ -613,11 +620,15 @@ $LASTEXITCODE
 | 1 | `test_agent_security::test_mcode_shell_cannot_resume_a_human_gate` | 脚本里用了 POSIX 的 `env` 命令，Windows 不跑（**与本机有没有 mcode 无关**） |
 | 3 | 其它 claude / mcode 环境相关用例 | 同上 |
 
-> ⚠️ **ffmpeg 与 mcode 必须在 PATH**，否则相关用例会**误报失败或误 skip**：
+> ⚠️ **ffmpeg 与 mcode 在 PATH 里的两种失败**（2026-10-20 起已由 `agent_gate` 自动兜底，见 §10.6）：
 > - `ffmpeg` 不在 PATH → 6 个用例报 `FileNotFoundError: [WinError 2]`（**失败**，非 skip）
 > - `mcode` 不在 PATH → `shutil.which("mcode")` 返回 `None` → 10 个 mcode 用例被**误 skip**
 >
-> 本机实际值：`C:\ffmpeg\ffmpeg-9.0.2-essentials_build\bin` 与 `C:\Users\wayyet\.minimax-code` 均**不在**默认 PATH，需显式前置。
+> 本机实际值：`C:\ffmpeg\ffmpeg-9.0.2-essentials_build\bin` 与 `C:\Users\wayyet\.minimax-code`。
+> **两者都不在默认 PATH 里**（`C:\Users\wayyet\.minimax-code` 在 2026-10-20 的 PATH 清理后
+> 回到了注册表 `HKCU\Environment\Path`，但后台 / 子进程 shell 未必继承到）。
+> 现在 `agent_gate` 会自己去安装目录找，**不再要求操作员手动前置 PATH**；
+> 但显式加 PATH 仍然更省事，也覆盖项目自身的裸名调用。
 
 > 注：kit 测试耗时约 4–5 分钟，**必须用后台任务跑**，前台会超时。
 > 另：未装 Claude Code 时相关用例会 skip —— **skip 必须写「skip」，不能算 pass**。
@@ -631,8 +642,9 @@ $LASTEXITCODE
 **P8-1 无人值守跑到关卡**
 
 ```powershell
-# Windows 上必须先把 mcode 放进 PATH,或用 AGENT_GATE_MCODE_BIN 指到 .CMD
-# (CreateProcess 不做 PATHEXT 补全,裸名 "mcode" 必 WinError 2)
+# Windows 上 CreateProcess 不做 PATHEXT 补全,裸名 "mcode" 必 WinError 2。
+# 2026-10-20 起 agent_gate 会自己解析安装目录,这两行不再是**必需**,
+# 留着只是更省事(也覆盖项目自身的裸名调用)。
 $env:AGENT_GATE_MCODE_BIN = "C:\Users\wayyet\.minimax-code\mcode.cmd"
 
 & $PY -m agent_gate drive --thread-id v006 --agent mcode `
@@ -644,11 +656,16 @@ $LASTEXITCODE
 & $PY -m agent_gate events --thread-id v006 --outputs-root "$REPO\outputs" --limit 50
 ```
 
-> **实测踩坑**：第一次跑 `v005` 直接 `drive` 退出码 4（`stalled`），会话日志里是
-> `找不到可执行文件 'mcode':[WinError 2]`。原因是本机 PATH 里**没有**
-> `C:\Users\wayyet\.minimax-code`（`mcode.cmd` 只在那个目录里）。
-> `resolve_agent_bin()` 只做 `shutil.which()`——目录不在 PATH 就找不到。
-> 两个解法:①把该目录加进 PATH；②设 `AGENT_GATE_MCODE_BIN` 指到 `mcode.cmd`（本次用的就是这个）。
+> **实测踩坑**（2026-10-20 首次 P8）：跑 `v005` 直接 `drive` 退出码 4（`stalled`），
+> 会话日志里是 `找不到可执行文件 'mcode':[WinError 2]`。
+> 原因是本机 PATH 里**没有** `C:\Users\wayyet\.minimax-code`（`mcode.cmd` 只在那个目录里），
+> 而当时的 `resolve_agent_bin()` 只做 `shutil.which()` —— 目录不在 PATH 就找不到。
+>
+> **当时的两个解法**：①把该目录加进 PATH；②设 `AGENT_GATE_MCODE_BIN` 指到 `mcode.cmd`。
+>
+> ✅ **2026-10-20 已根治**：`resolve_agent_bin()` 改成「环境变量 → PATH → 约定俗成的安装目录」
+> 三级查找（`agent_gate/agent_bin.py`），**PATH 里没有也能找到 `~/.minimax-code/mcode.cmd`**。
+> 详见 [§10.6](#106-外部工具解析修复2026-10-20)。
 >
 > **期望退出码 `10`** = 停在人工关卡，**不是失败**。
 
@@ -998,6 +1015,11 @@ D5 / D6 属于**素材链路**——「Agent 拿不到素材,也没拿到正确�
 
 > ⚠️ 这两条接入层缺陷**在交付包的 Linux 沙箱里测不出来**:PATHEXT 补全是 Windows 独有行为;
 > worker 启动耗时也是 Windows 明显更慢(import langgraph + 拉子进程)。
+>
+> 🔧 **2026-10-20 续修**:上表第 1 条(`launcher.py` 拉不起 `mcode`)当时只修到「PATH 里有 `.CMD` 也能解析」,
+> **PATH 里整个目录都没有**的情况没覆盖 —— 那正是本机的常态。
+> 已在 [§10.7](#107-外部工具解析修复2026-10-20) 把 `resolve_agent_bin()` 升级成三级查找,
+> `test_agent_bin.py` 也从 7 条扩到 **17 条**。
 
 #### 仍未解决(不在本次范围)
 
@@ -1246,6 +1268,109 @@ python -m agent_gate mcode-lock --base "$env:USERPROFILE\.minimax\config.yaml" `
 | kit 测试 | ✅ 224 / 0 失败 / 0 错误 / 17 skip（新增 16 条 D11 用例） |
 | **新发现** | ⚠️ **D11 草稿目录未按 thread 隔离** → 已修 + 补 16 条单测 |
 
+### 10.7 外部工具解析修复(2026-10-20)
+
+这一轮修的是**接入层**的一个老坑:`mcode` / `ffmpeg` 这类外部可执行文件
+**全靠 `shutil.which()` 找**,而 `shutil.which()` **只看 PATH**。
+
+#### 10.7.1 问题
+
+本机 `C:\Users\wayyet\.minimax-code` **默认常常不在 PATH 里**(它在注册表
+`HKCU\Environment\Path` 里,但后台 / 子进程 shell 未必继承到)。一旦不在:
+
+| 表现 | 机制 | 为什么危险 |
+| --- | --- | --- |
+| kit 里 10 条 `@needs_mcode` 用例被**静默 skip** | `shutil.which("mcode")` → `None` → 装饰器判定「没装」 | 汇总数字还是 `17 skip / 0 failure`,**分不出「被 skip」和「真跑通过」**,回归会被当成没发生 |
+| `drive` 退出码 **4**(`stalled`) | `resolve_agent_bin()` 只做 `shutil.which()`,拿不到就原样返回裸名 → `CreateProcess` **不做 PATHEXT 补全** → `WinError 2` | 会话根本没起来,`events.jsonl` 里只有「找不到可执行文件」 |
+| 抽帧**静默出不来** | `media.py` 用裸名 `ffmpeg`;项目里 `cmd = ["ffmpeg", ...]` 同理 | 任务照发,但 `images.Count=0` —— **不报错**,看起来像「视频里没画面」 |
+
+根因是**同一个东西在三处各写了一份**:launcher、测试脚手架、抽帧,各用各的查找方式,
+于是出现「一处能找到、另一处找不到」。
+
+#### 10.7.2 修法
+
+新增 `agent_gate/agent_bin.py`,作为**唯一**的外部可执行文件解析入口:
+
+```
+环境变量(AGENT_GATE_MCODE_BIN / _FFMPEG_BIN / …)  →  PATH  →  约定俗成的安装目录
+   ↑ 操作员的显式设置,原样返回、不校验存在性              ↑ shutil.which  ↑ ~/.minimax-code、~/.claude/local、C:/ffmpeg/*/bin …
+```
+
+- **写错的环境变量要响亮报错**,不能变成静默跳过 → 环境变量的值原样返回,不校验存在性。
+- 找不到就返回 `None`,由调用方决定跳过还是报错 —— **绝不静默降级**。
+- `AGENT_GATE_BIN_DIRS` 可以再加任意搜索目录(操作员的逃生口)。
+
+接进去的地方:
+
+| 文件 | 改动 |
+| --- | --- |
+| `agent_gate/launcher.py` | `resolve_agent_bin()` 改走统一解析(`drive` 的 Agent 启动走这里) |
+| `agent_gate/cli_client.py` | **同样的坑**:`_CLIClient.executable` 原来直接用裸名 → 改成走统一解析(`--backend mcode-cli` 走这里) |
+| `agent_gate/media.py` | 抽帧用的 ffmpeg / ffprobe 走统一解析 |
+| `agent_gate/runner.py` | `spawn_worker()` 给 worker 的 PATH **补上**解析到的 ffmpeg 目录(项目里的裸名调用才能用) |
+| `agent_gate/tests/support.py` | `MCODE_BIN` / `CLAUDE_BIN` / `FFMPEG_BIN` 走统一解析 → `@needs_mcode` 不再被静默 skip |
+
+#### 10.7.3 「静默 skip」的护栏
+
+光把解析改对不够 —— 下次有人再写一份 `shutil.which`,同样的坑会复发。
+所以加了一条**专门盯这件事**的测试:
+
+```python
+def test_support_never_silently_skips_mcode() -> None:
+    """装了 mcode 就必须被测试脚手架认出来。"""
+    from support import MCODE_BIN
+    resolved = resolve_executable("mcode")
+    if resolved is None:
+        pytest.skip("本机确实没有 mcode")
+    assert MCODE_BIN, "support.MCODE_BIN 为空 → @needs_mcode 用例会被静默 skip"
+    assert Path(MCODE_BIN).exists()
+```
+
+脚手架一旦退回用 `shutil.which`,这条测试**响亮地失败**,而不是让 10 条用例悄悄消失。
+
+#### 10.7.4 实测
+
+**场景**:把 `C:\Users\wayyet\.minimax-code` 从 PATH 里摘掉(`$env:PATH` 里只剩别的段),
+再跑 kit / drive。这是「本机默认不在 PATH」的真实复现。
+
+**A. kit 测试**（`pytest agent_gate/tests`,PATH 里**没有** mcode 安装目录）
+
+| 指标 | 修复前 | 修复后 |
+| --- | --- | --- |
+| 收集 | 224 | **234**（+10 = `test_agent_bin.py` 新增用例） |
+| failures / errors | 0 / 0 | **0 / 0** ✅ |
+| skipped | **27**（17 + 10 条 mcode 静默消失） | **17**（与 PATH 里有 mcode 时**完全一致**） |
+| `test_mcode_mcp_tool_timeout_comes_from_mcp_json` | `SKIPPED` | **PASSED** |
+| `test_drive_with_real_mcode` / `..._locked_config` | `SKIPPED` | **PASSED** |
+
+17 条 skip 的**归因逐条取自 junit-xml 的 `skipped/message`**:
+
+| 数量 | 原因 |
+| --- | --- |
+| 14 | 本机没有 `claude` |
+| 2 | POSIX-only（`env` 命令 / `killpg` 进程组） |
+| 1 | Windows 建不了符号链接 |
+| **0** | **「mcode 不在 PATH」—— 一条都没有** ✅ |
+
+**B. `drive` CLI（同一个 PATH 条件,同一条命令,只换代码版本）**
+
+| | 修复前 | 修复后 |
+| --- | --- | --- |
+| `python -m agent_gate drive --agent mcode` | **退出码 4**(`stalled`) | **退出码 10**(停在人工关卡 ①) |
+| 会话日志 | `找不到可执行文件 'mcode':[WinError 2] 系统找不到指定的文件。` | `agent_session n=1 rc=0 status=succeeded`,答完 6 个任务 |
+| `resolve_agent_bin("mcode")` | `"mcode"`(裸名) | `C:\Users\wayyet\.minimax-code\mcode.cmd` |
+
+> 对照方法:同一份验证脚本、同样把 PATH 摘掉,只把 `agent_gate/` 的改动
+> `git stash` 掉再跑一遍 —— **修复前稳定复现退出码 4**,改回来就是 10。
+> 这比「读代码推断」可靠。
+
+**C. 项目测试(回归)**
+
+| 测量 | tests | failures | errors | skipped |
+| --- | --- | --- | --- | --- |
+| M8(修复前) | 954 | 0 | 0 | 11 |
+| **M9(修复后)** | **954** | **0** | **0** | **11** ✅ 逐项一致 |
+
 ---
 
 ## 11. 回归对比
@@ -1276,6 +1401,7 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
 | **M6 `after_p8fix`** | **954** | **0** | **0** | **11** | **无** ✅ |
 | **M7 `after_review`** | **954** | **0** | **0** | **11** | **无** ✅（2026-10-20 复核轮，D11 只改接入层） |
 | **M8 `after_commit`** | **954** | **0** | **0** | **11** | **无** ✅（**提交后**在工作区重跑，与 M7 逐项一致） |
+| **M9 `after_agentbin`** | **954** | **0** | **0** | **11** | **无** ✅（2026-10-20 外部工具解析修复轮，只改接入层 `agent_gate/`） |
 
 > M6 比 M5 多 **19** 条 = `tests/unit/test_storyline_contract_alignment.py`(12)
 > + `tests/unit/test_draft_path_degradation.py`(7);
@@ -1335,6 +1461,13 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
   > `test_drive_with_real_mcode_locked_config`、`test_real_size_frames_reach_mcode`）；
   > 另有 1 条名字带 `mcode` 的用例是**因为脚本用了 POSIX `env` 命令**才 skip，与本机有没有 mcode 无关。
   > 这正是 P7 的判据「claude 相关用例 skip 并如实记为 skip，mcode 相关用例应 pass」。
+- **M9（外部工具解析修复轮）**：
+  - 项目测试 **954 / 0 失败 / 0 错误 / 11 skip** —— 与 M8 **逐项一致**（本轮只改接入层 `agent_gate/`）。
+  - kit 测试 **234 / 0 失败 / 0 错误 / 17 skip**，且这次是**故意把 mcode 安装目录从 PATH 里摘掉**跑的
+    → **17 条 skip 里 0 条与 mcode 有关**（14 条「本机没有 claude」+ 2 条 POSIX-only + 1 条符号链接）。
+    修复前同样条件下是 **27 skip**（多出的 10 条就是被静默跳过的 mcode 用例）。
+  - `drive` CLI 在同样条件下：**修复前退出码 4 + `WinError 2`，修复后退出码 10**。
+    详见 [§10.7](#107-外部工具解析修复2026-10-20)。
 
 ---
 
@@ -1358,7 +1491,7 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
 ?? tests/unit/test_storyline_contract_alignment.py
 ```
 
-禁入项逐条核对（与 §12.2 同一批规则）：
+禁入项逐条核对（与 §12.3 同一批规则）：
 
 | 项 | 结果 |
 | --- | --- |
@@ -1374,7 +1507,38 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
 > （`docs/分析/` 下另有 `WP8-真机验收清单.md`、
 > `auto-video-editor_main_调用链与auto模式分析.md` 及交付包快照目录，均已在仓库内被跟踪，无影响。）
 
-### 12.2 2026-10-19（首次接入轮）核验
+### 12.2 2026-10-20（外部工具解析修复轮）核验
+
+`git status --short` 实测输出（提交前）：
+
+```
+ M agent_gate/README.md
+ M agent_gate/cli_client.py
+ M agent_gate/launcher.py
+ M agent_gate/media.py
+ M agent_gate/runner.py
+ M agent_gate/tests/support.py
+ M agent_gate/tests/test_agent_bin.py
+ M agent_gate/tests/test_cli_client.py
+ M docs/integration/Agent驱动auto-video-editor_设计与执行计划.md
+?? agent_gate/agent_bin.py
+```
+
+禁入项逐条核对（与 §12.3 同一批规则）：
+
+| 项 | 结果 |
+| --- | --- |
+| `config.locked.yaml` | ✅ 未纳入（在 `C:\Users\wayyet\.minimax\`，含明文 `apiKey`） |
+| `.mcp.json` | ✅ 未纳入（在仓库外的 `E:\Documents\kuaishou\video-ops\`） |
+| `outputs/` / `checkpoints/` / `drafts/` / `logs/` / `inputs/` | ✅ 全部未纳入（`.gitignore` 已忽略，已用 `git check-ignore -v` 逐个验过） |
+| `*.sqlite` | ✅ 无任何 sqlite 文件进入暂存区 |
+| 验证脚本 | ✅ 只在 `%TEMP%\ag_drive_cli_verify.py`，**不入库** |
+
+> `docs/分析/` 下那 2 份**未跟踪**的分析文档（`auto-video-editor-main-langgraph-node-audit.md`、
+> `auto-video-editor-langgraph-analysis.md`）是**本轮之前**就存在的独立分析产物，与本次修复无关，
+> **不纳入**提交（与 §12.1 的处理一致）。
+
+### 12.3 2026-10-19（首次接入轮）核验
 
 `git status --short` 实测输出（提交前）：
 
@@ -1404,7 +1568,7 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
 
 | 范围 | 结果 |
 | --- | --- |
-| `sk-` 模式（`agent_gate/` 全目录） | 仅 1 处命中：`agent_gate/tests/support.py:72` 的 `"sk-ant-api03-fake-local-mock-key"` —— **本地假模型服务的测试桩**，配 `ANTHROPIC_BASE_URL=http://127.0.0.1:{port}` + 隔离 `HOME`，无法认证任何真实服务，可安全入库 |
+| `sk-` 模式（`agent_gate/` 全目录） | 仅 1 处命中：`agent_gate/tests/support.py:83` 的 `"sk-ant-api03-fake-local-mock-key"` —— **本地假模型服务的测试桩**，配 `ANTHROPIC_BASE_URL=http://127.0.0.1:{port}` + 隔离 `HOME`，无法认证任何真实服务，可安全入库 |
 | `sk-` 模式（新文档） | 0 命中 |
 | 赋值型 `api_key` / `password` / `Bearer` | 0 命中 |
 
@@ -1426,8 +1590,8 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
 | `jsonschema` | 4.26.0 |
 | `langgraph` | 1.2.9 |
 | `langgraph-checkpoint-sqlite` | 3.1.1 |
-| ffmpeg | 9.0.2（`C:\ffmpeg\ffmpeg-9.0.2-essentials_build\bin`，**需手动加入 PATH**） |
-| MiniMax Code | 0.6.11（`C:\Users\wayyet\.minimax-code\mcode.CMD`） |
+| ffmpeg | 9.0.2（`C:\ffmpeg\ffmpeg-9.0.2-essentials_build\bin`。`agent_gate` 自己抽帧**不再需要**手动加 PATH（§10.7 自动解析）；但**项目业务代码**里的裸名 `ffmpeg` 调用仍需在 PATH） |
+| MiniMax Code | 0.6.12（`C:\Users\wayyet\.minimax-code\mcode.CMD`；实测 `mcode --version` → `0.6.12`。**默认不在 PATH**，`agent_gate` 已能自动解析，见 §10.7） |
 | Claude Code | ❌ 未安装 |
 | checkpointer | SQLite（`checkpoints/<thread_id>.sqlite`） |
 | `STORYLINE_MODE` | `auto`（19 节点确定性图） |
@@ -1482,7 +1646,7 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
 | `mcode` 无「关内置工具」硬开关 | 软护栏 | 加锁配置收紧 `permissionMode` + `guard_hook.py`；验收 B-9/B-10 |
 | Postgres 路径未支持 | 不能上生产 | 显式拒绝启动；本文只声明 SQLite |
 | ffmpeg 不在后台 shell 的 PATH | kit 测试 6 个用例误报失败 | 显式 `$env:PATH` 前置；已写入 §7 阶段前置 |
-| **`mcode` 不在 PATH** | ① kit 测试里 10 条 `@needs_mcode` 用例被 **skip**（数字上看不出来）；② `drive` 直接 `WinError 2` → 退出码 4 `stalled` | 显式把 `C:\Users\wayyet\.minimax-code` 加进 PATH，或设 `AGENT_GATE_MCODE_BIN` 指到 `mcode.cmd`；见 附录 B |
+| **`mcode` 不在 PATH** | ① kit 测试里 10 条 `@needs_mcode` 用例被 **skip**（数字上看不出来）；② `drive` 直接 `WinError 2` → 退出码 4 `stalled` | ✅ **已根治**（2026-10-20）：`agent_gate/agent_bin.py` 三级查找（环境变量 → PATH → 安装目录），不再依赖 PATH。见 §10.6 |
 | 素材链路缺陷（D5/D6）未修 | 主图跑不出成片 | ✅ **已修**（2026-10-19），见 §10.4 |
 | `clip.kind` / prompt 模板问题扩大 | 后续节点拿空数据 | ✅ 同上（clip 契约 + 渲染器两层都修了） |
 | **D9：生产端/契约端字段集不一致** | `node_05` 必抛 `ContractInvalid` → `draft_path=None` → 关卡 ① 后必崩 | ✅ **已修**（2026-10-20），见 §10.5 |
@@ -1511,6 +1675,7 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
 | `validate.py` | 答案校验：JSON 解析 + Draft-07 schema（F4） |
 | `service.py` | 任务服务层：出题、收答案、状态汇总、拒绝事件 |
 | `media.py` | 抽帧（ffmpeg） |
+| `agent_bin.py` | **唯一**的外部可执行文件解析入口（mcode / claude / ffmpeg / ffprobe）：环境变量 → PATH → 约定俗成的安装目录（§10.6） |
 | `protocol.py` | 任务/结果数据结构与 `task_id` 计算 |
 | `factory.py` | graph factory 解析（`graph:build_graph`） |
 | `launcher.py` | `mcode` / `claude` 进程启动 |
@@ -1519,13 +1684,14 @@ P0 阶段产出的 `$env:TEMP\baseline.xml` 在后续维护中已被清理，无
 ## 附录 B. 验收命令速查
 
 ```powershell
-# 环境前置(两样都必须):
-#   ffmpeg —— 抽帧要它,否则 7 条用例会误报失败
-#   mcode  —— kit 测试里 @needs_mcode 的 10 条要它,否则会被 skip(不是 pass!)
+# 环境前置:
+#   ffmpeg —— 项目业务代码(assembly_capabilities)里的 cmd = ["ffmpeg", ...] 是裸名,仍需在 PATH
+#   mcode  —— agent_gate 自己会解析安装目录(§10.6),**不再强制要求在 PATH**;
+#             显式加上更省事,也让"mcode 用例真的跑了"一眼可见
 $env:PATH = "C:\ffmpeg\ffmpeg-9.0.2-essentials_build\bin;C:\Users\wayyet\.minimax-code;$env:PATH"
 $env:PYTHONIOENCODING = "utf-8"
 $env:AGENT_GATE_MEDIA_ROOTS = "$REPO\inputs;$REPO\tests\fixtures"
-# drive / resume 还要(Windows:CreateProcess 不做 PATHEXT 补全,裸名 mcode 必 WinError 2)
+# 可选:显式指定 mcode 可执行文件(Windows:CreateProcess 不做 PATHEXT 补全,裸名 mcode 必 WinError 2)
 $env:AGENT_GATE_MCODE_BIN = "C:\Users\wayyet\.minimax-code\mcode.cmd"
 
 # ⚠️ STORYLINE_MODE:跑测试和跑 drive 要的是**相反**的值,别一起设。
@@ -1538,7 +1704,7 @@ $env:STORYLINE_MODE = "human"     # ← 跑 pytest 时
 & $PY -m agent_gate status --thread-id v006 --outputs-root "$REPO\outputs"
 & $PY -m agent_gate events --thread-id v006 --outputs-root "$REPO\outputs" --limit 50
 
-# 单独跑 kit 测试(必须带 ffmpeg + mcode PATH)
+# 单独跑 kit 测试(必须带 ffmpeg PATH;ffmpeg 解析已内建,ffprobe 同理)
 & $PY -m pytest agent_gate/tests -q -p no:cacheprovider --junit-xml="$env:TEMP\kit_after.xml"
 
 # 项目测试(与基线对比)
@@ -1546,6 +1712,10 @@ $env:STORYLINE_MODE = "human"     # ← 跑 pytest 时
 $LASTEXITCODE
 ```
 
-> ⚠️ **PATH 漏了 mcode 的后果**:kit 测试里 10 条 `@needs_mcode` 用例会**被 skip 而不是跑**,
-> 数字上看不出来(mcode 不在 PATH → `shutil.which` 找不到 → 装饰器判定为「没装」)。
-> 本机 `C:\Users\wayyet\.minimax-code` **默认不在 PATH** 里,必须显式加上。
+> ✅ **PATH 漏了 mcode 不再是问题**（2026-10-20 起）：`agent_gate/agent_bin.py` 会依次查
+> **环境变量 → PATH → `~/.minimax-code`（Windows 上是 `mcode.cmd`）**，
+> kit 测试的 `@needs_mcode` 用例**不会被静默 skip**，`drive` 也不会再报 `WinError 2`。
+>
+> 但**验收时仍然要看逐用例状态**：汇总数字（`skip` / `0 failure`）分不出
+> 「被 skip」和「真跑通过」。`test_agent_bin.py::test_support_never_silently_skips_mcode`
+> 专门守这条 —— 脚手架一旦退回用 `shutil.which`，那条测试会**响亮地失败**。
