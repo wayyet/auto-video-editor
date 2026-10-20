@@ -211,6 +211,12 @@ def _run_powershell_step(
         cmd,
         capture_output=True,
         text=True,
+        # pwsh 子进程输出是 UTF-8(preflight.ps1 内已设 [Console]::OutputEncoding);
+        # 不显式指定 encoding 时 Python 在 Windows 上按 locale(GBK) 解码,
+        # 遇到中文/符号输出会抛 UnicodeDecodeError(发生在 reader thread,
+        # 捕不到,表现为 stdout 丢失 + 一段误导性 traceback)。
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout,
         creationflags=creationflags,
         check=False,
