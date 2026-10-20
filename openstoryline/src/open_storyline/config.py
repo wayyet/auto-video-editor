@@ -275,9 +275,63 @@ class Settings(ConfigBaseModel):
     plan_timeline_pro: PlanTimelineProConfig
 
 
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """递归合并两个 dict:override 里的同名 key 覆盖 base。
+
+    两边都是 dict 时逐层合并(用于 [generate_voiceover.providers.minimax] 这类嵌套表)。
+    """
+    out = dict(base)
+    for key, val in override.items():
+        cur = out.get(key)
+        if isinstance(val, dict) and isinstance(cur, dict):
+            out[key] = _deep_merge(cur, val)
+        else:
+            out[key] = val
+    return out
+
+
+def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
+    """环境变量覆盖(优先级最高)。
+
+    变量名与 agent_fastapi.MODEL_ENV_KEYS 保持一致:
+      OPENSTORYLINE_LLM_MODEL / OPENSTORYLINE_LLM_BASE_URL / OPENSTORYLINE_LLM_API_KEY
+      OPENSTORYLINE_VLM_MODEL / OPENSTORYLINE_VLM_BASE_URL / OPENSTORYLINE_VLM_API_KEY
+
+    只写其中一部分也可以(没写的沿用文件里的值)。
+    """
+    for section in ("llm", "vlm"):
+        block = data.setdefault(section, {})
+        for field_name in ("model", "base_url", "api_key"):
+            val = os.getenv(f"OPENSTORYLINE_{section.upper()}_{field_name.upper()}")
+            if val:
+                block[field_name] = val
+    return data
+
+
 def load_settings(config_path: str | Path) -> Settings:
+    """加载配置。
+
+    三层优先级(后者覆盖前者):
+      1. ``config.toml``        —— 入库版本,只放占位符
+      2. ``config.toml.local``  —— 同目录的本机覆盖文件(.gitignore 已排除),放真实 API Key
+      3. 环境变量 ``OPENSTORYLINE_LLM_API_KEY`` / ``OPENSTORYLINE_VLM_API_KEY``
+
+    ``config.toml.local`` 只需写要覆盖的字段,例如::
+
+        [llm]
+        api_key = "sk-..."
+
+        [vlm]
+        api_key = "sk-..."
+    """
     p = Path(config_path).expanduser().resolve()
     data = tomllib.loads(p.read_text(encoding="utf-8"))
+
+    local_path = p.with_name(p.name + ".local")  # config.toml -> config.toml.local
+    if local_path.is_file():
+        data = _deep_merge(data, tomllib.loads(local_path.read_text(encoding="utf-8")))
+
+    data = _apply_env_overrides(data)
     return Settings.model_validate(data, context={"config_dir": p.parent})
 
 def default_config_path() -> str:
