@@ -54,7 +54,10 @@ def mcode_client(tmp_path: Path, port: int, **kw) -> McodeCLIClient:
 def test_command_shapes(tmp_path):
     c = ClaudeCLIClient(executable="claude", model="m1")
     cmd = c.build_command("系统提示", CAP)
-    assert cmd[:2] == ["claude", "-p"]
+    # 裸名会被统一解析成**能直接 CreateProcess 的路径**(见 agent_gate.agent_bin):
+    # 解析不到才原样保留裸名。
+    assert Path(c.executable).name.lower().startswith("claude")
+    assert cmd[:2] == [c.executable, "-p"]
     assert cmd[cmd.index("--tools") + 1] == ""                      # 不给任何内置工具
     assert "--strict-mcp-config" in cmd and "--no-session-persistence" in cmd
     assert cmd[cmd.index("--permission-mode") + 1] == "dontAsk"
@@ -66,7 +69,8 @@ def test_command_shapes(tmp_path):
 
     m = McodeCLIClient(executable="mcode", permission="smart", timeout_s=90)       # 默认 lightweight
     cmd = m.build_command(tmp_path, "系统提示", ["/a.jpg", "/b.jpg"], CAP)
-    assert cmd[:4] == ["mcode", "exec", "--input", "-"]
+    assert Path(m.executable).name.lower().startswith("mcode")
+    assert cmd[:4] == [m.executable, "exec", "--input", "-"]
     assert cmd.count("--file") == 2
     assert cmd[cmd.index("--timeout") + 1] == "90s"
     assert json.loads((tmp_path / "output_schema.json").read_text(encoding="utf-8")) == CAP

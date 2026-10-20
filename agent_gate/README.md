@@ -56,6 +56,15 @@ Set-Location $REPO
 
 环境要求:`ffmpeg` / `ffprobe` 在 `PATH` 里。没装 `claude` 或 `mcode` 的测试会自动 skip。
 
+> `mcode` / `claude` **不在 PATH 也能用** —— `agent_gate/agent_bin.py` 会依次查
+> **环境变量 → PATH → 约定俗成的安装目录**(`~/.minimax-code` / `~/.claude/local`)。
+> 这是 2026-10-20 的修复:以前只查 PATH,目录不在 PATH 时
+> ① kit 里的 mcode 用例被**静默 skip**(汇总数字看不出来),
+> ② `drive` 直接 `WinError 2` 退出码 4。
+>
+> ⚠️ 但**验收时仍要逐用例比对**,别只看汇总数字 ——
+> 汇总数字(`17 skip / 0 failure`)分不出「被 skip」和「真跑通过」。
+
 ---
 
 ## 目录
@@ -75,6 +84,7 @@ Set-Location $REPO
 | `guard_hook.py` | Agent 工具权限面收敛钩子 |
 | `factory.py` / `launcher.py` | graph factory 解析 / 子进程启动 |
 | `safety.py` | **唯一**的标识符与路径校验入口(线程/任务白名单、路径归属、素材白名单) |
+| `agent_bin.py` | **唯一**的外部可执行文件解析入口(mcode / claude / ffmpeg):环境变量 → PATH → 约定俗成的安装目录 |
 
 ---
 

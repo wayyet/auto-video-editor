@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
 from agent_gate import service
+from agent_gate.agent_bin import augment_path
 from agent_gate.mailbox import Mailbox
 from agent_gate.protocol import (
     HEARTBEAT_S,
@@ -412,6 +413,10 @@ def spawn_worker(
                      "started_at": utc_now(), "heartbeat_at": utc_now(),
                      "interrupts": [], "error": None})
     env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+    # 子进程(worker)的 PATH 常常比交互式 shell 干净:少了 ffmpeg 目录,项目里
+    # 那些 `cmd = ["ffmpeg", ...]` 就**静默失败**(抽不出帧 / 渲染报错,而不是
+    # 明确说「找不到 ffmpeg」)。这里把解析到的工具目录显式补进 PATH。
+    env["PATH"] = augment_path(env.get("PATH"), ("ffmpeg", "ffprobe"))
     kw: dict[str, Any] = {}
     if os.name == "nt":
         kw["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP

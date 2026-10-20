@@ -5,6 +5,8 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from agent_gate.agent_bin import resolve_executable
+
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 
 
@@ -12,7 +14,18 @@ def is_image(path: str) -> bool:
     return Path(path).suffix.lower() in IMAGE_EXTS
 
 
-def probe_duration(path: str, *, ffprobe: str = "ffprobe", timeout: float = 30.0) -> float:
+def _tool(name: str) -> str:
+    """解析 ffmpeg / ffprobe。
+
+    不走 PATH 也能找到(本机 ffmpeg 装在 ``C:\\ffmpeg\\<版本>\\bin``,默认常常
+    不在 PATH)。抽不到帧时**任务照发**但 notes 里写明「没取到画面帧」——
+    如果连 ffmpeg 都没找到,那得让人看得见,不能当成「视频里没有画面」。
+    """
+    return resolve_executable(name) or name
+
+
+def probe_duration(path: str, *, ffprobe: str = "", timeout: float = 30.0) -> float:
+    ffprobe = ffprobe or _tool("ffprobe")
     cp = subprocess.run(
         [ffprobe, "-v", "error", "-show_entries", "format=duration",
          "-of", "default=nw=1:nk=1", str(path)],
@@ -31,14 +44,16 @@ def extract_frames(
     *,
     n: int = 6,
     max_edge: int = 640,
-    ffmpeg: str = "ffmpeg",
-    ffprobe: str = "ffprobe",
+    ffmpeg: str = "",
+    ffprobe: str = "",
     timeout: float = 60.0,
 ) -> list[str]:
     """在 [in_sec, out_sec] 内均匀取 n 帧,存成 jpg,返回成功写出的路径列表。
 
     out_sec 为空时取到片尾。取不出帧不抛错(返回空列表),任务仍然会发出去。
     """
+    ffmpeg = ffmpeg or _tool("ffmpeg")
+    ffprobe = ffprobe or _tool("ffprobe")
     out_dir.mkdir(parents=True, exist_ok=True)
     start = float(in_sec or 0.0)
     end = float(out_sec) if out_sec is not None else probe_duration(video, ffprobe=ffprobe)

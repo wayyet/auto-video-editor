@@ -24,6 +24,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
+from agent_gate.agent_bin import resolve_agent_bin
 from agent_gate.media import extract_frames, is_image
 from agent_gate.validate import NotJSON, parse_json_value, validate_result
 
@@ -107,7 +108,11 @@ class _CLIClient:
         extra_env: Optional[dict[str, str]] = None,
         clean_env: bool = False,
     ) -> None:
-        self.executable = executable or os.environ.get(self.env_bin) or self.default_bin
+        # 裸名("mcode"/"claude")交给 CreateProcess 一定 WinError 2 ——
+        # 走统一的解析入口:环境变量 → PATH → 约定俗成的安装目录(见 agent_gate.agent_bin)。
+        self.executable = resolve_agent_bin(
+            executable or os.environ.get(self.env_bin) or self.default_bin
+        )
         self.model = model or os.environ.get("AGENT_GATE_CLI_MODEL") or None
         self.timeout_s = float(timeout_s if timeout_s is not None
                                else os.environ.get("AGENT_GATE_CLI_TIMEOUT_S", "600"))

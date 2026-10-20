@@ -1,14 +1,19 @@
 """测试共用:本地假模型服务,以及 claude / mcode 的隔离运行环境。
 
 claude 或 mcode 不在本机时,对应测试用 needs_claude / needs_mcode 自动跳过。
-mcode 的位置:环境变量 AGENT_GATE_MCODE_BIN,否则取 PATH 里的 mcode。
+mcode 的位置:环境变量 AGENT_GATE_MCODE_BIN → PATH → ``~/.minimax-code``
+(见 :func:`agent_gate.agent_bin.resolve_executable`)。
+
+⚠️ 解析必须走 `agent_bin.resolve_executable`,**不能**直接用 `shutil.which`:
+本机 `C:\\Users\\wayyet\\.minimax-code` 默认常常不在 PATH 里,
+`shutil.which` 找不到 → `@needs_mcode` 的用例被**静默 skip** ——
+汇总数字(17 skip / 0 failure)分不出「被 skip」和「真跑通过」,回归会被当成没发生。
 """
 from __future__ import annotations
 
 import json
 import os
 import hashlib
-import shutil
 import socket
 import subprocess
 import sys
@@ -17,13 +22,19 @@ from pathlib import Path
 
 import pytest
 
+from agent_gate.agent_bin import resolve_executable
+
 HERE = Path(__file__).resolve().parent
 MOCK = HERE / "mock_llm_server.py"
 
-CLAUDE_BIN = shutil.which("claude")
-MCODE_BIN = os.environ.get("AGENT_GATE_MCODE_BIN") or shutil.which("mcode")
+CLAUDE_BIN = resolve_executable("claude")
+MCODE_BIN = resolve_executable("mcode")
+FFMPEG_BIN = resolve_executable("ffmpeg")
 needs_claude = pytest.mark.skipif(not CLAUDE_BIN, reason="本机没有 claude")
-needs_mcode = pytest.mark.skipif(not MCODE_BIN, reason="本机没有 mcode")
+needs_mcode = pytest.mark.skipif(
+    not MCODE_BIN,
+    reason="本机没有 mcode(PATH、AGENT_GATE_MCODE_BIN、~/.minimax-code 都找不到)",
+)
 
 
 def free_port() -> int:
@@ -101,7 +112,8 @@ def mcode_env(tmp_path: Path, port: int, data_dir: Path | None = None) -> dict[s
 
 def make_frame_jpg(dst: Path, *, max_edge: int = 640) -> Path:
     """ffmpeg 生成一张带噪点的 JPEG:宽 640、约 77 KB,和 media.extract_frames 抽出的真实帧同一个量级。"""
-    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=1,noise=alls=40:allf=t",
+    ffmpeg = FFMPEG_BIN or "ffmpeg"
+    subprocess.run([ffmpeg, "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=1,noise=alls=40:allf=t",
                     "-frames:v", "1", "-vf", f"scale='min({max_edge},iw)':-2", "-q:v", "4", str(dst)], check=True)
     return dst
 
