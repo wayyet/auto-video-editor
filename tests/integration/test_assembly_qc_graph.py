@@ -37,6 +37,20 @@ def _patch_heartbeat(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("graph.start_heartbeat", lambda: None)
 
 
+@pytest.fixture(autouse=True)
+def _patch_node_02_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """让 node_02 的 OpenStoryline 探测永远返回"已就绪"。
+
+    2026-10 起 Web 生命周期归 ``start_production.ps1`` 管,node_02 只做
+    HTTP 探测、**不再自己拉起 uvicorn**。图级测试如果不桩掉这个探测,
+    就会依赖本机 :7860 上是否恰好有 Web 在跑 —— 门禁会在"未就绪"时
+    直接 END,后面的节点永远不执行(测试表现为"图没产出任何东西")。
+    """
+    import nodes.node_02_launch_openstoryline as m2
+
+    monkeypatch.setattr(m2, "_wait_for_ready", lambda url, t: True)
+
+
 @pytest.fixture
 def fake_video(tmp_path: Path) -> Path:
     p = tmp_path / "input.mp4"

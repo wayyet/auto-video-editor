@@ -335,9 +335,11 @@ CHECKPOINTER_DB_DIR: Path = Path(__file__).parent / "checkpoints"
 # Week 5:Postgres 后端环境变量
 # - WORKFLOW_ENV=production 时强制用 Postgres(覆盖 CHECKPOINTER_BACKEND)
 # - POSTGRES_URI:标准 ``postgresql://user:pass@host:port/dbname`` 形式
+#   默认值与本地容器契约一致(edb-postgres16:postgres/devpass@5432/langgraph),
+#   保证"直接跑 Python"时也能连上本地库。
 POSTGRES_URI: str = os.environ.get(
     "POSTGRES_URI",
-    "postgresql://postgres:postgres@localhost:5432/video_workflow",
+    "postgresql://postgres:devpass@localhost:5432/langgraph",
 )
 WORKFLOW_ENV: str = os.environ.get("WORKFLOW_ENV", "development")  # "development" | "production"
 

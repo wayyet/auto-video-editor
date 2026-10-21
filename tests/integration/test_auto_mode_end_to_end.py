@@ -440,8 +440,8 @@ def test_node_02_auto_mode_skips_uvicorn(
     """``STORYLINE_MODE=auto`` 时 node_02_launch_openstoryline 应跳过 uvicorn 子进程。
 
     验收点(plan §7.3 第 1 条):auto-mode 跑 19 节点完全不需要 vendored Web
-    服务。本测试验证即使 popen_factory 抛异常(auto 路径不调用它),节点
-    仍返回 ``openstoryline_ready=True`` 且 append ``node_02_auto_skipped``。
+    服务。本测试验证节点**连探测都不发起**(health_checker 抛异常就会 fail),
+    节点仍返回 ``openstoryline_ready=True`` 且 append ``node_02_auto_skipped``。
     """
     monkeypatch.setenv("STORYLINE_MODE", "auto")
 
@@ -454,14 +454,14 @@ def test_node_02_auto_mode_skips_uvicorn(
     import nodes.node_02_launch_openstoryline as _n2
     reload(_n2)
 
-    # popen_factory 故意抛异常:如果 auto-mode 路径错误地调到了 uvicorn
-    # 子进程,这个异常会冒到上层,测试 fail。
-    def boom_popen(*args, **kwargs):
-        raise AssertionError("auto-mode 不应启动 vendored Web UI 子进程")
+    # health_checker 故意抛异常:如果 auto-mode 路径错误地发起了健康探测,
+    # 这个异常会冒到上层,测试 fail。
+    def boom_checker(url, timeout_s):
+        raise AssertionError("auto-mode 不应发起 OpenStoryline 健康探测")
 
     state: dict[str, Any] = {"error_log": [], "session_id": "auto_test"}
     out = _n2.launch_openstoryline_service(
-        state, popen_factory=boom_popen, health_checker=lambda u, t: True
+        state, health_checker=boom_checker
     )
     assert out["openstoryline_ready"] is True
     assert out["openstoryline_pid"] is None
@@ -472,13 +472,14 @@ def test_node_02_auto_mode_skips_uvicorn(
     assert out.get("error_log") == []
 
 
-def test_node_02_human_mode_still_starts_uvicorn(
+def test_node_02_human_mode_reuses_existing_service(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``STORYLINE_MODE=human``(默认)行为**完全不动**:仍启 uvicorn 子进程。
+    """``STORYLINE_MODE=human``(默认)只**探测**已有服务,不再启动 uvicorn 子进程。
 
-    验收点(plan §7.3 + §5 阶段 7 第 4 条):human-mode 路径保留作为
-    auto-mode 失败时的回退入口,必须仍能正常启动 vendored Web UI。
+    验收点(2026-10 启动入口统一):Web 生命周期归 ``start_production.ps1`` 管,
+    node_02 只探测 —— 探测成功 → ``ready=True`` + ``pid is None``
+    + ``status_log`` 含 ``node_02_openstoryline_reused``。
     """
     # 确保 STORYLINE_MODE 不是 auto(其他测试可能改了 env)
     monkeypatch.setenv("STORYLINE_MODE", "human")
@@ -489,31 +490,20 @@ def test_node_02_human_mode_still_starts_uvicorn(
     import nodes.node_02_launch_openstoryline as _n2
     reload(_n2)
 
-    captured: dict[str, list[str]] = {"argv": []}
-
-    class _StubProc:
-        pid = 4242
-        stdout = None
-        stderr = None
-
-    def fake_popen(argv, **kwargs):
-        captured["argv"] = list(argv)
-        return _StubProc()
-
     def fake_checker(url, timeout_s):
         return True
 
     state: dict[str, Any] = {"error_log": []}
     out = _n2.launch_openstoryline_service(
-        state, popen_factory=fake_popen, health_checker=fake_checker
+        state, health_checker=fake_checker
     )
     assert out["openstoryline_ready"] is True
-    assert out["openstoryline_pid"] == 4242
-    # uvicorn 子进程必须被启动(argv 含 "uvicorn")
-    assert any("uvicorn" in a for a in captured["argv"]), (
-        f"human-mode 必须启 uvicorn 子进程,argv={captured['argv']}"
-    )
+    # 本节点不拥有进程 → 不记 PID
+    assert out["openstoryline_pid"] is None
+    assert "node_02_openstoryline_reused" in (out.get("status_log") or [])
     # 不应 append auto_skipped
     assert "node_02_launch_openstoryline_auto_skipped" not in (
         out.get("status_log") or []
     )
+    # 模块里不应再有进程启动能力
+    assert not hasattr(_n2, "subprocess")

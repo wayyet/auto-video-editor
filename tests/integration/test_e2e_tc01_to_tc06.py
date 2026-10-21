@@ -42,16 +42,17 @@ class _StubProc:
 
 
 def _patch_node_2_ready(monkeypatch, *, ready: bool) -> None:
-    """让节点 2 不真起进程、不真发 HTTP,直接返回 ready。"""
-    from nodes import node_02_launch_openstoryline as m
+    """让节点 2 不真发 HTTP,直接返回 ready。
 
-    def fake_popen(*args, **kwargs):
-        return _StubProc(pid=22222 if ready else 33333)
+    2026-10:node_02 已不再启动进程(只剩 HTTP 探测),
+    所以这里只需桩掉 ``_wait_for_ready``。
+    """
+    from nodes import node_02_launch_openstoryline as m
 
     def fake_check(url, timeout_s):
         return ready
 
-    monkeypatch.setattr(m, "subprocess", type("S", (), {"Popen": staticmethod(fake_popen)}))
+    monkeypatch.setattr(m, "_wait_for_ready", fake_check)
 
 
 @pytest.fixture
@@ -62,13 +63,9 @@ def patched_graph(monkeypatch, tmp_path):
     import nodes.node_02_launch_openstoryline as m2
     from nodes import node_02_launch_openstoryline as mod2
 
-    def fake_popen(*args, **kwargs):
-        return _StubProc(pid=44444)
-
     def fake_health(url, timeout_s):
         return True  # ready=True
 
-    monkeypatch.setattr(mod2, "subprocess", type("S", (), {"Popen": staticmethod(fake_popen), "PIPE": -1}))
     monkeypatch.setattr(mod2, "_wait_for_ready", fake_health)
 
     # 节点 3:patch popen_factory
@@ -213,7 +210,9 @@ def test_tc02_state_field_completeness(patched_graph, base_initial_state, tmp_pa
     # 字段完整性断言(对齐 §4.2 WorkflowState)
     assert out["cache_cleaned"] is True
     assert isinstance(out["cache_cleaned_paths"], list)
-    assert out["openstoryline_pid"] is not None
+    # 2026-10:node_02 不再启动进程(Web 生命周期归 start_production.ps1 管),
+    # 所以它不记 PID —— 这里应恒为 None。
+    assert out["openstoryline_pid"] is None
     assert out["openstoryline_mcp_endpoint"].startswith("http://")
     assert out["openstoryline_web_url"].startswith("http://")
     assert out["openstoryline_ready"] is True
@@ -288,13 +287,9 @@ def test_tc03_encrypted_draft_aborts_writing(tmp_path, base_initial_state, monke
     import nodes.node_02_launch_openstoryline as mod2
     import nodes.node_03_open_preview as mod3
 
-    def fake_popen(*args, **kwargs):
-        return _StubProc(pid=55555)
-
     def fake_health(url, timeout_s):
         return True
 
-    monkeypatch.setattr(mod2, "subprocess", type("S", (), {"Popen": staticmethod(fake_popen), "PIPE": -1}))
     monkeypatch.setattr(mod2, "_wait_for_ready", fake_health)
     monkeypatch.setattr(mod3, "subprocess", type("S", (), {"Popen": staticmethod(lambda *a, **k: _StubProc())}))
 
@@ -379,13 +374,9 @@ def test_tc04_write_interrupted_keeps_target_intact(tmp_path, base_initial_state
     import nodes.node_02_launch_openstoryline as mod2
     import nodes.node_03_open_preview as mod3
 
-    def fake_popen(*args, **kwargs):
-        return _StubProc(pid=66666)
-
     def fake_health(url, timeout_s):
         return True
 
-    monkeypatch.setattr(mod2, "subprocess", type("S", (), {"Popen": staticmethod(fake_popen), "PIPE": -1}))
     monkeypatch.setattr(mod2, "_wait_for_ready", fake_health)
     monkeypatch.setattr(mod3, "subprocess", type("S", (), {"Popen": staticmethod(lambda *a, **k: _StubProc())}))
 
@@ -409,13 +400,9 @@ def test_tc05_openstoryline_not_ready_early_exits(tmp_path, base_initial_state, 
     import nodes.node_02_launch_openstoryline as mod2
     import nodes.node_03_open_preview as mod3
 
-    def fake_popen(*args, **kwargs):
-        return _StubProc(pid=77777)
-
     def fake_health_fail(url, timeout_s):
         return False  # ready=False
 
-    monkeypatch.setattr(mod2, "subprocess", type("S", (), {"Popen": staticmethod(fake_popen), "PIPE": -1}))
     monkeypatch.setattr(mod2, "_wait_for_ready", fake_health_fail)
     monkeypatch.setattr(mod3, "subprocess", type("S", (), {"Popen": staticmethod(lambda *a, **k: _StubProc())}))
 
@@ -445,13 +432,9 @@ def test_tc06_unsupported_video_format_writes_error_log(
     import nodes.node_03_open_preview as mod3
     import nodes.node_04b_get_storyboard_plan as m4b
 
-    def fake_popen(*args, **kwargs):
-        return _StubProc(pid=88888)
-
     def fake_health(url, timeout_s):
         return True
 
-    monkeypatch.setattr(mod2, "subprocess", type("S", (), {"Popen": staticmethod(fake_popen), "PIPE": -1}))
     monkeypatch.setattr(mod2, "_wait_for_ready", fake_health)
     monkeypatch.setattr(mod3, "subprocess", type("S", (), {"Popen": staticmethod(lambda *a, **k: _StubProc())}))
 

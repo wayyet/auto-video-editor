@@ -208,6 +208,31 @@ def _load_initial_state(args: argparse.Namespace) -> dict:
     return state
 
 
+def _check_final_state(result: Optional[dict]) -> int:
+    """检查图的最终 state,返回进程退出码。
+
+    - ``openstoryline_ready is False`` → 打印明确错误,返回 **3**
+      (工作流因 OpenStoryline Web 未就绪而提前终止)。
+    - 其它情况 → 0。
+
+    注意:LangGraph 1.2.9 下 ``invoke/ainvoke`` **不抛** ``GraphInterrupt``,
+    停在人工关卡时正常返回。因此"停在人工关卡"与"因 node_02 未就绪提前终止"
+    可以靠 ``openstoryline_ready`` 区分开,不会互相误判。
+    """
+    if not isinstance(result, dict):
+        return 0
+    if result.get("openstoryline_ready") is False:
+        print(
+            "[workflow] ✗ OpenStoryline 未就绪,工作流提前终止",
+            file=sys.stderr,
+        )
+        errors = result.get("error_log") or []
+        for line in errors:
+            print(f"[workflow]   {line}", file=sys.stderr)
+        return 3
+    return 0
+
+
 async def _invoke_async(args: argparse.Namespace) -> int:
     """生产路径:Postgres checkpointer + ainvoke。"""
     from graph import build_graph, get_checkpointer
@@ -222,8 +247,8 @@ async def _invoke_async(args: argparse.Namespace) -> int:
             run_preflight=False,
         )
         config = {"configurable": {"thread_id": args.thread_id}}
-        await g.ainvoke(state, config=config)
-    return 0
+        result = await g.ainvoke(state, config=config)
+    return _check_final_state(result)
 
 
 def _invoke_sync(args: argparse.Namespace) -> int:
@@ -238,8 +263,8 @@ def _invoke_sync(args: argparse.Namespace) -> int:
         run_preflight=False,
     )
     config = {"configurable": {"thread_id": args.thread_id}}
-    g.invoke(state, config=config)
-    return 0
+    result = g.invoke(state, config=config)
+    return _check_final_state(result)
 
 
 async def _main_async(args: argparse.Namespace) -> int:

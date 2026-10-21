@@ -182,6 +182,106 @@ New-Item -ItemType Directory -Force -Path inputs | Out-Null
 877 通过 / 0 失败 / 0 错误 / 11 跳过   (183s)
 ```
 
+### 2.6 一键启动(唯一入口)
+
+> 2026-10-21 起,`scripts\start_local.ps1` **已删除**。根目录的
+> `.\start_production.ps1` 是**唯一**完整工作流启动入口。
+
+**启动**(需要「以管理员身份运行」的 Windows PowerShell):
+
+```powershell
+# 默认:thread-id=video-001,STORYLINE_MODE=human,本地 Postgres 容器
+.\start_production.ps1
+
+# 换 thread-id
+.\start_production.ps1 -ThreadId video-002
+
+# 明确走 auto 模式(19 节点确定性图,不启动 OpenStoryline Web)
+.\start_production.ps1 -StorylineMode auto
+
+# 指定 Postgres(支持任意 URI,见下)
+.\start_production.ps1 -PostgresUri postgresql://app:secret@localhost:5432/appdb
+
+# 只打印计划,不产生任何副作用(不建目录、不建日志、不起进程)
+.\start_production.ps1 -WhatIf
+```
+
+**参数表**
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `-ThreadId` | `video-001` | LangGraph `thread_id`,同时写入 `runtime\initial_state_<id>.json` 与 checkpoint 查询 |
+| `-StorylineMode` | `human` | `human` = 走人工关卡(启动 OpenStoryline Web);`auto` = 19 节点确定性图(**不**启动 Web)。非法值在参数绑定阶段被拒(`ValidateSet`) |
+| `-PostgresUri` | `postgresql://postgres:devpass@localhost:5432/langgraph` | 连接的唯一真相。`localhost:5432` → **本地托管**模式(起 `edb-postgres16` 容器 + 自动对齐角色/库);其它 host/端口 → **外部**模式(完全不碰本地容器) |
+| `-SourceVideo` | jianying-editor 演示素材路径 | 复制到 `-InputsDir` 的源视频 |
+| `-InputsDir` | `FireRed-OpenStoryline\inputs` | 素材目录 |
+| `-InputsFileName` | `30s.mp4` | 素材文件名 |
+| `-SkipPhase3` | 关 | 跳过验收(checkpoints / heartbeat / outputs) |
+| `-WhatIf` | 关 | 只打印计划,**零副作用** |
+
+**`-PostgresUri` 的两种模式**
+
+| URI 形态 | 模式 | 行为 |
+|---|---|---|
+| `postgresql://u:p@localhost:5432/db` | 本地托管 | 起 `edb-postgres16` 容器 → 用管理员凭据**增量**对齐目标角色/库(`scripts\align_postgres.py`,只 CREATE/GRANT,不删)→ 用目标 URI 建表 |
+| `postgresql://u:p@<其它 host 或端口>/db` | 外部 | **不碰任何本地容器**,直接用目标 URI 验连 + 建表 |
+
+> ⚠️ 对齐时若目标角色 == 管理员角色(`postgres`)且密码不同,脚本会 `ALTER ROLE` 改密码
+> 并打印醒目告警 —— 此时默认 URI `postgresql://postgres:devpass@…` 将**不再可用**。
+> 改密码后请改用新的 URI。
+
+**停止**:
+
+```powershell
+.\stop_production.ps1                        # 停工作流进程 + Web + Postgres 容器(卷永远保留)
+.\stop_production.ps1 -RemoveContainers      # 顺带删容器(卷仍保留)
+.\stop_production.ps1 -CleanState -CleanHeartbeat
+.\stop_production.ps1 -WhatIf                # 只打印计划,零副作用
+```
+
+> **所有权口径**:启动时若 `:7860` 已被健康的 OpenStoryline Web 占用,脚本会**复用**它
+> (不启第二个进程),PID 文件标记 `reused=true`。`stop_production.ps1` 遇到 `reused=true`
+> 时**既不按 PID kill、也不走命令行兜底** —— 那个进程不是本项目拥有的,保留不动,
+> 需要停止请手动处理。
+
+**退出码表**
+
+| 码 | 含义 |
+|---|---|
+| 0 | 成功 |
+| 3 | `run_workflow.py`:OpenStoryline 未就绪,工作流提前终止(脚本透传为 24) |
+| 10-16 | preflight Step 1-6 失败(脚本透传) |
+| 19 | `-PostgresUri` 非法(格式 / 缺 host / 缺库名) |
+| 20 | Postgres 角色/库对齐失败 |
+| 21 | Web 进程启动后提前退出 |
+| 22 | Web 健康检查超时(180s) |
+| 23 | `:7860` 端口冲突(被非本项目进程占用) |
+| 24 | 工作流因 `node_02` 未就绪提前终止 |
+| 25 | Phase 3 checkpoint 查询失败(验收未完成) |
+| 26 | openstoryline 资源/模型缺失 |
+| 27 | `run_workflow.py` 非预期失败 |
+| 99 | preflight 未捕获异常 |
+
+**失败与恢复**
+
+| 症状 | 退出码 | 处理 |
+|---|---|---|
+| `当前 PowerShell 不是管理员` | 11 | 用「以管理员身份运行」重开 PowerShell,或按 README §2.4 手动起 `com.docker.service` |
+| `Docker Desktop 启动后 90s 内 daemon 未就绪` | 17 | 手动打开 Docker Desktop GUI,等「Docker Desktop is running」后重跑 |
+| `openstoryline/resource/ 缺失或为空` | 26 | 跑 `.\openstoryline\scripts\download_resources.ps1` + `download_models.ps1`(约 642 MB) |
+| `端口 7860 已被占用,但 GET 不返回 200` | 23 | 手动查出占用进程并处理;脚本**不会**杀未确认归属的进程 |
+| `180s 内 OpenStoryline Web 未就绪` | 22 | 看 `logs\openstoryline_web_*.log` 尾部的报错;脚本**不会**带未就绪的服务跑工作流 |
+| `preflight.ps1 退出码 15(Postgres 不可达)` | 15 | 确认 `-PostgresUri` 可连;外部库需先自行建库建角色 |
+| `角色/库对齐失败` | 20 | 看 `logs\start_*.log` 里 `align_postgres.py` 的报错(密码已脱敏) |
+| `验收未完成:checkpoint 查询失败` | 25 | 确认 Postgres 可连 + `checkpoints` 表已建(Phase 1 的 Step 6 会建) |
+| `OpenStoryline 未就绪,工作流提前终止` | 24 | Web 没起来;human 模式下先确认 `:7860` 的服务健康 |
+
+**日志**
+
+每次运行写一份 `logs\start_<时间戳>.log`;OpenStoryline Web 另写
+`logs\openstoryline_web_<时间戳>.log`,PID 信息写 `logs\openstoryline_pids_<时间戳>.json`。
+日志里的密码一律脱敏成 `***`。
+
 ## 3. 运行测试
 
 ```powershell

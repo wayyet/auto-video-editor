@@ -3,6 +3,13 @@
 # 配套：auto-video-editor Week 5 PostgresSaver
 # 用法：在项目根目录执行 .\scripts\start_postgres.ps1
 # ============================================================
+[CmdletBinding()]
+param(
+    # 目标连接串。传了且与管理员 URI 不同,容器 healthy 后会调 align_postgres.py
+    # 增量对齐角色/库(只 CREATE / GRANT,不 DROP、不删库)。不传 = 只保证管理员身份可用。
+    [string]$TargetUri
+)
+
 $ErrorActionPreference = 'Stop'
 
 $Image = 'quay.io/enterprisedb/postgresql:16.11-3.5-postgis-multilang'
@@ -12,6 +19,9 @@ $PgUser = 'postgres'
 $PgPassword = 'devpass'
 $PgDb = 'langgraph'
 $HostPort = 5432
+
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$RepoRoot  = Resolve-Path (Join-Path $ScriptDir '..')
 
 $dockerCommand = Get-Command docker -ErrorAction SilentlyContinue
 if ($null -eq $dockerCommand) {
@@ -23,6 +33,26 @@ function Assert-DockerSuccess {
 
     if ($LASTEXITCODE -ne 0) {
         throw "$Message（exit=$LASTEXITCODE）"
+    }
+}
+
+function Get-MaskedUri {
+    # 把 URI 里的密码替换成 ***,避免明文进日志
+    param([string]$Uri)
+
+    if ([string]::IsNullOrWhiteSpace($Uri)) { return '<空>' }
+    try {
+        $u = [System.Uri]$Uri
+        if ([string]::IsNullOrEmpty($u.UserInfo)) { return $Uri }
+        $user = $u.UserInfo.Split(':')[0]
+        $builder = New-Object System.Text.StringBuilder
+        [void]$builder.Append("$($u.Scheme)://$user`:***@")
+        [void]$builder.Append($u.Host)
+        if ($u.Port -gt 0) { [void]$builder.Append(":$($u.Port)") }
+        [void]$builder.Append($u.AbsolutePath)
+        return $builder.ToString()
+    } catch {
+        return '<无法解析的 URI>'
     }
 }
 
@@ -110,5 +140,31 @@ Assert-DockerSuccess '查询容器状态失败'
 
 $uri = "postgresql://${PgUser}:${PgPassword}@localhost:${HostPort}/${PgDb}"
 Write-Host ''
-Write-Host "==> 完成。POSTGRES_URI=$uri" -ForegroundColor Green
+Write-Host "==> 完成。POSTGRES_URI=$(Get-MaskedUri $uri)" -ForegroundColor Green
 Write-Host '==> 下一步：$env:POSTGRES_URI="postgresql://postgres:devpass@localhost:5432/langgraph"; .\.venv\Scripts\python.exe scripts\setup_postgres_schema.py' -ForegroundColor Green
+
+# ---------------------------------------------------------------
+# 角色/库对齐(可选):目标 URI 与管理员 URI 不同时,增量补齐角色与库。
+# 只 CREATE / GRANT,不 DROP、不删库、不删卷。对齐失败 → 退出码 20。
+# ---------------------------------------------------------------
+if (-not [string]::IsNullOrWhiteSpace($TargetUri)) {
+    if ($TargetUri -eq $uri) {
+        Write-Host '==> 目标 URI 与管理员 URI 一致,跳过对齐' -ForegroundColor Yellow
+    } else {
+        Write-Host ''
+        Write-Host "==> 对齐目标角色/库: $(Get-MaskedUri $TargetUri)" -ForegroundColor Cyan
+        $alignScript = Join-Path $ScriptDir 'align_postgres.py'
+        $pythonExe = Join-Path $RepoRoot '.venv\Scripts\python.exe'
+        if (-not (Test-Path $pythonExe)) { $pythonExe = 'python' }
+        if (-not (Test-Path $alignScript)) {
+            Write-Host "✗ 找不到 $alignScript" -ForegroundColor Red
+            exit 20
+        }
+        & $pythonExe $alignScript --target-uri $TargetUri --admin-uri $uri
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "✗ 角色/库对齐失败 (exit=$LASTEXITCODE)" -ForegroundColor Red
+            exit 20
+        }
+        Write-Host '==> 角色/库对齐完成' -ForegroundColor Green
+    }
+}

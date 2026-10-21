@@ -199,7 +199,15 @@ def resolve_video_input_paths(state) -> list[str]:
 
 ### 手工验收(Windows + OpenStoryline Web)
 
-1. `.\scripts\start_local.ps1`(免管理员全链)→ OpenStoryline Web :7860
+> ⚠️ **历史归档(2026-10-21 当时的实现)**
+>
+> 下列步骤记录的是**当时的**启动方式。`.\scripts\start_local.ps1` 已于
+> 2026-10-21 **删除**,启动入口统一为根目录的 `.\start_production.ps1`
+> (用 `-StorylineMode human` 走人工关卡链)。以下描述保留作为历史参考。
+>
+> 现行用法:见 [`README.md`](../../README.md) 的「启动入口」章节。
+
+1. `.\scripts\start_local.ps1`(免管理员全链;**现已删除,改用 `.\start_production.ps1 -StorylineMode human`**)→ OpenStoryline Web :7860
 2. `STORYLINE_MODE=human` 跑 `scripts\run_workflow.py --production --thread-id video-001 --initial-state-json runtime\initial_state_video-001.json`
 3. 关卡⓪ 挂起 → 网页点【📥 导入视频】→ **确认 Windows 对话框出现复选框**(用户报告的缺陷点)
    → Ctrl+A 多选 3 个 `.mov` → 打开

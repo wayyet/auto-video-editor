@@ -39,20 +39,17 @@ class _StubProc:
 
 @pytest.fixture(autouse=True)
 def _patched_external_calls(monkeypatch: pytest.MonkeyPatch) -> None:
-    """屏蔽节点 2/3 的真实进程拉起;_wait_for_ready 永远返回 True。"""
+    """屏蔽节点 2/3 的真实进程拉起;_wait_for_ready 永远返回 True。
+
+    2026-10:node_02 已不再启动任何进程(只剩 HTTP 探测),
+    因此**没有** ``m2.subprocess`` 可 patch —— 保留 ``_wait_for_ready`` 桩。
+    """
     import nodes.node_02_launch_openstoryline as m2
     import nodes.node_03_open_preview as m3
-
-    def fake_popen(*args, **kwargs):
-        return _StubProc(pid=22222)
 
     def fake_health(url, timeout_s):
         return True
 
-    monkeypatch.setattr(
-        m2, "subprocess",
-        type("S", (), {"Popen": staticmethod(fake_popen), "PIPE": -1}),
-    )
     monkeypatch.setattr(m2, "_wait_for_ready", fake_health)
 
     monkeypatch.setattr(
@@ -271,8 +268,8 @@ def test_node_03_monkeypatch_subprocess_truly_effective(
         (),
         {"Popen": staticmethod(_fake_popen), "PIPE": -1},
     )
-    # 镜像节点 2 / 节点 3 的 monkeypatch 写法
-    monkeypatch.setattr(m2, "subprocess", fake_subprocess)
+    # 2026-10:node_02 已彻底去掉进程启动能力(模块里没有 subprocess),
+    # 所以**没有** m2.subprocess 可 patch —— 只桩 m2._wait_for_ready。
     monkeypatch.setattr(m2, "_wait_for_ready", lambda url, t: True)
     monkeypatch.setattr(m3, "subprocess", fake_subprocess)
 
@@ -297,8 +294,7 @@ def test_node_03_monkeypatch_subprocess_truly_effective(
     g.invoke(Command(resume=True), config={"configurable": {"thread_id": thread_id}})
 
     # 节点 3 应被 fake 截获 1 次(开 Edge);
-    # 节点 2 应被 fake 截获 1 次(拉起 openstoryline 服务)。
-    # 在 Linux CI 上节点 2 是 fake_health 路径,但 popen_factory 还是会被 fake 截获。
+    # 节点 2 不再启动任何进程(2026-10)—— 模块里根本没有 subprocess。
     assert fake_calls["n"] >= 1, (
         f"fake.Popen 应至少被调 1 次(节点 3),实际 {fake_calls['n']} 次。"
         "若 == 0,说明节点 3 没走 fake 路径,monkeypatch 失效 — 对照验证报告 §5.3。"
@@ -306,4 +302,8 @@ def test_node_03_monkeypatch_subprocess_truly_effective(
     assert real_calls["n"] == 0, (
         f"真实 subprocess.Popen 应不被调用,实际被调 {real_calls['n']} 次。"
         "若 > 0,说明 monkeypatch 没真正替换节点 3 的 Popen 路径 — 对照验证报告 §5.3。"
+    )
+    # 节点 2 彻底没有进程启动能力 → 永远不会产生 Popen 调用
+    assert not hasattr(m2, "subprocess"), (
+        "节点 2 不应再有 subprocess 模块引用(Web 生命周期归 start_production.ps1 管)"
     )

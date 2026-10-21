@@ -89,6 +89,12 @@ Phase 4 auto-mode(plan §2.1 / §5 阶段 0~5):
 - ``launch_openstoryline`` 节点在 ``auto`` 模式下**禁用 vendored Web UI**
   启动(返回 ``openstoryline_ready=True`` + ``node_02_auto_skipped`` 状态),
   减少无谓 uvicorn 子进程开销,呼应"auto-mode 不依赖 vendored Web UI"。
+- 2026-10 启动入口统一后:``launch_openstoryline`` 节点在 **human 模式下也不再
+  启动任何进程** —— Web 生命周期归 ``start_production.ps1``(Phase 0.6/0.7)管,
+  节点只做 HTTP 探测。探测成功 → ``openstoryline_ready=True`` +
+  ``openstoryline_pid=None`` + ``node_02_openstoryline_reused``;
+  探测失败 → ``openstoryline_ready=False``,并由 ``_route_after_launch`` 门禁
+  **直接 END**(不开浏览器、不进人工关卡)。
 - ``_mcp_passthrough.py`` 已删除,19 节点全部走 ``storyline_capabilities/``
   本地能力层;``asr_runner.py`` 仍走 vendored venv 子进程调 funasr(主 venv
   不能装 torch),这是 ADR-001 阻塞项,**不**在阶段 7 删除范围内。
@@ -240,14 +246,31 @@ def _route_after_import(state: WorkflowState) -> str:
 # ---------------------------------------------------------------------------
 # Phase 4:auto-mode 19 节点图的条件路由(plan_v4 §5 阶段 0)
 # ---------------------------------------------------------------------------
+def _route_after_launch(state: WorkflowState) -> str:
+    """``launch_openstoryline`` 之后的门禁。
+
+    - **auto 模式**:不依赖 Web UI,照常进入 ``open_preview``。
+    - **human 模式**:``openstoryline_ready`` 为假(``node_02`` 探测不到
+      健康的 OpenStoryline Web)→ **直接 END**,不开浏览器、不进人工关卡。
+
+    背景:Web 生命周期归 ``start_production.ps1`` 管,``node_02`` 只探测。
+    服务没就绪时若继续往下走,会打开一个连不上的网页并卡在人工关卡,
+    看起来像"跑了但没结果" —— 这里改成**早退**。
+    """
+    mode = _STORYLINE_MODE_OVERRIDE.get() or STORYLINE_MODE
+    if mode == "auto":
+        return "open_preview"
+    return "open_preview" if state.get("openstoryline_ready") else "__end__"
+
+
 def _route_mode(state: WorkflowState) -> str:
     """open_preview 之后的双模分支:返回 ``"checkpoint0_storyline_plan"`` 或
     ``"storyline_load_media"``,由 ``config.STORYLINE_MODE`` 控制。
 
     默认 ``"human"`` 完全保留现有路径;``"auto"`` 走新 19 节点确定性图。
 
-    注意:build_graph 可显式接受 ``storyline_mode_override`` 参数强制覆盖,
-    便于测试在同一个进程内跑两种 mode。
+    模式来源:``_STORYLINE_MODE_OVERRIDE`` contextvar(测试注入)优先,
+    否则用模块级 ``STORYLINE_MODE``(来自 ``config``,import 时求值)。
     """
     mode = _STORYLINE_MODE_OVERRIDE.get() or STORYLINE_MODE
     if mode == "auto":
@@ -575,7 +598,13 @@ def _build_state_graph():
     # 但不再从 START 自动跑 — 避免每次 graph.invoke 都无谓删除
     # CACHE_PATHS_TO_CLEAN 中的剪映/OpenStoryline 临时目录。
     g.add_edge(START, "launch_openstoryline")
-    g.add_edge("launch_openstoryline", "open_preview")
+    # 门禁:human 模式下 OpenStoryline Web 未就绪 → 直接 END
+    # (auto 模式不依赖 Web UI,照常走 open_preview)
+    g.add_conditional_edges(
+        "launch_openstoryline",
+        _route_after_launch,
+        {"open_preview": "open_preview", END: END},
+    )
 
     # Phase 4:open_preview 之后做双模分支(plan_v4 §2.1 / §5 阶段 0)
     g.add_conditional_edges(

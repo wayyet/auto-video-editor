@@ -34,10 +34,6 @@ def _patch_external(monkeypatch: pytest.MonkeyPatch) -> None:
     import nodes.node_02_launch_openstoryline as m2
     import nodes.node_03_open_preview as m3
 
-    monkeypatch.setattr(
-        m2, "subprocess",
-        type("S", (), {"Popen": staticmethod(lambda *a, **k: _StubProc()), "PIPE": -1}),
-    )
     monkeypatch.setattr(m2, "_wait_for_ready", lambda url, t: True)
 
     monkeypatch.setattr(

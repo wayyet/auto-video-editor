@@ -3,7 +3,7 @@
 #
 # 与 start_production.ps1 对称 —— 把启动时拉起的进程 / 容器按逆序停掉:
 #   Phase 1  python run_workflow.py + agent_gate worker
-#   Phase 2  OpenStoryline 本地进程(MCP + Web,按 PID 文件 kill + 命令行兜底)
+#   Phase 2  OpenStoryline 本地 Web(按 PID 文件 kill + 命令行兜底)
 #   Phase 3  edb-postgres16 容器 (复用 scripts\stop_postgres.ps1)
 #   Phase 4  -StopDockerDesktop 才停 Docker Desktop(docker desktop stop)
 #   Phase 5  -CleanState 才删 initial_state JSON
@@ -14,13 +14,16 @@
 #   - 默认不删任何数据(命名卷、outputs、drafts、checkpoints 全保留)
 #   - 不需要管理员权限(只有 -StopDockerDesktop 路径需要)
 #   - UTF-8 控制台 + 日志,与 start_production.ps1 同风格
+#   - **所有权口径**:PID 文件里 ``reused=true`` 表示那个 Web 是外部进程,
+#     本脚本**不拥有**它 → PID kill 与命令行兜底都不执行,只提示手动处理。
+#     PID 文件缺失 / 解析失败 → 保持现有命令行兜底。
 #
 # 用法(普通 Windows PowerShell 即可):
 #   .\stop_production.ps1                                # 默认安全停止
 #   .\stop_production.ps1 -RemoveContainers              # stop + rm 两个容器
 #   .\stop_production.ps1 -StopDockerDesktop             # 顺带关 Docker Desktop
 #   .\stop_production.ps1 -CleanState -CleanHeartbeat    # 清残留
-#   .\stop_production.ps1 -WhatIf                        # 只打印计划
+#   .\stop_production.ps1 -WhatIf                        # 只打印计划(零副作用)
 # ============================================================
 
 [CmdletBinding()]
@@ -48,12 +51,54 @@ try {
 # ---------------------------------------------------------------
 $RepoRoot      = (Resolve-Path (Join-Path $PSScriptRoot '.')).Path
 $LogsDir       = Join-Path $RepoRoot 'logs'
-if (-not (Test-Path $LogsDir)) { New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null }
 $Timestamp     = Get-Date -Format 'yyyyMMdd_HHmmss'
 $LogFile       = Join-Path $LogsDir ("stop_${Timestamp}.log")
 $StopPostgres  = Join-Path $RepoRoot 'scripts\stop_postgres.ps1'
 $StateJson     = Join-Path $RepoRoot ("runtime\initial_state_{0}.json" -f $ThreadId)
 $HeartbeatFile = 'C:\ProgramData\VideoWorkflow\heartbeat.txt'
+
+# ---------------------------------------------------------------
+# WhatIf:只显示计划,不做任何修改
+#   必须在"建 logs/ 目录 / 建日志文件 / banner"之前 —— 零副作用。
+#   用 Write-Plan(只 Write-Host),不碰 $LogFile。
+# ---------------------------------------------------------------
+function Write-Plan {
+    param([string]$Text, [string]$Color = 'Cyan')
+    Write-Host $Text -ForegroundColor $Color
+}
+
+if ($WhatIf) {
+    Write-Plan '[WhatIf] 不会执行任何修改,以下为计划:' 'Yellow'
+    Write-Plan '  Phase 1:kill python run_workflow.py (--production) + agent_gate worker'
+    Write-Plan '  Phase 2:Stop-Process OpenStoryline Web (按 PID 文件 + 命令行兜底)'
+    Write-Plan '         (PID 文件标记 reused=true 时 → 复用进程保留不动,只提示手动处理)'
+    if ($RemoveContainers) {
+        Write-Plan "  Phase 3:$StopPostgres -Remove (容器删,卷永远保留)"
+    } else {
+        Write-Plan "  Phase 3:$StopPostgres (容器保留,卷永远保留)"
+    }
+    if ($StopDockerDesktop) {
+        Write-Plan '  Phase 4:docker desktop stop(关 Docker Desktop 本身,免管理员)'
+    } else {
+        Write-Plan '  Phase 4:[跳过 -StopDockerDesktop 未传]'
+    }
+    if ($CleanState) {
+        Write-Plan "  Phase 5:删除 $StateJson"
+    } else {
+        Write-Plan '  Phase 5:[跳过 -CleanState 未传]'
+    }
+    if ($CleanHeartbeat) {
+        Write-Plan "  Phase 6:删除 $HeartbeatFile"
+    } else {
+        Write-Plan '  Phase 6:[跳过 -CleanHeartbeat 未传]'
+    }
+    exit 0
+}
+
+# ---------------------------------------------------------------
+# 从这里开始才允许有副作用
+# ---------------------------------------------------------------
+if (-not (Test-Path $LogsDir)) { New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null }
 
 # ---------------------------------------------------------------
 # 日志函数:同时写控制台 + 日志文件
@@ -62,7 +107,7 @@ function Write-Phase {
     param([string]$Text, [string]$Color = 'Cyan')
     $line = "[$(Get-Date -Format 'HH:mm:ss')] $Text"
     Write-Host $line -ForegroundColor $Color
-    Add-Content -Path $LogFile -Value $line -Encoding UTF8
+    Add-Content -Path $LogFile -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue
 }
 function Write-PhaseOk   { param([string]$Text) Write-Phase "✓ $Text" 'Green' }
 function Write-PhaseWarn { param([string]$Text) Write-Phase "! $Text" 'Yellow' }
@@ -77,39 +122,6 @@ Write-Phase ("ThreadId : {0}" -f $ThreadId) 'Magenta'
 Write-Phase ("日志路径 : {0}" -f $LogFile) 'Magenta'
 Write-Phase ('=' * 60) 'Magenta'
 
-# ---------------------------------------------------------------
-# WhatIf:只显示计划,不做任何修改
-# ---------------------------------------------------------------
-if ($WhatIf) {
-    Write-Phase "[WhatIf] 不会执行任何修改,以下为计划:" 'Yellow'
-    Write-Phase "  Phase 1:kill python run_workflow.py (--production) + agent_gate worker"
-    if ($RemoveContainers) {
-        Write-Phase "  Phase 2:Stop-Process OpenStoryline MCP+Web (按 PID 文件 + 命令行兜底) + 清 PID 文件"
-    } else {
-        Write-Phase "  Phase 2:Stop-Process OpenStoryline MCP+Web (按 PID 文件 + 命令行兜底)"
-    }
-    if ($RemoveContainers) {
-        Write-Phase "  Phase 3:$StopPostgres -Remove (容器删,卷永远保留)"
-    } else {
-        Write-Phase "  Phase 3:$StopPostgres (容器保留,卷永远保留)"
-    }
-    if ($StopDockerDesktop) {
-        Write-Phase "  Phase 4:docker desktop stop(关 Docker Desktop 本身,免管理员)"
-    } else {
-        Write-Phase "  Phase 4:[跳过 -StopDockerDesktop 未传]"
-    }
-    if ($CleanState) {
-        Write-Phase "  Phase 5:删除 $StateJson"
-    } else {
-        Write-Phase "  Phase 5:[跳过 -CleanState 未传]"
-    }
-    if ($CleanHeartbeat) {
-        Write-Phase "  Phase 6:删除 $HeartbeatFile"
-    } else {
-        Write-Phase "  Phase 6:[跳过 -CleanHeartbeat 未传]"
-    }
-    exit 0
-}
 
 # ===============================================================
 # Phase 1 — kill python run_workflow.py
@@ -152,19 +164,22 @@ try {
 }
 
 # ===============================================================
-# Phase 2 — stop OpenStoryline 本地进程(MCP + Web)
+# Phase 2 — stop OpenStoryline 本地 Web
 #   优先按 PID 文件 kill;文件缺失 / 解析失败时按命令行兜底
-#   匹配 open_storyline.mcp.server 或 agent_fastapi:app 的 python.exe
+#   **所有权口径**:PID 文件 reused=true → 那是外部进程,本脚本不拥有它,
+#   PID kill 与命令行兜底(agent_fastapi:app)都不执行,只提示手动处理。
 # ===============================================================
 Write-Phase ''
-Write-Phase "Phase 2:停止 OpenStoryline 本地进程(MCP :8001 + Web :7860)" 'Cyan'
+Write-Phase "Phase 2:停止 OpenStoryline 本地 Web(:7860)" 'Cyan'
 
 # 收集要 kill 的 PID:先扫 PID 文件,再扫命令行兜底
 $OsMcpPort = 8001
 $OsWebPort = 7860
-$LogsDir = Join-Path $RepoRoot 'logs'
 $pidsToKill = [System.Collections.Generic.HashSet[int]]::new()
 $pidsSource = [System.Collections.Generic.List[string]]::new()
+# reused=true → 外部复用进程,跳过命令行兜底里的 agent_fastapi:app 匹配
+$skipWebCmdFallback = $false
+$ownershipState = 'unknown'   # owned | reused | not-found
 
 # 路径 1:读最新 PID 文件(按 LastWriteTime 倒序取一个)
 $latestPidFile = Get-ChildItem -Path $LogsDir -Filter 'openstoryline_pids_*.json' -ErrorAction SilentlyContinue |
@@ -172,8 +187,15 @@ $latestPidFile = Get-ChildItem -Path $LogsDir -Filter 'openstoryline_pids_*.json
 if ($null -ne $latestPidFile) {
     try {
         $prev = Get-Content -Path $latestPidFile.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-        if ($null -ne $prev -and $prev.reused -ne $true) {
-            foreach ($pidName in @('mcp_pid', 'web_pid')) {
+        if ($null -ne $prev -and $prev.reused -eq $true) {
+            # 外部复用:两条路径都不执行
+            $skipWebCmdFallback = $true
+            $ownershipState = 'reused'
+            Write-Phase "  读 PID 文件:{0}" -f $latestPidFile.Name
+            Write-Phase "  PID 文件标记为 reused(端口复用)—— 复用的 Web 保留不动,需要手动停止" 'Yellow'
+        } elseif ($null -ne $prev) {
+            $ownershipState = 'owned'
+            foreach ($pidName in @('mcp_pid', 'web_pid', 'web_cmd_pid')) {
                 $pidVal = $prev.$pidName
                 if ($null -ne $pidVal -and $pidVal -gt 0 -and -not $pidsToKill.Contains([int]$pidVal)) {
                     $pidsToKill.Add([int]$pidVal) | Out-Null
@@ -182,32 +204,40 @@ if ($null -ne $latestPidFile) {
             }
             Write-Phase ("  读 PID 文件:{0}" -f $latestPidFile.Name)
         } else {
-            Write-Phase "  PID 文件标记为 reused(端口复用),跳过 PID 路径,走命令行兜底"
+            Write-PhaseWarn "PID 文件内容为空,走命令行兜底"
         }
     } catch {
         Write-PhaseWarn "解析 PID 文件失败(走命令行兜底): $($_.Exception.Message)"
     }
+} else {
+    Write-Phase "  未找到 PID 文件(走命令行兜底)"
 }
 
 # 路径 2:命令行兜底(Get-CimInstance 查 python.exe 命令行)
-try {
-    $pyProcs = Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue
-    foreach ($p in $pyProcs) {
-        $cl = $p.CommandLine
-        if ($cl -and ($cl -match 'open_storyline\.mcp\.server' -or $cl -match 'agent_fastapi:app')) {
-            if (-not $pidsToKill.Contains([int]$p.ProcessId)) {
-                $pidsToKill.Add([int]$p.ProcessId) | Out-Null
-                $preview = if ($cl.Length -gt 100) { $cl.Substring(0, 100) + '...' } else { $cl }
-                $pidsSource.Add("命令行 PID={0} ({2})" -f $p.ProcessId, $preview) | Out-Null
+#   reused=true → 跳过 agent_fastapi:app(那是外部复用的 Web,不能杀)
+if ($skipWebCmdFallback) {
+    Write-Phase "  复用模式:跳过命令行兜底(不杀外部 agent_fastapi:app 进程)" 'Yellow'
+} else {
+    try {
+        $pyProcs = Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue
+        foreach ($p in $pyProcs) {
+            $cl = $p.CommandLine
+            if ($cl -and ($cl -match 'open_storyline\.mcp\.server' -or $cl -match 'agent_fastapi:app')) {
+                if (-not $pidsToKill.Contains([int]$p.ProcessId)) {
+                    $pidsToKill.Add([int]$p.ProcessId) | Out-Null
+                    $preview = if ($cl.Length -gt 100) { $cl.Substring(0, 100) + '...' } else { $cl }
+                    $pidsSource.Add("命令行 PID={0} ({2})" -f $p.ProcessId, $preview) | Out-Null
+                }
             }
         }
+    } catch {
+        Write-PhaseWarn ("查询 python.exe 命令行失败: {0}" -f $_.Exception.Message)
     }
-} catch {
-    Write-PhaseWarn ("查询 python.exe 命令行失败: {0}" -f $_.Exception.Message)
 }
 
 if ($pidsToKill.Count -eq 0) {
     Write-Phase "  未发现 OpenStoryline 进程,无需 kill"
+    if ($ownershipState -eq 'owned') { $ownershipState = 'not-found' }
 } else {
     foreach ($pidVal in $pidsToKill) {
         $alive = Get-Process -Id $pidVal -ErrorAction SilentlyContinue
@@ -225,20 +255,32 @@ if ($pidsToKill.Count -eq 0) {
     }
 }
 
-# 路径 3:端口兜底校验 — 等 ≤5s 看 8001 / 7860 是否释放
-$portDeadline = (Get-Date).AddSeconds(5)
-$portsReleased = $false
-while ((Get-Date) -lt $portDeadline) {
-    $prevEA = $ErrorActionPreference
-    $ErrorActionPreference = 'SilentlyContinue'
-    $mcpOpen = (Test-NetConnection -ComputerName '127.0.0.1' -Port $OsMcpPort -InformationLevel Quiet -WarningAction SilentlyContinue) -eq $true
-    $webOpen = (Test-NetConnection -ComputerName '127.0.0.1' -Port $OsWebPort -InformationLevel Quiet -WarningAction SilentlyContinue) -eq $true
-    $ErrorActionPreference = $prevEA
-    if (-not $mcpOpen -and -not $webOpen) { $portsReleased = $true; break }
-    Start-Sleep -Milliseconds 500
+# 停止状态三态
+switch ($ownershipState) {
+    'owned'   { Write-PhaseOk "停止状态:本次启动所有(已终止)" }
+    'reused'  { Write-Phase "停止状态:复用(保留)—— 复用的 Web 保留不动,需要手动停止" 'Yellow' }
+    'not-found' { Write-Phase "停止状态:未发现进程" 'Yellow' }
+    default   { Write-Phase "停止状态:未确认(PID 文件缺失,已走命令行兜底)" 'Yellow' }
 }
-if (-not $portsReleased) {
-    Write-PhaseWarn "5s 内 8001 / 7860 未释放(可能仍有别处占用)"
+
+# 路径 3:端口兜底校验 — 等 ≤5s 看 8001 / 7860 是否释放
+if ($skipWebCmdFallback) {
+    Write-Phase "  复用模式:跳过端口释放校验(外部 Web 仍占着 :7860,属预期)" 'Yellow'
+} else {
+    $portDeadline = (Get-Date).AddSeconds(5)
+    $portsReleased = $false
+    while ((Get-Date) -lt $portDeadline) {
+        $prevEA = $ErrorActionPreference
+        $ErrorActionPreference = 'SilentlyContinue'
+        $mcpOpen = (Test-NetConnection -ComputerName '127.0.0.1' -Port $OsMcpPort -InformationLevel Quiet -WarningAction SilentlyContinue) -eq $true
+        $webOpen = (Test-NetConnection -ComputerName '127.0.0.1' -Port $OsWebPort -InformationLevel Quiet -WarningAction SilentlyContinue) -eq $true
+        $ErrorActionPreference = $prevEA
+        if (-not $mcpOpen -and -not $webOpen) { $portsReleased = $true; break }
+        Start-Sleep -Milliseconds 500
+    }
+    if (-not $portsReleased) {
+        Write-PhaseWarn "5s 内 8001 / 7860 未释放(可能仍有别处占用)"
+    }
 }
 
 if ($RemoveContainers) {
