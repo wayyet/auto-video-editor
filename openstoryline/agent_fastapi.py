@@ -57,6 +57,12 @@ from open_storyline.config import Settings
 from open_storyline.storage.agent_memory import ArtifactStore
 from open_storyline.mcp.hooks.node_interceptors import ToolInterceptor
 from open_storyline.mcp.hooks.chat_middleware import set_mcp_log_sink, reset_mcp_log_sink
+from open_storyline.mcode_media import (
+    MCodeMediaError,
+    allowed_media_roots,
+    prepare_media_copies,
+    resolve_media_root,
+)
 
 WEB_DIR = os.path.join(ROOT_DIR, "web")
 STATIC_DIR = os.path.join(WEB_DIR, "static")
@@ -295,6 +301,48 @@ def resolve_media_dir(cfg_media_dir: str, session_id: str) -> str:
     project_dir = os.path.dirname(root)
     leaf = os.path.basename(root)
     return os.path.join(project_dir, session_id, leaf)
+
+
+async def resolve_session_media_paths(
+    request: Request,
+    session_id: str,
+    files: list[dict],
+) -> list[dict]:
+    """按 ``media_id`` **服务端**解析每个素材的落盘路径。
+
+    为什么必须服务端解析
+    --------------------
+    前端的 ``public_media`` 只返回 ``{id, name, kind, thumb_url, file_url}``,
+    **不暴露** ``path``。所以网页端发来的 ``stored_path`` 常常是**空串**
+    (``app.js``:``stored_path: media.path || media.stored_path || ""``)。
+    只信客户端路径 = 「导入视频」直接失败。
+
+    所以以**服务端会话媒体登记表**为准(``media_id -> MediaMeta.path``,
+    该登记表会随 ``session_state.json`` 持久化,重启后仍在),
+    客户端的 ``stored_path`` 只作兜底。两条路拿到的路径后面都要过
+    「必须位于本会话 media 目录内」的校验。
+    """
+    server_paths: dict[str, str] = {}
+    try:
+        store: SessionStore = request.app.state.sessions
+        sess = await store.get_or_404(session_id)
+        for mid, meta in (getattr(sess, "load_media", None) or {}).items():
+            server_paths[str(mid)] = str(getattr(meta, "path", "") or "")
+    except Exception as exc:  # noqa: BLE001
+        # 会话不存在 / 登记表不可用 -> 退回客户端路径,后续校验会兜住
+        logger.warning("解析会话媒体登记表失败(退回客户端 stored_path): %s", exc)
+        server_paths = {}
+
+    out: list[dict] = []
+    for f in files or []:
+        item = dict(f)
+        mid = str(item.get("media_id") or "").strip()
+        client_path = str(item.get("stored_path") or "").strip()
+        resolved = server_paths.get(mid) or client_path
+        item["stored_path"] = resolved
+        item["path_source"] = "session_registry" if server_paths.get(mid) else "client"
+        out.append(item)
+    return out
 
 
 def sanitize_filename(name: str) -> str:
@@ -2738,6 +2786,47 @@ async def import_video_endpoint(request: Request):
 
     job_id, _req = pending
 
+    # ---- 素材准备:复制到 agent_gate 素材白名单目录 ----
+    # 网页端上传的视频落在 ``openstoryline/outputs/<sid>/media/``,**不在**白名单里。
+    # mcode / agent_gate 只能用白名单内的绝对路径,所以这里做一份**副本**:
+    # 副本落在 ``<auto-video-editor>/inputs/<session_id>/``。
+    # 源文件不动(不移动、不删除、不覆盖)。
+    #
+    # 顺序很关键:**先复制成功,再写导入结果** —— 复制失败就不能让图侧拿到
+    # 「已就绪」的信号,否则图会拿着没准备好的素材继续跑。
+    try:
+        app_cfg = getattr(request.app.state, "cfg", None)
+        project_media_dir = str(
+            getattr(getattr(app_cfg, "project", None), "media_dir", "") or ""
+        )
+        if not project_media_dir:
+            raise MCodeMediaError(
+                "拿不到 project.media_dir 配置(服务未完成初始化?)"
+            )
+        session_media_dir = resolve_media_dir(project_media_dir, web_session_id)
+        # 源路径按 media_id **服务端**解析(前端不暴露 path,客户端 stored_path 常为空)。
+        # 注意:这里用解析后的副本去复制,``files`` 本身不动 ——
+        # 导入结果载荷必须保持原样(图侧契约不变)。
+        copy_files = await resolve_session_media_paths(request, web_session_id, files)
+        # 只有带 media_id 的文件才复制 —— 目标名是 <media_id>_<净化stem><ext>,
+        # 没有 media_id 就没有安全的命名依据。旧版单文件载荷可能缺这个字段,
+        # 这种情况下**跳过复制**(记日志),但导入本身照旧成功(载荷不变)。
+        copyable = [f for f in copy_files if str(f.get("media_id") or "").strip()]
+        if len(copyable) != len(copy_files):
+            logger.warning(
+                "有 %d 个素材缺少 media_id,已跳过副本(导入本身不受影响): session_id=%s",
+                len(copy_files) - len(copyable), web_session_id,
+            )
+        prepared_media = prepare_media_copies(
+            web_session_id,
+            copyable,
+            media_root=resolve_media_root(getattr(app_cfg, "mcode", None)),
+            allowed_roots=allowed_media_roots(),
+            session_media_dir=Path(session_media_dir),
+        )
+    except MCodeMediaError as e:
+        raise HTTPException(status_code=500, detail=f"素材准备失败:{e}")
+
     # ---- 回写结果文件(节点下一轮轮询即命中)----
     try:
         write_import_result(
@@ -2747,12 +2836,16 @@ async def import_video_endpoint(request: Request):
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"写回导入结果失败: {e}")
 
+    # 首个文件的标识(修掉原先引用未定义变量 media_id / filename 的缺陷)
+    first = files[0] if files else {}
+
     return JSONResponse({
         "ok": True,
         "job_id": job_id,
         "web_session_id": web_session_id,
-        "media_id": media_id,
-        "filename": filename,
+        "media_id": str(first.get("media_id") or ""),
+        "filename": str(first.get("filename") or ""),
+        "prepared_media": prepared_media,
     })
 
 

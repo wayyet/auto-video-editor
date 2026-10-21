@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import timedelta
+from pathlib import Path
 from typing import Optional, Any
 import logging
 
@@ -17,8 +18,23 @@ from open_storyline.nodes.node_manager import NodeManager
 from open_storyline.mcp.hooks.chat_middleware import handle_tool_errors, on_progress, log_tool_request
 from open_storyline.mcp.sampling_handler import make_sampling_callback
 from open_storyline.skills.skills_io import load_skills
+from open_storyline.mcode_chat_model import MCodeChatModel
+from open_storyline.mcode_media import (
+    allowed_media_roots,
+    build_media_manifest,
+    resolve_media_root,
+)
 
 logger = logging.getLogger(__name__)
+
+
+class MCodeConfigError(RuntimeError):
+    """mcode 分支的配置错误。
+
+    触发场景(全部在建 agent **之前**抛,不静默回退):
+    - ``[mcode].cwd`` 没配 / 目录不存在
+    - 操作员目录里缺 ``.mcp.json`` 或 ``AGENTS.md``
+    """
 
 async def validate_api_key(base_url: str, api_key: str, model: str, provider: str = "LLM", timeout: float = 10.0) -> bool:
     """
@@ -143,6 +159,115 @@ class ClientContext:
     lang: str = "zh" # Default language: Chinese
 
 
+# --------------------------------------------------------------------------
+# mcode 分支辅助
+# --------------------------------------------------------------------------
+
+def _is_mcode_model(model_name: str) -> bool:
+    """这个模型名是不是 mcode 档位。
+
+    判定只看**调用方显式传进来的** ``llm_override["model"]``。
+    ``config.toml`` 里的 ``[llm].model`` 不算 —— 本轮网页端模型选择**没有**接线,
+    不能让人以为「在网页端选了 mcode 就能用」。
+    """
+    return str(model_name or "").strip().lower().startswith("mcode")
+
+
+def _resolve_mcode_mode(model_name: str, default_mode: str) -> str:
+    """mcode 档位 -> 上下文模式。
+
+    - ``mcode-operator`` -> ``standard``(完整 agent 能力,开销大)
+    - ``mcode-chat``     -> ``lightweight``(轻量,便宜)
+    - 其他 ``mcode*``    -> 用 ``cfg.mcode.mode``
+    """
+    name = str(model_name or "").strip().lower()
+    if name == "mcode-operator":
+        return "standard"
+    if name == "mcode-chat":
+        return "lightweight"
+    mode = str(default_mode or "standard").strip().lower()
+    return mode if mode in ("standard", "lightweight") else "standard"
+
+
+def _validate_mcode_cwd(cwd: str) -> Path:
+    """校验 mcode 的操作员目录。**不满足就抛明确错误**,绝不静默回退。"""
+    raw = str(cwd or "").strip()
+    if not raw:
+        raise MCodeConfigError(
+            "mcode 未配置操作员目录。请设置 openstoryline/config.toml.local 的 "
+            "[mcode].cwd(或环境变量 OPENSTORYLINE_MCODE_CWD)指向操作员目录。"
+        )
+    path = Path(raw).expanduser()
+    if not path.is_dir():
+        raise MCodeConfigError(f"mcode 操作员目录不存在: {path}")
+    resolved = path.resolve()
+    if not (resolved / ".mcp.json").is_file():
+        raise MCodeConfigError(
+            f"mcode 操作员目录缺少 .mcp.json(mcode 靠它拿到 MCP 工具配置): {resolved}"
+        )
+    if not (resolved / "AGENTS.md").is_file():
+        raise MCodeConfigError(
+            f"mcode 操作员目录缺少 AGENTS.md(mcode 靠它拿到行为说明): {resolved}"
+        )
+    return resolved
+
+
+async def _build_mcode_agent(
+    cfg: Settings,
+    session_id: str,
+    store: ArtifactStore,
+    model_name: str,
+):
+    """mcode 分支:用 ``mcode exec`` 子进程当模型。
+
+    与普通分支的差别(每一条都是有意的):
+    - **跳过** LLM / VLM 两处 ``validate_api_key`` —— mcode 不走 OpenAI 兼容网关。
+    - **不连 8001** (``connections = {}``)—— 工具由 mcode 自己的 MCP 配置决定。
+    - ``tools=[]`` 且**不注册** LangChain skills 工具 —— skills 是真 LangChain 工具,
+      mcode 用不了。
+    - llm 与 vlm 用**同一个** ``MCodeChatModel`` 实例 —— mcode 不区分多模态,
+      素材由服务端生成并校验过的清单承担。
+    """
+    cwd = _validate_mcode_cwd(cfg.mcode.cwd)
+    mode = _resolve_mcode_mode(model_name, cfg.mcode.mode)
+
+    media_root = resolve_media_root(cfg.mcode)
+    media_dir = (media_root / session_id).resolve()
+    try:
+        manifest = build_media_manifest(media_dir, allowed_media_roots())
+    except Exception as exc:  # noqa: BLE001
+        # 清单生成失败不该阻断建 agent —— 素材清单是「锦上添花」,不是必需项。
+        logger.warning("生成素材清单失败(不阻断): session_id=%s dir=%s err=%s",
+                       session_id, media_dir, exc)
+        manifest = []
+
+    llm = MCodeChatModel(
+        cwd=str(cwd),
+        model=str(model_name or "mcode-cli"),
+        mode=mode,
+        permission=cfg.mcode.permission,
+        max_steps=cfg.mcode.max_steps,
+        timeout_s=cfg.mcode.timeout_s,
+        mcode_bin=(cfg.mcode.bin or None),
+        history_turns=cfg.mcode.history_turns,
+        max_prompt_chars=cfg.mcode.max_prompt_chars,
+        session_id=session_id,
+        media_dir=str(media_dir),
+        media_manifest=manifest,
+    )
+    vlm = llm  # mcode 不区分多模态:同一个实例
+
+    agent = create_agent(
+        model=llm,
+        tools=[],
+        middleware=[log_tool_request, handle_tool_errors],
+        store=store,
+        context_schema=ClientContext,
+    )
+    node_manager = NodeManager([])
+    return agent, node_manager
+
+
 async def build_agent(
     cfg: Settings,
     session_id: str,
@@ -166,6 +291,13 @@ async def build_agent(
     llm_timeout = _get(llm_override, "timeout", cfg.llm.timeout)
     llm_temperature = _get(llm_override, "temperature", cfg.llm.temperature)
     llm_max_retries = _get(llm_override, "max_retries", cfg.llm.max_retries)
+
+    # ---- mcode 分支:在 key 校验之前分流 ----
+    # mcode 不走 OpenAI 兼容网关,所以既不需要 API key,也不连 8001。
+    # 判定只看**调用方显式传入**的 llm_override["model"] —— 本轮网页端模型
+    # 选择没有接线,所以这条分支只能由单测 / 直接调用触发。
+    if _is_mcode_model(_get(llm_override, "model", "")):
+        return await _build_mcode_agent(cfg, session_id, store, str(llm_override.get("model") or ""))
 
     # Validate LLM API key before creating the model
     await validate_api_key(llm_base_url, llm_api_key, llm_model, "LLM", llm_timeout)

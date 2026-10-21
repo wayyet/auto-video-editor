@@ -174,3 +174,18 @@ short_text_margin_rate  = 0.0       # 鐭枃鏈捣濮嬭竟璺濈巼 / sho
 
 text_duration_mode = "with_tts"     # with_tts | with_clip (闅忛厤闊?| 闅忕墖娈?
 is_text_beats      = false          # 鏂囧瓧瀵归綈闊充箰鑺傛媿 / align text with music beats
+
+# ============= mcode 接入 / mcode CLI integration =============
+# 本段全是中性默认值:不含本机绝对路径、不含任何密钥。
+# 本机路径写 config.toml.local(已被 .gitignore 排除),或用环境变量覆盖:
+#   OPENSTORYLINE_MCODE_CWD / OPENSTORYLINE_MCODE_BIN / OPENSTORYLINE_MCODE_MEDIA_ROOT
+[mcode]
+cwd = ""              # 操作员目录(video-ops);空 = 未配置,建 agent 前报明确配置错误
+bin = ""              # mcode 可执行文件;空 = 走 agent_gate.agent_bin.resolve_agent_bin
+mode = "standard"     # standard | lightweight
+permission = "smart"  # 注意:这不是硬权限边界,只是软护栏
+max_steps = 120
+timeout_s = 900
+history_turns = 10
+max_prompt_chars = 60000
+media_root = ""       # 素材白名单根;空 = 从 AUTO_VIDEO_EDITOR_DIR / 仓库根推导

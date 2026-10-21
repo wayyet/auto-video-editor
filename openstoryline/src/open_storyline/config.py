@@ -251,6 +251,37 @@ class PlanTimelineProConfig(ConfigBaseModel):
     is_text_beats: bool = False  
     # Whether text start time should align with detected music beats
 
+class MCodeConfig(ConfigBaseModel):
+    """mcode CLI 接入配置。
+
+    注意:路径字段一律用 ``str`` 而不是 ``Path``。
+    ``ConfigBaseModel`` 会把 ``Path`` 字段按 config 目录解析相对路径,
+    ``""`` 会被解析成 config 目录 → 静默指向错误目录,很难排查。
+    这里坚持用 ``str`` + 显式校验。
+
+    字段说明:
+      cwd            操作员目录(video-ops);空 = 未配置,建 agent 前报明确配置错误
+      bin            mcode 可执行文件;空 = 走 ``agent_gate.agent_bin.resolve_agent_bin``
+      mode           mcode 上下文模式;standard 重、lightweight 轻
+      permission     mcode 权限策略。**不是硬权限边界**,只是软护栏
+      max_steps      单次 mcode exec 的最大步数
+      timeout_s      单次 mcode exec 的超时秒数
+      history_turns  拼 prompt 时保留的完整对话轮次上限
+      max_prompt_chars 拼 prompt 的字符上限
+      media_root     素材白名单根;空 = 从 AUTO_VIDEO_EDITOR_DIR 推导
+    """
+
+    cwd: str = ""
+    bin: str = ""
+    mode: Literal["standard", "lightweight"] = "standard"
+    permission: str = "smart"
+    max_steps: int = 120
+    timeout_s: int = 900
+    history_turns: int = 10
+    max_prompt_chars: int = 60000
+    media_root: str = ""
+
+
 class Settings(ConfigBaseModel):
     developer: DeveloperConfig
     project: ProjectConfig
@@ -273,6 +304,8 @@ class Settings(ConfigBaseModel):
     recommend_text: RecommendTextConfig
     plan_timeline: PlanTimelineConfig
     plan_timeline_pro: PlanTimelineProConfig
+    # mcode 接入:用 default_factory,没有 [mcode] 段的既有 config.toml 仍能加载
+    mcode: MCodeConfig = Field(default_factory=MCodeConfig)
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -297,6 +330,11 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
       OPENSTORYLINE_LLM_MODEL / OPENSTORYLINE_LLM_BASE_URL / OPENSTORYLINE_LLM_API_KEY
       OPENSTORYLINE_VLM_MODEL / OPENSTORYLINE_VLM_BASE_URL / OPENSTORYLINE_VLM_API_KEY
 
+    mcode 接入相关(只覆盖路径类字段;mode / permission / 数值项走 config 文件):
+      OPENSTORYLINE_MCODE_CWD        —— 操作员目录
+      OPENSTORYLINE_MCODE_BIN        —— mcode 可执行文件
+      OPENSTORYLINE_MCODE_MEDIA_ROOT —— 素材白名单根
+
     只写其中一部分也可以(没写的沿用文件里的值)。
     """
     for section in ("llm", "vlm"):
@@ -305,6 +343,12 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
             val = os.getenv(f"OPENSTORYLINE_{section.upper()}_{field_name.upper()}")
             if val:
                 block[field_name] = val
+
+    mcode_block = data.setdefault("mcode", {})
+    for field_name in ("cwd", "bin", "media_root"):
+        val = os.getenv(f"OPENSTORYLINE_MCODE_{field_name.upper()}")
+        if val:
+            mcode_block[field_name] = val
     return data
 
 
