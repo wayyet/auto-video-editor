@@ -1,0 +1,25 @@
+%% 图3：mcode 的两种用法 —— launcher（主方案·当操作员） vs cli_client（备选·当大模型替身）
+%% 关键差异：主方案 mcode 自己调 MCP 工具；备选 mcode 只回文本，由代码负责拼装
+flowchart LR
+    subgraph MAIN["主方案 launcher · mcode 当操作员"]
+        direction TB
+        A1["drive.py:104<br/>launcher.run(BATCH_PROMPT)"]
+        A2["mcode exec --cwd 操作员目录<br/>--config 加锁配置"]
+        A3["mcode 自己调 MCP 工具<br/>gate_next_tasks / gate_submit_result"]
+        A4["每会话一次 Popen<br/>一会话最多 batch=5 题"]
+        A1 --> A2 --> A3 --> A4
+    end
+    subgraph ALT["备选 cli_client · mcode 当大模型替身"]
+        direction TB
+        B1["节点里 chat()<br/>get_default_client 返回 McodeCLIClient"]
+        B2["cli_client.py:328 _invoke<br/>mcode exec --mode lightweight"]
+        B3["每次 chat() 一次 Popen<br/>请求里无任何工具 只回文本"]
+        B1 --> B2 --> B3
+    end
+    subgraph BOXF["共同落点 · 文件信箱"]
+        direction TB
+        C1["outputs/thread_id/agent_gate/tasks"]
+    end
+    A3 -->|"Agent 提交答案"| C1
+    B3 -->|"答案文本回传给节点"| C1
+    MAIN -.->|"由 drive 统一调度"| ALT

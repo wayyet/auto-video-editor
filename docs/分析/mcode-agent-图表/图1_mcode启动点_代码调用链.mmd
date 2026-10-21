@@ -1,0 +1,20 @@
+%% 图1：mcode agent 的启动点 —— 从 CLI 到 subprocess.Popen 的完整代码调用链
+%% 仓库：E:\Documents\kuaishou\auto-video-editor
+%% 行号对应 agent_gate/ 下的当前实现（2026-10-20 复核）
+flowchart TD
+    OP["操作员终端<br/>python -m agent_gate drive --agent mcode"] --> CLI["cli.py:232<br/>命中 cmd == drive"]
+    CLI --> KW["cli.py:251-252<br/>kw['permission'] = --permission<br/>kw['config'] = --mcode-config"]
+    KW --> BL["cli.py:257 → launcher.py:164<br/>build_launcher('mcode', **kw)"]
+    BL --> ML["launcher.py:133<br/>McodeLauncher 实例化"]
+    ML --> RB["launcher.py:63 → agent_bin.py:145<br/>resolve_agent_bin<br/>环境变量 → PATH → 安装目录"]
+    ML --> DV["drive.py:35<br/>drive 主循环"]
+    DV --> Q{"drive.py:99<br/>next_action == answer_tasks ?"}
+    Q -->|"否 · wait"| SL["drive.py:119<br/>sleep 2s 后重读 status.json"]
+    SL --> DV
+    Q -->|"是"| LR["drive.py:104<br/>launcher.run(BATCH_PROMPT)"]
+    LR --> LRUN["launcher.py:85<br/>AgentLauncher.run"]
+    LRUN --> CMD["launcher.py:153<br/>McodeLauncher.command<br/>拼出 mcode exec 的 argv"]
+    CMD --> RP["launcher.py:87 → cli_client.py:67<br/>run_process"]
+    RP --> POP["cli_client.py:76<br/>subprocess.Popen<br/>提示词走 stdin 管道"]
+    POP --> MC["mcode exec 进程<br/>C:/Users/wayyet/.minimax-code/mcode.cmd"]
+    MC --> OUT["stdout 回收 JSON<br/>写入 agent_sessions/001.out.txt"]

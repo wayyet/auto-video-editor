@@ -1,0 +1,27 @@
+%% 图2：运行期时序 —— 一次 drive 会话里 mcode 与各方的交互
+%% 实测依据：outputs/v006/agent_gate/events.jsonl + agent_sessions/001.out.txt
+sequenceDiagram
+    autonumber
+    participant OP as 操作员终端
+    participant DRV as drive 进程
+    participant MC as mcode exec 进程
+    participant MCP as MCP 服务
+    participant MBX as 文件信箱 outputs 目录
+    participant WRK as worker 进程 LangGraph
+
+    OP->>DRV: agent_gate drive --agent mcode
+    DRV->>MBX: 读 status.json 取 next_action
+    DRV->>MC: Popen mcode exec 提示词走 stdin
+    Note over MC: cwd = 操作员目录<br/>读 .mcp.json 与 AGENTS.md
+    MC->>MCP: 按 .mcp.json 拉起子进程<br/>python -m agent_gate.mcp_server
+    MC->>MCP: gate_next_tasks(thread_id, wait_s, limit)
+    MCP->>MBX: 读 tasks/t_xxx.task.json 与 frames 画面帧
+    MCP-->>MC: 任务 JSON + 画面帧图片
+    MC->>MCP: gate_submit_result(thread_id, task_id, answer)
+    MCP->>MBX: 校验 json_schema 后写 tasks/t_xxx.result.json
+    MCP-->>MC: ok
+    MC-->>DRV: stdout JSON status=succeeded
+    DRV->>MBX: 追加 events.jsonl 的 agent_session
+    WRK->>MBX: chat() 阻塞轮询读到 result.json
+    WRK-->>WRK: chat() 返回 图继续往下跑
+    Note over DRV,MC: 一个会话最多答 batch=5 题<br/>答完即退出会话 下一轮重开一个新 mcode

@@ -1,0 +1,47 @@
+%% 图4：进程与文件拓扑 —— 谁起谁、读写哪个文件
+%% 全部在同一台 Windows 机器上；只有 mcode 会出网调模型
+flowchart TB
+    subgraph HOST["同一台机器 Windows"]
+        direction TB
+        subgraph OPSD["操作员目录 E:/Documents/kuaishou/video-ops · 仓库外"]
+            direction LR
+            F1[".mcp.json<br/>声明 video-agent 服务"]
+            F2["AGENTS.md<br/>mcode 读的操作规则"]
+            F3["mcode.lock.snippet.yaml<br/>去掉内置工具的片段"]
+        end
+        subgraph P1["进程① drive"]
+            G1["agent_gate drive<br/>cli.py:232"]
+        end
+        subgraph P2["进程② mcode"]
+            G2["mcode exec<br/>launcher.py:153"]
+        end
+        subgraph P3["进程③ MCP 服务子进程"]
+            G3["agent_gate.mcp_server<br/>mcp_server.py"]
+        end
+        subgraph P4["进程④ worker"]
+            G4["agent_gate worker<br/>runner.py:212 跑 LangGraph 图"]
+        end
+        subgraph OUT["outputs/thread_id/agent_gate"]
+            direction LR
+            H1["tasks/t_xxx.task.json<br/>出题"]
+            H2["tasks/t_xxx.result.json<br/>交答案"]
+            H3["frames/ 画面帧 jpg"]
+            H4["status.json 心跳"]
+            H5["events.jsonl 事件流"]
+            H6["agent_sessions/00N.out.txt<br/>会话输出"]
+        end
+    end
+    G1 -->|"Popen · cwd=操作员目录"| G2
+    G1 -->|"读事件"| H5
+    G1 -->|"存会话输出"| H6
+    G2 -->|"读 .mcp.json"| F1
+    G2 -->|"读操作规则"| F2
+    G2 -->|"按配置拉起子进程"| G3
+    G2 -.->|"出网调模型 API"| API["MiniMax 模型服务"]
+    G3 -->|"读任务"| H1
+    G3 -->|"写答案"| H2
+    G3 -->|"读画面帧"| H3
+    G3 -->|"读写状态"| H4
+    G4 -->|"chat() 写出题 阻塞等答案"| H1
+    G4 -->|"读到答案 chat() 返回 图继续"| H2
+    G4 -->|"心跳与状态"| H4
