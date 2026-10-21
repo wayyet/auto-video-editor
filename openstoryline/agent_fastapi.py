@@ -45,7 +45,7 @@ SRC_DIR = os.path.join(ROOT_DIR, "src")
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-from open_storyline.agent import build_agent, ClientContext
+from open_storyline.agent import build_agent, ClientContext, is_mcode_model
 from open_storyline.utils.prompts import get_prompt
 from open_storyline.utils.media_handler import scan_media_dir
 from open_storyline.utils.ai_transition_cancel import (
@@ -78,6 +78,14 @@ CHUNK_SIZE = 1024 * 1024  # 1MB
 USE_SESSION_SUBDIR = True
 
 CUSTOM_MODEL_KEY = "__custom__"
+
+# mcode 档位:网页端模型下拉里的两个可选项。
+#   mcode-operator -> mcode standard 模式(完整 agent 能力,开销大)
+#   mcode-chat     -> mcode lightweight 模式(轻量,便宜)
+# 选中任何一个,整个会话的 LLM/VLM 都由 `mcode exec` 子进程驱动
+# (mcode 不区分多模态),不再走 OpenAI 兼容网关,也不需要 API key。
+MCODE_MODEL_KEYS: Tuple[str, ...] = ("mcode-operator", "mcode-chat")
+
 SESSION_STATE_FILENAME = "session_state.json"
 SESSION_STATE_MAX_HISTORY = 2000
 SESSION_STATE_MAX_LC_MESSAGES = 4000
@@ -178,6 +186,94 @@ def _peek_builtin_model_name(kind: str, cfg: Settings) -> str:
         return _s(resolved["model"])
 
     return "unknown model"
+
+
+def _looks_like_placeholder_secret(value: Any) -> bool:
+    """这个密钥字段是不是「空 / 掩码 / 占位符」。
+
+    入库的 ``config.toml`` 里 api_key 是 ``<YOUR_DEEPSEEK_API_KEY>`` 这种占位符,
+    真值只可能来自 ``config.toml.local`` 或环境变量。占位符**不能**当凭证用,
+    拿它去请求网关只会得到 401。
+    """
+    s = str(value or "").strip()
+    if not s or s == MASKED_SECRET:
+        return True
+    return s.startswith("<") and s.endswith(">")
+
+
+def _builtin_credentials_usable(cfg: Settings, kind: str = "llm") -> bool:
+    """内置模型(``[llm]`` / ``[vlm]``)的凭证是否真的可用。"""
+    cfg_block = cfg.llm if kind == "llm" else cfg.vlm
+    resolved, err = _resolve_builtin_model_override(kind, cfg_block)
+    if err or not resolved:
+        return False
+    return not _looks_like_placeholder_secret(resolved.get("api_key"))
+
+
+def _mcode_tiers_available(cfg: Settings) -> List[str]:
+    """mcode 档位当前能不能选。
+
+    判据:``[mcode].cwd`` 已配置**且**目录存在。
+
+    目录里缺 ``.mcp.json`` / ``AGENTS.md`` 不在这里判 —— 那属于运行期配置错误,
+    让用户选中了再拿到明确报错,比悄悄把选项藏起来更好排查。
+    """
+    mcode_cfg = getattr(cfg, "mcode", None)
+    cwd = str(getattr(mcode_cfg, "cwd", "") or "").strip()
+    if not cwd:
+        return []
+    try:
+        if not Path(cwd).expanduser().is_dir():
+            return []
+    except OSError:
+        return []
+    return list(MCODE_MODEL_KEYS)
+
+
+def _resolve_mcode_tier(*keys: Any) -> str:
+    """从若干个模型 key 里解析出「生效的 mcode 档位」。
+
+    LLM 优先;LLM 不是 mcode 档位时再看 VLM。返回空串 = 不走 mcode。
+    """
+    for key in keys:
+        s = str(key or "").strip()
+        if is_mcode_model(s):
+            return s.lower()
+    return ""
+
+
+def _dedup_models(models: List[str]) -> List[str]:
+    """模型下拉去重(保序)。"""
+    out: List[str] = []
+    for m in models:
+        if m and m not in out:
+            out.append(m)
+    return out
+
+
+def _sanitize_model_key(
+    key: Any,
+    allowed: List[str],
+    default: str,
+    *,
+    builtin_name: str,
+    builtin_usable: bool,
+) -> str:
+    """校验「恢复出来的」模型 key 是否还能用,不能用就回落到默认档位。
+
+    两个回落场景:
+
+    1. key 不在当前可选列表里(比如配置变了,旧会话记着一个已下线的模型名);
+    2. key 是内置模型,但它的凭证不可用(占位符 / 缺失)——
+       选它只会每次聊天都报 401,不如直接落到默认档位。
+    """
+    k = str(key or "").strip()
+    if not k or k not in allowed:
+        return default
+    if k == builtin_name and not builtin_usable:
+        return default
+    return k
+
 
 def _stable_dict_key(d: Optional[Dict[str, Any]]) -> str:
     try:
@@ -1335,11 +1431,25 @@ class ChatSession:
         default_llm = _peek_builtin_model_name("llm", self.cfg)
         default_vlm = _peek_builtin_model_name("vlm", self.cfg)
 
-        self.chat_models = [default_llm, CUSTOM_MODEL_KEY]
+        # 内置模型的名字(与「默认档位」区分开:内置模型永远留在下拉里,
+        # 只是可能不是默认选中项)。
+        self.builtin_llm_name = default_llm
+        self.builtin_vlm_name = default_vlm
+
+        # mcode 档位:操作员目录配好了才加进下拉。
+        mcode_tiers = _mcode_tiers_available(self.cfg)
+
+        self.chat_models = _dedup_models([default_llm] + mcode_tiers + [CUSTOM_MODEL_KEY])
         self.chat_model_key = default_llm
 
-        self.vlm_models = [default_vlm, CUSTOM_MODEL_KEY]
+        self.vlm_models = _dedup_models([default_vlm] + mcode_tiers + [CUSTOM_MODEL_KEY])
         self.vlm_model_key = default_vlm
+
+        # 默认档位:内置模型没有可用凭证(占位符 / 缺失)而 mcode 可用时,
+        # 直接默认走 mcode —— 否则用户每次开新会话都要先撞一次 401。
+        if mcode_tiers and not _builtin_credentials_usable(self.cfg, "llm"):
+            self.chat_model_key = mcode_tiers[0]
+            self.vlm_model_key = mcode_tiers[0]
 
         self.developer_mode = is_developer_mode(cfg)
 
@@ -1774,8 +1884,25 @@ class ChatSession:
             sess.lang = "zh"
 
         sess.history = list(data.get("history") or [])
-        sess.chat_model_key = str(data.get("chat_model_key") or sess.chat_model_key)
-        sess.vlm_model_key = str(data.get("vlm_model_key") or sess.vlm_model_key)
+        # 恢复出来的模型 key 必须**现在还能用**:
+        #   - 不在可选列表里(配置变了) -> 回落到默认档位
+        #   - 是内置模型但凭证是占位符/缺失 -> 回落到默认档位
+        #     (旧会话记着 "deepseek-v4-pro",但那把 key 从来就没配过,
+        #      留着它只会让每次聊天都撞 401)
+        sess.chat_model_key = _sanitize_model_key(
+            data.get("chat_model_key"),
+            sess.chat_models,
+            sess.chat_model_key,
+            builtin_name=sess.builtin_llm_name,
+            builtin_usable=_builtin_credentials_usable(sess.cfg, "llm"),
+        )
+        sess.vlm_model_key = _sanitize_model_key(
+            data.get("vlm_model_key"),
+            sess.vlm_models,
+            sess.vlm_model_key,
+            builtin_name=sess.builtin_vlm_name,
+            builtin_usable=_builtin_credentials_usable(sess.cfg, "vlm"),
+        )
         try:
             sess.sent_media_total = int(data.get("sent_media_total", 0) or 0)
         except Exception:
@@ -1990,25 +2117,34 @@ class ChatSession:
                 f"missing={','.join(missing)}"
             )
 
-        # 1) resolve LLM override
-        if self.chat_model_key == CUSTOM_MODEL_KEY:
-            if not isinstance(self.custom_llm_config, dict):
-                raise RuntimeError("please fill in model/base_url/api_key of custom LLM")
-            llm_override = self.custom_llm_config
+        # 0) mcode 档位:网页端选了 mcode-operator / mcode-chat。
+        #    mcode 不走 OpenAI 兼容网关,所以**不查**内置模型配置、
+        #    **不做** API key 校验 —— 凭据那套在这里完全不适用。
+        #    LLM 与 VLM 用同一个档位(mcode 不区分多模态)。
+        mcode_tier = _resolve_mcode_tier(self.chat_model_key, self.vlm_model_key)
+        if mcode_tier:
+            llm_override: Dict[str, Any] = {"model": mcode_tier}
+            vlm_override: Dict[str, Any] = {"model": mcode_tier}
         else:
-            llm_override, err = _resolve_builtin_model_override("llm", self.cfg.llm)
-            if err:
-                raise RuntimeError(err)
+            # 1) resolve LLM override
+            if self.chat_model_key == CUSTOM_MODEL_KEY:
+                if not isinstance(self.custom_llm_config, dict):
+                    raise RuntimeError("please fill in model/base_url/api_key of custom LLM")
+                llm_override = self.custom_llm_config
+            else:
+                llm_override, err = _resolve_builtin_model_override("llm", self.cfg.llm)
+                if err:
+                    raise RuntimeError(err)
 
-        # 2) resolve VLM override
-        if self.vlm_model_key == CUSTOM_MODEL_KEY:
-            if not isinstance(self.custom_vlm_config, dict):
-                raise RuntimeError("please fill in model/base_url/api_key of custom VLM")
-            vlm_override = self.custom_vlm_config
-        else:
-            vlm_override, err = _resolve_builtin_model_override("vlm", self.cfg.vlm)
-            if err:
-                raise RuntimeError(err)
+            # 2) resolve VLM override
+            if self.vlm_model_key == CUSTOM_MODEL_KEY:
+                if not isinstance(self.custom_vlm_config, dict):
+                    raise RuntimeError("please fill in model/base_url/api_key of custom VLM")
+                vlm_override = self.custom_vlm_config
+            else:
+                vlm_override, err = _resolve_builtin_model_override("vlm", self.cfg.vlm)
+                if err:
+                    raise RuntimeError(err)
 
         agent_build_key: Tuple[Any, ...] = (
             "models",

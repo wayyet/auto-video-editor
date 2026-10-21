@@ -47,7 +47,7 @@
 | `src/open_storyline/mcode_chat_model.py` | `MCodeChatModel`:组装命令、跑子进程、翻译结果 |
 | `src/open_storyline/mcode_media.py` | 素材准备:路径解析、复制校验、素材清单 |
 | `src/open_storyline/agent.py` | `build_agent()` 的 mcode 分支 |
-| `agent_fastapi.py` | 「导入视频」端点接入素材准备 |
+| `agent_fastapi.py` | 模型下拉接入 mcode 档位 + `ensure_agent()` 接线 + 「导入视频」端点接入素材准备 |
 
 ### 配置
 
@@ -85,12 +85,22 @@ OPENSTORYLINE_MCODE_MEDIA_ROOT  # 素材白名单根
 | `max_prompt_chars` | `60000` | prompt 字符上限(超了报错,不静默截断当前输入) |
 | `media_root` | `""` | 素材白名单根;空 = `<auto-video-editor>/inputs` |
 
+### 怎么在网页端用起来
+
+1. 配好上面的 `[mcode]` 段(操作员目录 + mcode 可执行文件);
+2. 起网页端:`.\openstoryline\.venv\Scripts\python.exe -m uvicorn agent_fastapi:app --host 127.0.0.1 --port 7860`
+   (cwd = `openstoryline`);
+3. 左侧「LLM 模型」下拉里选 **`mcode-operator`**(完整能力)或 **`mcode-chat`**(轻量省钱)。
+
+下拉里出现 mcode 档位的前提是 `[mcode].cwd` **已配置且目录存在**;没配就看不到这两个选项
+(不给点了就报错的选项)。选中后 LLM 与 VLM 会自动同步成同一个档位 —— mcode 不区分多模态。
+
+**默认档位**:如果内置模型(`[llm]`)的 api_key 还是占位符(入库的 `config.toml` 里就是
+`<YOUR_DEEPSEEK_API_KEY>`)而 mcode 可用,新会话**默认直接走 mcode**,省得先撞一次 401。
+内置模型配了真 key 就仍然默认用它。旧会话恢复时也会做同样判断:内置模型凭证不可用就落回 mcode。
+
 ### 能力边界(重要)
 
-- **网页端模型下拉里没有 mcode 选项**。本轮**模型选择没有接线**:
-  `ensure_agent()` 与 `_resolve_builtin_model_override()` 一字未改,前端下拉也没加
-  `mcode-operator` / `mcode-chat`。所以 mcode 分支**当前只能由单测或直接调用触发**,
-  「网页端选 mcode 就能用」这件事**本轮未验证**,属待后续处理项。
 - **skills 不可用**。mcode 分支不注册 LangChain skills 工具(`tools=[]`),
   skills 是真 LangChain 工具,mcode 用不了。mcode 用什么工具由它自己的
   `.mcp.json` 决定。
@@ -136,13 +146,15 @@ media 目录内」的校验。
 
 | 现象 | 原因 / 处理 |
 |---|---|
+| `LLM API key is invalid or unauthorized ... HTTP 401` | 走的是**内置模型**分支,那把 key 无效。左侧「LLM 模型」改选 `mcode-operator` / `mcode-chat`;或给 `[llm].api_key` 配真 key |
+| 下拉里**看不到** mcode 选项 | `[mcode].cwd` 没配或目录不存在。配好后**重启**网页端 |
+| 网页端还是「导入失败」toast | 旧版本端点有 `NameError` 缺陷,已修;确认服务已重启 |
 | `找不到 mcode 可执行文件` | 装 MiniMax Code,或设 `[mcode].bin` / `OPENSTORYLINE_MCODE_BIN` |
 | `配置的 mcode 可执行文件不存在: ...` | 显式 `bin` 路径写错。**不会**静默换成 PATH 里的别的程序 |
 | `mcode 操作员目录缺少 .mcp.json / AGENTS.md` | 操作员目录不对,或缺文件 |
 | `mcode 未配置操作员目录` | 配 `[mcode].cwd` |
 | `素材准备失败:...` | 看 `detail` 里的具体原因(源文件不在本会话目录 / 校验不过 / 越过白名单) |
 | `mcode exec 超时` | 超时后**整棵进程树**被杀掉(`taskkill /F /T`)。调 `[mcode].timeout_s` |
-| 网页端还是「导入失败」toast | 旧版本端点有 `NameError` 缺陷,已修;确认服务已重启 |
 
 ### 测试
 

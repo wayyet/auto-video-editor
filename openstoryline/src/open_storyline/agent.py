@@ -163,14 +163,25 @@ class ClientContext:
 # mcode 分支辅助
 # --------------------------------------------------------------------------
 
-def _is_mcode_model(model_name: str) -> bool:
+def is_mcode_model(model_name: str) -> bool:
     """这个模型名是不是 mcode 档位。
 
-    判定只看**调用方显式传进来的** ``llm_override["model"]``。
-    ``config.toml`` 里的 ``[llm].model`` 不算 —— 本轮网页端模型选择**没有**接线,
-    不能让人以为「在网页端选了 mcode 就能用」。
+    判定标准:名字以 ``mcode`` 开头(大小写不敏感)。
+
+    网页端模型下拉里的两个档位:
+
+    - ``mcode-operator`` -> ``standard``(完整 agent 能力,开销大)
+    - ``mcode-chat``     -> ``lightweight``(轻量,便宜)
+
+    网页端接线在 ``agent_fastapi.py``:模型下拉里的 mcode 档位会以
+    ``llm_override = {"model": <档位>}`` 传进来,于是本函数命中、
+    ``build_agent()`` 走 mcode 分支(跳过 API key 校验、不连 8001、``tools=[]``)。
     """
     return str(model_name or "").strip().lower().startswith("mcode")
+
+
+#: 兼容旧名(早期只有下划线版本,测试与外部脚本可能还在用)。
+_is_mcode_model = is_mcode_model
 
 
 def _resolve_mcode_mode(model_name: str, default_mode: str) -> str:
@@ -294,9 +305,9 @@ async def build_agent(
 
     # ---- mcode 分支:在 key 校验之前分流 ----
     # mcode 不走 OpenAI 兼容网关,所以既不需要 API key,也不连 8001。
-    # 判定只看**调用方显式传入**的 llm_override["model"] —— 本轮网页端模型
-    # 选择没有接线,所以这条分支只能由单测 / 直接调用触发。
-    if _is_mcode_model(_get(llm_override, "model", "")):
+    # 判定只看**调用方显式传入**的 llm_override["model"] —— 网页端模型下拉
+    # 选 mcode 档位时会传 {"model": "mcode-operator"} / {"model": "mcode-chat"}。
+    if is_mcode_model(_get(llm_override, "model", "")):
         return await _build_mcode_agent(cfg, session_id, store, str(llm_override.get("model") or ""))
 
     # Validate LLM API key before creating the model

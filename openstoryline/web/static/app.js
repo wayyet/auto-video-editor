@@ -4,6 +4,10 @@ const SIDEBAR_COLLAPSED_KEY = "openstoryline_sidebar_collapsed";
 const DEVBAR_COLLAPSED_KEY = "openstoryline_devbar_collapsed";
 const AUDIO_PREVIEW_MAX = 3;
 const CUSTOM_MODEL_KEY = "__custom__";
+// mcode 档位(mcode-operator / mcode-chat):mcode 不区分多模态,
+// 所以 LLM 与 VLM 必须是同一个档位,选一边就同步另一边。
+const MCODE_MODEL_PREFIX = "mcode";
+const isMcodeTier = (v) => String(v || "").trim().toLowerCase().startsWith(MCODE_MODEL_PREFIX);
 const SESSION_ID_KEY = "openstoryline_session_id";
 const SESSION_LIST_KEY = "openstoryline_session_list_v1";
 
@@ -3956,6 +3960,11 @@ class App {
       this.llmSelect.addEventListener("change", () => {
         const v = (this.llmSelect.value || "").trim();
         if (v) this.llmModel = v;
+        // mcode 档位:同步 VLM 下拉,别让 UI 显示一个实际没在用的模型
+        if (isMcodeTier(v) && this.vlmSelect) {
+          this.vlmSelect.value = v;
+          this.vlmModel = v;
+        }
         this._syncConfigPanels();
       });
     }
@@ -3964,6 +3973,10 @@ class App {
       this.vlmSelect.addEventListener("change", () => {
         const v = (this.vlmSelect.value || "").trim();
         if (v) this.vlmModel = v;
+        if (isMcodeTier(v) && this.llmSelect) {
+          this.llmSelect.value = v;
+          this.llmModel = v;
+        }
         this._syncConfigPanels();
       });
     }
