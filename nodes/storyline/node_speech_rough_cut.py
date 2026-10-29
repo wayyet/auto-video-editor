@@ -27,17 +27,19 @@ from nodes.storyline._common import append_status_tag, _resolve_outputs_root
 logger = logging.getLogger(__name__)
 
 
-def _read_asr_segments(state: WorkflowState) -> list[dict]:
+def _read_asr_doc(state: WorkflowState) -> dict:
     p = state.get("storyline_asr_artifact")
     if not p:
-        return []
+        return {}
     try:
         doc = json.loads(Path(str(p)).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return []
-    if isinstance(doc, dict):
-        return list(doc.get("segments") or [])
-    return []
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
+def _read_asr_segments(state: WorkflowState) -> list[dict]:
+    return list(_read_asr_doc(state).get("segments") or [])
 
 
 def storyline_speech_rough_cut_node(state: WorkflowState) -> dict:
@@ -45,7 +47,10 @@ def storyline_speech_rough_cut_node(state: WorkflowState) -> dict:
     out_dir = outputs_root / "storyline"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    segments = _read_asr_segments(state)
+    asr_doc = _read_asr_doc(state)
+    segments = list(asr_doc.get("segments") or [])
+    # 2026-10:把 ASR 产物里的素材 ID 原样带到粗剪产物顶层(回填 transcript 时对号入座)
+    carry_media_id = str(asr_doc.get("media_id") or "")
 
     if not segments:
         # ASR 空 → 没有可粗剪的句;写空 artifact,跳过(plan §4.4)
@@ -88,18 +93,20 @@ def storyline_speech_rough_cut_node(state: WorkflowState) -> dict:
         for seg in res.get("segments") or []:
             seg_out = dict(seg)
             seg_out["asr_sentence_index"] = i
+            # 多视频:每个 ASR 句自带 media_id,原样带到粗剪段上(回填 transcript 时对号入座)
+            if isinstance(sent, dict) and sent.get("media_id") and not seg_out.get("media_id"):
+                seg_out["media_id"] = str(sent["media_id"])
             rough_out.append(seg_out)
         # history 累积(plan §5 阶段 5)
         history.append({"reason": res.get("reason"), "res": res.get("segments")})
         preceding = (sent.get("text") or "").strip()
 
     out_path = out_dir / "rough_cut.json"
+    rough_doc: dict = {"segments": rough_out, "method": "sequential"}
+    if carry_media_id:
+        rough_doc["media_id"] = carry_media_id
     out_path.write_text(
-        json.dumps(
-            {"segments": rough_out, "method": "sequential"},
-            ensure_ascii=False,
-            default=str,
-        ),
+        json.dumps(rough_doc, ensure_ascii=False, default=str),
         encoding="utf-8",
     )
     return {

@@ -241,9 +241,43 @@ IMPORT_VIDEO_MANUAL_REQUIRED: bool = (
 # _CONNECT_RETRIES / _REQUIRED_TOOLS / storyline_session_id() 全部移除;
 # OpenStoryline 现走本地 uvicorn + httpx 健康检查,不再有 MCP 链路与外部路径常量。
 
-# 是否启用 AI Transition(ADR-005:默认关闭;Phase 4+ 节点已移除,保留供旧 README 引用)
+# ---------------------------------------------------------------------------
+# 2026-10 接入原"不可达节点"的三个开关(默认全开;三个都设为 0 ⇒ 图拓扑与接入前一致)
+# ---------------------------------------------------------------------------
+# 设置方式(PowerShell,须在 Python 进程启动前设置):
+#   $env:STORYLINE_ENABLE_WEB_TOPIC = "0"
+#   $env:STORYLINE_ENABLE_ASR_BRANCH = "0"
+#   $env:STORYLINE_ENABLE_AI_TRANSITION = "0"
+# 前两个开关(STORYLINE_ENABLE_WEB_TOPIC / STORYLINE_ENABLE_ASR_BRANCH):
+#   图里的路由函数在**运行时**读 ``config.XXX``(单测可用 monkeypatch.setattr 改),
+#   不改变图的节点/边集合,只改变走向。
+# 第三个开关(STORYLINE_ENABLE_AI_TRANSITION)在**建图时**读取:它决定图里接不接那两个节点
+#   (屏障要随之改变),所以修改后必须重启进程。
+#
+# ⚠️ 没有"清缓存"开关:``clean_cache`` 节点**不接图**(保留注册,零条边),
+#    只由 Web UI「清理缓存」按钮经 ``POST /api/system/clean-cache`` 显式触发,
+#    任何 ``graph.invoke()`` 都不会自动跑它。
+
+# 1) auto 模式:素材加载后并行搜网页话题(storyline_search_web_topic),
+#    结果以"参考标题"形式软注入文案节点的 overall;失败/无结果不影响主线。
+STORYLINE_ENABLE_WEB_TOPIC: bool = (
+    os.environ.get("STORYLINE_ENABLE_WEB_TOPIC", "true").lower().strip() in ("1", "true", "yes")
+)
+
+# 2) auto 模式:切镜后素材有音轨时并行跑本地 ASR + 口播粗剪
+#    (storyline_local_asr → storyline_speech_rough_cut),结果只回填 Clip.transcript。
+#    默认 STORYLINE_ASR_MODE=stub 时转写为空 → 回填为空,行为无变化。
+STORYLINE_ENABLE_ASR_BRANCH: bool = (
+    os.environ.get("STORYLINE_ENABLE_ASR_BRANCH", "true").lower().strip() in ("1", "true", "yes")
+)
+
+# 3) auto 模式:与 plan_timeline_pro 并排生成 AI 转场,qa_gate 之前把清单写进时间线 ai_transitions
+#    (storyline_generate_ai_transition → storyline_plan_timeline_ai_transition)。建图时读取。
+#    ADR-005 原为默认关闭;2026-10 按用户决定改为默认开启(当前仅 stub 客户端,不改动 clips)。
+#    注意:storyline_capabilities/ai_transition_client.py 里还有一份同名读取
+#    (ENABLE_AI_TRANSITION),两处默认值必须一致,tests 里有对齐断言。
 STORYLINE_ENABLE_AI_TRANSITION: bool = (
-    os.environ.get("STORYLINE_ENABLE_AI_TRANSITION", "0").lower().strip() in ("1", "true", "yes")
+    os.environ.get("STORYLINE_ENABLE_AI_TRANSITION", "true").lower().strip() in ("1", "true", "yes")
 )
 
 

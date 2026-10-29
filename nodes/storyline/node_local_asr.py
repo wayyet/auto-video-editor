@@ -176,6 +176,21 @@ def storyline_local_asr_node(state: WorkflowState) -> dict:
             encoding="utf-8",
         )
 
+    # 2026-10:单视频时,把被转写素材的 ID 写进产物顶层(多视频时每段已自带 media_id)。
+    # plan_timeline_pro 回填 Clip.transcript 时靠它按 source_media_id 对号入座
+    # (单视频 + 图片混排时必需)。失败只记 warning,不影响产物本身。
+    if not multi:
+        try:
+            single_id = str(videos[0].get("media_id") or "media_0001")
+            doc = json.loads(artifact_path.read_text(encoding="utf-8"))
+            if isinstance(doc, dict):
+                doc["media_id"] = single_id
+                artifact_path.write_text(
+                    json.dumps(doc, ensure_ascii=False, default=str), encoding="utf-8"
+                )
+        except (OSError, ValueError) as e:
+            logger.warning("local_asr: 写入 media_id 失败(忽略): %r", e)
+
     delta_log = [
         "storyline_local_asr_done",
         f"storyline_local_asr_mode={ASR_MODE}",

@@ -10,6 +10,7 @@ from nodes.storyline._common import (
     _read_json_artifact,
     append_status_tag,
     extract_user_request,
+    format_web_topic_reference,
     resolve_lang,
     _resolve_outputs_root,
 )
@@ -32,6 +33,16 @@ def storyline_generate_script_node(state: WorkflowState) -> dict:
     overall = ""
     if isinstance(understanding, dict):
         overall = str(understanding.get("overall") or "")
+    # 2026-10:网页话题参考(storyline_search_web_topic 的产物)软注入 overall。
+    # 参考信息不是文案生成的必要输入 —— 产物缺失 / 格式不对 / 任何异常都直接忽略。
+    try:
+        ref = format_web_topic_reference(
+            _read_json_artifact(state, "storyline_web_topic_artifact")
+        )
+        if ref:
+            overall = f"{overall}\n\n{ref}" if overall else ref
+    except Exception:  # noqa: BLE001
+        pass
     try:
         result = generate_script(
             groups=groups,

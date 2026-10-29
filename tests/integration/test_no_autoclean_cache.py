@@ -120,3 +120,19 @@ def test_clean_cache_function_still_works_manually(fake_cache_dir: Path) -> None
     assert str(fake_cache_dir) in out["cache_cleaned_paths"]
     assert not fake_cache_dir.exists(), "目录应已被 shutil.rmtree 删除"
     assert not sentinel.exists(), "sentinel 文件应随目录一起被删除"
+
+
+def test_clean_cache_has_no_edges_in_compiled_graph() -> None:
+    """编译后的图里 ``clean_cache`` **零条边**(2026-10 的决定)。
+
+    ``clean_cache`` 只由 Web UI「清理缓存」按钮经
+    ``POST /api/system/clean-cache`` 显式触发,**不经 LangGraph**。
+    图里保留 ``add_node`` 注册(便于日后需要时再接),但没有任何
+    入边 / 出边 ⇒ 任何 ``graph.invoke()`` 都不会自动触发它。
+    """
+    g = build_graph(checkpointer=InMemorySaver(), start_heartbeat_thread=False)
+    edges = {(e.source, e.target) for e in g.get_graph().edges}
+    incoming = sorted(t for _s, t in edges if t == "clean_cache")
+    outgoing = sorted(t for s, t in edges if s == "clean_cache")
+    assert incoming == [], f"clean_cache 不该有入边,但有:{incoming}"
+    assert outgoing == [], f"clean_cache 不该有出边,但有:{outgoing}"

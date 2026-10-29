@@ -502,6 +502,41 @@ runs_table.list_suspended()  # 运维查询入口
 
 Postgres 不可达时所有调用降级为 warning no-op,不阻塞主流程。
 
+### 4.10 2026-10 接入原"不可达节点"(三个开关)
+
+原先注册了、但从 START 永远走不到的 6 个节点,其中 **5 个已接入主图**;`clean_cache` **不接边**,只由 Web「清理缓存」按钮手动触发。**每个节点各自挂在与它最相关的现有节点旁边,不集中放在同一处。**
+每条旁支由一个环境开关控制,**默认全开**。三个开关都设为 `0` 时,图的执行轨迹与接入前完全一致
+(`tests/integration/test_unreachable_nodes_wiring.py` 里有黄金轨迹锁定)。
+
+| 新节点 | 挂在哪(相关的现有节点) | 触发条件 | 开关(默认 `1`) |
+|---|---|---|---|
+| `clean_cache` | **不接边**(保留 `add_node` 注册,零条入边/出边);仅 Web「清理缓存」按钮(`POST /api/system/clean-cache`)显式触发 | 只有人点 Web 按钮 | —(无开关) |
+| `storyline_search_web_topic` | `storyline_load_media` 之后,与 `storyline_search_media` / `storyline_split_shots` 并行的旁支(走到 END) | `STORYLINE_MODE=auto` + `storyline_targets.query` 非空 | `STORYLINE_ENABLE_WEB_TOPIC` |
+| `storyline_local_asr` | `storyline_split_shots` 之后,与 `storyline_understand_clips` 并行的旁支 | `STORYLINE_MODE=auto` + 素材有音轨 | `STORYLINE_ENABLE_ASR_BRANCH` |
+| `storyline_speech_rough_cut` | 紧跟 `storyline_local_asr`(走到 END) | 随 `local_asr` | 同上 |
+| `storyline_generate_ai_transition` | 与 `storyline_plan_timeline_pro` 并排(同一道 4 源屏障) | `STORYLINE_MODE=auto` | `STORYLINE_ENABLE_AI_TRANSITION` |
+| `storyline_plan_timeline_ai_transition` | 在 `plan_timeline_pro` + `generate_ai_transition` 之后、`qa_gate` 之前(`qa_gate` 的屏障里用它替换 `plan_timeline_pro`) | 同上 | 同上 |
+
+备注:
+
+- `clean_cache` ⚠️ **不再自动执行**;需要清理请点 Web 按钮(有破坏性:会删剪映草稿 `.bak`/`.backup`、回收站、FireRed 缓存与日志、`__pycache__` 等)。
+- 网页话题:标题作为"外部不可信参考"软注入 `storyline_generate_script` 的 `overall`;失败 / 无结果不影响主线。
+- ASR:只回填 `Clip.transcript`,不改镜头和时长;默认 `STORYLINE_ASR_MODE=stub` 时转写为空,无可见变化。
+- ASR 已知限制(接入前就存在,本次没改):配了 `STORYLINE_PEXELS_API_KEY` 时,`storyline_search_media` 会把 `storyline_media_artifact` 整个换成搜索结果清单,
+  素材的 `has_audio` 随之丢失 → ASR 分支保守不触发(不会报错,只是不跑)。
+- AI 转场:当前只有 stub;只挂 `ai_transitions` 清单,不改 clips。两个节点在 qa 重试回路**里面**,每轮各跑 1 次。
+- **读取时机不同**:前两个开关在**运行时**读取;`STORYLINE_ENABLE_AI_TRANSITION` 在**建图时**读取(决定图里接不接这两个节点),修改后须重启进程。
+- 开发约定:条件触发的节点(`web_topic` / `local_asr` / `speech_rough_cut`)**不能**放进 `add_edge([...], X)` 屏障,否则 qa 重试时会静默 END;
+  qa 重试回路里的节点,状态标签必须是固定值(不能带条数),否则 qa 路由会悄悄跳过重试。
+
+PowerShell 临时关闭(须在启动 Python 进程之前设置):
+
+```powershell
+$env:STORYLINE_ENABLE_WEB_TOPIC = "0"
+$env:STORYLINE_ENABLE_ASR_BRANCH = "0"
+$env:STORYLINE_ENABLE_AI_TRANSITION = "0"
+```
+
 ## 5. Week 1 交付物前置依赖(⚠️ 重要)
 
 - [ ] **剪映 v5.9.0 已安装**

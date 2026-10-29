@@ -2,7 +2,6 @@
 
 完整图拓扑(2026-09 + Phase 4 + Phase 5):
   START
-    → clean_cache
     → launch_openstoryline      (human-mode:本地 uvicorn + httpx 健康检查;
                                   auto-mode:noop,plan §5 阶段 7)
     → open_preview
@@ -77,6 +76,31 @@
 - 握手用文件而非 ``interrupt()``,与 ``clean_cache`` 模式同构。
 - 应急回滚:``IMPORT_VIDEO_MANUAL_REQUIRED=false`` 恢复旧的自动行为。
 - auto 模式的 ``storyline_load_media`` **未改动**,仍自动导入。
+
+2026-10 接入原"不可达节点"(见《不可达节点接入LangGraph设计与执行计划》)。
+五个节点**各挂在自己最相关的现有节点旁**,没有聚在一起:
+- ``clean_cache``:**不接边**(保留 ``add_node`` 注册,零条入边/出边)。2026-09 起它
+  只由 FireRed-OpenStoryline Web UI 的「清理缓存」按钮经 ``POST /api/system/clean-cache``
+  显式触发,**不经 LangGraph**;任何 ``graph.invoke()`` 都不会自动触发它。
+- ``storyline_search_web_topic``:挂在 ``storyline_load_media`` 旁,与 ``search_media`` /
+  ``split_shots`` 并行(``STORYLINE_ENABLE_WEB_TOPIC`` 且 ``storyline_targets.query`` 非空);
+  死胡同分支,结果由 ``generate_script`` 软读取。
+- ``storyline_local_asr``:挂在 ``storyline_split_shots`` 旁,与 ``understand_clips`` 并行
+  (``STORYLINE_ENABLE_ASR_BRANCH`` 且素材有音轨);死胡同分支。
+- ``storyline_speech_rough_cut``:紧跟 ``storyline_local_asr``(沿用既有边);
+  ``local_asr`` / ``speech_rough_cut`` 的结果由 ``plan_timeline_pro`` 回填 ``Clip.transcript``。
+- ``storyline_generate_ai_transition``:与 ``storyline_plan_timeline_pro`` **并排**,
+  共用同一道 4 源屏障(group_clips / generate_script / generate_voiceover / select_bgm)。
+- ``storyline_plan_timeline_ai_transition``:屏障 [``plan_timeline_pro``, ``generate_ai_transition``]
+  之后、``qa_gate`` 之前;``qa_gate`` 的屏障里用它**替换** ``plan_timeline_pro``
+  (``STORYLINE_ENABLE_AI_TRANSITION``,默认开,**建图时读取**,改开关要重启进程)。
+- ⚠️ 屏障规则(D10):**条件触发**的节点(web_topic / local_asr / speech_rough_cut)
+  **绝不能**放进任何 fan-in 屏障(``add_edge([...], X)``)—— qa 重试回路不会重跑它们的上游,
+  屏障永远凑不齐,图会静默 END。AI 转场两个节点每轮必跑(建图时按开关决定接不接),可以进屏障。
+- ⚠️ qa 重试路由靠 ``status_log[-1] == "storyline_qa_retry"`` 判断,而 ``status_log`` 去重追加:
+  重试回路内的节点**不得产生每轮都不同的状态标签**(如带计数的 ``..._done:items=N``),
+  否则新标签会排到 ``storyline_qa_retry`` 之后,重试被悄悄跳过。
+- 三个开关**全部设为 0** ⇒ 与接入前的执行轨迹一致(``tests/integration/test_unreachable_nodes_wiring.py`` 锁定)。
 
 Phase 4 auto-mode(plan §2.1 / §5 阶段 0~5):
 - ``_route_mode`` 条件边在 ``open_preview`` 之后做双模分支;
@@ -231,6 +255,8 @@ from nodes.storyline.node_plan_timeline_ai_transition import (
     storyline_plan_timeline_ai_transition_node,
 )
 from nodes.storyline.node_render_video import storyline_render_video_node
+from nodes.storyline._common import media_has_audio, web_topic_query
+from storyline_capabilities.ai_transition_client import is_ai_transition_enabled
 
 
 # ---------------------------------------------------------------------------
@@ -289,38 +315,57 @@ def _route_after_storyline_join(state: WorkflowState) -> str:
     return "__end__"
 
 
-def _storyline_route_after_load_media(state: WorkflowState) -> str:
+def _web_topic_branch_enabled(state: WorkflowState) -> bool:
+    """网页话题分支是否触发:开关为真 **且** ``storyline_targets.query`` 非空。
+
+    没有 query 就没有可搜的话题,不如不跑(也避免多一个空产物)。
+    """
+    import config as _config
+
+    return bool(_config.STORYLINE_ENABLE_WEB_TOPIC and web_topic_query(state))
+
+
+def _asr_branch_enabled(state: WorkflowState) -> bool:
+    """ASR 分支是否触发:开关为真 **且** 素材里至少有一个带音轨的视频(读 ``has_audio``)。"""
+    import config as _config
+
+    return bool(_config.STORYLINE_ENABLE_ASR_BRANCH and media_has_audio(state))
+
+
+def _storyline_route_after_load_media(state: WorkflowState):
     """storyline_load_media 之后的条件路由(plan §2.2 第 96/97 行)。
 
-    阶段 0 默认走 ``split_shots`` 主干,``search_media`` 旁路仅当 ``Pexels Key``
-    已配(读 ``STORYLINE_PEXELS_API_KEY``);不在 stub 模式启用。
+    主干:默认 ``split_shots``;``search_media`` 旁路仅当 ``Pexels Key`` 已配
+    (读 ``STORYLINE_PEXELS_API_KEY``)。
+
+    2026-10:``_web_topic_branch_enabled`` 为真时**同时**触发 ``storyline_search_web_topic``
+    (返回 list = 并行 fan-out)。该分支是死胡同(无出边),不进任何 fan-in 屏障。
+    返回值:单个分支时是 ``str``,两个分支时是 ``list[str]``。
     """
-    if os.environ.get("STORYLINE_PEXELS_API_KEY", "").strip():
-        return "storyline_search_media"
-    return "storyline_split_shots"
+    main = (
+        "storyline_search_media"
+        if os.environ.get("STORYLINE_PEXELS_API_KEY", "").strip()
+        else "storyline_split_shots"
+    )
+    if _web_topic_branch_enabled(state):
+        return [main, "storyline_search_web_topic"]
+    return main
 
 
-def _storyline_route_after_split_shots(state: WorkflowState) -> str:
+def _storyline_route_after_split_shots(state: WorkflowState):
     """storyline_split_shots 之后的条件路由(plan §2.2 第 99/100 行)。
 
-    阶段 0 默认走 ``understand_clips`` 主干;``local_asr`` 旁路仅当
-    ``media_artifact`` 里识别到至少一个 media 有 audio stream(读 ``has_audio``)。
-    阶段 1 才完整检测。
+    主干永远是 ``understand_clips``。2026-10:``_asr_branch_enabled`` 为真时**同时**触发
+    ``storyline_local_asr``(→ ``storyline_speech_rough_cut``,返回 list = 并行 fan-out)。
 
-    ⚠️ **已知缺陷(2026-09-30 核查,只标记不改)**:下面两个分支返回同一个值,
-    所以 ``if media_artifact`` 判断完全无效 —— ``storyline_local_asr`` 与它下游
-    的 ``storyline_speech_rough_cut`` **当前不可达**。这不是"遗留物"(有意保留的
-    死代码),是没写完的 ``has_audio`` 检测。
-
-    归属:属于**功能补全**,不在"节点冗余合并"计划范围内。补检测时应在
-    ``has_audio`` 为真时返回 ``"storyline_local_asr"``,并确认
-    ``storyline_local_asr → storyline_speech_rough_cut`` 的边存在;
-    这会改变 auto 模式的实际执行路径,需单独评审后再改。
+    该 ASR 分支是死胡同,结果通过 state 里的 ``storyline_asr_artifact`` /
+    ``storyline_rough_cut_artifact`` 交给 ``plan_timeline_pro`` 回填 ``Clip.transcript``。
+    时序保证:ASR 链只需 2 个超步,而 plan_timeline_pro 至少在
+    group_clips → generate_script → generate_voiceover 之后(≥ 5 步)才触发。
+    返回值:单个分支时是 ``str``,两个分支时是 ``list[str]``。
     """
-    media_artifact = state.get("storyline_media_artifact")
-    if media_artifact:
-        # 阶段 0 stub 模式不真正解析文件,保守直接走主干
-        return "storyline_understand_clips"
+    if _asr_branch_enabled(state):
+        return ["storyline_understand_clips", "storyline_local_asr"]
     return "storyline_understand_clips"
 
 
@@ -557,19 +602,13 @@ def _build_state_graph():
     # 不进入这些节点,172 unit / 关卡⓪ interrupt/resume 不回归。
     g.add_node("storyline_load_media", storyline_load_media_node)
     g.add_node("storyline_search_media", storyline_search_media_node)
-    # ⚠️ 已注册未连通(2026-09-30 核查,只标记不删):下面这个节点**没有任何
-    # add_edge / add_conditional_edges 引用**,即永远不会被执行。模块
-    # ``nodes/storyline/node_search_web_topic.py``(50 行)因此是死代码。
-    # 若日后要接进图,参考 storyline 同级节点的接法并补一条条件边。
+    # 2026-10 已接入:storyline_load_media 之后的并行旁支(见 _storyline_route_after_load_media)
     g.add_node("storyline_search_web_topic", storyline_search_web_topic_node)
     g.add_node("storyline_split_shots", storyline_split_shots_node)
-    # ⚠️ 当前不可达(缺陷,不是遗留物):``_storyline_route_after_split_shots``
-    # 两个分支都返回 "storyline_understand_clips",所以本节点及其下游
-    # ``storyline_speech_rough_cut`` 永远走不到。详见该路由函数的注释。
+    # 2026-10 已接入:storyline_split_shots 之后的并行旁支(见 _storyline_route_after_split_shots)
     g.add_node("storyline_local_asr", storyline_local_asr_node)
     g.add_node("storyline_speech_rough_cut", storyline_speech_rough_cut_node)
-    # ⚠️ 已注册未连通(2026-09-30 核查,只标记不删):同 storyline_search_web_topic,
-    # 零条边引用;``nodes/storyline/node_generate_ai_transition.py``(92 行)是死代码。
+    # 2026-10 已接入:与 plan_timeline_pro 并排(同一道 4 源屏障;建图时按开关接边)
     g.add_node("storyline_generate_ai_transition",
                storyline_generate_ai_transition_node)
     g.add_node("storyline_understand_clips", storyline_understand_clips_node)
@@ -583,9 +622,7 @@ def _build_state_graph():
     g.add_node("storyline_recommend_transition", storyline_recommend_transition_node)
     g.add_node("storyline_recommend_text", storyline_recommend_text_node)
     g.add_node("storyline_plan_timeline_pro", storyline_plan_timeline_pro_node)
-    # ⚠️ 已注册未连通(2026-09-30 核查,只标记不删):与上面两个 storyline 节点同理,
-    # 零条边引用 —— fan-in 只接了 ``storyline_plan_timeline_pro``(graph.py:708 附近),
-    # ai_transition 变体没有入边也没有出边。
+    # 2026-10 已接入:plan_timeline_pro + generate_ai_transition 之后、qa_gate 之前
     g.add_node("storyline_plan_timeline_ai_transition",
                storyline_plan_timeline_ai_transition_node)
     g.add_node("storyline_render_video", storyline_render_video_node)
@@ -597,8 +634,9 @@ def _build_state_graph():
     # "清理缓存" 按钮通过 POST /api/system/clean-cache 端点显式触发),
     # 但不再从 START 自动跑 — 避免每次 graph.invoke 都无谓删除
     # CACHE_PATHS_TO_CLEAN 中的剪映/OpenStoryline 临时目录。
+    # 2026-10 决定:clean_cache **不接边**(零条入边/出边),只由人点 Web 按钮才执行。
     g.add_edge(START, "launch_openstoryline")
-    # 门禁:human 模式下 OpenStoryline Web 未就绪 → 直接 END
+    # 门禁(上游 2026-10 新增):human 模式下 OpenStoryline Web 未就绪 → 直接 END
     # (auto 模式不依赖 Web UI,照常走 open_preview)
     g.add_conditional_edges(
         "launch_openstoryline",
@@ -723,19 +761,22 @@ def _build_state_graph():
     #   B) 主干 → split_shots
     # 阶段 0 默认走 B(stub 模式无条件),search_media 暂作旁路,**不** 串回 LM
     # (避免单测复杂度;阶段 1+ 完善)。
+    # 2026-10:路由函数可返回 list(并行 fan-out)。search_web_topic 是死胡同分支。
     g.add_conditional_edges(
         "storyline_load_media",
         _storyline_route_after_load_media,
         {
             "storyline_search_media": "storyline_search_media",
             "storyline_split_shots": "storyline_split_shots",
+            "storyline_search_web_topic": "storyline_search_web_topic",
         },
     )
     g.add_edge("storyline_search_media", "storyline_split_shots")
 
     # split_shots 出 2 个分支(并行 fan-out):
     #   A) understand_clips 主路径
-    #   B) local_asr 条件(有语音)→ speech_rough_cut(目前阶段 0 为旁支)
+    #   B) local_asr 条件(有语音)→ speech_rough_cut(2026-10 已接入;死胡同分支,
+    #      产物经 state 交给 plan_timeline_pro 回填 Clip.transcript)
     g.add_conditional_edges(
         "storyline_split_shots",
         _storyline_route_after_split_shots,
@@ -796,10 +837,37 @@ def _build_state_graph():
         "storyline_plan_timeline_pro",
     )
 
-    # qa_gate 也是 fan-in:PTP + RTR + RT(plan §2.2)。同样改 list 形式。
+    # 2026-10 AI 转场两节点:与 plan_timeline_pro 并排(设计文档 §3.2:PTP/GAT → PTAT → qa 闸门)。
+    #   - generate_ai_transition(GAT):与 PTP 共用同一道 4 源屏障,和 PTP 同一超步各跑一次。
+    #     不直接挂 recommend_transition:它每轮会被触发 3 次(group_clips / select_bgm 各一),
+    #     会让 AI 转场每轮重复 3 次。
+    #   - plan_timeline_ai_transition(PTAT):屏障 [PTP, GAT],紧跟其后。
+    #   - qa_gate 的屏障里用 PTAT **替换** PTP,qa 校验的就是含 AI 转场的最终时间线。
+    # 开关在**建图时**读取(与 ASSEMBLY_QC_GATE_ENABLED 同类):
+    #   关 → 不接这两个节点,拓扑与接入前完全一致;开 → 两个节点**每轮必跑**,
+    #   所以放进屏障不会踩 D10(它们不是"有时跑有时不跑"的条件分支)。
+    # 两个节点内部都包了 try/except,失败只写 error_log,仍然正常返回 → 屏障照常凑齐。
+    _plan_for_qa = "storyline_plan_timeline_pro"
+    if is_ai_transition_enabled():
+        g.add_edge(
+            [
+                "storyline_group_clips",
+                "storyline_generate_script",
+                "storyline_generate_voiceover",
+                "storyline_select_bgm",
+            ],
+            "storyline_generate_ai_transition",
+        )
+        g.add_edge(
+            ["storyline_plan_timeline_pro", "storyline_generate_ai_transition"],
+            "storyline_plan_timeline_ai_transition",
+        )
+        _plan_for_qa = "storyline_plan_timeline_ai_transition"
+
+    # qa_gate 也是 fan-in:PTP(开启 AI 转场时为 PTAT)+ RTR + RT(plan §2.2)。同样改 list 形式。
     g.add_edge(
         [
-            "storyline_plan_timeline_pro",
+            _plan_for_qa,
             "storyline_recommend_transition",
             "storyline_recommend_text",
         ],

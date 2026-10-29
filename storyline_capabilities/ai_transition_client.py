@@ -1,7 +1,10 @@
 """AI Transition 桩(plan_v4 §5 阶段 5 / ADR-005)。
 
-ADR-005 默认关闭 AI Transition。本模块**只**在 ``STORYLINE_ENABLE_AI_TRANSITION=1``
-时才被节点壳子调用,默认状态返回 ``{"enabled": False}`` 让节点 noop。
+2026-10 起开关 ``STORYLINE_ENABLE_AI_TRANSITION`` **默认开启**(ADR-005 原为默认关闭,
+已被"默认全部开启"的决定取代)。这个开关在**建图时**读取:设为 ``0`` 时图里根本不接
+``storyline_generate_ai_transition`` / ``storyline_plan_timeline_ai_transition``,拓扑与接入前完全一致
+(两个节点自己也检查开关:旧 checkpoint / 单测直接调用时是 noop)。改开关后要重启进程。
+当前只有 stub 实现(每个衔接点写一份占位 JSON,不改时间线 clips)。
 
 真实 AI 转场(可控视频扩散模型)依赖 torch + GPU + 模型权重,主 venv 不能装,
 所以本地化版本 = 接口 + 默认 stub。后续要上线时再写 ``RealAITransitionClient``
@@ -20,8 +23,10 @@ from typing import Any, Optional, Protocol, runtime_checkable
 logger = logging.getLogger(__name__)
 
 
+# 2026-10:默认值由 "0" 改为 "true"(与 config.STORYLINE_ENABLE_AI_TRANSITION 保持一致,
+# 见 tests/unit/test_flag_defaults_aligned.py)。设为 0 即关闭。
 ENABLE_AI_TRANSITION: bool = os.environ.get(
-    "STORYLINE_ENABLE_AI_TRANSITION", "0"
+    "STORYLINE_ENABLE_AI_TRANSITION", "true"
 ).lower().strip() in ("1", "true", "yes")
 
 

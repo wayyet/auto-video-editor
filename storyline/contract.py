@@ -121,17 +121,39 @@ class TimelineSubtitles(BaseModel):
 
 
 class TimelineOptions(BaseModel):
-    """时间轴选项。``enable_ai_transition`` 默认 false(ADR-005)。"""
+    """时间轴选项。
+
+    ``enable_ai_transition`` 表示时间线里是否已挂上**真实**(非 stub)AI 转场,默认 false;
+    它**不是**环境开关 ``STORYLINE_ENABLE_AI_TRANSITION``(那个只决定图要不要走 AI 转场节点)。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     enable_ai_transition: bool = Field(
-        False, description="FireRed plan_timeline_ai_transition;默认关闭"
+        False, description="是否已挂上真实(非 stub)AI 转场;默认 false"
     )
     enable_voiceover: bool = Field(True, description="是否生成配音;为 false 时跳过 TTS")
     max_duration_ms: Optional[int] = Field(
         None, ge=0, description="目标总时长上限(整数毫秒),null/0 表示不限"
     )
+
+
+class AITransitionItem(BaseModel):
+    """AI 转场清单条目(``storyline_generate_ai_transition`` 产出)。
+
+    2026-10 随"不可达节点接入"新增。``mapper`` 暂不消费这个清单,只供联调查看 /
+    后续真实转场客户端接入;``is_stub=True`` 表示是占位结果,不是真实转场。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    from_clip_id: str = Field(..., description="前一个 clip 的 clip_id")
+    to_clip_id: str = Field(..., description="后一个 clip 的 clip_id")
+    duration_ms: Annotated[int, Field(ge=0, description="转场时长(整数毫秒)")]
+    provider: str = Field("stub", description="生成方:stub / 真实客户端名")
+    is_stub: bool = Field(True, description="是否占位结果")
+    error: Optional[str] = Field(None, description="生成失败原因(成功为 null)")
+    artifact: Optional[str] = Field(None, description="转场产物文件路径")
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +180,10 @@ class CanonicalTimeline(BaseModel):
     # status_log。显式声明,不再靠 extra 透传。
     method: Optional[str] = Field(None, description="时间线分配方法名(tts_align / empty 等)")
     warnings: list[str] = Field(default_factory=list, description="producer 产出的告警列表")
+    # 2026-10:storyline_plan_timeline_ai_transition 挂上的 AI 转场清单(默认空;mapper 不读)。
+    ai_transitions: list[AITransitionItem] = Field(
+        default_factory=list, description="AI 转场清单(默认空;mapper 暂不消费)"
+    )
 
     @model_validator(mode="after")
     def _validate_timeline_invariants(self) -> "CanonicalTimeline":
@@ -283,6 +309,7 @@ __all__ = [
     "TimelineAudio",
     "TimelineSubtitles",
     "TimelineOptions",
+    "AITransitionItem",
     "CanonicalTimeline",
     "GroupArtifact",
     "StorylineTimeline",
