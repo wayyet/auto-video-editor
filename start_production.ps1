@@ -254,6 +254,7 @@ foreach ($name in @(
     'STORYLINE_MODE',
     'THREAD_ID',
     'PYTHONUNBUFFERED',
+    'PYTHONIOENCODING',
     'AUTO_VIDEO_EDITOR_PREFLIGHT_SKIP_POSTGRES_START'
 )) {
     $envBackup[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
@@ -581,6 +582,9 @@ set PYTHONUNBUFFERED=1
     $env:POSTGRES_URI  = $PostgresUri
     $env:STORYLINE_MODE = $StorylineMode
     $env:THREAD_ID      = $ThreadId
+    # Windows 下 python stdout 默认 GBK,PowerShell 按 UTF-8 解码 → 中文乱码。
+    # 显式钉 UTF-8,让 Phase 2/Phase 3 的 Python 子进程输出在控制台和日志里都可读。
+    $env:PYTHONIOENCODING = 'utf-8'
     # 外部 URI 模式:Python 侧预检也不该去起本地容器
     if ($target.Kind -ne 'local-managed') {
         $env:AUTO_VIDEO_EDITOR_PREFLIGHT_SKIP_POSTGRES_START = '1'
@@ -589,6 +593,7 @@ set PYTHONUNBUFFERED=1
     Write-Phase ("  POSTGRES_URI   = {0}" -f $maskedUri)
     Write-Phase ("  STORYLINE_MODE = {0}" -f $StorylineMode)
     Write-Phase ("  THREAD_ID      = {0}" -f $ThreadId)
+    Write-Phase ("  PYTHONIOENCODING = {0}" -f $env:PYTHONIOENCODING)
 
     # ===============================================================
     # Phase 1 — preflight.ps1(本次运行**唯一一次**完整预检)
@@ -688,29 +693,52 @@ set PYTHONUNBUFFERED=1
 
     # 1) Postgres checkpoints 按 thread_id 计数
     Write-Phase "  [3.1] checkpoints 表 $ThreadId 记录数:"
-    $pyCount = & $VenvPy -c @"
-import asyncio, os, sys
-async def m():
-    try:
-        import psycopg
-    except ImportError:
-        print('psycopg 未安装,未验收(可选依赖)')
-        sys.exit(0)
-    try:
-        async with await psycopg.AsyncConnection.connect(os.environ['POSTGRES_URI']) as c:
-            async with c.cursor() as cur:
-                await cur.execute("SELECT COUNT(*) FROM checkpoints WHERE thread_id = %s", (os.environ['THREAD_ID'],))
-                (n,) = await cur.fetchone()
-                print(f'checkpoints: {n}')
-                await cur.execute("SELECT thread_id, COUNT(*) FROM checkpoints GROUP BY thread_id ORDER BY 2 DESC")
-                for r in await cur.fetchall():
-                    print(f'  - thread {r[0]}: {r[1]}')
-    except Exception as e:
-        print(f'查询失败: {e}', file=sys.stderr)
-        sys.exit(1)
-asyncio.run(m())
+    # 原生命令非零退出码不要当场抛异常 —— 关掉 PSNativeCommandUseErrorActionPreference,
+    # 让下面的 $countExit 分支给出友好提示(否则此处直接 NativeCommandExitException)。
+    $prevNativePref = $PSNativeCommandUseErrorActionPreference
+    $PSNativeCommandUseErrorActionPreference = $false
+    try {
+        # 同步 psycopg:Windows 下 psycopg 异步只支持 Selector 事件循环,asyncio.run 默认是
+        # ProactorEventLoop 会直接报错(2026-09 提交 8b42830f 引入,2026-10-29 修复)。
+        $pyCount = & $VenvPy -c @"
+import os, sys
+try:
+    import psycopg
+except ImportError:
+    print('psycopg 未安装,未验收(可选依赖)')
+    sys.exit(0)
+try:
+    tid = os.environ['THREAD_ID']
+    # 续跑的 checkpoint 可能落在 psycopg 把 bytes 写进 TEXT 列产生的 '\x<hex>' thread_id 下,
+    # 两套都要数,否则只查文本 thread_id 会漏掉续跑数据。
+    tid_hex = '\\x' + tid.encode('utf-8').hex()
+    def label(v):
+        # 本机 Postgres 容器是 SQL_ASCII 编码,psycopg 会把 TEXT 列返回成 bytes
+        s = v.decode('utf-8', 'replace') if isinstance(v, bytes) else str(v)
+        if s.startswith('\\x'):
+            try:
+                return bytes.fromhex(s[2:]).decode('utf-8') + ' (hex)'
+            except Exception:
+                pass
+        return s
+    with psycopg.connect(os.environ['POSTGRES_URI']) as c:
+        with c.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM checkpoints WHERE thread_id = %s", (tid,))
+            (n_text,) = cur.fetchone()
+            cur.execute("SELECT COUNT(*) FROM checkpoints WHERE thread_id = %s", (tid_hex,))
+            (n_hex,) = cur.fetchone()
+            print(f'checkpoints: {n_text + n_hex}  (文本 thread_id={n_text}, 续跑 hex thread_id={n_hex})')
+            cur.execute("SELECT thread_id, COUNT(*) FROM checkpoints GROUP BY thread_id ORDER BY 2 DESC")
+            for r in cur.fetchall():
+                print(f'  - thread {label(r[0])}: {r[1]}')
+except Exception as e:
+    print(f'查询失败: {e}', file=sys.stderr)
+    sys.exit(1)
 "@ 2>&1
-    $countExit = $LASTEXITCODE
+        $countExit = $LASTEXITCODE
+    } finally {
+        $PSNativeCommandUseErrorActionPreference = $prevNativePref
+    }
     Write-SubProcessOutput -Lines $pyCount -Prefix '    '
     if ($countExit -ne 0) {
         Write-PhaseErr "验收未完成:checkpoint 查询失败(退出码 $countExit)"
