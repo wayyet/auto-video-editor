@@ -39,7 +39,7 @@ param(
     [string]$InputsFileName = '30s.mp4',
     # Postgres 连接串(唯一真相)。localhost:5432 → 本地托管(起容器 + 对齐角色/库);
     # 其它 host/端口 → 外部模式(不碰本地容器)。
-    [string]$PostgresUri    = 'postgresql://postgres:devpass@localhost:5432/langgraph',
+    [string]$PostgresUri    = 'postgresql://postgres:devpass@localhost:5432/video_workflow',
     # human = 起 OpenStoryline Web + 走人工关卡(默认);auto = 19 节点确定性图,不起 Web
     [ValidateSet('auto', 'human')]
     [string]$StorylineMode  = 'human',

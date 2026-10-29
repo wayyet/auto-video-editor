@@ -40,6 +40,7 @@ asyncio_mode = "auto"
 markers = [
     "admin: tests that require local administrator privileges (run with `-m admin`)",
     "slow: tests that exercise real I/O and take more than a few seconds",
+    "postgres: tests that require a reachable PostgreSQL (run with `-m postgres`)",
 ]
 
 [tool.ruff]
@@ -47,4 +48,4 @@ lint.ignore = ["E501"]
 target-version = "py310"
 
 [tool.hatch.build.targets.wheel]
-packages = ["nodes", "draft_ops", "mcp_clients", "storyline"]
+packages = ["nodes", "draft_ops", "mcp_clients", "storyline", "db"]

@@ -141,7 +141,7 @@ Assert-DockerSuccess '查询容器状态失败'
 $uri = "postgresql://${PgUser}:${PgPassword}@localhost:${HostPort}/${PgDb}"
 Write-Host ''
 Write-Host "==> 完成。POSTGRES_URI=$(Get-MaskedUri $uri)" -ForegroundColor Green
-Write-Host '==> 下一步：$env:POSTGRES_URI="postgresql://postgres:devpass@localhost:5432/langgraph"; .\.venv\Scripts\python.exe scripts\setup_postgres_schema.py' -ForegroundColor Green
+Write-Host '==> 下一步：$env:POSTGRES_URI="postgresql://postgres:devpass@localhost:5432/video_workflow"; .\.venv\Scripts\python.exe scripts\setup_postgres_schema.py' -ForegroundColor Green
 
 # ---------------------------------------------------------------
 # 角色/库对齐(可选):目标 URI 与管理员 URI 不同时,增量补齐角色与库。

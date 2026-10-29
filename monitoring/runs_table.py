@@ -1,4 +1,4 @@
-"""workflow_runs 轻量台账表(Week 5 新增,对照第 5 周计划 §4.7)。
+"""workflow_runs 轻量台账表(PostgreSQL 统一改造方案 §4.4)。
 
 目的:在 Postgres 同一库里建独立表,跟踪每个挂起的 thread_id 与当前关卡,
 便于:
@@ -7,12 +7,12 @@
   只对 running / suspended 做迁移,跳过 completed / failed
 - 多日挂起的可视化
 
-表结构:
+表结构(建表 DDL 已迁到 ``db/migrations.py``,这里是唯一事实来源):
     thread_id          TEXT PRIMARY KEY
     video_name         TEXT NOT NULL       -- 从 state.session_id / draft_path 解析
     current_checkpoint TEXT                -- '①' / '②' / '③' / NULL
     status             TEXT NOT NULL       -- 'running' / 'suspended' / 'completed' / 'failed'
-    updated_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 
 调用约定:由各关卡节点(node_06 / node_12 / node_checkpoint3_layout_review)
 + graph 边界节点调用 ``upsert_run`` / ``mark_resumed`` 维护。
@@ -20,11 +20,19 @@
 
 ``psycopg`` 是同步连接,与 ``AsyncPostgresSaver`` 的异步池不共享连接 —
 ``runs_table`` 用独立 ``psycopg.connect`` 直连,简单可靠。
+
+降级语义(方案 D5 / §4.4)
+------------------------
+运行台账**允许降级**:数据库不可达时调用返回降级值(``False`` / ``[]``),
+但**必须**同时打 ERROR 级日志并累加告警计数 —— 静默降级会让人误以为"已保存"。
+(检查点与会话状态不走这套降级,那是 fail-closed。)
 """
 
 from __future__ import annotations
 
+import logging
 import os
+import threading
 from contextlib import contextmanager
 from typing import Iterator
 
@@ -32,16 +40,8 @@ import psycopg
 
 from config import POSTGRES_URI
 
+logger = logging.getLogger(__name__)
 
-CREATE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS workflow_runs (
-    thread_id TEXT PRIMARY KEY,
-    video_name TEXT NOT NULL,
-    current_checkpoint TEXT,
-    status TEXT NOT NULL,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-"""
 
 # status 合法取值(便于上层校验)
 STATUS_RUNNING = "running"
@@ -51,6 +51,35 @@ STATUS_FAILED = "failed"
 
 VALID_STATUSES = frozenset({STATUS_RUNNING, STATUS_SUSPENDED, STATUS_COMPLETED, STATUS_FAILED})
 
+# 降级操作计数(方案 §4.4:台账降级必须可观测)。
+# 进程内计数 —— 供监控脚本 / 告警采集读取;每次降级 +1。
+_degraded_count = 0
+_degraded_lock = threading.Lock()
+
+
+def degraded_count() -> int:
+    """返回本进程累计的台账降级次数。
+
+    大于 0 说明 Postgres 不可达,台账写入没有真正落库 —— 应当告警。
+    """
+    with _degraded_lock:
+        return _degraded_count
+
+
+def _record_degraded(operation: str, exc: BaseException) -> None:
+    """记录一次降级:ERROR 级日志 + 计数 +1。"""
+    global _degraded_count
+    with _degraded_lock:
+        _degraded_count += 1
+        total = _degraded_count
+    logger.error(
+        "[runs_table] %s failed (%s: %s) — 已降级(累计降级 %s 次);台账未落库,需排查 Postgres",
+        operation,
+        type(exc).__name__,
+        exc,
+        total,
+    )
+
 
 @contextmanager
 def _conn() -> Iterator[psycopg.Connection]:
@@ -58,33 +87,33 @@ def _conn() -> Iterator[psycopg.Connection]:
 
     失败时让 ``psycopg.OperationalError`` 透传给上层,便于调用方决定
     是否记录 warning / 跳过。
+
+    走 ``db.connection`` —— 把 ``client_encoding`` 设成 UTF-8:本机库是
+    ``SQL_ASCII``,不设的话 psycopg 会按 ASCII 编码查询串,中文直接报错。
     """
+    from db.connection import connection as _db_connection
+
     uri = os.environ.get("POSTGRES_URI", POSTGRES_URI)
-    c = psycopg.connect(uri)
-    try:
-        yield c
-    finally:
-        c.close()
+    with _db_connection(uri) as conn:
+        yield conn
 
 
 def init_schema() -> None:
-    """建表(幂等)。Week 5 计划 §4.7 要求主入口在启动时调用一次。
+    """应用层迁移(幂等)。
 
-    失败不抛,改写 warning — Postgres 不可达时 runs_table 调用全部降级为
-    no-op,不影响图运行。
+    建表 DDL 已从本模块移走 —— 统一由 ``db/migrations.py`` 管理(方案 §4.4),
+    这里只做一次调用,避免"两处建表"漂移。
+
+    失败不抛,降级为 ERROR 日志 —— Postgres 不可达时 runs_table 调用全部降级为
+    no-op,不影响图运行;但会累加 ``degraded_count()`` 供告警采集。
     """
     try:
+        from db.migrations import apply_migrations
+
         with _conn() as c:
-            with c.cursor() as cur:
-                cur.execute(CREATE_TABLE_SQL)
-            c.commit()
+            apply_migrations(c)
     except Exception as e:  # noqa: BLE001
-        import logging
-        logging.warning(
-            "[runs_table] init_schema failed (%s: %s) — workflow_runs 台账暂不可用",
-            type(e).__name__,
-            e,
-        )
+        _record_degraded("init_schema", e)
 
 
 def upsert_run(
@@ -102,7 +131,7 @@ def upsert_run(
         status: 'running' / 'suspended' / 'completed' / 'failed'。
 
     Returns:
-        True 写成功,False 失败(降级为 warning,不影响主流程)。
+        True 写成功,False 失败(降级 + ERROR 日志 + 计数,不影响主流程)。
     """
     if status not in VALID_STATUSES:
         raise ValueError(
@@ -118,21 +147,14 @@ def upsert_run(
                     ON CONFLICT (thread_id) DO UPDATE
                     SET current_checkpoint = EXCLUDED.current_checkpoint,
                         status = EXCLUDED.status,
-                        updated_at = CURRENT_TIMESTAMP
+                        updated_at = now()
                     """,
                     (thread_id, video_name, current_checkpoint, status),
                 )
             c.commit()
         return True
     except Exception as e:  # noqa: BLE001
-        import logging
-        logging.warning(
-            "[runs_table] upsert_run(%s, %s) failed (%s: %s)",
-            thread_id,
-            status,
-            type(e).__name__,
-            e,
-        )
+        _record_degraded(f"upsert_run({thread_id}, {status})", e)
         return False
 
 
@@ -158,7 +180,7 @@ def list_suspended() -> list[dict]:
 
     Returns:
         list of dicts: ``[{thread_id, video_name, current_checkpoint, updated_at}, ...]``。
-        数据库不可达时返回 ``[]``。
+        数据库不可达时返回 ``[]``(并记一次降级)。
     """
     try:
         with _conn() as c:
@@ -175,10 +197,5 @@ def list_suspended() -> list[dict]:
                 cols = [d.name for d in cur.description]
                 return [dict(zip(cols, row)) for row in cur.fetchall()]
     except Exception as e:  # noqa: BLE001
-        import logging
-        logging.warning(
-            "[runs_table] list_suspended failed (%s: %s) — returning []",
-            type(e).__name__,
-            e,
-        )
+        _record_degraded("list_suspended", e)
         return []

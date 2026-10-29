@@ -23,7 +23,7 @@ def _postgres_uri() -> str:
     uri = os.environ.get("POSTGRES_URI", "").strip()
     if not uri:
         print("✗ 未设置 POSTGRES_URI", file=sys.stderr)
-        print("示例：$env:POSTGRES_URI='postgresql://postgres:devpass@localhost:5432/langgraph'", file=sys.stderr)
+        print("示例：$env:POSTGRES_URI='postgresql://postgres:devpass@localhost:5432/video_workflow'", file=sys.stderr)
         raise SystemExit(2)
     return uri
 

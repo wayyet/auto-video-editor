@@ -69,7 +69,7 @@ function Exit-WithCode {
 # ---------------------------------------------------------------
 # Postgres URI 解析 / 脱敏 / 分类
 # ---------------------------------------------------------------
-$DefaultPostgresUri = 'postgresql://postgres:devpass@localhost:5432/langgraph'
+$DefaultPostgresUri = 'postgresql://postgres:devpass@localhost:5432/video_workflow'
 
 function Get-MaskedUri {
     # 把 URI 里的密码替换成 ***,避免明文进日志

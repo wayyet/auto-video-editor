@@ -1,7 +1,7 @@
 """连通性自检：版本、当前数据库及 LangGraph checkpoint 表。
 
 期望库名不再硬编码 —— 按连接串 URI 的 dbname 动态比对
-(URI 未指定库名时才回落 ``langgraph``),以支持任意 ``-PostgresUri``。
+(URI 未指定库名时才回落 ``video_workflow``),以支持任意 ``-PostgresUri``。
 
 用法::
 
@@ -30,7 +30,7 @@ EXPECTED_TABLES = {
     "checkpoint_migrations",
 }
 # 仅当 URI 里没有 dbname 时才回落到这个库名
-DEFAULT_DATABASE = "langgraph"
+DEFAULT_DATABASE = "video_workflow"
 
 # Windows 默认 stdout 是 GBK，遇到中文 / 符号会报错；强制 UTF-8。
 try:
@@ -45,7 +45,7 @@ def _postgres_uri() -> str:
     uri = os.environ.get("POSTGRES_URI", "").strip()
     if not uri:
         print("✗ 未设置 POSTGRES_URI", file=sys.stderr)
-        print("示例：$env:POSTGRES_URI='postgresql://postgres:devpass@localhost:5432/langgraph'", file=sys.stderr)
+        print("示例：$env:POSTGRES_URI='postgresql://postgres:devpass@localhost:5432/video_workflow'", file=sys.stderr)
         raise SystemExit(2)
     return uri
 
@@ -65,7 +65,7 @@ def _mask_uri(uri: str) -> str:
 
 
 def _expected_database(uri: str) -> str:
-    """按 URI 的 dbname 推出期望库名；URI 没写库名时回落 ``langgraph``。"""
+    """按 URI 的 dbname 推出期望库名；URI 没写库名时回落 ``video_workflow``。"""
     try:
         parsed = urlparse(uri)
     except ValueError:

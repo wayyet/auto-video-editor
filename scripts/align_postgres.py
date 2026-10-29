@@ -124,7 +124,7 @@ async def _ensure_role(cur, *, user: str, password: str, admin_user: str) -> str
     print(f"  ✓ 已更新管理员角色 {user!r} 的密码")
     print(
         "  ! 警告:管理员角色密码已改,默认 URI "
-        "postgresql://postgres:devpass@localhost:5432/langgraph "
+        "postgresql://postgres:devpass@localhost:5432/video_workflow "
         "将不再可用。",
         file=sys.stderr,
     )

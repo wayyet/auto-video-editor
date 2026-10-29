@@ -96,7 +96,7 @@ Week 5 切到 `AsyncPostgresSaver` 时，使用 Docker Desktop 启动本地 EDB 
 
 - 镜像：`quay.io/enterprisedb/postgresql:16.11-3.5-postgis-multilang`
 - 容器：`edb-postgres16`
-- 数据库：`langgraph`
+- 数据库：`video_workflow`（运行时唯一库；容器默认维护库为 `langgraph`，由 `align_postgres.py` 增量建出 `video_workflow`）
 - 端口：`localhost:5432`
 - 命名卷：`edb_pgdata`
 
@@ -113,7 +113,7 @@ Week 5 切到 `AsyncPostgresSaver` 时，使用 Docker Desktop 启动本地 EDB 
 .\scripts\stop_postgres.ps1 -Remove
 
 # 首次或需要重置表时执行
-$env:POSTGRES_URI = "postgresql://postgres:devpass@localhost:5432/langgraph"
+$env:POSTGRES_URI = "postgresql://postgres:devpass@localhost:5432/video_workflow"
 .\.venv\Scripts\python.exe scripts\setup_postgres_schema.py
 
 # 验证版本、数据库和 checkpoint 表
@@ -129,7 +129,7 @@ $env:WORKFLOW_ENV = "production"
 ```powershell
 [Environment]::SetEnvironmentVariable(
   "POSTGRES_URI",
-  "postgresql://postgres:devpass@localhost:5432/langgraph",
+  "postgresql://postgres:devpass@localhost:5432/video_workflow",
   "User"
 )
 ```
@@ -212,7 +212,7 @@ New-Item -ItemType Directory -Force -Path inputs | Out-Null
 |---|---|---|
 | `-ThreadId` | `video-001` | LangGraph `thread_id`,同时写入 `runtime\initial_state_<id>.json` 与 checkpoint 查询 |
 | `-StorylineMode` | `human` | `human` = 走人工关卡(启动 OpenStoryline Web);`auto` = 19 节点确定性图(**不**启动 Web)。非法值在参数绑定阶段被拒(`ValidateSet`) |
-| `-PostgresUri` | `postgresql://postgres:devpass@localhost:5432/langgraph` | 连接的唯一真相。`localhost:5432` → **本地托管**模式(起 `edb-postgres16` 容器 + 自动对齐角色/库);其它 host/端口 → **外部**模式(完全不碰本地容器) |
+| `-PostgresUri` | `postgresql://postgres:devpass@localhost:5432/video_workflow` | 连接的唯一真相。`localhost:5432` → **本地托管**模式(起 `edb-postgres16` 容器 + 自动对齐角色/库);其它 host/端口 → **外部**模式(完全不碰本地容器) |
 | `-SourceVideo` | jianying-editor 演示素材路径 | 复制到 `-InputsDir` 的源视频 |
 | `-InputsDir` | `FireRed-OpenStoryline\inputs` | 素材目录 |
 | `-InputsFileName` | `30s.mp4` | 素材文件名 |
@@ -401,7 +401,7 @@ async def main():
 | 变量 | 说明 | 默认 |
 |---|---|---|
 | `WORKFLOW_ENV` | `production` 强制用 Postgres;其它值走 `CHECKPOINTER_BACKEND` | `development` |
-| `POSTGRES_URI` | `postgresql://user:pass@host:port/dbname` | `postgresql://postgres:postgres@localhost:5432/video_workflow` |
+| `POSTGRES_URI` | `postgresql://user:pass@host:port/dbname` | `postgresql://postgres:devpass@localhost:5432/video_workflow` |
 
 依赖(`pyproject.toml` / `requirements.txt`):`langgraph-checkpoint-postgres>=3.1` + `psycopg[binary,pool]>=3.2`。本机未启 Postgres 时,`tests/integration/test_postgres_checkpointer.py` 自动 skip。
 
@@ -494,13 +494,49 @@ Week 5 新增轻量 SQL 工具,在 Postgres 同一库里建独立表跟踪挂起
 ```python
 from monitoring import runs_table
 
-runs_table.init_schema()  # 幂等建表
+runs_table.init_schema()  # 幂等:走 db.migrations 的迁移器
 runs_table.upsert_run(thread_id, video_name, "①", "suspended")  # 关卡前
 runs_table.mark_completed(thread_id)                              # 流程结束后
 runs_table.list_suspended()  # 运维查询入口
 ```
 
-Postgres 不可达时所有调用降级为 warning no-op,不阻塞主流程。
+建表 DDL 已收敛到 `db/migrations.py`(唯一事实来源)。Postgres 不可达时所有调用**降级**
+为 no-op、不阻塞主流程,但会打 **ERROR** 级日志并累加 `runs_table.degraded_count()`
+——静默降级会让人误以为"已保存"。
+
+### 4.9b `db/` — 应用层迁移与 `chat_sessions` 仓储
+
+PostgreSQL 统一改造方案(阶段 A / B)新增的应用层数据访问层。**运行时唯一库 = `video_workflow`**。
+
+| 模块 | 职责 |
+|---|---|
+| `db/migrations.py` | 版本化 SQL 迁移器。管 `app_schema_migrations` / `chat_sessions` / `workflow_runs` |
+| `db/session_repository.py` | `chat_sessions` 仓储:CRUD、乐观锁(`version`)、游标分页 |
+| `db/connection.py` | 连接辅助:把 `client_encoding` 设成 UTF-8(本机库是 `SQL_ASCII`) |
+
+**分工边界**:LangGraph 自己的 4 张 checkpoint 表由 `AsyncPostgresSaver.setup()` 建
+(`scripts/setup_postgres_schema.py`),应用迁移**不碰**它们。
+
+```powershell
+# 执行应用层迁移(幂等,可重复跑)
+.\.venv\Scripts\python.exe scripts\migrate_db.py
+
+# 只看已应用的迁移版本
+.\.venv\Scripts\python.exe scripts\migrate_db.py --status
+```
+
+```python
+from db.session_repository import SessionRepository
+
+repo = SessionRepository()                      # 用 POSTGRES_URI / config 默认值
+repo.create(session_id, state_json=state)       # 新建
+repo.update_state(session_id, state, expected_version=1)  # 乐观锁:版本对不上抛冲突
+repo.list(limit=50, cursor=(updated_at, sid))   # 游标分页(不用 offset)
+```
+
+⚠️ **本机库是 `SQL_ASCII`**:写 JSONB 必须用 `db.session_repository.jsonb()`
+(内部 `ensure_ascii=False`),否则 PG 报 `UntranslatableCharacter`;读 TEXT 列用
+`text_value()` 解码。详见 `db/connection.py` 的模块文档。
 
 ### 4.10 2026-10 接入原"不可达节点"(三个开关)
 
