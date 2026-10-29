@@ -9,6 +9,11 @@ htmlcov/
 build/
 dist/
 
+# 本地环境变量(含 POSTGRES_URI 密码等凭据),只提交 .env.example
+.env
+.env.*
+!.env.example
+
 # 测试产物
 artifacts/shot_plan_*.json
 artifacts/draft_content.json
