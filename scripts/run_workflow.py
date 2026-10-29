@@ -9,7 +9,7 @@
 
 .. code-block:: powershell
 
-    # 默认开发模式(sqlite checkpointer,跑本地 fixture 30s.mp4)
+    # 常规运行(Postgres checkpointer,唯一执行路径)
     .\\.venv\\Scripts\\python.exe scripts\\run_workflow.py --thread-id video-001
 
     # 生产模式(WORKFLOW_ENV=production + PostgresSaver)
@@ -24,6 +24,8 @@
   pre-flight 自检。
 - ``--production`` 等价于 ``WORKFLOW_ENV=production``;需要本机
   Postgres 已就绪(由 pre-flight 步骤 4-6 负责)。
+- PostgreSQL 统一改造后**只有一条执行路径**:Postgres checkpointer + ``ainvoke``。
+  原 ``_invoke_sync()``(SQLite / 内存 saver + ``invoke``)已删除(方案 §4.3)。
 - 管理员权限:Step 1(``Start-Service``)需要 admin;非管理员跑会失败
   并给出明确指引。
 """
@@ -234,36 +236,27 @@ def _check_final_state(result: Optional[dict]) -> int:
 
 
 async def _invoke_async(args: argparse.Namespace) -> int:
-    """生产路径:Postgres checkpointer + ainvoke。"""
-    from graph import build_graph, get_checkpointer
+    """生产路径:Postgres checkpointer + ainvoke(唯一执行路径)。"""
+    from graph import build_graph, get_checkpointer, normalize_thread_id
 
     state = _load_initial_state(args)
+    thread_id = normalize_thread_id(args.thread_id)
+    # 应用层迁移先行:``chat_sessions`` / ``workflow_runs`` / ``app_schema_migrations``
+    # 必须在跑工作流之前就位(方案 §4.3)。失败即中止启动 —— fail-closed,
+    # 不允许"迁移失败但工作流照跑"的半可用状态。
+    from db.migrations import apply_migrations_to_db
+
+    apply_migrations_to_db()
     async with get_checkpointer() as saver:
         # pre-flight 已在主入口跑过,这里 run_preflight=False 避免重复
         g = build_graph(
             checkpointer=saver,
-            thread_id=args.thread_id,
+            thread_id=thread_id,
             start_heartbeat_thread=False,
             run_preflight=False,
         )
-        config = {"configurable": {"thread_id": args.thread_id}}
+        config = {"configurable": {"thread_id": thread_id}}
         result = await g.ainvoke(state, config=config)
-    return _check_final_state(result)
-
-
-def _invoke_sync(args: argparse.Namespace) -> int:
-    """开发路径:sqlite/in-memory checkpointer + invoke。"""
-    from graph import build_graph
-
-    state = _load_initial_state(args)
-    g = build_graph(
-        checkpointer=None,
-        thread_id=args.thread_id,
-        start_heartbeat_thread=False,
-        run_preflight=False,
-    )
-    config = {"configurable": {"thread_id": args.thread_id}}
-    result = g.invoke(state, config=config)
     return _check_final_state(result)
 
 
@@ -275,9 +268,9 @@ async def _main_async(args: argparse.Namespace) -> int:
     if rc != 0:
         return rc
 
-    if os.environ.get("WORKFLOW_ENV") == "production":
-        return await _invoke_async(args)
-    return _invoke_sync(args)
+    # PostgreSQL 统一改造(方案 §4.3):SQLite 分支已删除 ——
+    # 无论 WORKFLOW_ENV 是什么,都走 Postgres 异步路径。
+    return await _invoke_async(args)
 
 
 def main() -> int:

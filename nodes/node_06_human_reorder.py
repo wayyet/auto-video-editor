@@ -18,7 +18,7 @@ Week 5 改动(对齐第 5 周计划 §1.1):
 
 测试策略:
 - ``_build_interrupt_payload`` / ``_post_resume`` 抽成纯函数,单测直接覆盖
-- ``human_reorder`` 仅做编排,集成测试通过完整 graph + SqliteSaver 覆盖
+- ``human_reorder`` 仅做编排,集成测试通过完整 graph + ``InMemorySaver`` 覆盖
 """
 
 from __future__ import annotations

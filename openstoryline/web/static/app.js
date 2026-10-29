@@ -9,7 +9,12 @@ const CUSTOM_MODEL_KEY = "__custom__";
 const MCODE_MODEL_PREFIX = "mcode";
 const isMcodeTier = (v) => String(v || "").trim().toLowerCase().startsWith(MCODE_MODEL_PREFIX);
 const SESSION_ID_KEY = "openstoryline_session_id";
+// 旧客户端把会话列表存在 localStorage。PostgreSQL 改造后**服务端是唯一事实来源**,
+// 这个 key 降级为**一次性对账输入**:启动时读一次,拿里面的标题去给"服务端已存在"的
+// 会话改名(PATCH),读完即删 —— 绝不拿客户端的 id 去服务端建会话。
 const SESSION_LIST_KEY = "openstoryline_session_list_v1";
+// 侧边栏列表的服务端分页大小(与旧客户端 localStorage 里保留的 50 条一致)。
+const SESSION_LIST_LIMIT = 50;
 
 // =========================================================
 // i18n (zh/en) + lang persistence
@@ -51,6 +56,7 @@ const __OS_I18N = {
     "sidebar.import_video": "导入视频",
     "sidebar.history_title": "对话历史",
     "sidebar.history_empty": "暂无历史会话",
+    "sidebar.history_error": "历史会话加载失败，请稍后重试",
     "sidebar.history_aria": "历史会话列表",
     "sidebar.model_label": "对话模型",
     "sidebar.model_select_aria": "选择对话模型",
@@ -191,6 +197,7 @@ const __OS_I18N = {
     "sidebar.import_video": "Import video",
     "sidebar.history_title": "History",
     "sidebar.history_empty": "No past chats yet",
+    "sidebar.history_error": "Failed to load chat history. Please retry later.",
     "sidebar.history_aria": "Chat history list",
     "sidebar.model_label": "Chat model",
     "sidebar.model_select_aria": "Select chat model",
@@ -561,6 +568,33 @@ class ApiClient {
       throw new HttpError(await this._readFetchError(r), r.status);
     }
     return await r.json();
+  }
+
+  /** 会话列表(PostgreSQL 改造后:服务端是唯一事实来源)。 */
+  async listSessions({ limit = 50, cursor = null, titlePrefix = null, includeDeleted = false } = {}) {
+    const qs = new URLSearchParams();
+    qs.set("limit", String(limit));
+    if (cursor) qs.set("cursor", String(cursor));
+    if (titlePrefix) qs.set("title_prefix", String(titlePrefix));
+    if (includeDeleted) qs.set("include_deleted", "true");
+    const r = await fetch(`/api/sessions?${qs.toString()}`);
+    if (!r.ok) {
+      throw new HttpError(await this._readFetchError(r), r.status);
+    }
+    return await r.json(); // { items: [...], next_cursor: string|null }
+  }
+
+  /** 改标题(自动标题回写、旧 localStorage 列表对账都走这里)。 */
+  async renameSession(sessionId, title, titleSource = "manual") {
+    const r = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: String(title || ""), title_source: titleSource }),
+    });
+    if (!r.ok) {
+      throw new HttpError(await this._readFetchError(r), r.status);
+    }
+    return await r.json(); // { ok, session_id, title, title_source }
   }
 
   async getProviderUiSchema(kind) {
@@ -2415,6 +2449,10 @@ class App {
 
     this.sessionId = null;
     this.sessionHistory = [];
+    // 服务端列表拉取失败时的错误信息(非空 ⇒ 侧边栏显示错误态,而不是显示旧数据)。
+    this.sessionListError = null;
+    // 服务端分页游标(下一页的 next_cursor,原样回传即可)。
+    this.sessionNextCursor = null;
     this.pendingMedia = [];
 
     this.llmSelect = $("#llmModelSelect");
@@ -2825,9 +2863,9 @@ class App {
     await this.loadProviderUiSchema("tts");
     await this.loadProviderUiSchema("ai_transition");
 
-    // 先加载本地会话列表
-    this.sessionHistory = this._loadSessionHistory();
-    this._renderSessionHistory();
+    // 会话列表以服务端(PostgreSQL)为准:先拉一次,再用旧 localStorage 列表做一次性对账。
+    await this._loadSessionListFromServer();
+    await this._reconcileLegacySessionTitles();
 
     // 复用 localStorage 当前会话；如果失效就创建新 session
     const saved = localStorage.getItem(SESSION_ID_KEY);
@@ -2853,9 +2891,86 @@ class App {
     await this.newSession();
   }
 
-  // ----- Session history (localStorage, per-browser) -----
+  // ----- Session history (server = PostgreSQL，唯一事实来源) -----
 
-  _loadSessionHistory() {
+  /** ISO 时间戳 → epoch 毫秒(渲染层沿用 epoch 毫秒排序)。 */
+  _isoToEpochMs(value) {
+    if (!value) return 0;
+    const t = Date.parse(String(value));
+    return Number.isFinite(t) ? t : 0;
+  }
+
+  /** 服务端会话项 → 侧边栏条目(字段名与旧 localStorage 版本保持一致)。 */
+  _mapServerSession(item) {
+    const id = String(item?.session_id || "").trim();
+    const created = this._isoToEpochMs(item?.created_at);
+    const updated = this._isoToEpochMs(item?.updated_at);
+    const messageCount = Number(item?.message_count || 0);
+    return {
+      id,
+      title: String(item?.title || "").trim(),
+      // 手动标题不会被自动标题覆盖 ⇒ 记下来，回写自动标题时跳过。
+      title_source: String(item?.title_source || "auto"),
+      created_at: created,
+      updated_at: updated,
+      last_preview: String(item?.last_message_preview || "").trim(),
+      // has_user 推导规则:服务端 message_count 就是 len(history);
+      // 新建会话 history 为空 ⇒ message_count = 0 ⇒ has_user = false(空白会话)。
+      has_user: messageCount > 0,
+    };
+  }
+
+  /** 从服务端拉会话列表;失败时清空列表并记错误(不显示旧数据)。 */
+  async _loadSessionListFromServer() {
+    try {
+      const data = await this.api.listSessions({ limit: SESSION_LIST_LIMIT });
+      const items = Array.isArray(data?.items) ? data.items : [];
+      this.sessionHistory = items
+        .map((it) => this._mapServerSession(it))
+        .filter((it) => it.id);
+      this.sessionNextCursor = data?.next_cursor || null;
+      this.sessionListError = null;
+    } catch (e) {
+      console.warn("[session] failed to load session list from server:", e);
+      this.sessionHistory = [];
+      this.sessionNextCursor = null;
+      this.sessionListError = (e && (e.message || e)) ? String(e.message || e) : "unavailable";
+    }
+    this._renderSessionHistory(this.sessionId);
+    return !this.sessionListError;
+  }
+
+  /**
+   * 一次性对账:读旧 localStorage 列表,只给**服务端已存在**的会话改标题。
+   * 客户端的 id 永远不会被拿去服务端建会话。读完即删掉这个 key。
+   */
+  async _reconcileLegacySessionTitles() {
+    const legacy = this._readLegacySessionList();
+    if (!legacy.length) return;
+    try { localStorage.removeItem(SESSION_LIST_KEY); } catch {}
+
+    for (const item of legacy) {
+      const known = this._getSessionHistoryItem(item.id);
+      if (!known) continue;                         // 服务端没有 ⇒ 跳过
+      const title = String(item.title || "").trim();
+      if (!title) continue;
+      if (title === known.title) continue;          // 一样就别动
+      if (known.title_source === "manual") continue; // 手动标题优先
+      try {
+        // 旧列表里的标题都是**自动推导**出来的(旧版侧栏没有手动改名入口)
+        // ⇒ 按 "auto" 回写,之后还能被新的自动标题更新。
+        const res = await this.api.renameSession(item.id, title, "auto");
+        known.title = String(res?.title || title);
+        known.title_source = String(res?.title_source || "auto");
+      } catch (e) {
+        console.warn("[session] legacy title reconcile failed:", item.id, e);
+      }
+    }
+    this._renderSessionHistory(this.sessionId);
+  }
+
+  /** 读旧 localStorage 列表(一次性对账输入)。 */
+  _readLegacySessionList() {
     try {
       const raw = localStorage.getItem(SESSION_LIST_KEY);
       if (!raw) return [];
@@ -2867,30 +2982,11 @@ class App {
         if (!item || typeof item !== "object") continue;
         const id = String(item.id || "").trim();
         if (!id) continue;
-        const title = String(item.title || "").trim();
-        const created_at = Number(item.created_at || Date.now());
-        const updated_at = Number(item.updated_at || created_at);
-        const last_preview = String(item.last_preview || "").trim();
-        const has_user = !!item.has_user;
-        out.push({ id, title, created_at, updated_at, last_preview, has_user });
+        out.push({ id, title: String(item.title || "").trim() });
       }
       return out;
     } catch {
       return [];
-    }
-  }
-
-  _saveSessionHistory(list) {
-    if (!Array.isArray(list)) return;
-    try {
-      // 根据 created_at 倒序排序再裁剪，确保持久化里保留“最新的 50 个会话”，并与 UI 排序一致
-      const sorted = list
-        .slice()
-        .sort((a, b) => (Number(b?.created_at) || 0) - (Number(a?.created_at) || 0));
-      const trimmed = sorted.slice(0, 50);
-      localStorage.setItem(SESSION_LIST_KEY, JSON.stringify(trimmed));
-    } catch {
-      // 忽略存储错误（Safari 无痕等）
     }
   }
 
@@ -2956,9 +3052,13 @@ class App {
     const hasUser = this._snapshotHasUserMessage(snapshot);
 
     let found = false;
+    let prevTitle = "";
+    let prevSource = "";
     const next = this.sessionHistory.map((item) => {
       if (item.id !== sid) return item;
       found = true;
+      prevTitle = String(item.title || "");
+      prevSource = String(item.title_source || "");
       return {
         ...item,
         title: title || item.title || "",
@@ -2973,6 +3073,7 @@ class App {
       next.push({
         id: sid,
         title,
+        title_source: "auto",
         created_at: now,
         updated_at: now,
         last_preview: preview,
@@ -2981,7 +3082,46 @@ class App {
     }
 
     this.sessionHistory = next;
-    this._saveSessionHistory(this.sessionHistory);
+    // 自动标题回写服务端(服务端才是事实来源)。
+    // 只在列表里已经见过这个会话时才回写 —— 没见过的会话我们不知道它当前
+    // 的标题/来源,不去覆盖服务端已有的状态。
+    if (found) this._maybePushAutoTitle(sid, prevTitle, prevSource, title);
+  }
+
+  /**
+   * 自动标题回写服务端的判定:
+   * - “新对话”是占位标题,不带回写;
+   * - 手动标题(title_source='manual')不被自动标题覆盖;
+   * - 标题没变就不发请求。
+   */
+  _maybePushAutoTitle(sessionId, prevTitle, prevSource, nextTitle) {
+    const sid = String(sessionId || "").trim();
+    const title = String(nextTitle || "").trim();
+    if (!sid || !title) return;
+    if (this._isNewChatTitle(title)) return;
+    if (String(prevSource || "") === "manual") return;
+    if (String(prevTitle || "").trim() === title) return;
+    this._pushAutoTitleToServer(sid, title);
+  }
+
+  /** 把自动标题 PATCH 回服务端(失败只告警,不打断交互)。 */
+  _pushAutoTitleToServer(sessionId, title) {
+    const sid = String(sessionId || "").trim();
+    if (!sid) return;
+    // title_source="auto" ⇒ 这条是**自动推导**出来的标题,之后还能被新的自动标题更新。
+    // (手动标题用 "manual",自动标题不会覆盖它 —— 方案 §4.6)
+    this.api.renameSession(sid, title, "auto")
+      .then((res) => {
+        const item = this._getSessionHistoryItem(sid);
+        if (item) {
+          item.title = String(res?.title || title);
+          item.title_source = String(res?.title_source || "auto");
+        }
+        this._renderSessionHistory(this.sessionId);
+      })
+      .catch((e) => {
+        console.warn("[session] auto title write-back failed:", sid, e);
+      });
   }
 
   _snapshotHistory(snapshot) {
@@ -3161,7 +3301,6 @@ class App {
     const next = this.sessionHistory.filter((item) => item.id !== sid);
     if (next.length === this.sessionHistory.length) return;
     this.sessionHistory = next;
-    this._saveSessionHistory(this.sessionHistory);
   }
 
   _renderSessionHistory(activeId) {
@@ -3169,6 +3308,15 @@ class App {
     if (!host) return;
 
     host.innerHTML = "";
+
+    // 服务端列表拉不到 ⇒ 显示错误态,不要拿旧数据糊弄用户(其余功能照常可用)。
+    if (this.sessionListError) {
+      const errEl = document.createElement("div");
+      errEl.className = "session-history-empty";
+      errEl.textContent = __t("sidebar.history_error");
+      host.appendChild(errEl);
+      return;
+    }
 
     const list = Array.isArray(this.sessionHistory) ? this.sessionHistory.slice() : [];
     if (!list.length) {
@@ -3249,7 +3397,6 @@ class App {
       };
     });
     this.sessionHistory = next;
-    this._saveSessionHistory(this.sessionHistory);
     this._renderSessionHistory(this.sessionId);
   }
 
@@ -3282,10 +3429,15 @@ class App {
     if (!Array.isArray(this.sessionHistory)) this.sessionHistory = [];
 
     let found = false;
+    let prevTitle = "";
+    let prevSource = "";
+    let nextTitle = "";
     const next = this.sessionHistory.map((it) => {
       if (!it || it.id !== sid) return it;
       found = true;
-      const nextTitle = (this._isNewChatTitle(it.title) || !String(it.title || "").trim())
+      prevTitle = String(it.title || "");
+      prevSource = String(it.title_source || "");
+      nextTitle = (this._isNewChatTitle(it.title) || !String(it.title || "").trim())
         ? (text.length > 32 ? text.slice(0, 32) + "…" : (text || this._newChatTitle()))
         : it.title;
 
@@ -3299,9 +3451,11 @@ class App {
     });
 
     if (!found) {
+      nextTitle = text ? (text.length > 32 ? text.slice(0, 32) + "…" : text) : this._newChatTitle();
       next.push({
         id: sid,
-        title: text ? (text.length > 32 ? text.slice(0, 32) + "…" : text) : this._newChatTitle(),
+        title: nextTitle,
+        title_source: "auto",
         created_at: now,
         updated_at: now,
         last_preview: preview,
@@ -3310,7 +3464,8 @@ class App {
     }
 
     this.sessionHistory = next;
-    this._saveSessionHistory(this.sessionHistory);
+    // 用户发了第一条消息 ⇒ 自动标题回写服务端。
+    this._maybePushAutoTitle(sid, prevTitle, prevSource, nextTitle);
     this._renderSessionHistory(this.sessionId);
   }
 

@@ -24,9 +24,12 @@ LangGraph 自己的 4 张 checkpoint 表(``checkpoints`` / ``checkpoint_blobs`` 
 ----------------------------------------------
 ``client_encoding`` 跟随库编码 = ``SQL_ASCII``,因此:
 - 读 TEXT 列拿到的是 ``bytes``,调用方必须自己 ``decode("utf-8")``(方案 §3.2 A5)。
+  ⇒ 迁移 003 把**库级默认**改成 UTF8,新连接直接给 ``str``;但代码里仍要能处理
+  两种形态(旧连接的 bytes / 新连接的 str)。
 - 写 JSONB **必须**用 ``ensure_ascii=False`` 序列化:默认的 ``ensure_ascii=True``
   会把中文变成 ``\\uXXXX``,PG 无法把 unicode 转义翻译成 SQL_ASCII ⇒
-  ``UntranslatableCharacter``。
+  ``UntranslatableCharacter``。⇒ 写 JSONB 的进程必须先调
+  ``db.connection.configure_json_dumps()``(全局设置,LangGraph saver 也吃这一套)。
 """
 
 from __future__ import annotations
@@ -211,6 +214,31 @@ CREATE INDEX IF NOT EXISTS idx_workflow_runs_status_updated
     ON workflow_runs (status, updated_at DESC);
 """
 
+# ---------------------------------------------------------------------------
+# 003 — 库级 client_encoding
+# ---------------------------------------------------------------------------
+# 本机库编码是 SQL_ASCII(Windows 容器没设 LANG)。库级 ``client_encoding`` 默认
+# 跟着库编码走 = SQL_ASCII ⇒ psycopg3 把 TEXT 列当 **bytes** 返回,调用方得自己
+# decode(方案 §3.2 A5)。
+#
+# 这里把**库级默认**改成 UTF8:
+# - 库本身的存储编码**不变**(仍是 SQL_ASCII,服务端不做任何字符集转换);
+# - 只是让新连接默认用 UTF-8 ⇒ TEXT / JSONB 直接给 ``str``,少一个解码坑。
+#
+# ⚠️ 这条迁移**改不了已建立的连接**:已开的会话仍是旧值,重连才生效。
+# ⚠️ 只影响"当前连接的库",所以用 ``current_database()`` 拼,不会误改别的库。
+_CLIENT_ENCODING_UTF8_SQL = """
+DO $$
+BEGIN
+    EXECUTE format(
+        'ALTER DATABASE %I SET client_encoding TO %L',
+        current_database(),
+        'UTF8'
+    );
+END
+$$;
+"""
+
 
 # ---------------------------------------------------------------------------
 # 迁移清单
@@ -237,6 +265,11 @@ MIGRATIONS: tuple[Migration, ...] = (
             _WORKFLOW_RUNS_TZ_FINALIZE_SQL,
             _WORKFLOW_RUNS_INDEX_SQL,
         ),
+    ),
+    Migration(
+        version=3,
+        name="set_client_encoding_utf8",
+        statements=(_CLIENT_ENCODING_UTF8_SQL,),
     ),
 )
 

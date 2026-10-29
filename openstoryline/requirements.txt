@@ -39,3 +39,8 @@ transformers==4.46.3
 # ddgs 自带浏览器指纹伪装，是实测唯一能绕过搜索引擎反爬页的方案；pysocks 让 requests 支持 socks5 代理
 ddgs==9.14.4
 pysocks==1.7.1
+# PostgreSQL 统一改造(方案 §4.5):聊天会话状态落 PostgreSQL `chat_sessions` 表,
+# OpenStoryline Web 服务要直连 Postgres ⇒ 需要 psycopg。
+# ⚠️ 本机库编码是 SQL_ASCII ⇒ 写 JSONB 必须 ensure_ascii=False
+#    (见 auto-video-editor 的 db/connection.py::configure_json_dumps)。
+psycopg[binary]>=3.2

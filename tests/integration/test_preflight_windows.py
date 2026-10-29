@@ -213,7 +213,13 @@ def test_run_workflow_skip_preflight_returns_cleanly(monkeypatch: pytest.MonkeyP
     测试方法:替换 ``runtime.preflight._run_powershell_step`` 为 spy,
     调用 ``run_workflow.main()`` 配合 ``--skip-preflight``,
     断言 spy 未被调用。
+
+    2026-10(阶段 C):``run_workflow.py`` 只剩**一条**执行路径 ——
+    Postgres checkpointer + ``await g.ainvoke(...)``(原同步 SQLite 分支已删)。
+    因此这里的 mock 必须提供**可 await 的** ``ainvoke``;
+    同时把 checkpointer 获取与 DB 迁移也 mock 掉,让本用例不依赖活的 Postgres。
     """
+    import contextlib
     import sys
     from pathlib import Path
 
@@ -223,9 +229,20 @@ def test_run_workflow_skip_preflight_returns_cleanly(monkeypatch: pytest.MonkeyP
 
     from scripts.run_workflow import main as run_main  # type: ignore[import-not-found]
 
+    @contextlib.asynccontextmanager
+    async def _fake_get_checkpointer():
+        yield mock.MagicMock()
+
     # 跳过 ainvoke 实际跑图:替换 build_graph 让它直接返回 mock
     with mock.patch("runtime.preflight._run_powershell_step") as fake_pwsh, \
-         mock.patch("graph.build_graph", return_value=mock.MagicMock(invoke=mock.MagicMock(return_value={}))):
+         mock.patch(
+             "graph.build_graph",
+             return_value=mock.MagicMock(
+                 ainvoke=mock.AsyncMock(return_value={}),
+             ),
+         ), \
+         mock.patch("graph.get_checkpointer", _fake_get_checkpointer), \
+         mock.patch("db.migrations.apply_migrations_to_db", return_value=None):
         monkeypatch.setattr(
             sys, "argv", ["run_workflow.py", "--skip-preflight", "--thread-id", "ci-test"]
         )

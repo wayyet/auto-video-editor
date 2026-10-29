@@ -4,6 +4,7 @@
 
 - **Week 2**:LangGraph 5 节点骨架(节点 1-5)+ draft_content.json 加密检测/版本策略/原子写入底层库 + 端到端集成测试
 - **Week 3**:扩展为 13+1 节点完整图(节点 1-13 + 1 升级节点)+ 关卡①/② interrupt/resume 联调 + 心跳监控 + 持久化 SqliteSaver
+- **PostgreSQL 统一改造**:运行时唯一数据库 = PostgreSQL(`video_workflow`);SQLite 检查点后端与本地 `.sqlite` 落盘已删除,聊天会话从 JSON 文件迁入 `chat_sessions` 表,浏览器侧栏历史以服务端为唯一事实来源
 
 ## 1. 目录结构
 
@@ -51,7 +52,10 @@ auto-video-editor/
 │   ├── heartbeat_writer.py             编排进程内 daemon 线程
 │   ├── heartbeat_monitor.ps1           外部监控脚本(任务计划程序触发)
 │   └── register_heartbeat_task.ps1     任务计划程序注册脚本
-├── checkpoints/                        [新,gitignore] SqliteSaver 落盘目录
+├── db/                                 [新] PostgreSQL 统一改造:迁移器 + 会话仓储
+│   ├── migrations.py                   版本化应用层迁移(app_schema_migrations)
+│   ├── connection.py                   连接辅助(client_encoding=utf-8)
+│   └── session_repository.py           chat_sessions 仓储(乐观锁 + 游标分页)
 ├── mcp_clients/
 │   └── openstoryline_client.py         Week 2 已交付
 ├── docs/
@@ -80,14 +84,15 @@ python -m pip install --upgrade pip
 python -m pip install -e E:\Documents\kuaishou\langgraph-main\libs\langgraph `
                       -e E:\Documents\kuaishou\langgraph-main\libs\checkpoint `
                       -e E:\Documents\kuaishou\langgraph-main\libs\prebuilt `
-                      httpx pytest pytest-mock pytest-asyncio langgraph-checkpoint-sqlite
+                      httpx pytest pytest-mock pytest-asyncio langgraph-checkpoint-postgres
 ```
 
 ### 2.3 验证安装
 
 ```powershell
-python -c "from graph import build_graph; g = build_graph(); print(type(g).__name__)"
+python -c "from graph import build_graph; from config import make_checkpointer; g = build_graph(checkpointer=make_checkpointer('memory')); print(type(g).__name__)"
 # 应输出:CompiledStateGraph
+# 注意:build_graph() 必须显式注入 checkpointer,不再自动兜底(方案 §4.2)。
 ```
 
 ### 2.4 本地启动 EDB Postgres 16.11（Docker 版，推荐）
@@ -134,7 +139,8 @@ $env:WORKFLOW_ENV = "production"
 )
 ```
 
-默认 `CHECKPOINTER_BACKEND` 仍是 SQLite；只有 `WORKFLOW_ENV=production` 或显式设置 `CHECKPOINTER_BACKEND=postgres` 时才使用该容器。完全删除数据前需确认影响：checkpoint 会随 `edb_pgdata` 卷一起删除。
+运行时**所有**持久化(checkpoint + 聊天会话)都在这个容器的 `video_workflow` 库里,没有第二个数据库、没有本地 `.sqlite` 落盘(方案 §4.1)。完全删除数据前需确认影响：checkpoint 与会话状态会随 `edb_pgdata` 卷一起删除。
+
 
 拉镜像前若之前遇过 `127.0.0.1:3067 connect refused` 之类的代理报错，可先跑代理自检脚本（containerd 的代理层偶尔会被指向失效端口）：
 
@@ -336,38 +342,45 @@ python -m pytest tests/integration/test_interrupt_resume.py::test_checkpoint1_in
    $env:FIRERED_ASR_ENDPOINT = "http://127.0.0.1:8009/transcribe"
    ```
 
-### 4.1 持久化 checkpointer
+### 4.1 持久化 checkpointer(PostgreSQL 唯一后端)
 
-`config.make_checkpointer(backend, thread_id)` 支持两种后端:
+PostgreSQL 统一改造后,运行时**只有一个**持久化后端:PostgreSQL。
+SQLite 后端与 `checkpoints/` 落盘目录已删除(方案 §4.1 / D2)。
 
 ```python
 from config import make_checkpointer
 
-# 内存(单测 / 临时运行)
+# 内存(单测专用,进程内无持久化)
 saver = make_checkpointer("memory")
-
-# SQLite(Week 3 默认,支持多日挂起恢复)
-saver = make_checkpointer("sqlite", thread_id="video-001")
-# 文件落盘: <workspace>/checkpoints/<thread_id>.sqlite
 ```
+
+生产路径**不要**用 `make_checkpointer`,走 `graph.get_checkpointer()`(见 4.4)。
+`build_graph()` 现在要求**显式注入** checkpointer,未注入直接抛 `RuntimeError` ——
+不再自动兜底,避免"悄悄退化成无持久化"导致挂起任务查不到。
 
 ### 4.2 interrupt / resume 模式
 
 ```python
-from graph import build_graph
+from graph import build_graph, get_checkpointer
 from langgraph.types import Command
 
-g = build_graph(thread_id="video-001")  # 默认 sqlite
+async def main():
+    async with get_checkpointer() as saver:
+        g = build_graph(checkpointer=saver, thread_id="video-001")
 
-# 第一次 invoke:跑到关卡① 挂起
-try:
-    g.invoke(initial_state, config={"configurable": {"thread_id": "video-001"}})
-except GraphInterrupt:
-    pass
+        # 第一次 invoke:跑到关卡① 挂起
+        try:
+            await g.ainvoke(initial_state, config={"configurable": {"thread_id": "video-001"}})
+        except GraphInterrupt:
+            pass
 
-# 用户在剪映手动调整后,用 Command(resume=True) 续跑
-g.invoke(Command(resume=True), config={"configurable": {"thread_id": "video-001"}})
+        # 用户在剪映手动调整后,用 Command(resume=True) 续跑
+        await g.ainvoke(Command(resume=True), config={"configurable": {"thread_id": "video-001"}})
 ```
+
+> ⚠️ `thread_id` **必须是 `str`**。psycopg3 把 `bytes` 写进 `TEXT` 列会变成
+> `\x<hex>` 字面量,导致同一逻辑线程分裂成两套 thread_id(方案 §3.1 M2)。
+> 用 `graph.normalize_thread_id(thread_id)` 归一后再用。
 
 ### 4.3 心跳监控
 
@@ -381,10 +394,9 @@ g.invoke(Command(resume=True), config={"configurable": {"thread_id": "video-001"
 # 默认每 2 分钟检查一次,心跳超时 120s 即写本地日志告警
 ```
 
-### 4.4 Week 5 持久化 checkpointer — Postgres 后端
+### 4.4 Postgres checkpointer — 生产路径
 
-`config.make_checkpointer` Week 5 起支持 `backend="postgres"`(生产路径),由
-`graph.get_checkpointer()` asynccontextmanager 包装管理 ``setup()`` 与连接池:
+`graph.get_checkpointer()` asynccontextmanager 包装管理 `setup()` 与连接池:
 
 ```python
 from graph import build_graph, get_checkpointer
@@ -400,10 +412,16 @@ async def main():
 
 | 变量 | 说明 | 默认 |
 |---|---|---|
-| `WORKFLOW_ENV` | `production` 强制用 Postgres;其它值走 `CHECKPOINTER_BACKEND` | `development` |
 | `POSTGRES_URI` | `postgresql://user:pass@host:port/dbname` | `postgresql://postgres:devpass@localhost:5432/video_workflow` |
+| `WORKFLOW_ENV` | 只用于选择同步/异步执行路径,**不**参与存储后端选择 | `development` |
+| `TEST_POSTGRES_URI` | 集成测试用的库;显式指定后连不上直接 fail(不静默 skip) | 同 `POSTGRES_URI` |
 
-依赖(`pyproject.toml` / `requirements.txt`):`langgraph-checkpoint-postgres>=3.1` + `psycopg[binary,pool]>=3.2`。本机未启 Postgres 时,`tests/integration/test_postgres_checkpointer.py` 自动 skip。
+依赖(`pyproject.toml` / `requirements.txt`):`langgraph-checkpoint-postgres>=3.1` + `psycopg[binary,pool]>=3.2`。
+
+> 本机 Postgres 容器 `edb-postgres16` 的库编码是 **`SQL_ASCII`**:
+> 查询脚本要自己解码 `TEXT` 列(`bytes` → `str`),
+> 写 JSONB 必须 `ensure_ascii=False`。
+> 仓库已封装为 `db/connection.py`(`client_encoding=utf-8`)与 `db/session_repository.py::jsonb()`。
 
 ### 4.5 Week 5 `resume_all_pending` — 统一 resume 入口
 
@@ -537,6 +555,39 @@ repo.list(limit=50, cursor=(updated_at, sid))   # 游标分页(不用 offset)
 ⚠️ **本机库是 `SQL_ASCII`**:写 JSONB 必须用 `db.session_repository.jsonb()`
 (内部 `ensure_ascii=False`),否则 PG 报 `UntranslatableCharacter`;读 TEXT 列用
 `text_value()` 解码。详见 `db/connection.py` 的模块文档。
+
+### 4.9c 会话状态入 PostgreSQL(阶段 D)与会话 REST API
+
+聊天会话的完整状态存 `chat_sessions.state_json`(JSONB),**不再**写 `session_state.json`。
+浏览器侧栏历史以**服务端为唯一事实来源**。
+
+| 方法 | 路由 | 说明 |
+|---|---|---|
+| `POST` | `/api/sessions` | 新建会话(旧接口,不变) |
+| `GET` | `/api/sessions` | **列表**:游标分页(`limit` 1..200 默认 50、`cursor`、`title_prefix`、`include_deleted`);按 `updated_at DESC, session_id DESC`;响应**不含 `state_json`**;`next_cursor` 为 `null` 表示到底 |
+| `GET` | `/api/sessions/{id}` | 取单个会话(旧接口,不变) |
+| `PATCH` | `/api/sessions/{id}` | 改标题:`{"title": "...", "title_source": "auto"\|"manual"}` |
+| `DELETE` | `/api/sessions/{id}` | **软删除**(打 `deleted_at`);可用 `repo.restore()` 找回 |
+| `POST` | `/api/sessions/{id}/clear` | 清空对话(旧接口,不变) |
+
+- **fail-closed**:数据库不可用 ⇒ 会话接口返回 **503**,**不**静默降级、**不**回退写 JSON 文件。
+- **乐观锁**:`state_json` 更新走 `version` 乐观锁;冲突不覆盖 ⇒ 抛 `SessionVersionConflict`。
+- **手动标题优先**:`title_source='manual'` 的会话不会被自动标题覆盖。
+- 限流:`GET /api/sessions` 走独立桶 `list_sessions`(burst 10 / rpm 30),不挤占通用 `api_general`。
+
+```powershell
+# 一次性工具:旧 session_state.json 导入 chat_sessions(幂等;--archive 会把旧文件移出活动路径)
+.\.venv\Scripts\python.exe scripts\import_session_states.py --dry-run
+.\.venv\Scripts\python.exe scripts\import_session_states.py --archive
+
+# 一次性工具:旧 SQLite checkpoint 弃用清单 + 归档(移动到 logs/retired_checkpoints/<日期>/)
+.\.venv\Scripts\python.exe scripts\retire_sqlite_checkpoints.py --apply
+
+# 断连演练:PostgreSQL 不可达时必须明确报错,且不落本地文件
+.\.venv\Scripts\python.exe scripts\drill_disconnect.py
+```
+
+⚠️ 这三个脚本是**一次性迁移工具**,不是运行时组件;运行时代码已不引用任何 SQLite / JSON 文件。
 
 ### 4.10 2026-10 接入原"不可达节点"(三个开关)
 

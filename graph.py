@@ -141,8 +141,12 @@ Week 5 关键改动(保留):
 LangGraph fan-in 自动等齐两条分支后才触发尾链首节点(避免多次独立 ``add_edge`` 造成的
 重复触发,见验证报告 §5.1);``join_before_delivery`` 调序后只做交付前 QA。
 
-关卡①/②/③ 使用 ``langgraph.types.interrupt``,需要 checkpointer(Week 3 用
-SqliteSaver 做持久化,覆盖多日挂起恢复;Week 5 切到 PostgresSaver)。
+关卡①/②/③ 使用 ``langgraph.types.interrupt``,需要 checkpointer。
+PostgreSQL 统一改造后(checkpointer 统一为 PostgreSQL,方案 §4.1 / §4.2):
+- 生产:``get_checkpointer()`` → ``AsyncPostgresSaver``(唯一持久化后端);
+- 单测:``make_checkpointer("memory")`` → ``InMemorySaver``;
+- ``build_graph()`` **不再**自动兜底创建 saver —— 未注入就明确报错,
+  避免"悄悄退化成无持久化"导致挂起任务查不到(方案 §8 风险表)。
 """
 
 from __future__ import annotations
@@ -162,7 +166,6 @@ _STORYLINE_MODE_OVERRIDE: contextvars.ContextVar[str | None] = contextvars.Conte
 from config import (
     POSTGRES_URI,
     STORYLINE_MODE,
-    make_checkpointer,
     resolve_draft_dir,
 )
 from monitoring.heartbeat_writer import start_heartbeat
@@ -445,6 +448,14 @@ async def get_checkpointer():
     if not uri:
         raise ValueError("POSTGRES_URI 环境变量未设置")
 
+    # ⚠️ 必须先设 JSONB 的 dumps:本机库编码是 SQL_ASCII,psycopg3 默认
+    # ``ensure_ascii=True`` 会把中文写成 ``\uXXXX``,PG 无法把它翻译成 SQL_ASCII
+    # ⇒ ``UntranslatableCharacter``。这是**进程级全局**设置,LangGraph saver
+    # 内部用的 ``Jsonb(...)`` 也吃这一套(方案 §3.2 A5)。
+    from db.connection import configure_json_dumps
+
+    configure_json_dumps()
+
     # AsyncPostgresSaver.from_conn_string 返回一个 AsyncContextManager(可作 async with)
     # 但我们要让外层直接 yield saver,需要在内部 __aenter__ 拿到实例
     saver_cm = AsyncPostgresSaver.from_conn_string(uri)
@@ -452,6 +463,46 @@ async def get_checkpointer():
         # 首次使用建表(幂等);Week 5 计划 §3.3 "破坏性变更应急" 文档明示
         await saver.setup()
         yield saver
+
+
+# ---------------------------------------------------------------------------
+# thread_id 归一(方案 §3.2 A2 / §3.1 M2)
+# ---------------------------------------------------------------------------
+def normalize_thread_id(thread_id: object) -> str:
+    """把 thread_id 归一成 ``str``;**拒绝 bytes**。
+
+    为什么必须拒绝 bytes
+    ------------------
+    ``langgraph.checkpoint.postgres`` 的 saver 把
+    ``config["configurable"]["thread_id"]`` **原样透传**给 psycopg3
+    (``langgraph/checkpoint/postgres/__init__.py`` 的 ``put`` / ``aput``)。
+    psycopg3 把 Python ``bytes`` 写进 ``TEXT`` 列时,会存成 ``\\x<hex>`` 字面量。
+
+    结果:同一个逻辑线程被分裂成**两套 thread_id** ——
+    文本版(``video-wiring-001``)与 hex 版(``\\x766964656f...``)。
+    查 ``WHERE thread_id = 'xxx'`` 会漏掉续跑的那一半,挂起任务查不到、续跑断链。
+
+    本机实测(2026-10-29):``video-wiring-001`` 40 条(step -1→38)+
+    ``\\x766964656f2d776172696e672d303031`` 22 条(step 39→60),正好接续。
+
+    Raises:
+        TypeError: thread_id 不是 ``str``(尤其是 bytes)。
+        ValueError: thread_id 为空 / 只有空白。
+    """
+    if isinstance(thread_id, (bytes, bytearray, memoryview)):
+        raise TypeError(
+            "thread_id 必须是 str,不能是 bytes —— psycopg3 会把 bytes 写进 TEXT 列成 "
+            f"\\x<hex> 字面量,导致同一逻辑线程分裂成两套 thread_id"
+            f"(got {type(thread_id).__name__})"
+        )
+    if not isinstance(thread_id, str):
+        raise TypeError(
+            f"thread_id 必须是 str(got {type(thread_id).__name__})"
+        )
+    value = thread_id.strip()
+    if not value:
+        raise ValueError("thread_id 不能为空")
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -468,8 +519,11 @@ def build_graph(
     """装配 17 节点 + 1 升级节点 + 1 桥接节点的完整图。
 
     Args:
-        checkpointer: 已构造的 checkpointer,None 时按 config 选 SqliteSaver/InMemorySaver。
-        thread_id: sqlite 模式下决定落盘文件名。
+        checkpointer: 已构造的 checkpointer。**必填** —— 为 ``None`` 时直接抛
+            ``RuntimeError``,不再自动兜底(方案 §4.2)。
+            生产用 ``get_checkpointer()``(AsyncPostgresSaver),
+            单测用 ``make_checkpointer("memory")``(InMemorySaver)。
+        thread_id: 工作流线程 ID;必须是 ``str``(见 ``normalize_thread_id``)。
         start_heartbeat_thread: 是否同时启动心跳写线程(默认 True)。
             单测可传 False 避免 IO。
         run_preflight: 是否在 compile 前执行 pre-flight 自检(默认 False,
@@ -482,7 +536,9 @@ def build_graph(
         CompiledStateGraph 实例。
 
     Raises:
+        RuntimeError: 未注入 checkpointer。
         PreflightError: pre-flight 任一步骤失败时抛出。
+        TypeError / ValueError: thread_id 不是合法的 str。
     """
     if run_preflight:
         # 延迟 import,确保 84 条现有测试不会因 preflight 模块失败而崩
@@ -506,8 +562,15 @@ def build_graph(
                 f"pre-flight 在 step={failed.step!r} 失败: {failed.error}"
             )
 
+    # thread_id 归一(方案 §3.2 A2):必须是 str,否则 saver 会写出 \\x<hex> 版。
+    thread_id = normalize_thread_id(thread_id)
+
     if checkpointer is None:
-        checkpointer = make_checkpointer(thread_id=thread_id)
+        raise RuntimeError(
+            "build_graph() 必须显式注入 checkpointer"
+            "(生产用 graph.get_checkpointer(),单测用 make_checkpointer('memory'))"
+            "—— 不再自动兜底,避免悄悄退化成无持久化。"
+        )
 
     if start_heartbeat_thread:
         try:

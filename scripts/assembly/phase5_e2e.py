@@ -322,8 +322,12 @@ def case_gate_off() -> dict[str, Any]:
     saved = config.ASSEMBLY_QC_GATE_ENABLED
     config.ASSEMBLY_QC_GATE_ENABLED = False
     try:
+        # PostgreSQL 统一改造后 build_graph() 不再自动兜底,必须显式注入 saver
+        # (方案 §4.2)。这里是纯拓扑断言脚本,用内存 saver 即可。
+        from langgraph.checkpoint.memory import InMemorySaver
+
         g = _graph.build_graph(
-            checkpointer=None,
+            checkpointer=InMemorySaver(),
             thread_id="phase5-gate-off",
             start_heartbeat_thread=False,
             run_preflight=False,

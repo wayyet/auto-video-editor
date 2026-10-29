@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import traceback
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
@@ -92,23 +93,203 @@ def _isolate_draft_dir(outputs_root: Path | str, thread_id: str) -> tuple[Path, 
     return d, None, True
 
 
-def checkpoint_path(thread_id: str) -> Path:
-    """这个 thread 的 checkpoint 落盘位置。
+# ---------------------------------------------------------------------------
+# 检查点后端(PostgreSQL 统一改造 §4.7)
+# ---------------------------------------------------------------------------
+#: ``AGENT_GATE_CKPT_BACKEND`` 可选值:
+#: - ``postgres``:同步 ``langgraph.checkpoint.postgres.PostgresSaver``(默认,唯一持久化后端)
+#: - ``memory``  :``InMemorySaver``(沙箱 / 单测;进程内,无持久化)
+CKPT_BACKEND_ENV = "AGENT_GATE_CKPT_BACKEND"
 
-    解析顺序:``AGENT_GATE_CKPT_DIR`` → ``TOY_CKPT_DIR``(沙箱玩具图)→ 仓库
-    ``config.CHECKPOINTER_DB_DIR`` → ``<cwd>/checkpoints``。
+DEFAULT_POSTGRES_URI = "postgresql://postgres:devpass@localhost:5432/video_workflow"
+
+_CKPT_BACKENDS = ("postgres", "memory")
+
+
+def postgres_uri() -> str:
+    """worker 用的 Postgres 连接串。
+
+    顺序:``AGENT_GATE_POSTGRES_URI`` → ``POSTGRES_URI`` 环境变量 →
+    仓库 ``config.POSTGRES_URI`` → 默认值。
+
+    ``AGENT_GATE_POSTGRES_URI`` 放在最前面,是为了让 agent_gate 的测试能用
+    **独立测试库**(见 ``agent_gate/tests/conftest.py``),不污染工作库里真实的
+    checkpoint —— 也避免改到仓库全局的 ``POSTGRES_URI``。
+    """
+    for env in ("AGENT_GATE_POSTGRES_URI", "POSTGRES_URI"):
+        uri = os.environ.get(env, "").strip()
+        if uri:
+            return uri
+    try:
+        from config import POSTGRES_URI as _cfg_uri
+
+        return str(_cfg_uri)
+    except Exception:  # noqa: BLE001 — 纯 kit 场景(仓库不在 sys.path 上)
+        return DEFAULT_POSTGRES_URI
+
+
+def checkpoint_backend() -> str:
+    """当前 worker 用的 checkpointer 后端(``postgres`` / ``memory``)。
+
+    默认 ``postgres`` —— 统一改造后 SQLite 后端已删除,没有"本地文件兜底"这条退路。
+    """
+    backend = os.environ.get(CKPT_BACKEND_ENV, "").strip().lower()
+    if not backend:
+        backend = "postgres"
+    if backend not in _CKPT_BACKENDS:
+        raise ValueError(
+            f"{CKPT_BACKEND_ENV}={backend!r} 无效;可选: {' / '.join(_CKPT_BACKENDS)}"
+        )
+    return backend
+
+
+def _configure_json_dumps() -> None:
+    """让 psycopg3 写 JSONB 时不做 ``\\uXXXX`` 转义。
+
+    本机 Postgres 库编码是 ``SQL_ASCII``:PG 写 JSONB 时要把 unicode 转义翻译成
+    库编码,而 ``SQL_ASCII`` 表示不了非 ASCII 字符 ⇒ ``UntranslatableCharacter``。
+    改成 ``ensure_ascii=False`` 后中文以原始 UTF-8 字节写入,不需要翻译转义。
+
+    ⚠️ ``set_json_dumps`` 是**进程级全局**设置 ⇒ LangGraph saver 内部用的
+    ``Jsonb(...)`` 也吃这一套(踩坑记录:agent_gate worker 写中文 checkpoint
+    时报 ``UntranslatableCharacter ... "\\u4e24..."``)。
+
+    优先复用仓库的 ``db.connection.configure_json_dumps``;纯 kit 场景(仓库不在
+    sys.path 上)退回到本地实现。
+    """
+    try:
+        from db.connection import configure_json_dumps
+
+        configure_json_dumps()
+        return
+    except Exception:  # noqa: BLE001 — 纯 kit 场景
+        pass
+    import json
+
+    from psycopg.types.json import set_json_dumps
+
+    set_json_dumps(lambda obj, context=None: json.dumps(obj, ensure_ascii=False))
+
+
+def make_checkpointer(thread_id: str = "default"):
+    """构造 worker 用的 checkpointer(调用方负责释放,见 ``close_checkpointer``)。
+
+    worker 是**同步**进程(``graph.invoke``),所以用**同步**的
+    ``langgraph.checkpoint.postgres.PostgresSaver``;
+    ``AsyncPostgresSaver`` 只实现异步接口,同步 ``invoke`` 会抛 ``NotImplementedError``。
+
+    Args:
+        thread_id: 工作流线程 ID;仅用于日志 / 错误信息。
+
+    Returns:
+        同步 saver 实例(PostgresSaver 或 InMemorySaver)。
+        PostgresSaver 上挂了 ``_agent_gate_pool`` 属性,供 ``close_checkpointer`` 释放。
+
+    Raises:
+        RuntimeError: Postgres 不可用 / 表未建 / 包未安装。
+        ValueError: ``AGENT_GATE_CKPT_BACKEND`` 取值非法。
+    """
+    backend = checkpoint_backend()
+    if backend == "memory":
+        from langgraph.checkpoint.memory import InMemorySaver
+
+        return InMemorySaver()
+
+    uri = postgres_uri()
+    try:
+        from langgraph.checkpoint.postgres import PostgresSaver
+        from psycopg import Connection
+        from psycopg.rows import dict_row
+    except ImportError as e:  # pragma: no cover — 依赖缺失
+        raise RuntimeError(
+            "agent_gate 需要 langgraph-checkpoint-postgres 与 psycopg[binary,pool]:"
+            "pip install langgraph-checkpoint-postgres 'psycopg[binary,pool]'"
+        ) from e
+
+    # 写 JSONB 的全局 dumps 设置(见 ``_configure_json_dumps``)
+    _configure_json_dumps()
+
+    # 用**单条连接**而不是连接池:与 ``PostgresSaver.from_conn_string`` 同款。
+    # 理由:worker 是单线程跑图的(sync invoke),连接池的 worker 线程在进程退出时
+    # 会打 "couldn't stop thread" 噪声,单连接没有这个问题。
+    try:
+        conn = Connection.connect(
+            uri,
+            autocommit=True,
+            prepare_threshold=0,
+            row_factory=dict_row,
+            client_encoding="utf-8",
+        )
+    except Exception as e:
+        raise RuntimeError(
+            f"Postgres checkpointer 连接失败(thread_id={thread_id}): {e}"
+        ) from e
+    try:
+        saver = PostgresSaver(conn)
+        saver.setup()
+    except Exception as e:
+        conn.close()
+        raise RuntimeError(
+            f"Postgres checkpointer 初始化失败(thread_id={thread_id}): {e}"
+        ) from e
+    # 把连接挂在 saver 上,让调用方能释放它
+    setattr(saver, "_agent_gate_conn", conn)
+    return saver
+
+
+def close_checkpointer(saver: Any) -> None:
+    """释放 checkpointer 持有的数据库连接(如果有)。"""
+    conn = getattr(saver, "_agent_gate_conn", None)
+    if conn is None:
+        return
+    try:
+        conn.close()
+    except Exception:  # noqa: BLE001 — 释放失败不该盖掉真正的错误
+        pass
+
+
+@contextmanager
+def checkpointer_session(thread_id: str):
+    """构造 worker 用的 checkpointer,退出时释放连接池。
+
+    语义同 ``make_checkpointer``,但保证连接池被回收。
+
+    Raises:
+        RuntimeError: Postgres 不可用 / 表未建 / 包未安装。
+        ValueError: ``AGENT_GATE_CKPT_BACKEND`` 取值非法。
+    """
+    saver = make_checkpointer(thread_id)
+    try:
+        yield saver
+    finally:
+        close_checkpointer(saver)
+
+
+def checkpoint_exists(thread_id: str) -> bool:
+    """这个 thread 在 Postgres 里有没有 checkpoint。
+
+    统一改造后 checkpoint 不再是本地文件,而是 ``checkpoints`` 表里的行
+    (方案 §4.7)。查两套 thread_id:文本版 + ``\\x<hex>`` 字面量版 ——
+    后者是历史遗留(bytes 传进 saver 造成的,见方案 §3.1 M2)。
+
+    查不到 / 连不上 ⇒ 返回 ``False``(fail-closed:宁可不许续跑,也不盲目重跑)。
     """
     safe_thread_id(thread_id)
-    for env in ("AGENT_GATE_CKPT_DIR", "TOY_CKPT_DIR"):
-        d = os.environ.get(env)
-        if d:
-            return Path(d) / f"{thread_id}.sqlite"
+    uri = postgres_uri()
+    hex_literal = "\\x" + thread_id.encode("utf-8").hex()
     try:
-        from config import CHECKPOINTER_DB_DIR
+        import psycopg
 
-        return Path(CHECKPOINTER_DB_DIR) / f"{thread_id}.sqlite"
-    except Exception:  # noqa: BLE001 — 仓库不在 sys.path 上(纯 kit 场景)
-        return Path("checkpoints") / f"{thread_id}.sqlite"
+        with psycopg.connect(uri, connect_timeout=5, client_encoding="utf-8") as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM checkpoints"
+                    " WHERE thread_id = %s OR thread_id = %s LIMIT 1",
+                    (thread_id, hex_literal),
+                )
+                return cur.fetchone() is not None
+    except Exception:  # noqa: BLE001 — 查不到就当没有(fail-closed)
+        return False
 
 
 # ------------------------------------------------------------------ 恢复(同步版)
@@ -135,9 +316,11 @@ def resume_pending_sync(
 ) -> Any:
     """``resume_all_pending`` 的同步版。
 
-    仓库自带的 resume_all_pending 是 async(用 aget_state / ainvoke),
-    而开发默认的 SqliteSaver 不支持异步方法(沙箱实测抛 NotImplementedError),
-    所以 SQLite 路径用本函数;生产的 Postgres 路径继续用原函数。
+    agent_gate 的 worker 是**同步进程**(``graph.invoke`` / ``graph.get_state``),
+    所以走同步接口。统一改造后同步 saver 是
+    ``langgraph.checkpoint.postgres.PostgresSaver``(实现了同步 get/put);
+    ``AsyncPostgresSaver`` 只支持异步方法,同步调用会抛 ``NotImplementedError``。
+
     匹配规则与原函数一致:按 payload["checkpoint"] 匹配;只有 1 个挂起时可用 fallback_key。
     """
     from langgraph.types import Command
@@ -191,21 +374,26 @@ def install_client(client: Any) -> None:
 
 
 def production_blocker() -> Optional[str]:
-    """命中生产环境就返回原因,否则 None(F6 护栏)。
+    """返回"当前环境不能跑 worker"的原因;None = 可以启动(F6 护栏)。
 
-    本方案只验收 SQLite 本地开发路径。Postgres 异步 worker 不在范围内,
-    所以这里**显式拒绝启动**而不是静默退回 SQLite。
+    PostgreSQL 统一改造后(方案 §4.7)的语义变化:
+
+    - **删掉**原来"``WORKFLOW_ENV=production`` 或 backend=postgres 就拒绝启动"的规则。
+      原文注释写的是"本方案只验收 SQLite 本地开发路径" —— 而 SQLite 后端已被删除,
+      Postgres 现在是唯一后端;继续拦着等于让 agent 链路永远起不来(方案 §3.2 A1)。
+    - **保留正向校验**:运行时后端必须落在 Postgres 上。残留的旧
+      ``CHECKPOINTER_BACKEND`` 环境变量(如 ``=sqlite``)直接拒绝,
+      避免有人以为还在用本地文件存储。
     """
-    if os.environ.get("WORKFLOW_ENV") == "production":
-        return "WORKFLOW_ENV=production"
-    try:
-        from config import resolve_checkpointer_backend
-
-        backend = resolve_checkpointer_backend()
-    except Exception:  # noqa: BLE001 — 仓库不在 sys.path 上就只看 env
-        backend = os.environ.get("CHECKPOINTER_BACKEND", "sqlite")
-    if str(backend).strip().lower() == "postgres":
-        return f"checkpointer backend = {backend}"
+    stale = os.environ.get("CHECKPOINTER_BACKEND", "").strip().lower()
+    if stale and stale != "postgres":
+        return (
+            f"CHECKPOINTER_BACKEND={stale} 已废弃 —— PostgreSQL 统一改造后运行时"
+            "只有 Postgres 后端(SQLite 分支已删除);请 unset 该环境变量。"
+        )
+    backend = os.environ.get(CKPT_BACKEND_ENV, "").strip().lower()
+    if backend and backend not in _CKPT_BACKENDS:
+        return f"{CKPT_BACKEND_ENV}={backend} 无效(可选: {' / '.join(_CKPT_BACKENDS)})"
     return None
 
 
@@ -247,21 +435,27 @@ def run_worker(
 
         client = client_factory(mb) if client_factory else build_client(backend, mb)
         install_client(client)
-        graph = load_callable(graph_factory)(
-            thread_id=thread_id, start_heartbeat_thread=False, run_preflight=require_preflight
-        )
-        cfg = {"configurable": {"thread_id": thread_id}}
-        mb.log_event("worker_started", mode=("resume" if resume_values is not None
-                                             else "start" if initial_state is not None else "continue"))
-        w.set(STATE_RUNNING)
-        if resume_values is not None:
-            out = resume_pending_sync(graph, cfg, resume_values)
-        elif initial_state is not None:
-            out = graph.invoke(initial_state, cfg)
-        else:  # 崩溃后从最近检查点继续
-            out = graph.invoke(None, cfg)
-        snap = graph.get_state(cfg)
-        intr = describe_interrupts(snap)
+        # checkpointer 由 worker 自己建并注入(方案 §4.7):仓库的
+        # ``graph.build_graph()`` 已改为"未注入就报错",不再自动兜底。
+        with checkpointer_session(thread_id) as saver:
+            graph = load_callable(graph_factory)(
+                checkpointer=saver,
+                thread_id=thread_id,
+                start_heartbeat_thread=False,
+                run_preflight=require_preflight,
+            )
+            cfg = {"configurable": {"thread_id": thread_id}}
+            mb.log_event("worker_started", mode=("resume" if resume_values is not None
+                                                 else "start" if initial_state is not None else "continue"))
+            w.set(STATE_RUNNING)
+            if resume_values is not None:
+                out = resume_pending_sync(graph, cfg, resume_values)
+            elif initial_state is not None:
+                out = graph.invoke(initial_state, cfg)
+            else:  # 崩溃后从最近检查点继续
+                out = graph.invoke(None, cfg)
+            snap = graph.get_state(cfg)
+            intr = describe_interrupts(snap)
         if intr:
             w.set(STATE_WAITING_HUMAN, interrupts=intr)
             mb.log_event("waiting_human", checkpoints=[i["checkpoint"] for i in intr])
@@ -314,7 +508,7 @@ def check_mode(
     ``already_used``    mode=start,但这个 thread 已经有 status 或 checkpoint
     ``already_running`` 正在 starting / running —— 保留的第 4 条独立检查
     ``not_restartable`` mode=continue_after_crash,但状态不是 crashed / failed
-    ``no_checkpoint``   mode=continue_after_crash,但检查点文件不存在
+    ``no_checkpoint``   mode=continue_after_crash,但 Postgres 里没有这个 thread 的检查点
     ``not_waiting_human`` mode=resume,但状态不是 waiting_human
     ``bad_checkpoint``  mode=resume,但传入的 checkpoint 不在挂起列表里
     ==================  ==========================================================
@@ -338,10 +532,10 @@ def check_mode(
             return {"ok": False, "code": "not_restartable", "status": dict(cur),
                     "message": f"当前状态是 {state!r},只有 crashed / failed 才可以从检查点继续。"}
         if has_checkpoint is None:
-            has_checkpoint = checkpoint_path(thread_id).exists()
+            has_checkpoint = checkpoint_exists(thread_id)
         if not has_checkpoint:
             return {"ok": False, "code": "no_checkpoint", "status": dict(cur),
-                    "message": "没有找到这个 thread 的检查点文件,无法从崩溃处继续。"
+                    "message": "没有找到这个 thread 的检查点(Postgres 里没有记录),无法从崩溃处继续。"
                                "如果还没开始跑过,请改用 mode=start 和新的 thread_id。"}
         return None
 

@@ -236,29 +236,47 @@ def test_cli_worker_passes_require_preflight(tmp_path, monkeypatch):
 
 
 # ------------------------------------------------------------------ F6 生产护栏
-def test_production_blocker_on_env(monkeypatch):
+def test_no_blocker_on_production(monkeypatch):
+    """PostgreSQL 统一改造后,production **不再**被拦下(方案 §4.7)。
+
+    原来的护栏前提是"本方案只验收 SQLite 本地开发路径";SQLite 后端已删除,
+    Postgres 是唯一后端,继续拦着等于让 agent 链路永远起不来(方案 §3.2 A1)。
+    """
     monkeypatch.setenv("WORKFLOW_ENV", "production")
-    assert runner.production_blocker() is not None
-
-
-def test_production_blocker_on_postgres(monkeypatch):
-    monkeypatch.delenv("WORKFLOW_ENV", raising=False)
-    monkeypatch.setattr("config.CHECKPOINTER_BACKEND", "postgres", raising=False)
-    monkeypatch.setattr("config.WORKFLOW_ENV", "development", raising=False)
-    assert "postgres" in runner.production_blocker()
-
-
-def test_no_blocker_on_sqlite_dev(monkeypatch):
-    monkeypatch.delenv("WORKFLOW_ENV", raising=False)
-    monkeypatch.setattr("config.CHECKPOINTER_BACKEND", "sqlite", raising=False)
-    monkeypatch.setattr("config.WORKFLOW_ENV", "development", raising=False)
+    monkeypatch.delenv("CHECKPOINTER_BACKEND", raising=False)
+    monkeypatch.setenv("AGENT_GATE_CKPT_BACKEND", "postgres")
     assert runner.production_blocker() is None
 
 
-def test_run_worker_exits_3_in_production(tmp_path, monkeypatch):
-    """命中护栏 → 退出码 3 + STATE_FAILED + production_unsupported 事件,不静默退回 SQLite。"""
+def test_blocker_on_stale_sqlite_backend_env(monkeypatch):
+    """残留的旧 ``CHECKPOINTER_BACKEND=sqlite`` → 明确拒绝(正向校验:必须是 Postgres)。"""
+    monkeypatch.delenv("WORKFLOW_ENV", raising=False)
+    monkeypatch.setenv("CHECKPOINTER_BACKEND", "sqlite")
+    reason = runner.production_blocker()
+    assert reason is not None
+    assert "CHECKPOINTER_BACKEND" in reason and "sqlite" in reason
+
+
+def test_no_blocker_on_stale_postgres_backend_env(monkeypatch):
+    """``CHECKPOINTER_BACKEND=postgres`` 是合法值,不拦。"""
+    monkeypatch.delenv("WORKFLOW_ENV", raising=False)
+    monkeypatch.setenv("CHECKPOINTER_BACKEND", "postgres")
+    assert runner.production_blocker() is None
+
+
+def test_blocker_on_invalid_agent_gate_backend(monkeypatch):
+    """``AGENT_GATE_CKPT_BACKEND`` 取值非法 → 明确拒绝。"""
+    monkeypatch.delenv("CHECKPOINTER_BACKEND", raising=False)
+    monkeypatch.setenv("AGENT_GATE_CKPT_BACKEND", "redis")
+    reason = runner.production_blocker()
+    assert reason is not None
+    assert "AGENT_GATE_CKPT_BACKEND" in reason
+
+
+def test_run_worker_exits_3_on_stale_sqlite_backend(tmp_path, monkeypatch):
+    """命中护栏 → 退出码 3 + STATE_FAILED + production_unsupported 事件,不静默退回本地文件。"""
     monkeypatch.setenv("WORKFLOW_ENV", "production")
-    monkeypatch.setenv("AGENT_GATE_CKPT_DIR", str(tmp_path / "ckpt"))
+    monkeypatch.setenv("CHECKPOINTER_BACKEND", "sqlite")
     code = runner.run_worker(thread_id="job1", outputs_root=tmp_path, graph_factory=GRAPH,
                              initial_state={"session_id": "job1"}, backend="stub")
     assert code == 3
@@ -269,12 +287,11 @@ def test_run_worker_exits_3_in_production(tmp_path, monkeypatch):
     assert any(e["event"] == "production_unsupported" for e in mb.read_events(20))
 
 
-def test_run_worker_exits_0_on_sqlite_dev(tmp_path, monkeypatch):
-    """对照组:SQLite 本地开发路径照常能跑(用会失败的 graph 证明它确实往下走了)。"""
+def test_run_worker_exits_0_on_postgres_backend(tmp_path, monkeypatch):
+    """对照组:Postgres 后端照常能跑(用会失败的 graph 证明它确实往下走了)。"""
     monkeypatch.delenv("WORKFLOW_ENV", raising=False)
-    monkeypatch.setattr("config.CHECKPOINTER_BACKEND", "sqlite", raising=False)
-    monkeypatch.setattr("config.WORKFLOW_ENV", "development", raising=False)
-    monkeypatch.setenv("AGENT_GATE_CKPT_DIR", str(tmp_path / "ckpt"))
+    monkeypatch.delenv("CHECKPOINTER_BACKEND", raising=False)
+    monkeypatch.setenv("AGENT_GATE_CKPT_BACKEND", "memory")
     code = runner.run_worker(thread_id="job1", outputs_root=tmp_path,
                              graph_factory="no_such_module:build_graph",
                              initial_state={"session_id": "job1"}, backend="stub")

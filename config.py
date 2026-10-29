@@ -2,12 +2,15 @@
 
 > Week 1 交付物确认后,替换下方标注 [TODO: Week1] 的值即可,无需改动节点实现。
 
-Week 5 改动(对齐第 5 周计划 §1.3 / §4.6):
-- ``make_checkpointer`` 新增 ``backend="postgres"`` 分支,生产 checkpointer 从
-  SqliteSaver 切到 AsyncPostgresSaver(实际由 ``get_checkpointer()`` asynccontextmanager
-  包装管理 ``setup()`` 与连接池)。
-- 新增 ``WORKFLOW_ENV`` 与 ``POSTGRES_URI`` 环境变量触发 Postgres 后端。
-- ``CHECKPOINTER_BACKEND`` 默认仍为 ``"sqlite"``,保证现有单测与本地开发不受影响。
+PostgreSQL 统一改造(方案 §4.1 / 阶段 C):
+- 运行时**唯一**持久化后端是 PostgreSQL。``make_checkpointer`` 只保留 ``"memory"``
+  分支(单测专用,进程内无持久化);生产用 ``graph.get_checkpointer()`` 返回的
+  ``AsyncPostgresSaver``(由 asynccontextmanager 包装管理 ``setup()`` 与连接池)。
+- ``CHECKPOINTER_BACKEND`` / ``CHECKPOINTER_DB_DIR`` 已删除 —— 不再有
+  "按环境选后端"的机制,也不再有任何 SQLite 落盘路径。
+- ``POSTGRES_URI`` 指向唯一数据库 ``video_workflow``(方案 D1)。
+- ``WORKFLOW_ENV`` 保留,但**只**用于选择同步/异步执行路径
+  (见 ``scripts/run_workflow.py``),不再参与存储后端选择。
 """
 
 from __future__ import annotations
@@ -360,15 +363,12 @@ CAPCUT_DECRYPT_CMD: list[str] = ["capcut", "decrypt"]
 # ---------------------------------------------------------------------------
 # 持久化 checkpointer
 # ---------------------------------------------------------------------------
-# Week 3 默认 "sqlite": 跨进程/多日挂起可恢复,详见 graph.make_checkpointer。
-# 单测可显式传 InMemorySaver。
-# Week 5:新增 "postgres" 后端,由 WORKFLOW_ENV=production + POSTGRES_URI 触发。
-CHECKPOINTER_BACKEND: str = "sqlite"  # "memory" | "sqlite" | "postgres"
-CHECKPOINTER_DB_DIR: Path = Path(__file__).parent / "checkpoints"
-
-# Week 5:Postgres 后端环境变量
-# - WORKFLOW_ENV=production 时强制用 Postgres(覆盖 CHECKPOINTER_BACKEND)
-# - POSTGRES_URI:标准 ``postgresql://user:pass@host:port/dbname`` 形式
+# PostgreSQL 统一改造(方案 §4.1):运行时唯一后端是 PostgreSQL。
+# - 生产:``graph.get_checkpointer()`` → AsyncPostgresSaver
+# - 单测:``make_checkpointer("memory")`` → InMemorySaver(进程内,无持久化)
+# SQLite 分支已删除(方案 D2):``checkpoints/`` 目录不再被任何代码写入。
+#
+# POSTGRES_URI:标准 ``postgresql://user:pass@host:port/dbname`` 形式
 #   默认值与本地容器契约一致(edb-postgres16:postgres/devpass@5432/video_workflow),
 #   保证"直接跑 Python"时也能连上本地库。
 #   库名统一为 video_workflow(计划 D1)——本仓库不再使用 langgraph / auto_video_editor。
@@ -376,17 +376,9 @@ POSTGRES_URI: str = os.environ.get(
     "POSTGRES_URI",
     "postgresql://postgres:devpass@localhost:5432/video_workflow",
 )
+# WORKFLOW_ENV 只用于选择同步/异步执行路径(见 scripts/run_workflow.py),
+# **不再**参与存储后端选择。
 WORKFLOW_ENV: str = os.environ.get("WORKFLOW_ENV", "development")  # "development" | "production"
-
-
-def resolve_checkpointer_backend() -> str:
-    """按 ``WORKFLOW_ENV`` 解析实际后端:production → postgres,其它走默认。
-
-    允许 ``CHECKPOINTER_BACKEND`` 显式覆盖(便于测试中强制用 sqlite)。
-    """
-    if WORKFLOW_ENV == "production":
-        return "postgres"
-    return CHECKPOINTER_BACKEND
 
 
 # ---------------------------------------------------------------------------
@@ -534,44 +526,38 @@ def openstoryline_web_url() -> str:
     return f"http://127.0.0.1:{OPENSTORYLINE_WEB_PORT}"
 
 
-def make_checkpointer(backend: str = CHECKPOINTER_BACKEND, thread_id: str = "default"):
-    """按 backend 选 checkpointer。
+def make_checkpointer(backend: str = "memory", thread_id: str = "default"):
+    """按 backend 选 checkpointer(PostgreSQL 统一改造方案 §4.1)。
 
-    - "memory":  InMemorySaver(进程内,无持久化)
-    - "sqlite":  SqliteSaver(落盘 checkpoints/<thread_id>.sqlite)
-    - "postgres": AsyncPostgresSaver(Week 5 新增,生产路径)
+    - "memory":  InMemorySaver(进程内,无持久化)—— **单测专用**
+    - "postgres": 不走本工厂;生产请用 ``graph.get_checkpointer()``
+
+    SQLite 分支已删除(方案 D2):运行时不再有任何本地 ``.sqlite`` 落盘路径。
 
     Args:
-        backend: "memory" | "sqlite" | "postgres"
-        thread_id: sqlite 模式下决定落盘文件名;postgres 模式下被忽略(URI 单库)。
+        backend: 目前只有 ``"memory"``(生产路径不走本工厂)。
+        thread_id: 仅保留以兼容旧调用签名;memory 模式下忽略。
 
     Returns:
-        兼容 LangGraph compile(checkpointer=...) 的 saver实例。
+        兼容 LangGraph compile(checkpointer=...) 的 saver 实例。
 
     Raises:
         ValueError: 未知 backend。
-        RuntimeError: backend="postgres" 但 POSTGRES_URI 未设置或包未安装。
+        RuntimeError: backend="postgres" —— 提示改用 ``graph.get_checkpointer()``。
     """
     if backend == "memory":
         from langgraph.checkpoint.memory import InMemorySaver
         return InMemorySaver()
 
-    if backend == "sqlite":
-        import sqlite3
-        from langgraph.checkpoint.sqlite import SqliteSaver  # 需 langgraph-checkpoint-sqlite>=2.0
-        CHECKPOINTER_DB_DIR.mkdir(parents=True, exist_ok=True)
-        db_path = CHECKPOINTER_DB_DIR / f"{thread_id}.sqlite"
-        # 直接构造 — 绕开 SqliteSaver.from_conn_string 的 context manager 包装,
-        # 因为 LangGraph compile() 期望 saver 实例而非 context manager。
-        conn = sqlite3.connect(str(db_path), check_same_thread=False)
-        return SqliteSaver(conn)
-
     if backend == "postgres":
         raise RuntimeError(
             "backend='postgres' 不应直接通过 make_checkpointer 调用 — "
-            "生产路径请用 monitoring.runs_table + graph.get_checkpointer() 异步 context manager,"
+            "生产路径请用 graph.get_checkpointer() 异步 context manager,"
             "由后者负责 AsyncPostgresSaver.setup() 与连接池管理。"
-            "如果只是想在测试中拿到一个 saver,可用 AsyncPostgresSaver.from_conn_string(POSTGRES_URI)。"
+            "如果只是想在测试中拿到一个 saver,可用 make_checkpointer('memory')。"
         )
 
-    raise ValueError(f"Unknown checkpointer backend: {backend!r}")
+    raise ValueError(
+        f"Unknown checkpointer backend: {backend!r} "
+        "(可用: 'memory';生产用 graph.get_checkpointer())"
+    )

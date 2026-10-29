@@ -134,7 +134,7 @@ mcode 只能用白名单内的绝对路径,所以点「📥 导入视频」时:
 **源路径由服务端解析**,不信客户端。前端的 `public_media` 只返回
 `{id, name, kind, thumb_url, file_url}` —— **不暴露 `path`**,所以网页端送来的
 `stored_path` 恒为空串。端点按 `media_id` 从**会话媒体登记表**
-(`media_id -> MediaMeta.path`,随 `session_state.json` 持久化)取真实落盘路径,
+(`media_id -> MediaMeta.path`,随会话状态持久化在 PostgreSQL `chat_sessions.state_json` 里)取真实落盘路径,
 客户端的 `stored_path` 只作兜底;两条路拿到的路径都要过「必须位于本会话
 media 目录内」的校验。
 

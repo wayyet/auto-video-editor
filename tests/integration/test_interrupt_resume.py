@@ -6,7 +6,9 @@ LangGraph 1.2.9 行为:``invoke()`` **不抛** GraphInterrupt;中断信息通过
 
 覆盖:
 1. 基础 interrupt — interrupt() 挂起 + checkpointer 持久化 + Command(resume=True) 续跑
-2. 多日挂起模拟 — 全新 graph + 同 thread_id 跨进程恢复(SqliteSaver)
+2. 多日挂起模拟 — 全新 graph 实例 + 同一个 checkpointer 跨实例恢复
+   (2026-10 阶段 C:SQLite 后端已删除;真正的"新数据库连接"恢复覆盖移到
+   ``tests/integration/test_postgres_resume.py``,用真实 Postgres)
 3. 副作用幂等 — _send_notification 只发 1 次
 4. thread_id 隔离 — 两个 thread 并发互不干扰
 """
@@ -21,7 +23,6 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
-from config import CHECKPOINTER_DB_DIR, make_checkpointer
 from graph import build_graph
 from state import WorkflowState
 
@@ -90,32 +91,18 @@ def seeded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[WorkflowSta
     return _seed_state(str(draft_file)), draft_file
 
 
-def _build_inmemory_graph(thread_id: str):
-    return build_graph(checkpointer=InMemorySaver(), thread_id=thread_id, start_heartbeat_thread=False)
+def _build_inmemory_graph(thread_id: str, saver: InMemorySaver | None = None):
+    """编译一张图。
 
-
-def _build_sqlite_graph(thread_id: str, sqlite_path: Path | None = None):
-    """显式构造 sqlite checkpointer 的图。sqlite_path 用于测试隔离到 tmp 目录。
-
-    需要 ``langgraph-checkpoint-sqlite`` 包(``pyproject.toml`` 已声明);
-    如果包未安装,本测试被跳过(见 test_multi_day_resume_via_sqlite_persistence 的
-    ``pytest.mark.skipif``)。
+    ``saver`` 显式传入时,多张图共享同一个 checkpointer —— 用来模拟
+    "进程重启后用同一个存档恢复"(阶段 C 之后 SQLite 后端已删除,
+    跨数据库连接的恢复覆盖见 ``tests/integration/test_postgres_resume.py``)。
     """
-    import sqlite3
-    from langgraph.checkpoint.sqlite import SqliteSaver
-
-    if sqlite_path is None:
-        sqlite_path = CHECKPOINTER_DB_DIR / f"{thread_id}.sqlite"
-    sqlite_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(sqlite_path), check_same_thread=False)
-    saver = SqliteSaver(conn)
-    return build_graph(checkpointer=saver, thread_id=thread_id, start_heartbeat_thread=False)
-
-
-_SQLITE_AVAILABLE = pytest.mark.skipif(
-    __import__("importlib").util.find_spec("langgraph.checkpoint.sqlite") is None,
-    reason="langgraph-checkpoint-sqlite 未安装(运行 pip install langgraph-checkpoint-sqlite 启用本测试)",
-)
+    return build_graph(
+        checkpointer=saver if saver is not None else InMemorySaver(),
+        thread_id=thread_id,
+        start_heartbeat_thread=False,
+    )
 
 
 def _is_interrupted(g, config: dict) -> bool:
@@ -175,13 +162,19 @@ def test_checkpoint1_interrupt_and_resume_basic(seeded, monkeypatch: pytest.Monk
 
 
 # ---------------------------------------------------------------------------
-# 测试 2:多日挂起模拟(同 sqlite 文件 + 全新 graph 实例)
+# 测试 2:多日挂起模拟(同一个 checkpointer + 全新 graph 实例)
 # ---------------------------------------------------------------------------
-@_SQLITE_AVAILABLE
-def test_multi_day_resume_via_sqlite_persistence(seeded, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """模拟"全新 graph 实例 + 同 sqlite 文件 = 跨进程恢复"。
+def test_multi_day_resume_via_shared_checkpointer(
+    seeded, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """模拟"全新 graph 实例 + 同一个存档 = 跨实例恢复"。
 
     2026-09 迁移后:第一次 invoke 停在关卡⓪,resume 后关卡①,resume 后 END。
+
+    2026-10(阶段 C):SQLite 后端已删除,这里用共享的 ``InMemorySaver``
+    保住"重建图后仍能从存档 resume"这条行为覆盖;
+    真正的新数据库连接(Postgres)恢复覆盖见
+    ``tests/integration/test_postgres_resume.py``。
     """
     state, _ = seeded
     thread_id = "multi-day"
@@ -193,14 +186,14 @@ def test_multi_day_resume_via_sqlite_persistence(seeded, tmp_path: Path, monkeyp
     import nodes.node_04b_get_storyboard_plan as _m4b
     monkeypatch.setattr(_m4b, "OPENSTORYLINE_OUTPUTS_ROOT", os_root)
 
-    sqlite_path = tmp_path / f"{thread_id}.sqlite"
+    saver = InMemorySaver()
 
-    g1 = _build_sqlite_graph(thread_id, sqlite_path=sqlite_path)
+    g1 = _build_inmemory_graph(thread_id, saver=saver)
     g1.invoke(state, config=config)
     assert _is_interrupted(g1, config), "g1 应停在 checkpoint0_storyline_plan interrupt"
 
-    # 模拟"数天后":丢弃 g1,新建 graph2
-    g2 = _build_sqlite_graph(thread_id, sqlite_path=sqlite_path)
+    # 模拟"数天后":丢弃 g1,新建 graph2(共享同一个 checkpointer)
+    g2 = _build_inmemory_graph(thread_id, saver=saver)
     g2.invoke(Command(resume=True), config=config)
     assert _is_interrupted(g2, config), "g2 resume 关卡⓪ 后应在节点 6 interrupt"
 
@@ -219,14 +212,6 @@ def test_multi_day_resume_via_sqlite_persistence(seeded, tmp_path: Path, monkeyp
         if t in ("node_13_adjust_volume_done", "node_13_adjust_volume_no_audio_track")
     ]
     assert len(node_13_tags) == 1, f"节点 13 应执行 1 次,实际 {len(node_13_tags)} 次"
-
-    # 关闭连接 + 清理 sqlite 文件(tmp_path 隔离,Windows 锁也能 unlink)
-    try:
-        g1.checkpointer.__exit__(None, None, None)
-        g2.checkpointer.__exit__(None, None, None)
-    except Exception:
-        pass
-    # tmp_path 由 pytest 自动清理
 
 
 # ---------------------------------------------------------------------------

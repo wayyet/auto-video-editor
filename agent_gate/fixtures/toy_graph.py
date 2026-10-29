@@ -4,19 +4,15 @@
 - 能力函数里 chat 调用包在 ``try/except Exception``,失败就降级(沙箱实测 GraphInterrupt 会被它吞掉)
 - 2 个并行节点同一超步里同时调 chat
 - 人工关卡用 ``interrupt({"checkpoint": "①", ...})``
-- build_graph 签名与仓库一致,默认 SqliteSaver(同步)
+- build_graph 签名与仓库一致,默认 InMemorySaver(进程内,无持久化)
 
     understand(3 次 chat) → filter(1 次) → [script ∥ transition] → gate① → finalize(1 次) → END
 """
 from __future__ import annotations
 
 import operator
-import os
-import sqlite3
-from pathlib import Path
 from typing import Annotated, Any, Optional, TypedDict
 
-from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
@@ -137,9 +133,16 @@ def _state_graph() -> StateGraph:
 
 def build_graph(checkpointer=None, *, thread_id: str = "default", start_heartbeat_thread: bool = True,
                 run_preflight: bool = False, preflight_config: Optional[object] = None):
-    """签名与仓库 graph.build_graph 一致。默认 SqliteSaver,落盘到 $TOY_CKPT_DIR/<thread_id>.sqlite。"""
+    """签名与仓库 graph.build_graph 一致。
+
+    默认用 **Postgres** checkpointer(``agent_gate.runner.make_checkpointer``)——
+    与 worker 进程连的是**同一个库**,所以另起一个图也能读到 worker 写的检查点
+    (测试里就靠这个读回状态)。统一改造后不再有本地 ``.sqlite`` 落盘(方案 §4.7)。
+
+    需要进程内内存 saver 时显式传 ``checkpointer=InMemorySaver()``。
+    """
     if checkpointer is None:
-        d = Path(os.environ.get("TOY_CKPT_DIR", "checkpoints"))
-        d.mkdir(parents=True, exist_ok=True)
-        checkpointer = SqliteSaver(sqlite3.connect(str(d / f"{thread_id}.sqlite"), check_same_thread=False))
+        from agent_gate.runner import make_checkpointer
+
+        checkpointer = make_checkpointer(thread_id)
     return _state_graph().compile(checkpointer=checkpointer)

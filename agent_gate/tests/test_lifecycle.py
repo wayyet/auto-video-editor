@@ -14,6 +14,8 @@ resume        状态 == waiting_human 且 checkpoint 匹配      not_waiting_hum
 """
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from agent_gate import runner, service
@@ -180,11 +182,46 @@ def test_spawn_continue_without_checkpoint(tmp_path, monkeypatch):
     assert res["ok"] is False and res["code"] == "no_checkpoint"
 
 
-def test_checkpoint_path_follows_env(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENT_GATE_CKPT_DIR", str(tmp_path / "ckpt"))
-    assert runner.checkpoint_path("job1") == tmp_path / "ckpt" / "job1.sqlite"
+def test_checkpoint_exists_queries_postgres(tmp_path, monkeypatch):
+    """统一改造后 checkpoint 不再是本地文件,改为查 Postgres(方案 §4.7)。"""
+    calls = {}
+
+    class _FakeCur:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, sql, params):
+            calls["sql"] = sql
+            calls["params"] = params
+
+        def fetchone(self):
+            return (1,)
+
+    class _FakeConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def cursor(self):
+            return _FakeCur()
+
+    def _fake_connect(*args, **kwargs):
+        calls["kwargs"] = kwargs
+        return _FakeConn()
+
+    monkeypatch.setitem(sys.modules, "psycopg",
+                        type("m", (), {"connect": staticmethod(_fake_connect)}))
+    assert runner.checkpoint_exists("job1") is True
+    # 文本版 + hex 字面量版两套 thread_id 都要扫(方案 §3.1 M2)
+    assert calls["params"] == ("job1", "\\x6a6f6231")
+    # 非法 thread_id 必须被挡住
     with pytest.raises(Exception):
-        runner.checkpoint_path("../evil")
+        runner.checkpoint_exists("../evil")
 
 
 def test_cli_resume_requires_human_terminal(tmp_path, monkeypatch):

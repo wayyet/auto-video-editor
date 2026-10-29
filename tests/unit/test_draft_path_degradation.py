@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from langgraph.checkpoint.memory import InMemorySaver
 
 from nodes.node_07_speed_fit import (
     get_snapshot2_path,
@@ -86,7 +87,12 @@ def test_plan_timeline_pro_fan_in_excludes_split_shots() -> None:
     """
     from graph import build_graph
 
-    graph = build_graph(thread_id="topo-probe", start_heartbeat_thread=False, run_preflight=False)
+    graph = build_graph(
+        checkpointer=InMemorySaver(),
+        thread_id="topo-probe",
+        start_heartbeat_thread=False,
+        run_preflight=False,
+    )
     edges = graph.get_graph().edges
 
     sources_of_ptp: set[str] = set()

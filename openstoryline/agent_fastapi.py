@@ -15,6 +15,7 @@ import logging
 import shutil
 from pathlib import Path
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Set
 from contextlib import asynccontextmanager
 from starlette.websockets import WebSocketState, WebSocketDisconnect
@@ -44,6 +45,23 @@ ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 SRC_DIR = os.path.join(ROOT_DIR, "src")
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
+
+# ---- 仓库根目录:``db`` 包(PostgreSQL 仓储,阶段 D)在仓库根下 ----
+# agent_fastapi.py 由 ``openstoryline/.venv`` 启动(``uvicorn agent_fastapi:app``),
+# sys.path[0] 是 openstoryline/ ⇒ 仓库根不在其中 ⇒ ``import db`` 会失败。
+# 注意:仓库根有顶层 ``config.py``;本模块用的是 ``open_storyline.config``
+# (带包名),不受影响。
+REPO_ROOT_DIR = os.path.dirname(ROOT_DIR)
+if REPO_ROOT_DIR not in sys.path:
+    sys.path.insert(0, REPO_ROOT_DIR)
+
+# ---- 确保 ``src.open_storyline.*`` 这种写法能 import ----
+# ``open_storyline.nodes.node_manager`` 里写的是 ``from src.open_storyline... import ...``,
+# 即把 ``openstoryline/`` 当成 ``src`` 的父目录。生产环境靠 cwd=openstoryline/ 达成;
+# 这里补上,保证从仓库根 ``import openstoryline.agent_fastapi`` 也能用。
+# ⚠️ 放**末尾**:仓库根的 ``config.py`` 必须优先于 ``openstoryline/config.py``。
+if ROOT_DIR not in sys.path:
+    sys.path.append(ROOT_DIR)
 
 from open_storyline.agent import build_agent, ClientContext, is_mcode_model
 from open_storyline.utils.prompts import get_prompt
@@ -414,7 +432,7 @@ async def resolve_session_media_paths(
     只信客户端路径 = 「导入视频」直接失败。
 
     所以以**服务端会话媒体登记表**为准(``media_id -> MediaMeta.path``,
-    该登记表会随 ``session_state.json`` 持久化,重启后仍在),
+    该登记表会随会话状态持久化在 PostgreSQL ``chat_sessions.state_json`` 里,重启后仍在),
     客户端的 ``stored_path`` 只作兜底。两条路拿到的路径后面都要过
     「必须位于本会话 media 目录内」的校验。
     """
@@ -1037,6 +1055,11 @@ HTTP_MEDIA_GET_BURST = _env_int("RATE_LIMIT_MEDIA_GET_BURST", 60)
 HTTP_CLEAR_RPM   = _env_int("RATE_LIMIT_CLEAR_SESSION_RPM", 3000)
 HTTP_CLEAR_BURST = _env_int("RATE_LIMIT_CLEAR_SESSION_BURST", 50)
 
+# 会话列表(GET /api/sessions,阶段 D 新增)：前端会频繁刷新历史列表，
+# 单独一个桶，别跟普通 /api/ 请求挤同一个 api_general 配额。
+HTTP_LIST_SESSIONS_RPM   = _env_int("RATE_LIMIT_LIST_SESSIONS_RPM", 30)
+HTTP_LIST_SESSIONS_BURST = _env_int("RATE_LIMIT_LIST_SESSIONS_BURST", 10)
+
 # 其它 API 默认：比 global 更细一点（可选）
 HTTP_API_RPM   = _env_int("RATE_LIMIT_API_RPM", 2400)
 HTTP_API_BURST = _env_int("RATE_LIMIT_API_BURST", 120)
@@ -1128,6 +1151,11 @@ def _match_http_rule(method: str, path: str) -> Tuple[str, int, int, float]:
     # 精确接口优先
     if method == "POST" and path == "/api/sessions":
         return ("create_session", HTTP_CREATE_SESSION_BURST, HTTP_CREATE_SESSION_RPM, 1.0)
+
+    # 会话列表(GET /api/sessions,阶段 D)：独立限流桶。
+    # 必须排在下面 ``path.startswith("/api/")`` 的通用兜底**之前**。
+    if method == "GET" and path == "/api/sessions":
+        return ("list_sessions", HTTP_LIST_SESSIONS_BURST, HTTP_LIST_SESSIONS_RPM, 1.0)
 
     # 上传素材（含分片接口）
     if method == "POST" and path.startswith("/api/sessions/"):
@@ -1412,7 +1440,52 @@ class MediaStore:
 
 
 class SessionStateUnavailableError(Exception):
-    """session_state.json exists but cannot be read or parsed (I/O or JSON). Callers should map to 503, not 404."""
+    """会话状态不可用(PostgreSQL 读不到 / 写不进,或旧 JSON 文件损坏)。
+
+    Callers should map to 503, not 404。
+    """
+
+
+# ---------------------------------------------------------------------------
+# PostgreSQL 仓储(阶段 D)
+# ---------------------------------------------------------------------------
+# ``db.session_repository`` 需要 psycopg;OpenStoryline 是独立 venv,可能还没装
+# ⇒ **不在 import 期**加载仓储,首次使用时才 import,失败时抛
+# ``SessionStateUnavailableError``(⇒ 503),保证 Web 服务能起来、报错可读。
+_DEFAULT_SESSION_REPOSITORY: Any = None
+_DEFAULT_SESSION_REPOSITORY_ERROR: Optional[BaseException] = None
+
+
+def _default_session_repository() -> Any:
+    """默认的 ``chat_sessions`` 仓储(懒加载 + 进程内缓存)。
+
+    Raises:
+        SessionStateUnavailableError: ``db`` 包 / psycopg 不可用(⇒ 503)。
+    """
+    global _DEFAULT_SESSION_REPOSITORY, _DEFAULT_SESSION_REPOSITORY_ERROR
+    if _DEFAULT_SESSION_REPOSITORY is not None:
+        return _DEFAULT_SESSION_REPOSITORY
+    if _DEFAULT_SESSION_REPOSITORY_ERROR is not None:
+        raise SessionStateUnavailableError("db_unavailable") from _DEFAULT_SESSION_REPOSITORY_ERROR
+    try:
+        from db.session_repository import SessionRepository
+    except Exception as e:  # psycopg 没装 / db 包不可达
+        _DEFAULT_SESSION_REPOSITORY_ERROR = e
+        logger.error("db.session_repository 不可用(psycopg 没装?): %s", e)
+        raise SessionStateUnavailableError("db_unavailable") from e
+    repo = SessionRepository()
+    _DEFAULT_SESSION_REPOSITORY = repo
+    return repo
+
+
+def _is_repo_error(exc: BaseException, name: str) -> bool:
+    """判断异常是不是仓储层的某个异常(按类名匹配)。
+
+    为什么不直接 ``except db.session_repository.SessionNotFound``:
+    本模块 import 期不能依赖 psycopg(见 ``_default_session_repository``),
+    所以这里按类名(含父类)判断,避免在 import 期拉 ``db`` 包。
+    """
+    return any(t.__name__ == name for t in type(exc).__mro__)
 
 
 class ChatSession:
@@ -1423,9 +1496,11 @@ class ChatSession:
     - load_media / pending_media（staging）
     - tool trace 索引（支持 tool 事件“就地更新”）
     """
-    def __init__(self, session_id: str, cfg: Settings):
+    def __init__(self, session_id: str, cfg: Settings, repo: Any = None):
         self.session_id = session_id
         self.cfg = cfg
+        # PostgreSQL 仓储(阶段 D):没注入就用默认的(懒加载)。
+        self._repo = repo
         self.lang = "zh"
 
         default_llm = _peek_builtin_model_name("llm", self.cfg)
@@ -1510,6 +1585,12 @@ class ChatSession:
 
     def state_file_path(self) -> str:
         return self.state_file_path_for(self.session_id, self.cfg)
+
+    def repository(self) -> Any:
+        """本会话用的 ``chat_sessions`` 仓储(没注入就用默认的)。"""
+        if self._repo is not None:
+            return self._repo
+        return _default_session_repository()
 
     def _serialize_load_media(self) -> Dict[str, Dict[str, Any]]:
         out: Dict[str, Dict[str, Any]] = {}
@@ -1744,13 +1825,35 @@ class ChatSession:
         }
 
     def save_state_atomic(self) -> None:
-        path = self.state_file_path()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp = path + ".tmp"
+        """把会话状态写进 PostgreSQL(``chat_sessions.state_json``)。
+
+        ⚠️ **fail-closed**:写不进去就抛异常,**绝不**回退去写 JSON 文件 ——
+        服务器是唯一事实来源,悄悄写文件等于把数据劈成两半。
+
+        Raises:
+            SessionStateUnavailableError: 数据库不可写(⇒ 503)。
+        """
+        repo = self.repository()
         data = self.dump_state()
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
+        try:
+            repo.update_state(self.session_id, data)
+            return
+        except Exception as e:
+            if not _is_repo_error(e, "SessionNotFound"):
+                logger.error("session state write failed sid=%s err=%s", self.session_id, e)
+                raise SessionStateUnavailableError("write_error") from e
+
+        # 行不存在(新会话,或已被软删)⇒ 幂等建一行。
+        # ``create_if_absent`` 不会覆盖已有内容,也不会复活被软删的会话。
+        try:
+            _record, created = repo.create_if_absent(self.session_id, state_json=data)
+        except Exception as e:
+            logger.error("session state create failed sid=%s err=%s", self.session_id, e)
+            raise SessionStateUnavailableError("write_error") from e
+        if not created:
+            logger.warning(
+                "session already exists(deleted?), state not persisted sid=%s", self.session_id
+            )
 
     def _ensure_lc_messages_invariants(self) -> None:
         msgs = [m for m in (self.lc_messages or []) if isinstance(m, BaseMessage)]
@@ -1846,39 +1949,81 @@ class ChatSession:
             if tcid:
                 self._tool_history_index[str(tcid)] = idx
 
-    @classmethod
-    def load_from_state(cls, session_id: str, cfg: Settings) -> Optional["ChatSession"]:
-        path = cls.state_file_path_for(session_id, cfg)
+    @staticmethod
+    def _read_legacy_state_file(session_id: str, cfg: Settings) -> Optional[Dict[str, Any]]:
+        """读**旧**版 ``session_state.json``(阶段 D 迁移兼容用)。
+
+        读不到 / 坏了 / 不是 dict ⇒ ``None``(当作"没有旧数据")。
+        旧文件**只读**:状态一律以库为准,这里只是给迁移期的一次性导入兜底。
+        """
+        try:
+            path = ChatSession.state_file_path_for(session_id, cfg)
+        except Exception:
+            return None
         if not os.path.exists(path):
             return None
         try:
             with open(path, "r", encoding="utf-8") as f:
                 raw = f.read()
             data = json.loads(raw)
-        except OSError as e:
-            logger.warning("session state read failed sid=%s path=%s err=%s", session_id, path, e)
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    @classmethod
+    def load_from_state(
+        cls,
+        session_id: str,
+        cfg: Settings,
+        repo: Any = None,
+    ) -> Optional["ChatSession"]:
+        """从 PostgreSQL 恢复会话(``chat_sessions.state_json``)。
+
+        库里没有这条会话时,再看一次**旧** ``session_state.json``(迁移兼容),
+        并把它幂等导入库里(``create_if_absent`` —— 不覆盖库里已有内容)。
+
+        Raises:
+            SessionStateUnavailableError: 数据库读失败 / 状态形状不对(⇒ 503)。
+        """
+        if repo is None:
+            repo = _default_session_repository()
+
+        try:
+            record = repo.get(session_id)
+        except Exception as e:
+            logger.warning("session state read failed sid=%s err=%s", session_id, e)
             raise SessionStateUnavailableError("read_error") from e
-        except json.JSONDecodeError as e:
-            logger.warning("session state json invalid sid=%s path=%s err=%s", session_id, path, e)
-            raise SessionStateUnavailableError("corrupt_json") from e
+
+        data: Any = None
+        if record is not None:
+            data = getattr(record, "state_json", None)
+        else:
+            # 旧 JSON 文件(只读一次,导入后以库为准)
+            data = cls._read_legacy_state_file(session_id, cfg)
+            if data is None:
+                return None
+            try:
+                repo.create_if_absent(session_id, state_json=data)
+            except Exception as e:
+                # 导入失败不致命:仍然可以用文件内容恢复本次会话
+                logger.warning("legacy session import failed sid=%s err=%s", session_id, e)
 
         if not isinstance(data, dict):
-            logger.warning("session state not a dict sid=%s path=%s", session_id, path)
+            logger.warning("session state not a dict sid=%s", session_id)
             raise SessionStateUnavailableError("invalid_shape")
 
         # Mismatch vs persisted session_id → not this resource (404). Do not use 503 here:
         # 503 is reserved for read/parse failures (SessionStateUnavailableError).
-        sid_in_file = str(data.get("session_id") or "").strip()
-        if sid_in_file and sid_in_file != session_id:
+        sid_in_state = str(data.get("session_id") or "").strip()
+        if sid_in_state and sid_in_state != session_id:
             logger.warning(
-                "session state session_id mismatch path=%s requested=%s file=%s (treating as not found)",
-                path,
+                "session state session_id mismatch requested=%s stored=%s (treating as not found)",
                 session_id,
-                sid_in_file,
+                sid_in_state,
             )
             return None
 
-        sess = cls(session_id=session_id, cfg=cfg)
+        sess = cls(session_id=session_id, cfg=cfg, repo=repo)
         sess.lang = str(data.get("lang") or "zh").strip().lower()
         if sess.lang not in ("zh", "en"):
             sess.lang = "zh"
@@ -2406,17 +2551,37 @@ class ChatSession:
 
 
 class SessionStore:
-    def __init__(self, cfg: Settings):
+    """会话缓存 + PostgreSQL 仓储(阶段 D:数据库是唯一事实来源)。
+
+    内存里只放"热"会话;冷会话按需从 ``chat_sessions`` 表读回来。
+    """
+
+    def __init__(self, cfg: Settings, repo: Any = None):
         self.cfg = cfg
         self._lock = asyncio.Lock()
         self._sessions: Dict[str, ChatSession] = {}
+        self._repo = repo
+
+    @property
+    def repo(self) -> Any:
+        """本 store 用的仓储(没注入就用默认的;psycopg 缺失 ⇒ 503)。"""
+        if self._repo is None:
+            self._repo = _default_session_repository()
+        return self._repo
 
     async def create(self) -> ChatSession:
         sid = uuid.uuid4().hex
-        sess = ChatSession(sid, self.cfg)
+        sess = ChatSession(sid, self.cfg, repo=self._repo)
         async with self._lock:
             self._sessions[sid] = sess
-        await self.save_session_state(sess)
+        try:
+            self.repo.create(sid, state_json=sess.dump_state())
+        except Exception as e:
+            async with self._lock:
+                self._sessions.pop(sid, None)
+            if not _is_repo_error(e, "SessionAlreadyExists"):
+                logger.error("create session failed sid=%s err=%s", sid, e)
+                raise SessionStateUnavailableError("write_error") from e
         return sess
 
     async def get(self, sid: str) -> Optional[ChatSession]:
@@ -2433,7 +2598,7 @@ class SessionStore:
         delay = 0.05
         for attempt in range(3):
             try:
-                restored = ChatSession.load_from_state(sid, self.cfg)
+                restored = ChatSession.load_from_state(sid, self.cfg, repo=self.repo)
                 break
             except SessionStateUnavailableError as e:
                 reason = str(e.args[0]) if e.args else ""
@@ -2444,10 +2609,11 @@ class SessionStore:
                 raise
         if restored is None:
             return None
-        try:
-            restored.save_state_atomic()
-        except Exception:
-            pass
+
+        # 注意:这里**不再**把归一化后的状态回写数据库 ——
+        # 回写会让 ``updated_at`` 每次加载都刷新,会话列表的排序会被"只是打开
+        # 一下"打乱。归一化(补 tool 结果 / 截断坏行)本身是幂等的,每次加载
+        # 重跑一遍即可,状态以库里那份为准。
 
         async with self._lock:
             existing = self._sessions.get(sid)
@@ -2455,6 +2621,11 @@ class SessionStore:
                 return existing
             self._sessions[sid] = restored
             return restored
+
+    async def forget(self, sid: str) -> None:
+        """把会话从内存缓存里摘掉(软删除后调用)。"""
+        async with self._lock:
+            self._sessions.pop(str(sid or "").strip(), None)
 
     async def get_or_404(self, sid: str) -> ChatSession:
         try:
@@ -2466,10 +2637,12 @@ class SessionStore:
         return sess
 
     async def save_session_state(self, sess: ChatSession) -> None:
-        try:
-            sess.save_state_atomic()
-        except Exception as e:
-            logger.warning("failed to persist session state. sid=%s err=%s", getattr(sess, "session_id", "?"), e)
+        """持久化会话状态。
+
+        ⚠️ **不再吞异常**:写不进去就让调用方知道(⇒ 503 / 5xx)。
+        旧实现只 ``logger.warning(...)`` 就把异常吞了 —— 那是**静默丢数据**。
+        """
+        sess.save_state_atomic()
 
 
 @asynccontextmanager
@@ -2477,8 +2650,36 @@ async def lifespan(app: FastAPI):
     cfg = load_settings(default_config_path())
     app.state.cfg = cfg
     app.state.developer_mode = is_developer_mode(cfg)
-    app.state.sessions = SessionStore(cfg)
-    yield
+
+    # ---- PostgreSQL(阶段 D):会话状态的唯一事实来源 ----
+    # 建表 / 升级是幂等的;连不上也不拦服务启动(会话接口会返回 503)。
+    repo: Any = None
+    try:
+        from db.migrations import apply_migrations_to_db
+        apply_migrations_to_db()
+    except Exception as e:
+        logger.warning("apply migrations failed(会话接口可能 503): %s", e)
+    try:
+        repo = _default_session_repository()
+    except SessionStateUnavailableError as e:
+        logger.error("PostgreSQL 仓储不可用(会话接口将返回 503): %s", e)
+    app.state.session_repo = repo
+    app.state.sessions = SessionStore(cfg, repo=repo)
+
+    try:
+        yield
+    finally:
+        # 释放:仓储本身按操作开短连接(``db.session_repository`` 负责),
+        # 这里只需要把引用放掉;若换成了带连接池的实现,``close()`` 会被调用。
+        store = getattr(app.state, "sessions", None)
+        closer = getattr(store, "close", None)
+        if callable(closer):
+            try:
+                await closer()
+            except Exception as e:
+                logger.warning("session store close failed: %s", e)
+        app.state.sessions = None
+        app.state.session_repo = None
 
 
 app = FastAPI(title="OpenStoryline Web", version="1.0.0", lifespan=lifespan)
@@ -2488,6 +2689,16 @@ app.add_middleware(
     limiter=RATE_LIMITER,
     trust_proxy_headers=RATE_LIMIT_TRUST_PROXY_HEADERS,
 )
+
+
+@app.exception_handler(SessionStateUnavailableError)
+async def _handle_session_state_unavailable(
+    request: Request, exc: SessionStateUnavailableError
+):
+    """会话状态不可用 ⇒ 503(而不是 500 / 404)。"""
+    reason = str(exc.args[0]) if exc.args else ""
+    logger.warning("session state unavailable reason=%s path=%s", reason, request.url.path)
+    return JSONResponse({"detail": "session state unavailable"}, status_code=503)
 
 if os.path.isdir(STATIC_DIR):
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -2715,6 +2926,223 @@ async def create_session():
     store: SessionStore = app.state.sessions
     sess = await store.create()
     return JSONResponse(sess.snapshot())
+
+
+# ---- 阶段 D:会话列表 / 改名 / 软删除(PostgreSQL)----
+
+#: 会话列表分页上限
+SESSION_LIST_LIMIT_MIN = 1
+SESSION_LIST_LIMIT_MAX = 200
+SESSION_LIST_LIMIT_DEFAULT = 50
+
+#: 标题最大长度
+SESSION_TITLE_MAX_LEN = 200
+
+
+def _session_repository_or_503() -> Any:
+    """拿会话仓储;拿不到(psycopg 缺失)⇒ 503。"""
+    repo = getattr(app.state, "session_repo", None)
+    if repo is not None:
+        return repo
+    try:
+        return _default_session_repository()
+    except SessionStateUnavailableError as e:
+        raise HTTPException(status_code=503, detail="session store unavailable") from e
+
+
+def _iso_datetime(value: Any) -> str:
+    """datetime → ISO-8601 字符串(响应里就长这样,游标也用这个格式)。"""
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+def _encode_session_cursor(updated_at_iso: str, session_id: str) -> Optional[str]:
+    """游标 = ``<updated_at ISO>|<session_id>``(与响应里的 updated_at 完全一致)。"""
+    iso = str(updated_at_iso or "").strip()
+    sid = str(session_id or "").strip()
+    if not iso or not sid:
+        return None
+    return f"{iso}|{sid}"
+
+
+def _decode_session_cursor(raw: Optional[str]) -> Optional[Tuple[datetime, str]]:
+    """解析游标(``<updated_at ISO>|<session_id>``)。格式不对 ⇒ ValueError。"""
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    iso, sep, sid = text.rpartition("|")
+    if not sep or not iso.strip() or not sid.strip():
+        raise ValueError(f"bad cursor: {raw!r}")
+    iso = iso.strip()
+    # 容错:客户端没对 "+00:00" 做 URL 编码时,query 里的 "+" 会被解成空格。
+    # 本游标的 ISO 串里只有时区偏移那一处可能出现空格 ⇒ 换回 "+" 再解析。
+    if " " in iso and "+" not in iso:
+        iso = iso.replace(" ", "+", 1)
+    try:
+        parsed = datetime.fromisoformat(iso)
+    except ValueError as e:
+        raise ValueError(f"bad cursor timestamp: {raw!r}") from e
+    return (parsed, sid.strip())
+
+
+def _session_summary_payload(summary: Any) -> Dict[str, Any]:
+    """会话列表项(**不含** ``state_json``)。"""
+    return {
+        "session_id": str(getattr(summary, "session_id", "") or ""),
+        "title": str(getattr(summary, "title", "") or ""),
+        "title_source": str(getattr(summary, "title_source", "") or "auto"),
+        "created_at": _iso_datetime(getattr(summary, "created_at", None)),
+        "updated_at": _iso_datetime(getattr(summary, "updated_at", None)),
+        "message_count": int(getattr(summary, "message_count", 0) or 0),
+        "last_message_preview": str(getattr(summary, "last_message_preview", "") or ""),
+    }
+
+
+@api.get("/sessions")
+async def list_sessions(
+    limit: int = SESSION_LIST_LIMIT_DEFAULT,
+    cursor: Optional[str] = None,
+    title_prefix: Optional[str] = None,
+    include_deleted: bool = False,
+):
+    """会话列表(游标分页,按 ``updated_at DESC, session_id DESC``)。
+
+    - ``limit``:1..200(默认 50,超范围会被夹紧)
+    - ``cursor``:上一页 ``next_cursor`` 原样回传
+    - ``include_deleted``:默认 false(不含已软删除的会话)
+    """
+    try:
+        limit = int(limit)
+    except Exception:
+        limit = SESSION_LIST_LIMIT_DEFAULT
+    limit = max(SESSION_LIST_LIMIT_MIN, min(limit, SESSION_LIST_LIMIT_MAX))
+    # 注:``limit`` 声明成 ``int`` ⇒ FastAPI 已经挡掉非整数(422);
+    # 这里的 try 只是防御直接调用本函数的情况。
+
+    cur: Optional[Tuple[datetime, str]] = None
+    if cursor:
+        try:
+            cur = _decode_session_cursor(cursor)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail="invalid cursor") from e
+
+    repo = _session_repository_or_503()
+    try:
+        # 多取一条用来判断"还有没有下一页"
+        rows = repo.list(
+            limit=limit + 1,
+            cursor=cur,
+            title_prefix=(title_prefix or None),
+            include_deleted=bool(include_deleted),
+        )
+    except Exception as e:
+        logger.error("list sessions failed err=%s", e)
+        raise HTTPException(status_code=503, detail="session store unavailable") from e
+
+    has_more = len(rows) > limit
+    items = [_session_summary_payload(s) for s in rows[:limit]]
+    next_cursor: Optional[str] = None
+    if has_more and items:
+        next_cursor = _encode_session_cursor(items[-1]["updated_at"], items[-1]["session_id"])
+    return JSONResponse({"items": items, "next_cursor": next_cursor})
+
+
+@api.patch("/sessions/{session_id}")
+async def rename_session(session_id: str, request: Request):
+    """改会话标题(``{"title": "新标题"}``)。
+
+    标题可选;给了就必须是**非空字符串**(去空白后 ≤ 200 字),否则 422。
+
+    ``title_source`` 也可选(方案 §4.6):
+    - ``"manual"``(默认):用户手动改的标题 ⇒ 之后的自动标题**不会**覆盖它;
+    - ``"auto"``:前端**自动推导**出来的标题回写 ⇒ 之后还能被新的自动标题更新。
+
+    ⚠️ 不传时按 ``"manual"`` 处理 —— 手动标题优先是安全默认。
+    """
+    try:
+        body = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=422, detail="invalid json body") from e
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=422, detail="invalid body")
+
+    raw_title = body.get("title")
+    title: Optional[str] = None
+    if raw_title is not None:
+        if not isinstance(raw_title, str):
+            raise HTTPException(status_code=422, detail="title must be a string")
+        title = raw_title.strip()
+        if not title:
+            raise HTTPException(status_code=422, detail="title must not be empty")
+        if len(title) > SESSION_TITLE_MAX_LEN:
+            raise HTTPException(
+                status_code=422,
+                detail=f"title too long (max {SESSION_TITLE_MAX_LEN})",
+            )
+
+    raw_source = body.get("title_source")
+    title_source = "manual"
+    if raw_source is not None:
+        if not isinstance(raw_source, str) or raw_source not in ("auto", "manual"):
+            raise HTTPException(
+                status_code=422, detail="title_source must be 'auto' or 'manual'"
+            )
+        title_source = raw_source
+
+    repo = _session_repository_or_503()
+
+    if title is None:
+        # 没给 title ⇒ 只回显当前标题
+        try:
+            record = repo.get(session_id)
+        except Exception as e:
+            logger.error("get session failed sid=%s err=%s", session_id, e)
+            raise HTTPException(status_code=503, detail="session store unavailable") from e
+        if record is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        return JSONResponse({
+            "ok": True,
+            "session_id": str(record.session_id),
+            "title": str(record.title or ""),
+            "title_source": str(record.title_source or "auto"),
+        })
+
+    try:
+        record = repo.rename(session_id, title, title_source=title_source)
+    except Exception as e:
+        if _is_repo_error(e, "SessionNotFound"):
+            raise HTTPException(status_code=404, detail="session not found") from e
+        logger.error("rename session failed sid=%s err=%s", session_id, e)
+        raise HTTPException(status_code=503, detail="session store unavailable") from e
+
+    return JSONResponse({
+        "ok": True,
+        "session_id": str(record.session_id),
+        "title": str(record.title or ""),
+        "title_source": str(record.title_source or title_source),
+    })
+
+
+@api.delete("/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """软删除会话(打 ``deleted_at``);可用 ``repo.restore()`` 恢复。"""
+    repo = _session_repository_or_503()
+    try:
+        deleted = repo.soft_delete(session_id)
+    except Exception as e:
+        logger.error("soft delete session failed sid=%s err=%s", session_id, e)
+        raise HTTPException(status_code=503, detail="session store unavailable") from e
+    if not deleted:
+        # 不存在,或者已经删过了
+        raise HTTPException(status_code=404, detail="session not found")
+
+    store = getattr(app.state, "sessions", None)
+    if store is not None:
+        await store.forget(session_id)
+    return JSONResponse({"ok": True, "session_id": session_id})
 
 
 @api.get("/sessions/{session_id}")

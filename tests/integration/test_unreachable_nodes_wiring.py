@@ -322,7 +322,7 @@ def run_auto(
     rough_segments: list[dict] | None = None,
     web_titles: list[str] | None = None,
     boom: tuple[str, ...] = (),
-    sqlite_path: Path | None = None,
+    saver: Any | None = None,
     stop_after: str | None = None,
     group_counts: list[int] | None = None,
 ) -> Run:
@@ -519,13 +519,7 @@ def run_auto(
         "storyline_targets": targets,
     }
 
-    saver: Any = InMemorySaver()
-    if sqlite_path is not None:
-        import sqlite3
-
-        from langgraph.checkpoint.sqlite import SqliteSaver
-
-        saver = SqliteSaver(sqlite3.connect(str(sqlite_path), check_same_thread=False))
+    saver = saver if saver is not None else InMemorySaver()
 
     token = graph_module._STORYLINE_MODE_OVERRIDE.set("auto")
     try:
@@ -889,19 +883,23 @@ def test_ai_pair_attaches_only_junctions_that_exist_in_the_final_timeline(
 
 
 # ---------------------------------------------------------------------------
-# 7. 存档:接入后的图能在 SqliteSaver 上挂起并恢复
+# 7. 存档:接入后的图能在同一个 checkpointer 上挂起并恢复
 # ---------------------------------------------------------------------------
-def test_checkpoint_roundtrip_on_sqlite(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """跑到关卡①挂起 → 重新 build 一张新图 → 从同一个 sqlite 存档恢复到 node_07。"""
-    from langgraph.checkpoint.sqlite import SqliteSaver
-    from langgraph.types import Command
-    import sqlite3
+def test_checkpoint_roundtrip_on_shared_checkpointer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """跑到关卡①挂起 → 重新 build 一张新图 → 从同一个存档恢复到 node_07。
 
-    db = tmp_path / "ckpt.sqlite"
-    run = run_auto(monkeypatch, tmp_path, sqlite_path=db)
+    2026-10(阶段 C):SQLite 后端已删除,这里用共享的 ``InMemorySaver``;
+    "新数据库连接"级别的恢复语义(等价于旧的跨进程 SQLite 语义)
+    见 ``tests/integration/test_postgres_resume.py``。
+    """
+    from langgraph.types import Command
+
+    saver = InMemorySaver()
+    run = run_auto(monkeypatch, tmp_path, saver=saver)
     assert run.next_nodes == ("node_06_human_reorder",)
 
-    saver = SqliteSaver(sqlite3.connect(str(db), check_same_thread=False))
     token = graph_module._STORYLINE_MODE_OVERRIDE.set("auto")
     try:
         g2 = graph_module.build_graph(checkpointer=saver, thread_id="wiring", start_heartbeat_thread=False)

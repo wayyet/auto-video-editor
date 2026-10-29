@@ -27,13 +27,20 @@ PG 要把 JSON 里的 ``\\uXXXX`` 转义翻译成库编码,而 ``SQL_ASCII`` 无
 
 from __future__ import annotations
 
+import json
 import os
 from contextlib import contextmanager
 from typing import Iterator
 
 import psycopg
 
-__all__ = ["CLIENT_ENCODING", "DEFAULT_CONNECT_TIMEOUT_S", "connect", "connection"]
+__all__ = [
+    "CLIENT_ENCODING",
+    "DEFAULT_CONNECT_TIMEOUT_S",
+    "configure_json_dumps",
+    "connect",
+    "connection",
+]
 
 # 客户端编码固定用 UTF-8(库本身仍是 SQL_ASCII,服务端不做转换)。
 CLIENT_ENCODING = "utf-8"
@@ -54,6 +61,31 @@ def _connect_timeout_s() -> int:
     except ValueError:
         return DEFAULT_CONNECT_TIMEOUT_S
     return value if value > 0 else DEFAULT_CONNECT_TIMEOUT_S
+
+
+def configure_json_dumps() -> None:
+    """让 psycopg3 写 JSONB 时**不做** ``\\uXXXX`` 转义。
+
+    为什么必须(方案 §3.2 A5)
+    -----------------------
+    本机库编码是 ``SQL_ASCII``。PG 在写 JSONB 时,会把 JSON 里的 unicode 转义
+    (``\\u4e24`` 这种)翻译成库编码 —— 而 ``SQL_ASCII`` 表示不了非 ASCII 字符
+    ⇒ 直接抛 ``UntranslatableCharacter``。
+
+    改成 ``ensure_ascii=False`` 后,中文以**原始 UTF-8 字节**写入,PG 不需要翻译
+    转义 ⇒ 正常存取(服务端仍不做任何字符集转换)。
+
+    ⚠️ ``psycopg.types.json.set_json_dumps`` 是**进程级全局**设置,影响该进程内
+    所有 ``Jsonb`` / ``Json`` 的 dumps —— 包括 LangGraph saver 内部用的那些。
+    所以 **任何** 要往本机 Postgres 写 JSONB 的进程(含 ``AsyncPostgresSaver`` /
+    ``PostgresSaver``)都必须先调用本函数。
+
+    踩坑记录(2026-10-29):agent_gate 的 worker 写中文 checkpoint 时报
+    ``UntranslatableCharacter ... "\\u4e24..."``,根因就是漏了这一步。
+    """
+    from psycopg.types.json import set_json_dumps
+
+    set_json_dumps(lambda obj, context=None: json.dumps(obj, ensure_ascii=False))
 
 
 def connect(uri: str) -> psycopg.Connection:

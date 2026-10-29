@@ -1,12 +1,16 @@
-"""Week 5 集成测试 — 跨进程恢复 + 关卡③ 路径 + 副作用幂等。
+"""Week 5 集成测试 — 跨实例恢复 + 关卡③ 路径 + 副作用幂等。
 
 对齐第 5 周计划 §5.2。
 
 覆盖:
-- 跨进程(SqliteSaver + 全新 graph 实例)恢复关卡①/②/③
+- 跨实例恢复关卡①/②/③(同一个 checkpointer + 全新 graph 实例)
 - 关卡③ interrupt 路径:超长英文 → interrupt → resume → 重读草稿
 - 副作用跨 resume 只执行 1 次(Week 5 附件"测试代码"段 2)
-- 多日挂起:同 sqlite 文件跨多次 build_graph
+- 多日挂起:同一个存档跨多次 build_graph
+
+2026-10(阶段 C):SQLite 后端已删除。"新数据库连接"级别的恢复覆盖
+(等价于旧的跨进程 SQLite 语义)移到
+``tests/integration/test_postgres_resume.py``,用真实 Postgres 跑。
 """
 
 from __future__ import annotations
@@ -85,19 +89,18 @@ def _is_interrupted(g, config: dict) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# 测试 1:跨进程恢复关卡①/②/③(SqliteSaver)
+# 测试 1:跨实例恢复关卡①/②/③(同一个 checkpointer + 全新 graph 实例)
 # ---------------------------------------------------------------------------
-@pytest.mark.skipif(
-    __import__("importlib").util.find_spec("langgraph.checkpoint.sqlite") is None,
-    reason="langgraph-checkpoint-sqlite 未安装",
-)
-def test_resume_all_three_checkpoints_via_sqlite_persistence(
+def test_resume_all_three_checkpoints_via_shared_checkpointer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """模拟"全新 graph 实例 + 同 sqlite 文件 = 跨进程恢复"。
+    """模拟"全新 graph 实例 + 同一个存档 = 跨实例恢复"。
 
     Week 5 验证 3 个关卡的 interrupt payload ``checkpoint`` 字段都是
     "①"/"②"/"③" 统一格式(关卡③ 触发条件由 layout issues 决定)。
+
+    2026-10(阶段 C):SQLite 后端已删除,这里用共享的 ``InMemorySaver``;
+    "新数据库连接"的恢复语义见 ``tests/integration/test_postgres_resume.py``。
     """
     draft_dir = tmp_path / "drafts" / "demo"
     draft_file = _seed_draft(draft_dir)
@@ -107,14 +110,10 @@ def test_resume_all_three_checkpoints_via_sqlite_persistence(
     thread_id = "w5-cross-proc"
     config = {"configurable": {"thread_id": thread_id}}
 
-    # ---- 用 SqliteSaver 构造 g1,跑到关卡① ----
-    import sqlite3
-    from langgraph.checkpoint.sqlite import SqliteSaver
-
-    sqlite_path = tmp_path / f"{thread_id}.sqlite"
-    conn1 = sqlite3.connect(str(sqlite_path), check_same_thread=False)
+    # ---- 用共享的 InMemorySaver 构造 g1,跑到关卡① ----
+    saver = InMemorySaver()
     g1 = build_graph(
-        checkpointer=SqliteSaver(conn1),
+        checkpointer=saver,
         thread_id=thread_id,
         start_heartbeat_thread=False,
     )
@@ -127,11 +126,9 @@ def test_resume_all_three_checkpoints_via_sqlite_persistence(
     p1 = snap1.interrupts[0].value
     assert p1["checkpoint"] == "①"
 
-    # ---- 模拟"进程重启":丢弃 g1,新建 g2(同 sqlite) ----
+    # ---- 模拟"进程重启":丢弃 g1,新建 g2(共享同一个存档) ----
     g2 = build_graph(
-        checkpointer=SqliteSaver(
-            sqlite3.connect(str(sqlite_path), check_same_thread=False)
-        ),
+        checkpointer=saver,
         thread_id=thread_id,
         start_heartbeat_thread=False,
     )

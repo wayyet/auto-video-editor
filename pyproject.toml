@@ -16,9 +16,10 @@ dependencies = [
     # langgraph-checkpoint
     # langgraph-prebuilt
     "httpx>=0.27",
-    "langgraph-checkpoint-sqlite>=2.0",     # Week 3:SqliteSaver 提供持久化 checkpointer
-    "langgraph-checkpoint-postgres>=3.1",  # Week 5:AsyncPostgresSaver 生产路径
-    "psycopg[binary,pool]>=3.2",            # Week 5:Postgres 驱动 + 连接池
+    # PostgreSQL 统一改造:运行时唯一持久化后端(方案 §4.8)。
+    # SQLite checkpointer 依赖已删除 —— 不再有本地 .sqlite 落盘。
+    "langgraph-checkpoint-postgres>=3.1",  # AsyncPostgresSaver / PostgresSaver
+    "psycopg[binary,pool]>=3.2",            # Postgres 驱动 + 连接池
     "Pillow>=10.0",                         # Week 4:封面 PNG 本地渲染(16:9 / 4:3)
     "pydantic>=2.0",                        # storyline/contract.py 用
     # 禁止引入:torch / torchaudio / moviepy(ADR-001 进程隔离,不入主环境)

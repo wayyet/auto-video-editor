@@ -17,7 +17,13 @@ $Container = 'edb-postgres16'
 $Volume = 'edb_pgdata'
 $PgUser = 'postgres'
 $PgPassword = 'devpass'
+# 容器的默认库(``POSTGRES_DB``)—— **只在数据卷首次初始化时生效**,
+# 改这个变量不会自动建库(方案 §4.9)。运行时真正用的是 ``video_workflow``。
 $PgDb = 'langgraph'
+# 管理用维护库 —— PostgreSQL 实例里**永远存在**,与 ``$PgDb`` 无关。
+# ``align_postgres.py --admin-uri`` 必须连这个库:连业务库/默认库都不稳
+# (默认库已按方案 U4 归档删除)。
+$PgAdminDb = 'postgres'
 $HostPort = 5432
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -139,6 +145,8 @@ if (-not $healthy) {
 Assert-DockerSuccess '查询容器状态失败'
 
 $uri = "postgresql://${PgUser}:${PgPassword}@localhost:${HostPort}/${PgDb}"
+# 管理 URI 指向维护库 ``postgres``(永远存在),不指向可能被归档删除的默认库。
+$adminUri = "postgresql://${PgUser}:${PgPassword}@localhost:${HostPort}/${PgAdminDb}"
 Write-Host ''
 Write-Host "==> 完成。POSTGRES_URI=$(Get-MaskedUri $uri)" -ForegroundColor Green
 Write-Host '==> 下一步：$env:POSTGRES_URI="postgresql://postgres:devpass@localhost:5432/video_workflow"; .\.venv\Scripts\python.exe scripts\setup_postgres_schema.py' -ForegroundColor Green
@@ -160,7 +168,7 @@ if (-not [string]::IsNullOrWhiteSpace($TargetUri)) {
             Write-Host "✗ 找不到 $alignScript" -ForegroundColor Red
             exit 20
         }
-        & $pythonExe $alignScript --target-uri $TargetUri --admin-uri $uri
+        & $pythonExe $alignScript --target-uri $TargetUri --admin-uri $adminUri
         if ($LASTEXITCODE -ne 0) {
             Write-Host "✗ 角色/库对齐失败 (exit=$LASTEXITCODE)" -ForegroundColor Red
             exit 20

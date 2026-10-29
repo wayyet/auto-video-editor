@@ -9,6 +9,8 @@
 #     postgresql://postgres:devpass@localhost:5432/langgraph
 # ⚠️ 容器默认库只是"管理员维护库";本项目的运行时库统一为 video_workflow(计划 D1)，
 #    由 align_postgres.py 增量建出(只 CREATE / GRANT,不 DROP)。
+# ⚠️ 默认库 langgraph 已按方案 U4 在阶段 E 归档删除;管理操作一律连维护库
+#    postgres(postgresql://postgres:devpass@localhost:5432/postgres)。
 # 仅当 Docker Desktop 跑不了或需要 native Windows 服务时才用本脚本。
 # 用法：在“管理员: Windows PowerShell”窗口里运行此脚本
 # ============================================================

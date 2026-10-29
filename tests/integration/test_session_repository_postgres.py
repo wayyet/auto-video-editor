@@ -8,8 +8,9 @@
 - 中文状态(``state_json`` / ``title``)在 SQL_ASCII 库上能正确往返;
 - 迁移脚本幂等(重复执行不报错、不重复建表)。
 
-测试库用独立变量 ``TEST_POSTGRES_URI``;显式指定却连不上 ⇒ 直接 fail,
-不静默 skip(方案 §7.2,杜绝"假绿")。
+测试库用**独立**的库(``tests/integration/conftest.py`` 的 ``isolated_postgres_db``,
+带唯一后缀,跑完自动删)—— **不是**生产库 ``video_workflow``。
+显式指定了 URI 却连不上 ⇒ 直接 fail,不静默 skip(方案 §7.2,杜绝"假绿")。
 """
 
 from __future__ import annotations
@@ -73,10 +74,22 @@ pytestmark = [
 ]
 
 
+@pytest.fixture(scope="session")
+def db_uri(isolated_postgres_db) -> str:
+    """**隔离**测试库的 URI。
+
+    ⚠️ 不能直接用 ``video_workflow``(生产库):本文件会真的建会话 / 改标题 /
+    软删除,打生产库 = 往用户库里灌垃圾数据,而且用例之间会互相干扰。
+    独立库由 ``tests/integration/conftest.py`` 的 ``isolated_postgres_db`` 建,
+    会话结束时自动删掉。
+    """
+    return isolated_postgres_db()
+
+
 @pytest.fixture()
-def repo() -> SessionRepository:
-    """指向真实测试库的仓储。"""
-    return SessionRepository(uri=TEST_URI)
+def repo(db_uri: str) -> SessionRepository:
+    """指向隔离测试库的仓储。"""
+    return SessionRepository(uri=db_uri)
 
 
 @pytest.fixture()
@@ -84,11 +97,11 @@ def session_id() -> str:
     return uuid.uuid4().hex
 
 
-def test_migrations_are_idempotent(repo: SessionRepository) -> None:
+def test_migrations_are_idempotent(repo: SessionRepository, db_uri: str) -> None:
     """重复执行迁移不报错(阶段 B 门禁:幂等)。"""
     from db.connection import connection as _db_connection
 
-    with _db_connection(TEST_URI) as conn:
+    with _db_connection(db_uri) as conn:
         first = apply_migrations(conn)
         second = apply_migrations(conn)
     # 第一次可能执行了迁移,也可能数据库早已是最新;第二次一定无事可做。
@@ -96,10 +109,10 @@ def test_migrations_are_idempotent(repo: SessionRepository) -> None:
     assert second == []
 
 
-def test_migration_table_exists(repo: SessionRepository) -> None:
+def test_migration_table_exists(repo: SessionRepository, db_uri: str) -> None:
     from db.connection import connection as _db_connection
 
-    with _db_connection(TEST_URI) as conn:
+    with _db_connection(db_uri) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT 1 FROM information_schema.tables "
@@ -131,11 +144,13 @@ def test_create_rejects_duplicate(repo: SessionRepository, session_id: str) -> N
         repo.create(session_id, state_json={"history": []})
 
 
-def test_another_connection_sees_the_state(repo: SessionRepository, session_id: str) -> None:
+def test_another_connection_sees_the_state(
+    repo: SessionRepository, session_id: str, db_uri: str
+) -> None:
     """另一条连接(≈另一个应用实例)能读到完整状态(方案 §7.2 用例 3)。"""
     repo.create(session_id, state_json={"history": [{"message": "跨实例可见"}]})
 
-    other = SessionRepository(uri=TEST_URI)
+    other = SessionRepository(uri=db_uri)
     record = other.get(session_id)
     assert record is not None
     assert record.state_json["history"][0]["message"] == "跨实例可见"
@@ -250,6 +265,7 @@ def test_get_or_raise_raises(repo: SessionRepository) -> None:
 
 def test_workflow_runs_check_constraint_rejects_hex_thread_id(
     repo: SessionRepository,
+    db_uri: str,
 ) -> None:
     """thread_id 的 CHECK 必须挡掉 ``\\x<hex>`` 字面量(方案 §3.2 A2)。"""
     import psycopg
@@ -257,7 +273,7 @@ def test_workflow_runs_check_constraint_rejects_hex_thread_id(
     from db.connection import connection as _db_connection
 
     with pytest.raises(psycopg.errors.CheckViolation):
-        with _db_connection(TEST_URI) as conn:
+        with _db_connection(db_uri) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "INSERT INTO workflow_runs(thread_id, video_name, status) "
@@ -267,11 +283,11 @@ def test_workflow_runs_check_constraint_rejects_hex_thread_id(
             conn.commit()
 
 
-def test_workflow_runs_accepts_normal_thread_id(repo: SessionRepository) -> None:
+def test_workflow_runs_accepts_normal_thread_id(repo: SessionRepository, db_uri: str) -> None:
     """正常 thread_id 必须能写入(别把 CHECK 写太严)。"""
     from db.connection import connection as _db_connection
 
-    with _db_connection(TEST_URI) as conn:
+    with _db_connection(db_uri) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO workflow_runs(thread_id, video_name, status) "
