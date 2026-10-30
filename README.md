@@ -3,7 +3,7 @@
 本目录实现附件《第 2 周分阶段实施计划》与《第 3 周详细实施计划》的全部交付物:
 
 - **Week 2**:LangGraph 5 节点骨架(节点 1-5)+ draft_content.json 加密检测/版本策略/原子写入底层库 + 端到端集成测试
-- **Week 3**:扩展为 13+1 节点完整图(节点 1-13 + 1 升级节点)+ 关卡①/② interrupt/resume 联调 + 心跳监控 + 持久化 SqliteSaver
+- **Week 3**:扩展为 13+1 节点完整图(节点 1-13 + 1 升级节点)+ 关卡①/② interrupt/resume 联调 + 心跳监控 + 持久化 SqliteSaver(历史实现,当前版本已不支持;运行时持久化已统一为 PostgreSQL)
 - **PostgreSQL 统一改造**:运行时唯一数据库 = PostgreSQL(`video_workflow`);SQLite 检查点后端与本地 `.sqlite` 落盘已删除,聊天会话从 JSON 文件迁入 `chat_sessions` 表,浏览器侧栏历史以服务端为唯一事实来源
 
 ## 1. 目录结构
@@ -580,14 +580,11 @@ repo.list(limit=50, cursor=(updated_at, sid))   # 游标分页(不用 offset)
 .\.venv\Scripts\python.exe scripts\import_session_states.py --dry-run
 .\.venv\Scripts\python.exe scripts\import_session_states.py --archive
 
-# 一次性工具:旧 SQLite checkpoint 弃用清单 + 归档(移动到 logs/retired_checkpoints/<日期>/)
-.\.venv\Scripts\python.exe scripts\retire_sqlite_checkpoints.py --apply
-
 # 断连演练:PostgreSQL 不可达时必须明确报错,且不落本地文件
 .\.venv\Scripts\python.exe scripts\drill_disconnect.py
 ```
 
-⚠️ 这三个脚本是**一次性迁移工具**,不是运行时组件;运行时代码已不引用任何 SQLite / JSON 文件。
+⚠️ `scripts/import_session_states.py` 是**一次性迁移工具**,`scripts/drill_disconnect.py` 是**断连演练工具**;两者都不是运行时组件,运行时代码已不引用任何 SQLite / JSON 文件。
 
 ### 4.10 2026-10 接入原"不可达节点"(三个开关)
 

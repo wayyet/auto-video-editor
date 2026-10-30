@@ -12,9 +12,8 @@
 
 1. 确认剪映 5.9.0 已安装,且 hosts 已屏蔽剪映升级域。
 2. 确认 `.\.venv\Scripts\python.exe` 可用,ffmpeg 在 PATH。
-3. 确认 checkpointer 后端:
-   - 用 SQLite(默认):`CHECKPOINTER_BACKEND` 不用改,线程落在 `checkpoints\<thread_id>.sqlite`。
-   - 用 Postgres:先起 Docker Desktop 与 `edb-postgres16` 容器,否则挂起台账不可用。
+3. 确认 checkpointer 后端(仅 PostgreSQL):
+   - 先起 Docker Desktop 与 `edb-postgres16` 容器,否则挂起台账不可用。
 4. 清掉旧的挂起线程:如果之前有跑了一半的线程,**不要**直接用新图恢复 —— 先在旧版本跑完或作废重跑。
 
 ---
@@ -88,7 +87,7 @@
 ```
 执行人:              日期:
 剪映版本:            5.9.0
-checkpointer 后端:    sqlite / postgres
+checkpointer 后端:    postgres
 thread_id:
 
 ① 英文草稿内容        通过 / 不通过 —— 现象:
