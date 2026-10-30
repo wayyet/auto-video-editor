@@ -358,6 +358,41 @@ for i, delta in enumerate(deltas):
     if i == 0 and spec.get("hold_s"):
         time.sleep(float(spec["hold_s"]))
 
+# 工具调用(阶段 E:WS-03 要验证工具卡片状态顺序)。
+# 生命周期由 toolCall.status 枚举驱动:Preparing(4) -> Start(1) -> Finished(2)。
+for tool in (spec.get("tools") or []):
+    tid = tool.get("id") or "call_1"
+    tname = tool.get("name") or "read_notes"
+    event(seq, "item.started", item={
+        "id": tid, "type": "tool_call",
+        "toolCall": {"id": tid, "name": tname, "status": 4},
+    }); seq += 1
+    event(seq, "item.updated", item={
+        "id": tid, "type": "tool_call",
+        "toolCall": {
+            "id": tid, "name": tname, "status": 1,
+            "input": tool.get("input") or {"path": "notes.md"},
+        },
+    }); seq += 1
+    if tool.get("fail"):
+        event(seq, "item.updated", item={
+            "id": tid, "type": "tool_call",
+            "toolCall": {
+                "id": tid, "name": tname, "status": 3,
+                "error": tool.get("error") or "工具执行失败",
+            },
+        }); seq += 1
+    else:
+        event(seq, "item.updated", item={
+            "id": tid, "type": "tool_call",
+            "toolCall": {
+                "id": tid, "name": tname, "status": 2,
+                "output": tool.get("output") or {
+                    "content": [{"type": "text", "text": tool.get("text") or "已读取 5 个素材文件"}],
+                },
+            },
+        }); seq += 1
+
 event(seq, "exec.completed", result={
     "schemaVersion": 1, "type": "exec.result", "status": "succeeded",
     "output": final_output,
@@ -386,6 +421,7 @@ def fake_mcode_stream_cli(tmp_path, monkeypatch):
       include_reasoning    是否额外吐一条 reasoning 事件
       supports_stream_json 能力探测时 ``--help`` 里是否出现 stream-json
       exit_code            退出码
+      tools               工具调用列表(每项 ``{"id","name","input","output","fail"}``)
     """
     counter = {"n": 0}
 
@@ -404,6 +440,7 @@ def fake_mcode_stream_cli(tmp_path, monkeypatch):
         run_id: str = "run-1",
         session_id: str = "sess-1",
         turn_id: str = "turn-1",
+        tools: Optional[List[Dict[str, Any]]] = None,
     ) -> SimpleNamespace:
         counter["n"] += 1
         work = tmp_path / f"fake_stream_{counter['n']}"
@@ -423,6 +460,7 @@ def fake_mcode_stream_cli(tmp_path, monkeypatch):
             "run_id": run_id,
             "session_id": session_id,
             "turn_id": turn_id,
+            "tools": tools,
         }
         spec_path = work / "spec.json"
         spec_path.write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")

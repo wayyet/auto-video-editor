@@ -1,4 +1,30 @@
 // /static/app.js
+//
+// 阶段 E:执行过程面板的**策略**放在 ./mcode_panel.mjs(纯函数,可单测)。
+// 这里只负责「把策略算出来的模型画成 DOM」。
+import {
+  LLM_SOURCE,
+  MCODE_DISPLAY_NAME,
+  MCODE_SOURCE,
+  ROUTE_BODY,
+  ROUTE_BUBBLE,
+  ROUTE_PANEL,
+  TOOL_STATE_ERROR,
+  TOOL_STATE_RUNNING,
+  TOOL_STATE_SUCCESS,
+  TurnEventGate,
+  applyEventToPanelModel,
+  buildPanelModel,
+  createPanelModel,
+  isTerminalStatus,
+  normalizeSource,
+  phaseI18nKey,
+  routeEvent,
+  shouldAcceptEvent,
+  statusI18nKey,
+  statusIcon,
+} from "./mcode_panel.mjs?v=20261031-phaseE";
+
 const $ = (sel) => document.querySelector(sel);
 const SIDEBAR_COLLAPSED_KEY = "openstoryline_sidebar_collapsed";
 const DEVBAR_COLLAPSED_KEY = "openstoryline_devbar_collapsed";
@@ -149,6 +175,21 @@ const __OS_I18N = {
     "tool.card.default_name": "工具调用",
     "tool.card.fallback_name": "MCP 工具",
 
+    // 阶段 E:MCode 执行过程面板
+    "mcode.panel.title": "执行过程",
+    "mcode.status.queued": "排队中",
+    "mcode.status.running": "正在运行",
+    "mcode.status.waiting_tool": "等待工具结果",
+    "mcode.status.completed": "已完成",
+    "mcode.status.failed": "已失败",
+    "mcode.status.cancelled": "已取消",
+    "mcode.status.timed_out": "已超时",
+    "mcode.phase.initializing": "初始化",
+    "mcode.phase.analyzing": "分析任务",
+    "mcode.phase.tool_execution": "工具执行",
+    "mcode.phase.synthesizing": "整理结果",
+    "mcode.phase.completed": "已完成",
+
     "tool.preview.render_title": "成片预览",
     "tool.preview.other_videos": "其它视频（点击预览）",
     "tool.preview.videos": "视频（点击预览）",
@@ -289,6 +330,21 @@ const __OS_I18N = {
     // tools
     "tool.card.default_name": "Tool call",
     "tool.card.fallback_name": "MCP Tool",
+
+    // 阶段 E:MCode 执行过程面板
+    "mcode.panel.title": "Execution trace",
+    "mcode.status.queued": "Queued",
+    "mcode.status.running": "Running",
+    "mcode.status.waiting_tool": "Waiting for tool",
+    "mcode.status.completed": "Completed",
+    "mcode.status.failed": "Failed",
+    "mcode.status.cancelled": "Cancelled",
+    "mcode.status.timed_out": "Timed out",
+    "mcode.phase.initializing": "Initializing",
+    "mcode.phase.analyzing": "Analyzing",
+    "mcode.phase.tool_execution": "Running tools",
+    "mcode.phase.synthesizing": "Summarizing",
+    "mcode.phase.completed": "Completed",
 
     "tool.preview.render_title": "Rendered preview",
     "tool.preview.other_videos": "Other videos (click to preview)",
@@ -839,6 +895,12 @@ class ChatUI {
     this.toolMediaDomById = new Map();
     this.currentAssistant = null; // { bubbleEl, rawText }
 
+    // 阶段 E:MCode「执行过程」面板。一轮一个面板,按 turn_id 索引。
+    // 面板里的工具卡片和聊天正文里的工具卡片**共用** upsertToolCard(),
+    // 区别只在容器(面板内 vs 聊天区)。
+    this.mcodePanels = new Map(); // turn_id -> panel
+    this.mcodePanelOrder = [];    // 保持插入顺序
+
     this.mdStreaming = true;          // 是否启用流式 markdown
     this._mdRaf = 0;                  // requestAnimationFrame id
     this._mdTimer = null;             // setTimeout id
@@ -974,6 +1036,12 @@ class ChatUI {
     this.toolDomById.clear();
     this.currentAssistant = null;
 
+    // 阶段 E:执行过程面板也一起清掉
+    if (this.mcodePanels) {
+      this.mcodePanels.clear();
+      this.mcodePanelOrder = [];
+    }
+
     if (this.devLogEl) this.devLogEl.innerHTML = "";
     this.devDomByID.clear()
 
@@ -987,6 +1055,142 @@ class ChatUI {
 
   }
   
+  // ---------------------------------------------------------------
+  // 阶段 E:MCode 执行过程面板
+  // ---------------------------------------------------------------
+  //
+  // 面板只装**过程**:状态、阶段、步骤、工具卡片。
+  // 助手答复(文本)是另一块(普通的 .bubble),两者不混。
+
+  ensureMcodePanel(turnId, source = MCODE_SOURCE) {
+    const key = String(turnId ?? "");
+    const existing = this.mcodePanels.get(key);
+    if (existing) return existing;
+
+    const wrap = document.createElement("div");
+    wrap.className = "msg assistant mcode-turn";
+
+    const details = document.createElement("details");
+    details.className = "mcode-panel";
+    details.open = true; // 默认展开(设计文档 §8.1)
+
+    const head = document.createElement("summary");
+    head.className = "mcode-panel-head";
+
+    const badge = document.createElement("span");
+    badge.className = "mcode-panel-badge";
+    badge.textContent = MCODE_DISPLAY_NAME;
+
+    const statusEl = document.createElement("span");
+    statusEl.className = "mcode-panel-status";
+
+    const phaseEl = document.createElement("span");
+    phaseEl.className = "mcode-panel-phase hidden";
+
+    head.appendChild(badge);
+    head.appendChild(statusEl);
+    head.appendChild(phaseEl);
+
+    const body = document.createElement("div");
+    body.className = "mcode-panel-body";
+
+    const steps = document.createElement("ol");
+    steps.className = "mcode-steps";
+
+    const tools = document.createElement("div");
+    tools.className = "mcode-tools";
+
+    body.appendChild(steps);
+    body.appendChild(tools);
+
+    details.appendChild(head);
+    details.appendChild(body);
+    wrap.appendChild(details);
+
+    this.chatEl.appendChild(wrap);
+
+    const panel = {
+      key,
+      source: normalizeSource(source) || MCODE_SOURCE,
+      wrapEl: wrap,
+      detailsEl: details,
+      headEl: head,
+      stepsEl: steps,
+      toolsEl: tools,
+      statusEl,
+      phaseEl,
+      model: createPanelModel(),
+    };
+    this.mcodePanels.set(key, panel);
+    this.mcodePanelOrder.push(key);
+    return panel;
+  }
+
+  getMcodePanel(turnId) {
+    return this.mcodePanels.get(String(turnId ?? "")) || null;
+  }
+
+  updateMcodePanel(turnId, model) {
+    const panel = this.getMcodePanel(turnId);
+    if (!panel) return null;
+    panel.model = model;
+
+    // 头部:来源标识 + 状态 + 阶段
+    panel.statusEl.textContent = __t(statusI18nKey(model.status));
+    const phaseKey = phaseI18nKey(model.phase);
+    if (phaseKey) {
+      panel.phaseEl.textContent = __t(phaseKey);
+      panel.phaseEl.classList.remove("hidden");
+    } else {
+      panel.phaseEl.textContent = "";
+      panel.phaseEl.classList.add("hidden");
+    }
+
+    // 步骤列表
+    panel.stepsEl.textContent = "";
+    for (const step of model.steps || []) {
+      const li = document.createElement("li");
+      li.className = "mcode-step";
+      li.dataset.status = String(step.status || "");
+
+      const icon = document.createElement("span");
+      icon.className = "mcode-step-icon";
+      icon.textContent = statusIcon(step.status);
+
+      const text = document.createElement("span");
+      text.className = "mcode-step-text";
+      text.textContent = String(step.text || "");
+
+      li.appendChild(icon);
+      li.appendChild(text);
+      panel.stepsEl.appendChild(li);
+    }
+
+    // 工具卡片:复用 upsertToolCard(同一个 tool_call_id 只会有一张卡)
+    for (const tool of model.tools || []) {
+      this.upsertToolCard(tool.tool_call_id, {
+        server: tool.server,
+        name: tool.name,
+        state: tool.state,
+        args: tool.args,
+        summary: tool.summary,
+        message: tool.message,
+        progress: tool.progress,
+        source: MCODE_SOURCE,
+        __progress_mode: "real",
+      }, { container: panel.toolsEl, wrapClass: "mcode-tool-item" });
+    }
+
+    // 终态:关掉「运行中」的视觉状态
+    if (isTerminalStatus(model.status)) {
+      panel.wrapEl.dataset.state = String(model.status);
+    } else {
+      panel.wrapEl.dataset.state = "running";
+    }
+
+    return panel;
+  }
+
   setBubbleContent(bubbleEl, text, { markdown = true } = {}) {
     const s = String(text ?? "");
 
@@ -1462,7 +1666,13 @@ class ChatUI {
   }
 
   // tool 卡片：按 tool_call_id upsert（可折叠、极简、带状态符号）
-  upsertToolCard(tool_call_id, patch) {
+  // 阶段 E:工具卡片。
+  //   opts.container —— 卡片挂哪儿(聊天正文 / MCode 执行过程面板);
+  //   opts.wrapClass —— 外层 wrapper 的 class(默认 "msg assistant");
+  //   patch.source   —— 来源标识(阶段 E 补的字段)。
+  upsertToolCard(tool_call_id, patch, opts = {}) {
+    const container = opts.container || this.chatEl;
+    const wrapClass = opts.wrapClass || "msg assistant";
     const wasNearBottom = this.isNearBottom();
     const clamp01 = (n) => Math.max(0, Math.min(1, Number.isFinite(n) ? n : 0));
     const safeStringify = (x) => {
@@ -1554,17 +1764,18 @@ class ChatUI {
       details.appendChild(bodyWrap);
 
       wrap.appendChild(details);
-      this.chatEl.appendChild(wrap);
+      container.appendChild(wrap);
       this.maybeAutoScroll(wasNearBottom, { behavior: "auto" });
 
       dom = {
         wrap, details, statusEl, nameEl, argsPreviewEl, progRow, prog, fill, pctEl, pre, preview,
-        data: { server: "", name: "", args: undefined, message: "", summary: null, state: "running", progress: 0 },
+        sourceEl: null,
+        data: { server: "", name: "", args: undefined, message: "", summary: null, state: "running", progress: 0, source: "" },
         _progressMode: "fake",
       };
       this.toolDomById.set(tool_call_id, dom);
     }
-  
+
     // merge patch -> dom.data（关键：progress/end 不传 args 时要保留 start 的 args）
     const d = dom.data || {};
     const merged = {
@@ -1575,8 +1786,22 @@ class ChatUI {
       message: (patch && Object.prototype.hasOwnProperty.call(patch, "message")) ? (patch.message || "") : d.message,
       summary: (patch && Object.prototype.hasOwnProperty.call(patch, "summary")) ? patch.summary : d.summary,
       args:    (patch && Object.prototype.hasOwnProperty.call(patch, "args")) ? patch.args : d.args,
+      // 阶段 E:来源标识 —— MCode 的工具卡片标出来,普通模型的不标。
+      source:  (patch && patch.source != null) ? patch.source : d.source,
     };
     dom.data = merged;
+
+    // 阶段 E:来源徽标(只有 mcode 才显示)
+    if (merged.source === MCODE_SOURCE) {
+      if (!dom.sourceEl) {
+        const badge = document.createElement("span");
+        badge.className = "tool-source";
+        badge.textContent = MCODE_DISPLAY_NAME;
+        dom.sourceEl = badge;
+        const left = dom.details && dom.details.querySelector(".tool-left");
+        if (left) left.appendChild(badge);
+      }
+    }
 
     const shouldUseRealProgress =
       !!(patch && patch.__progress_mode === "real") ||
@@ -2447,6 +2672,16 @@ class App {
     this.ui = new ChatUI();
     this.ws = null;
 
+    // 阶段 E:本轮的来源与去重闸门。
+    //   _turnSource  —— "mcode" / "llm",由 assistant.start 决定;
+    //   _mcodeGate   —— 按 run_id + seq 去重 / 排序;
+    //   _mcodeModel  —— 执行过程面板的数据模型(纯数据,渲染交给 ChatUI)。
+    this._turnSource = LLM_SOURCE;
+    this._turnId = "";
+    this._mcodeGate = new TurnEventGate();
+    this._mcodeModel = createPanelModel();
+    this._mcodeDroppedEvents = 0;
+
     this.sessionId = null;
     this.sessionHistory = [];
     // 服务端列表拉取失败时的错误信息(非空 ⇒ 侧边栏显示错误态,而不是显示旧数据)。
@@ -3170,14 +3405,39 @@ class App {
     this._updateComposerDisabledState();
   }
 
+  // 阶段 E:快照里的执行过程 trace(独立于 history)。
+  _snapshotMcodeTrace(snapshot) {
+    return (snapshot && Array.isArray(snapshot.mcode_trace)) ? snapshot.mcode_trace : [];
+  }
+
+  // 阶段 E:从 trace 重建某一轮的执行过程面板。
+  //
+  // 关键:trace 里只有**过程**事件,没有 assistant 正文 ——
+  // 所以恢复出来的面板不会往聊天正文里插一句话(WS-07)。
+  _ensureMcodePanelForTurn(turnId, trace) {
+    const key = String(turnId ?? "");
+    const existing = this.ui.getMcodePanel(key);
+    if (existing) return existing;
+
+    const panel = this.ui.ensureMcodePanel(key, MCODE_SOURCE);
+    const model = buildPanelModel(trace || [], { turnId: key });
+    this.ui.updateMcodePanel(key, model);
+    return panel;
+  }
+
   _replaySnapshotHistory(snapshot) {
     this.ui.clearAll();
 
+    const trace = this._snapshotMcodeTrace(snapshot);
     const history = this._snapshotHistory(snapshot);
     for (const item of history) {
       if (item.role === "user") {
         this.ui.appendUserMessage(item.content || "", item.attachments || []);
       } else if (item.role === "assistant") {
+        if (item.source === MCODE_SOURCE) {
+          // MCode 的这一轮:先建执行过程面板(面板在上),再放助手正文。
+          this._ensureMcodePanelForTurn(item.turn_id, trace);
+        }
         this.ui.startAssistantMessage({placeholder: false});
         this.ui.finalizeAssistant(item.content || "");
       } else if (item.role === "tool") {
@@ -3193,7 +3453,17 @@ class App {
         if (String(item.state || "").toLowerCase() === "running") {
           patch.__progress_mode = "real";
         }
-        this.ui.upsertToolCard(item.tool_call_id, patch);
+        if (item.source === MCODE_SOURCE) {
+          // MCode 的工具卡片归执行过程面板 —— 不进聊天正文。
+          patch.source = MCODE_SOURCE;
+          const panel = this._ensureMcodePanelForTurn(item.turn_id, trace);
+          this.ui.upsertToolCard(item.tool_call_id, patch, {
+            container: panel.toolsEl,
+            wrapClass: "mcode-tool-item",
+          });
+        } else {
+          this.ui.upsertToolCard(item.tool_call_id, patch);
+        }
 
         if (item.summary != null) {
           this.ui.appendDevSummary(item.tool_call_id, {
@@ -3205,9 +3475,19 @@ class App {
         }
       }
     }
+
+    // trace 里有、history 里没有的轮次(比如只跑了状态没跑出正文)也要恢复。
+    const seenTurns = new Set();
+    for (const row of trace) {
+      const tid = String((row && row.turn_id) || "");
+      if (!tid || seenTurns.has(tid)) continue;
+      seenTurns.add(tid);
+      this._ensureMcodePanelForTurn(tid, trace);
+    }
   }
 
   _syncToolCardsFromSnapshot(snapshot) {
+    const trace = this._snapshotMcodeTrace(snapshot);
     const history = this._snapshotHistory(snapshot);
     for (const item of history) {
       if (!item || item.role !== "tool") continue;
@@ -3224,7 +3504,16 @@ class App {
       if (String(item.state || "").toLowerCase() === "running") {
         patch.__progress_mode = "real";
       }
-      this.ui.upsertToolCard(item.tool_call_id, patch);
+      if (item.source === MCODE_SOURCE) {
+        patch.source = MCODE_SOURCE;
+        const panel = this._ensureMcodePanelForTurn(item.turn_id, trace);
+        this.ui.upsertToolCard(item.tool_call_id, patch, {
+          container: panel.toolsEl,
+          wrapClass: "mcode-tool-item",
+        });
+      } else {
+        this.ui.upsertToolCard(item.tool_call_id, patch);
+      }
 
       if (item.summary != null) {
         this.ui.appendDevSummary(item.tool_call_id, {
@@ -4518,17 +4807,58 @@ class App {
       this._updateComposerDisabledState();
       // 如果之前有 placeholder（rawText 为空），先清掉避免残留
       try { this.ui.flushAssistantSegment(); } catch {}
+
+      // 阶段 E:先定本轮来源 —— 后面每条事件都要按它校验。
+      const d = data || {};
+      this._turnSource = normalizeSource(d.source) || LLM_SOURCE;
+      this._turnId = String(d.turn_id || "");
+      this._mcodeGate = new TurnEventGate();
+      this._mcodeModel = createPanelModel();
+      this._mcodeDroppedEvents = 0;
+
+      if (this._turnSource === MCODE_SOURCE) {
+        // MCode turn:先开执行过程面板,再开助手气泡 —— 面板在上、正文在下。
+        this.ui.ensureMcodePanel(this._turnId, MCODE_SOURCE);
+      }
+
       this.ui.startAssistantMessage({placeholder: true});
       return;
     }
 
+    // 阶段 E:路由规则只有一份(在 mcode_panel.mjs 里),单测也测它。
+    const d = data || {};
+    const routes = routeEvent({
+      type,
+      turnSource: this._turnSource,
+      eventSource: d.source,
+    });
+    const toPanel = routes.includes(ROUTE_PANEL);
+    const toBubble = routes.includes(ROUTE_BUBBLE);
+    const toBody = routes.includes(ROUTE_BODY);
+
+    if (toPanel) this._applyPanelEvent(type, d);
+
     if (type === "assistant.flush") {
-      this.ui.flushAssistantSegment();
+      if (toBubble) this.ui.flushAssistantSegment();
       return;
     }
 
     if (type === "assistant.delta") {
-      this.ui.appendAssistantDelta((data || {}).delta || "");
+      if (!toBubble) {
+        // 来源对不上 —— 不进助手气泡。
+        this._mcodeDroppedEvents += 1;
+        return;
+      }
+      if (this._turnSource === MCODE_SOURCE) {
+        // MCode turn:按 run_id + seq 去重 / 排序(重复的、乱序的丢弃)。
+        const verdict = this._mcodeGate.accept(d);
+        if (!verdict.ok) {
+          this._mcodeDroppedEvents += 1;
+          return;
+        }
+      }
+      // 文本**只**进助手气泡 —— 过程事件另走执行过程面板。
+      this.ui.appendAssistantDelta(d.delta || "");
       return;
     }
 
@@ -4536,45 +4866,58 @@ class App {
       this.streaming = false;
       this.canceling = false;
       this._updateComposerDisabledState();
-      this.ui.endAssistantTurn((data || {}).text || "");
+      if (toBubble) this.ui.endAssistantTurn(d.text || "");
       return;
     }
 
-    if (type === "tool.start") {
-      this.ui.upsertToolCard(data.tool_call_id, {
-        server: data.server,
-        name: data.name,
-        state: "running",
-        args: data.args || {},
-        progress: 0,
-      });
+    if (type === "agent.status" || type === "agent.step") {
+      // 只进执行过程面板(普通 turn 直接忽略 —— SRC-03)。
       return;
     }
 
-    if (type === "tool.progress") {
-      this.ui.upsertToolCard(data.tool_call_id, {
-        server: data.server,
-        name: data.name,
-        state: "running",
-        progress: typeof data.progress === "number" ? data.progress : 0,
-        message: data.message || "",
-        __progress_mode: "real",
-      });
-      return;
-    }
+    if (type === "tool.start" || type === "tool.progress" || type === "tool.end") {
+      if (!toBody) {
+        // MCode 的工具卡片归执行过程面板 —— 不进聊天正文。
+        return;
+      }
+      // 普通模型:原样留在聊天正文里(零回归)。
+      if (type === "tool.start") {
+        this.ui.upsertToolCard(d.tool_call_id, {
+          server: d.server,
+          name: d.name,
+          state: TOOL_STATE_RUNNING,
+          args: d.args || {},
+          progress: 0,
+          source: d.source || "",
+        });
+        return;
+      }
 
-    if (type === "tool.end") {
-      this.ui.upsertToolCard(data.tool_call_id, {
-        server: data.server,
-        name: data.name,
-        state: data.is_error ? "error" : "success",
-        summary: (data && Object.prototype.hasOwnProperty.call(data, "summary")) ? data.summary : null,
+      if (type === "tool.progress") {
+        this.ui.upsertToolCard(d.tool_call_id, {
+          server: d.server,
+          name: d.name,
+          state: TOOL_STATE_RUNNING,
+          progress: typeof d.progress === "number" ? d.progress : 0,
+          message: d.message || "",
+          source: d.source || "",
+          __progress_mode: "real",
+        });
+        return;
+      }
+
+      this.ui.upsertToolCard(d.tool_call_id, {
+        server: d.server,
+        name: d.name,
+        state: d.is_error ? TOOL_STATE_ERROR : TOOL_STATE_SUCCESS,
+        summary: (d && Object.prototype.hasOwnProperty.call(d, "summary")) ? d.summary : null,
+        source: d.source || "",
       });
-      this.ui.appendDevSummary(data.tool_call_id, {
-        server: data.server,
-        name: data.name,
-        summary: data.summary,
-        is_error: !!data.is_error,
+      this.ui.appendDevSummary(d.tool_call_id, {
+        server: d.server,
+        name: d.name,
+        summary: d.summary,
+        is_error: !!d.is_error,
       });
       return;
     }
@@ -4598,6 +4941,9 @@ class App {
       const msg = String((data || {}).message || "unknown error");
       const partial = String((data || {}).partial_text || "").trim();
 
+      // 阶段 E:错误也进执行过程面板(状态置 failed,已完成的步骤保留)。
+      // —— 面板那边已经由上面的 `toPanel` 分支统一处理过了,这里不再重复。
+
       // 用 endAssistantTurn 结束当前流式气泡：
       // - 有 partial：保留已输出内容，并追加错误说明
       // - 无 partial：直接显示错误
@@ -4607,6 +4953,41 @@ class App {
 
       this.ui.endAssistantTurn(text);
       return;
+    }
+  }
+
+  // 阶段 E:把一条过程事件应用到执行过程面板。
+  //
+  // 三道闸门(设计文档 §8.2):
+  //   1. 本轮必须是 mcode —— 普通模型不许出现 MCode 面板;
+  //   2. 事件来源必须是 mcode —— 别的事件混不进来;
+  //   3. run_id + seq 去重 / 排序 —— 重复的、乱序的丢弃。
+  _applyPanelEvent(type, data) {
+    if (this._turnSource !== MCODE_SOURCE) return;
+
+    const d = data || {};
+    if (!shouldAcceptEvent({ turnSource: this._turnSource, eventSource: d.source })) {
+      this._mcodeDroppedEvents += 1;
+      return;
+    }
+
+    const verdict = this._mcodeGate.accept(d);
+    if (!verdict.ok) {
+      this._mcodeDroppedEvents += 1;
+      return;
+    }
+
+    this._mcodeModel = applyEventToPanelModel(this._mcodeModel, type, d);
+    this.ui.updateMcodePanel(this._turnId, this._mcodeModel);
+
+    if (type === "tool.end") {
+      // 开发者模式的原始输出面板 —— MCode 的工具也要能看到。
+      this.ui.appendDevSummary(d.tool_call_id, {
+        server: d.server,
+        name: d.name,
+        summary: d.summary,
+        is_error: !!d.is_error,
+      });
     }
   }
 

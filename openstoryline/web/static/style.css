@@ -2185,3 +2185,141 @@ body.dev-mode:not(.devbar-collapsed) #devbarToggle svg{
 .sidebar-help-tooltip-link:hover{
   opacity: 1;
 }
+
+/* ============================================================
+   阶段 E:MCode 执行过程面板
+   ------------------------------------------------------------
+   - 可折叠(<details>),默认展开;
+   - 标题带来源标识「MCode Agent」,避免和普通模型混淆;
+   - 过程(状态/步骤/工具)只在这个面板里,聊天正文不受影响。
+   ============================================================ */
+
+.msg.assistant.mcode-turn{
+  padding-top: 4px;
+}
+
+.mcode-panel{
+  width: 100%;
+  border: 1px solid var(--border-weak);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.mcode-panel-head{
+  cursor: pointer;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  list-style: none;
+}
+.mcode-panel-head::-webkit-details-marker{ display:none; }
+.mcode-panel-head::marker{ content:""; }
+
+.mcode-panel-badge{
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  color: var(--text);
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  white-space: nowrap;
+}
+
+.mcode-panel-status{
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.mcode-panel-phase{
+  font-size: 12px;
+  color: var(--muted);
+  opacity: .8;
+  white-space: nowrap;
+}
+
+.mcode-panel-body{
+  padding: 4px 14px 12px;
+  border-top: 1px solid var(--border-weak);
+}
+
+.mcode-steps{
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mcode-step{
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.mcode-step-icon{
+  flex: 0 0 auto;
+  width: 14px;
+  text-align: center;
+  opacity: .85;
+}
+
+.mcode-step-text{
+  min-width: 0;
+  word-break: break-word;
+}
+
+.mcode-step[data-status="completed"] .mcode-step-icon{ color: var(--text); }
+.mcode-step[data-status="failed"] .mcode-step-icon,
+.mcode-step[data-status="error"] .mcode-step-icon{ color: #d64545; }
+.mcode-step[data-status="running"] .mcode-step-icon{ animation: os_mcode_pulse 1.4s ease-in-out infinite; }
+
+@keyframes os_mcode_pulse{
+  0%, 100%{ opacity: .35; }
+  50%{ opacity: 1; }
+}
+
+.mcode-tools{
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mcode-tool-item{
+  padding: 0;
+}
+
+/* 面板里的工具卡片不再带聊天区的左右缩进 */
+.mcode-tools details.tool-card{
+  border-radius: 10px;
+}
+
+/* 工具卡片上的来源徽标(阶段 E) */
+.tool-source{
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border-weak);
+  border-radius: 999px;
+  padding: 1px 7px;
+  white-space: nowrap;
+}
+
+/* 终态:不再闪 */
+.mcode-turn[data-state="completed"] .mcode-step[data-status="running"] .mcode-step-icon,
+.mcode-turn[data-state="failed"] .mcode-step[data-status="running"] .mcode-step-icon,
+.mcode-turn[data-state="cancelled"] .mcode-step[data-status="running"] .mcode-step-icon,
+.mcode-turn[data-state="timed_out"] .mcode-step[data-status="running"] .mcode-step-icon{
+  animation: none;
+  opacity: .6;
+}

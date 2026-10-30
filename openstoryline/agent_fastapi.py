@@ -120,6 +120,39 @@ UPLOAD_STATUS_SYSTEM_PREFIX = "【User media upload status】"
 UPLOAD_STATUS_SYSTEM_EMPTY = "【User media upload status】{}"
 MASKED_SECRET = "***"
 
+# -- 阶段 E:执行过程 trace 的边界 ------------------------------------------
+#
+# 设计文档 §9 T7:过程事件**单独**存一份有界 trace,不进 ``sess.history``。
+# 三个上限:
+#   - 每轮最多 MCODE_TRACE_MAX_EVENTS 条(与 ``[mcode] max_trace_events`` 一致);
+#   - 单条摘要最多 MCODE_TRACE_MAX_TEXT_CHARS 字符(与 ``max_event_text_chars`` 一致);
+#   - 跨轮最多留 MCODE_TRACE_MAX_TURNS 轮(再旧就丢,避免会话状态无限长)。
+MCODE_TRACE_MAX_EVENTS = 300
+MCODE_TRACE_MAX_TEXT_CHARS = 2000
+MCODE_TRACE_MAX_TURNS = 5
+
+#: trace 记录里允许出现的字段(白名单)。其余字段一律不落盘 ——
+#: 避免把 prompt、环境变量、完整 stderr 之类的东西顺手存进去。
+MCODE_TRACE_FIELDS: Tuple[str, ...] = (
+    "type",
+    "source",
+    "session_id",
+    "turn_id",
+    "run_id",
+    "seq",
+    "status",
+    "phase",
+    "step_id",
+    "title",
+    "message",
+    "tool_call_id",
+    "name",
+    "server",
+    "is_error",
+    "summary",
+    "timestamp_ms",
+)
+
 def debug_traceback_print(cfg: Settings):
     if cfg.developer.developer_mode:
         traceback.print_exc()
@@ -320,6 +353,183 @@ def _make_mcode_adapter(
         max_text_chars=int(getattr(mcode_cfg, "max_event_text_chars", 2000)),
         max_trace_events=int(getattr(mcode_cfg, "max_trace_events", 300)),
     )
+
+
+# --------------------------------------------------------------------------
+# 阶段 E:内部 MCode 事件 -> WebSocket 事件
+# --------------------------------------------------------------------------
+#
+# 这一层是**纯映射**:一条内部事件进来,产出零到两条 WebSocket 事件,
+# 外加一条可落盘的 trace 记录。
+#
+# 为什么从 WebSocket 端点里抽出来
+# ------------------------------
+#
+# 端点里的闭包没法直接测。抽成模块级函数之后,阶段 E 的验收就能用**真数据**
+# 跑出一条完整的「WebSocket 事件时间线」—— 也就是浏览器真正收到的那串
+# ``{type, data}`` —— 拿来当验收证据(WS-01…WS-07)。
+#
+# 关键约束
+# --------
+# * 文本只走 ``assistant.delta``;过程(状态 / 工具)只走 ``agent.status`` / ``tool.*``;
+# * 过程事件**额外**写一份有界 trace(不进 ``sess.history``);
+# * trace 写失败只记日志,**不能**把已经成功的 turn 变成失败。
+
+def _mcode_trace_row(
+    type_: str,
+    data: Dict[str, Any],
+    *,
+    turn_id: str,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """把一条 WebSocket 事件负载整理成 trace 记录(字段已白名单化)。"""
+    row: Dict[str, Any] = {
+        "type": type_,
+        "source": str(data.get("source") or TURN_SOURCE_MCODE),
+        "session_id": str(data.get("session_id") or ""),
+        "turn_id": turn_id,
+        "run_id": str(data.get("run_id") or ""),
+        "seq": data.get("seq"),
+        "timestamp_ms": int(time.time() * 1000),
+    }
+    for key in ("status", "phase", "step_id", "title", "message",
+                "tool_call_id", "name", "server", "is_error", "summary"):
+        if key in data and data.get(key) is not None:
+            row[key] = data.get(key)
+    if extra:
+        for key, val in extra.items():
+            if val is not None:
+                row[key] = val
+    return row
+
+
+async def _dispatch_mcode_internal(
+    internal: Any,
+    *,
+    sess: "ChatSession",
+    turn_id: str,
+    trace_enabled: bool,
+    emit: Any,
+    flush_segment: Any,
+    append_text: Any,
+) -> Optional[str]:
+    """一条内部 MCode 事件 -> WebSocket 事件。
+
+    Args:
+        internal: ``MCodeEventAdapter`` 产出的内部事件。
+        sess: 当前会话(工具记账 + trace 落点)。
+        turn_id: 本轮 id。
+        trace_enabled: 是否推送执行过程事件(``[mcode] show_execution_trace``)。
+        emit: ``async (type, data) -> bool`` —— 统一的 WebSocket 出口。
+        flush_segment: ``async (send_flush_event: bool) -> None`` —— 封口当前文本段。
+        append_text: ``(delta: str) -> None`` —— 把增量记进本轮文本缓冲。
+
+    Returns:
+        ``KIND_FINAL`` 时返回本轮最终正文;其余情况返回 ``None``。
+    """
+    data = dict(getattr(internal, "data", {}) or {})
+    kind_ = getattr(internal, "kind", "")
+
+    if kind_ == KIND_TEXT:
+        delta = data.get("delta") or ""
+        if not delta:
+            return None
+        # 先记进文本段再发 —— 和原闭包语义一致(发失败也不丢字)。
+        append_text(delta)
+        await emit("assistant.delta", data)
+        return None
+
+    if kind_ == KIND_FINAL:
+        # 最终正文以 exec.completed.result.output 为权威。
+        return str(data.get("text") or "")
+
+    if not trace_enabled:
+        # 执行过程事件被关掉了 —— 文本与最终正文照发。
+        return None
+
+    if kind_ == KIND_STATUS:
+        await emit("agent.status", data)
+        sess.record_mcode_trace(_mcode_trace_row("agent.status", data, turn_id=turn_id))
+        return None
+
+    if kind_ == KIND_TOOL_START:
+        await flush_segment(send_flush_event=True)
+        rec = sess.apply_tool_event({
+            "type": "tool_start",
+            "tool_call_id": data.get("tool_call_id"),
+            "server": data.get("server"),
+            "name": data.get("name"),
+            "args": data.get("args") or {},
+            "source": data.get("source"),
+            "turn_id": turn_id,
+        })
+        if rec:
+            payload = {
+                "tool_call_id": rec["tool_call_id"],
+                "server": rec["server"],
+                "name": rec["name"],
+                "args": rec["args"],
+                "source": data.get("source"),
+                "seq": data.get("seq"),
+                "run_id": data.get("run_id"),
+            }
+            await emit("tool.start", payload)
+            sess.record_mcode_trace(_mcode_trace_row("tool.start", payload, turn_id=turn_id))
+        return None
+
+    if kind_ == KIND_TOOL_PROGRESS:
+        rec = sess.apply_tool_event({
+            "type": "tool_progress",
+            "tool_call_id": data.get("tool_call_id"),
+            "server": data.get("server"),
+            "name": data.get("name"),
+            "message": data.get("message") or "",
+            "source": data.get("source"),
+            "turn_id": turn_id,
+        })
+        if rec:
+            payload = {
+                "tool_call_id": rec["tool_call_id"],
+                "server": rec["server"],
+                "name": rec["name"],
+                "progress": rec["progress"],
+                "message": rec["message"],
+                "source": data.get("source"),
+                "seq": data.get("seq"),
+                "run_id": data.get("run_id"),
+            }
+            await emit("tool.progress", payload)
+            sess.record_mcode_trace(_mcode_trace_row("tool.progress", payload, turn_id=turn_id))
+        return None
+
+    if kind_ == KIND_TOOL_END:
+        rec = sess.apply_tool_event({
+            "type": "tool_end",
+            "tool_call_id": data.get("tool_call_id"),
+            "server": data.get("server"),
+            "name": data.get("name"),
+            "is_error": bool(data.get("is_error")),
+            # 工具输出摘要化之后还要脱敏 —— 摘要里也可能带密钥。
+            "summary": _mask_secrets_recursive(data.get("summary")),
+            "source": data.get("source"),
+            "turn_id": turn_id,
+        })
+        if rec:
+            payload = {
+                "tool_call_id": rec["tool_call_id"],
+                "server": rec["server"],
+                "name": rec["name"],
+                "is_error": rec["state"] == "error",
+                "summary": rec["summary"],
+                "source": data.get("source"),
+                "seq": data.get("seq"),
+                "run_id": data.get("run_id"),
+            }
+            await emit("tool.end", payload)
+            sess.record_mcode_trace(_mcode_trace_row("tool.end", payload, turn_id=turn_id))
+        return None
+
+    return None
 
 
 def _dedup_models(models: List[str]) -> List[str]:
@@ -605,6 +815,54 @@ def _mask_tool_history_record(rec: Dict[str, Any]) -> Dict[str, Any]:
         if key in r:
             r[key] = _mask_secrets_recursive(r.get(key))
     return r
+
+
+def _append_assistant_history(
+    sess: "ChatSession",
+    text: str,
+    *,
+    turn_source: str,
+    turn_id: str,
+    ts: Optional[float] = None,
+) -> bool:
+    """往 history 里追加一条 assistant 记录(**同一轮内同文去重**)。
+
+    为什么需要去重(阶段 E / WS-07):
+
+    同一段文本可能被落两次 —— 工具开始前 ``flush_segment`` 落一次「工具前的分段」,
+    turn 收尾时又作为「最终正文」落一次。两份都留着的话,刷新回放时正文会
+    **重复出现一遍**。
+
+    去重范围刻意收得很窄:只比对**同一轮**里最近一条 assistant 记录。
+    不同轮次说同样的话(比如两次都回「好的」)必须都保留。
+    """
+    content = str(text or "").strip()
+    if not content:
+        return False
+
+    last_assistant: Optional[Dict[str, Any]] = None
+    for item in reversed(sess.history or []):
+        if isinstance(item, dict) and item.get("role") == "assistant":
+            last_assistant = item
+            break
+
+    if (
+        last_assistant is not None
+        and str(last_assistant.get("turn_id") or "") == str(turn_id or "")
+        and str(last_assistant.get("content") or "").strip() == content
+    ):
+        return False
+
+    sess.history.append({
+        "id": uuid.uuid4().hex[:12],
+        "role": "assistant",
+        "content": content,
+        "ts": ts if ts is not None else time.time(),
+        # 阶段 E:标来源 —— 前端据此决定这段文本是不是 MCode 的。
+        "source": turn_source,
+        "turn_id": turn_id,
+    })
+    return True
 
 
 def _serialize_lc_message(msg: BaseMessage) -> Dict[str, Any]:
@@ -1621,6 +1879,13 @@ class ChatSession:
         ]
         self.history: List[Dict[str, Any]] = []
 
+        # 阶段 E:执行过程 trace(**独立于 history**)。
+        # 过程事件(状态 / 工具 / 步骤)写这里,不写 history —— history 是「用户看到的
+        # 对话」,trace 是「这一轮机器干了什么」,两者语义不同、生命周期也不同。
+        # 有界:每轮 ≤ max_trace_events 条,总共只留最近 MCODE_TRACE_MAX_TURNS 轮。
+        self._mcode_trace: List[Dict[str, Any]] = []
+        self._mcode_trace_turn_counts: Dict[str, int] = {}
+
         self.load_media: Dict[str, MediaMeta] = {}
         self.pending_media_ids: List[str] = []
 
@@ -1878,6 +2143,9 @@ class ChatSession:
             "session_id": self.session_id,
             "lang": self.lang,
             "history": self._persist_history(),
+            # 阶段 E:trace 跟着会话状态一起落库(刷新后能重建执行过程面板)。
+            # 记录本身已经截断 + 脱敏过,这里再过一次 JSON 安全化。
+            "mcode_trace": _to_json_safe(self.mcode_trace_snapshot()),
             "chat_model_key": self.chat_model_key,
             "vlm_model_key": self.vlm_model_key,
             "load_media": self._serialize_load_media(),
@@ -2096,6 +2364,8 @@ class ChatSession:
             sess.lang = "zh"
 
         sess.history = list(data.get("history") or [])
+        # 阶段 E:恢复执行过程 trace(有界 + 脱敏后再用)。
+        sess.restore_mcode_trace(data.get("mcode_trace"))
         # 恢复出来的模型 key 必须**现在还能用**:
         #   - 不在可选列表里(配置变了) -> 回落到默认档位
         #   - 是内置模型但凭证是占位符/缺失 -> 回落到默认档位
@@ -2440,6 +2710,9 @@ class ChatSession:
             "developer_mode": self.developer_mode,
             "pending_media": self.public_pending_media(),
             "history": self.history,
+            # 阶段 E:执行过程 trace 单独一份 —— 前端刷新/重连后据此重建过程面板,
+            # **不会**把它当成普通 assistant 消息插进正文(WS-07)。
+            "mcode_trace": self.mcode_trace_snapshot(),
             "turn_running": self.chat_lock.locked(),
             "restore_degraded": bool(getattr(self, "restore_degraded", False)),
             "restore_degraded_reason": str(getattr(self, "restore_degraded_reason", "") or ""),
@@ -2558,6 +2831,10 @@ class ChatSession:
                 "progress": 0.0,
                 "message": "",
                 "summary": None,
+                # 阶段 E:标来源 —— 前端据此把 MCode 的工具卡片放进**执行过程面板**,
+                # 普通模型的工具卡片仍然留在聊天正文里(零回归)。
+                "source": "",
+                "turn_id": "",
                 "ts": time.time(),
             }
             self.history.append(rec)
@@ -2585,8 +2862,14 @@ class ChatSession:
         server = raw.get("server") or ""
         name = raw.get("name") or ""
         args = raw.get("args") or {}
+        source = str(raw.get("source") or "")
+        turn_id = str(raw.get("turn_id") or "")
 
         rec = self._ensure_tool_record(tcid, server, name, args)
+        if source:
+            rec["source"] = source
+        if turn_id:
+            rec["turn_id"] = turn_id
 
         if et == "tool_start":
             rec.update({
@@ -2629,6 +2912,132 @@ class ChatSession:
             })
 
         return rec
+
+    # ---- 阶段 E:有界执行过程 trace ------------------------------------
+    #
+    # 三条硬约束(设计文档 §9 T7):
+    #   1. **不进 history** —— trace 是独立的一份,history 仍然只装「用户看到的对话」。
+    #   2. **有界** —— 每轮 ≤ max_trace_events 条,单条摘要 ≤ max_event_text_chars 字符,
+    #      跨轮只留最近 MCODE_TRACE_MAX_TURNS 轮。
+    #   3. **写失败不能把成功的 turn 变成失败** —— 整个方法吞掉异常,只记日志。
+
+    def _mcode_trace_limits(self) -> tuple[int, int]:
+        """从配置里取 trace 的两个上限(取不到就用模块级默认值)。"""
+        max_events = MCODE_TRACE_MAX_EVENTS
+        max_chars = MCODE_TRACE_MAX_TEXT_CHARS
+        mcode_cfg = getattr(getattr(self, "cfg", None), "mcode", None)
+        if mcode_cfg is not None:
+            try:
+                max_events = int(getattr(mcode_cfg, "max_trace_events", max_events) or max_events)
+            except (TypeError, ValueError):
+                max_events = MCODE_TRACE_MAX_EVENTS
+            try:
+                max_chars = int(getattr(mcode_cfg, "max_event_text_chars", max_chars) or max_chars)
+            except (TypeError, ValueError):
+                max_chars = MCODE_TRACE_MAX_TEXT_CHARS
+        return max(1, max_events), max(1, max_chars)
+
+    @staticmethod
+    def _truncate_trace_text(text: Any, max_chars: int) -> str:
+        s = str(text or "")
+        if len(s) <= max_chars:
+            return s
+        return s[:max_chars] + f"...(截断,共 {len(s)} 字符)"
+
+    def _build_trace_record(self, raw: Dict[str, Any], max_chars: int) -> Dict[str, Any]:
+        """白名单 + 截断 + 脱敏,产出**可安全落盘**的一条 trace。"""
+        rec: Dict[str, Any] = {}
+        for key in MCODE_TRACE_FIELDS:
+            if key not in raw:
+                continue
+            val = raw[key]
+            if val is None:
+                continue
+            if key in ("message", "summary", "title"):
+                val = self._truncate_trace_text(val, max_chars)
+            rec[key] = val
+        # 脱敏放在截断**之后**:先截断再脱敏,免得密钥被切成两半后匹配不上规则。
+        masked = _mask_secrets_recursive(rec)
+        return masked if isinstance(masked, dict) else rec
+
+    def record_mcode_trace(self, raw: Dict[str, Any]) -> bool:
+        """记一条执行过程事件。
+
+        返回是否真的记下来了(超上限 / 写失败都会是 False)。
+        **绝不抛异常** —— trace 是附属品,写不进去不能影响主链路。
+        """
+        try:
+            if not isinstance(raw, dict) or not raw:
+                return False
+            max_events, max_chars = self._mcode_trace_limits()
+            turn_id = str(raw.get("turn_id") or "")
+            used = int(self._mcode_trace_turn_counts.get(turn_id, 0))
+            if used >= max_events:
+                return False
+            rec = self._build_trace_record(raw, max_chars)
+            if not rec:
+                return False
+            self._mcode_trace.append(rec)
+            self._mcode_trace_turn_counts[turn_id] = used + 1
+            self._prune_mcode_trace()
+            return True
+        except Exception as e:  # noqa: BLE001
+            logger.warning("写 mcode trace 失败(忽略,不影响本轮结果): %s", e)
+            return False
+
+    def _prune_mcode_trace(self) -> None:
+        """只保留最近 MCODE_TRACE_MAX_TURNS 轮。"""
+        try:
+            turn_ids: List[str] = []
+            for rec in self._mcode_trace:
+                tid = str(rec.get("turn_id") or "")
+                if tid and tid not in turn_ids:
+                    turn_ids.append(tid)
+            if len(turn_ids) <= MCODE_TRACE_MAX_TURNS:
+                return
+            keep = set(turn_ids[-MCODE_TRACE_MAX_TURNS:])
+            self._mcode_trace = [
+                rec for rec in self._mcode_trace
+                if str(rec.get("turn_id") or "") in keep
+            ]
+            self._mcode_trace_turn_counts = {
+                tid: cnt for tid, cnt in self._mcode_trace_turn_counts.items() if tid in keep
+            }
+        except Exception as e:  # noqa: BLE001
+            logger.warning("裁剪 mcode trace 失败(忽略): %s", e)
+
+    def mcode_trace_snapshot(self) -> List[Dict[str, Any]]:
+        """给前端 / 快照用的一份 trace 副本(前端只读)。"""
+        try:
+            return [dict(rec) for rec in self._mcode_trace]
+        except Exception:  # noqa: BLE001
+            return []
+
+    def restore_mcode_trace(self, records: Any) -> None:
+        """从会话状态里恢复 trace(刷新 / 重连后重建执行过程面板)。"""
+        try:
+            if not isinstance(records, list):
+                return
+            max_events, max_chars = self._mcode_trace_limits()
+            restored: List[Dict[str, Any]] = []
+            counts: Dict[str, int] = {}
+            for raw in records:
+                if not isinstance(raw, dict) or not raw:
+                    continue
+                turn_id = str(raw.get("turn_id") or "")
+                used = int(counts.get(turn_id, 0))
+                if used >= max_events:
+                    continue
+                rec = self._build_trace_record(raw, max_chars)
+                if not rec:
+                    continue
+                restored.append(rec)
+                counts[turn_id] = used + 1
+            self._mcode_trace = restored
+            self._mcode_trace_turn_counts = counts
+            self._prune_mcode_trace()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("恢复 mcode trace 失败(忽略): %s", e)
 
 
 class SessionStore:
@@ -4294,16 +4703,20 @@ async def ws_chat(ws: WebSocket, session_id: str):
                             nonlocal seg_text, seg_ts
 
                             if send_flush_event:
-                                await emit_turn_event("assistant.flush", {})
+                                await emit_turn_event("assistant.flush", {
+                                    "source": turn_source,
+                                    "turn_id": turn_id,
+                                })
 
                             text = (seg_text or "").strip()
                             if text:
-                                sess.history.append({
-                                    "id": uuid.uuid4().hex[:12],
-                                    "role": "assistant",
-                                    "content": text,
-                                    "ts": seg_ts or time.time(),
-                                })
+                                _append_assistant_history(
+                                    sess,
+                                    text,
+                                    turn_source=turn_source,
+                                    turn_id=turn_id,
+                                    ts=seg_ts or time.time(),
+                                )
 
                             seg_text = ""
                             seg_ts = None
@@ -4313,96 +4726,32 @@ async def ws_chat(ws: WebSocket, session_id: str):
 
                             工具事件走 ``sess.apply_tool_event`` —— 与普通模型链路
                             共用同一套工具卡片记账,前端不用为 mcode 写第二套。
+
+                            映射规则在模块级 ``_dispatch_mcode_internal`` 里
+                            (阶段 E 抽出来的,便于直接测出 WebSocket 事件时间线)。
                             """
                             nonlocal seg_text, seg_ts, mcode_final_text
-                            data = dict(getattr(internal, "data", {}) or {})
-                            kind_ = getattr(internal, "kind", "")
 
-                            if kind_ == KIND_TEXT:
-                                delta = data.get("delta") or ""
-                                if not delta:
-                                    return
+                            def _append_text(delta: str) -> None:
+                                # nonlocal 必须把 seg_text 也带上 ——
+                                # ``seg_text += delta`` 是**赋值**,只声明 seg_ts 的话
+                                # Python 会把 seg_text 当成本函数的局部变量 → UnboundLocalError。
+                                nonlocal seg_text, seg_ts
                                 if seg_ts is None:
                                     seg_ts = time.time()
                                 seg_text += delta
-                                await emit_turn_event("assistant.delta", data)
-                                return
 
-                            if kind_ == KIND_FINAL:
-                                # 最终正文以 exec.completed.result.output 为权威。
-                                mcode_final_text = str(data.get("text") or "")
-                                return
-
-                            if not trace_enabled:
-                                # 执行过程事件被关掉了 —— 文本与最终正文照发。
-                                return
-
-                            if kind_ == KIND_STATUS:
-                                await emit_turn_event("agent.status", data)
-                                return
-
-                            if kind_ == KIND_TOOL_START:
-                                await flush_segment(send_flush_event=True)
-                                rec = sess.apply_tool_event({
-                                    "type": "tool_start",
-                                    "tool_call_id": data.get("tool_call_id"),
-                                    "server": data.get("server"),
-                                    "name": data.get("name"),
-                                    "args": data.get("args") or {},
-                                })
-                                if rec:
-                                    await emit_turn_event("tool.start", {
-                                        "tool_call_id": rec["tool_call_id"],
-                                        "server": rec["server"],
-                                        "name": rec["name"],
-                                        "args": rec["args"],
-                                        "source": data.get("source"),
-                                        "seq": data.get("seq"),
-                                        "run_id": data.get("run_id"),
-                                    })
-                                return
-
-                            if kind_ == KIND_TOOL_PROGRESS:
-                                rec = sess.apply_tool_event({
-                                    "type": "tool_progress",
-                                    "tool_call_id": data.get("tool_call_id"),
-                                    "server": data.get("server"),
-                                    "name": data.get("name"),
-                                    "message": data.get("message") or "",
-                                })
-                                if rec:
-                                    await emit_turn_event("tool.progress", {
-                                        "tool_call_id": rec["tool_call_id"],
-                                        "server": rec["server"],
-                                        "name": rec["name"],
-                                        "progress": rec["progress"],
-                                        "message": rec["message"],
-                                        "source": data.get("source"),
-                                        "seq": data.get("seq"),
-                                    })
-                                return
-
-                            if kind_ == KIND_TOOL_END:
-                                rec = sess.apply_tool_event({
-                                    "type": "tool_end",
-                                    "tool_call_id": data.get("tool_call_id"),
-                                    "server": data.get("server"),
-                                    "name": data.get("name"),
-                                    "is_error": bool(data.get("is_error")),
-                                    # 工具输出摘要化之后还要脱敏 —— 摘要里也可能带密钥。
-                                    "summary": _mask_secrets_recursive(data.get("summary")),
-                                })
-                                if rec:
-                                    await emit_turn_event("tool.end", {
-                                        "tool_call_id": rec["tool_call_id"],
-                                        "server": rec["server"],
-                                        "name": rec["name"],
-                                        "is_error": rec["state"] == "error",
-                                        "summary": rec["summary"],
-                                        "source": data.get("source"),
-                                        "seq": data.get("seq"),
-                                    })
-                                return
+                            final = await _dispatch_mcode_internal(
+                                internal,
+                                sess=sess,
+                                turn_id=turn_id,
+                                trace_enabled=trace_enabled,
+                                emit=emit_turn_event,
+                                flush_segment=flush_segment,
+                                append_text=_append_text,
+                            )
+                            if final is not None:
+                                mcode_final_text = final
 
                         pump_task: Optional[asyncio.Task] = None
 
@@ -4646,16 +4995,19 @@ async def ws_chat(ws: WebSocket, session_id: str):
                                                 "name": rec["name"],
                                                 "is_error": True,
                                                 "summary": rec.get("summary"),
+                                                "source": turn_source,
+                                                "turn_id": turn_id,
                                             })
                                         # 1.3 把已输出的 seg_text 写入 history（UI 看到的内容）
                                         interrupted_text = (seg_text or "").strip()
                                         if interrupted_text:
-                                            sess.history.append({
-                                                "id": uuid.uuid4().hex[:12],
-                                                "role": "assistant",
-                                                "content": interrupted_text,
-                                                "ts": seg_ts or time.time(),
-                                            })
+                                            _append_assistant_history(
+                                                sess,
+                                                interrupted_text,
+                                                turn_source=turn_source,
+                                                turn_id=turn_id,
+                                                ts=seg_ts or time.time(),
+                                            )
 
                                         # 1.4 上下文：只写回“用户真实看到/认可”的消息序列
                                         cancelled_tool_ids = [rec["tool_call_id"] for rec in cancelled_tool_recs]
@@ -4674,7 +5026,12 @@ async def ws_chat(ws: WebSocket, session_id: str):
 
 
                                         # ★打断：只发 assistant.end，带 interrupted=true
-                                        await emit_turn_event("assistant.end", {"text": interrupted_text, "interrupted": True})
+                                        await emit_turn_event("assistant.end", {
+                                            "text": interrupted_text,
+                                            "interrupted": True,
+                                            "source": turn_source,
+                                            "turn_id": turn_id,
+                                        })
 
                                         await store.save_session_state(sess)
                                         sess.cancel_event.clear()
@@ -4704,7 +5061,13 @@ async def ws_chat(ws: WebSocket, session_id: str):
                                             if seg_ts is None:
                                                 seg_ts = time.time()
                                             seg_text += delta
-                                            await emit_turn_event("assistant.delta", {"delta": delta})
+                                            # 阶段 E:带上 source —— 前端据此校验
+                                            # 「这条增量是不是本轮来源的」。
+                                            await emit_turn_event("assistant.delta", {
+                                                "delta": delta,
+                                                "source": turn_source,
+                                                "turn_id": turn_id,
+                                            })
                                         continue
 
                                     if kind == "mcp":
@@ -4721,6 +5084,8 @@ async def ws_chat(ws: WebSocket, session_id: str):
                                                     "server": rec["server"],
                                                     "name": rec["name"],
                                                     "args": rec["args"],
+                                                    "source": turn_source,
+                                                    "turn_id": turn_id,
                                                 })
                                             elif raw["type"] == "tool_progress":
                                                 await emit_turn_event("tool.progress", {
@@ -4729,6 +5094,8 @@ async def ws_chat(ws: WebSocket, session_id: str):
                                                     "name": rec["name"],
                                                     "progress": rec["progress"],
                                                     "message": rec["message"],
+                                                    "source": turn_source,
+                                                    "turn_id": turn_id,
                                                 })
                                             elif raw["type"] == "tool_end":
                                                 await emit_turn_event("tool.end", {
@@ -4737,6 +5104,8 @@ async def ws_chat(ws: WebSocket, session_id: str):
                                                     "name": rec["name"],
                                                     "is_error": rec["state"] == "error",
                                                     "summary": rec["summary"],
+                                                    "source": turn_source,
+                                                    "turn_id": turn_id,
                                                 })
                                         continue
 
@@ -4749,12 +5118,13 @@ async def ws_chat(ws: WebSocket, session_id: str):
                                             final_text = (seg_text or "").strip()
 
                                         if final_text:
-                                            sess.history.append({
-                                                "id": uuid.uuid4().hex[:12],
-                                                "role": "assistant",
-                                                "content": final_text,
-                                                "ts": seg_ts or time.time(),
-                                            })
+                                            _append_assistant_history(
+                                                sess,
+                                                final_text,
+                                                turn_source=turn_source,
+                                                turn_id=turn_id,
+                                                ts=seg_ts or time.time(),
+                                            )
 
                                         if new_messages:
                                             sess.lc_messages.extend(new_messages)
@@ -4762,6 +5132,7 @@ async def ws_chat(ws: WebSocket, session_id: str):
                                         await emit_turn_event("assistant.end", {
                                             "text": final_text,
                                             "source": turn_source,
+                                            "turn_id": turn_id,
                                         })
                                         await store.save_session_state(sess)
                                         break
@@ -4772,12 +5143,13 @@ async def ws_chat(ws: WebSocket, session_id: str):
 
                                         # 把已输出部分落盘/落上下文（避免丢上下文）
                                         if partial:
-                                            sess.history.append({
-                                                "id": uuid.uuid4().hex[:12],
-                                                "role": "assistant",
-                                                "content": partial,
-                                                "ts": seg_ts or time.time(),
-                                            })
+                                            _append_assistant_history(
+                                                sess,
+                                                partial,
+                                                turn_source=turn_source,
+                                                turn_id=turn_id,
+                                                ts=seg_ts or time.time(),
+                                            )
                                             sess.lc_messages.append(AIMessage(content=partial))
 
                                         if new_messages:
@@ -4788,6 +5160,7 @@ async def ws_chat(ws: WebSocket, session_id: str):
                                             "message": err_text,
                                             "partial_text": partial,
                                             "source": turn_source,
+                                            "turn_id": turn_id,
                                         })
                                         await store.save_session_state(sess)
                                         break
@@ -4801,7 +5174,12 @@ async def ws_chat(ws: WebSocket, session_id: str):
                             # 如果已经走了打断收尾，别再发 error（避免“打断=报错”）
                             if was_interrupted:
                                 return
-                            await emit_turn_event("error", {"message": f"{type(e).__name__}: {e}", "partial_text": (seg_text or "").strip()})
+                            await emit_turn_event("error", {
+                                "message": f"{type(e).__name__}: {e}",
+                                "partial_text": (seg_text or "").strip(),
+                                "source": turn_source,
+                                "turn_id": turn_id,
+                            })
                             logger.error(_format_exc(e))
                             return
                         finally:

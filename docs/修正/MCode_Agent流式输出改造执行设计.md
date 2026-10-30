@@ -1064,22 +1064,76 @@ CLI 报 `too many arguments for 'exec'. Expected 1 argument but got N`。
 
 **回滚点**：关闭 `source=mcode` 事件注册开关，退回旧 `json` 路径。
 
-### 阶段 E —— 前端执行过程面板与全量验收（未执行）
+### 阶段 E —— 前端执行过程面板与全量验收 ✅ 已执行
 
 **目标**：过程与正文分离展示，并完成回归。
 
-- E-1 `app.js` 的 `onEvent` 分发器新增 `agent.status` / `agent.step` 分支；`assistant.delta` 校验 `source` 与当前 turn 一致；按 `run_id + seq` 去重与排序。
-- E-2 `style.css`：执行过程面板样式（可折叠、默认展开、来源标识「MCode Agent」）。
-- E-3 工具卡片复用 `upsertToolCard()`，补 `source` 字段。
-- E-4 trace 有界记录：每轮 ≤ 300 条、单条摘要 ≤ 2000 字符、写入前脱敏；**不写进 `sess.history`**；trace 写失败不得把成功的 turn 改成失败。
-- E-5 回归：普通 DeepSeek 分支零回归。
-- E-6 人工验收：产出 CLI 版本 + fixture + 测试结果 + WebSocket 事件时间线四件套证据。
+| 编号 | 任务 | 状态 |
+|---|---|---|
+| E-1 | `app.js` 的 `onEvent` 分发器新增 `agent.status` / `agent.step` 分支；`assistant.delta` 校验 `source` 与当前 turn 一致；按 `run_id + seq` 去重与排序 | ✅ |
+| E-2 | `style.css`：执行过程面板样式（可折叠、默认展开、来源标识「MCode Agent」） | ✅ |
+| E-3 | 工具卡片复用 `upsertToolCard()`，补 `source` 字段 | ✅ |
+| E-4 | trace 有界记录：每轮 ≤ 300 条、单条摘要 ≤ 2000 字符、写入前脱敏；**不写进 `sess.history`**；trace 写失败不得把成功的 turn 改成失败 | ✅ |
+| E-5 | 回归：`pytest openstoryline/tests`（显式目录）；普通 DeepSeek 分支零回归 | ✅ |
+| E-6 | 人工验收：产出 CLI 版本 + fixture + 测试结果 + WebSocket 事件时间线四件套证据 | ✅ |
 
-**验收**：WS-01…WS-07 全绿；UT/SRC 全绿；普通模型无回归。
-**回滚点**：前端面板可单独回滚，保留已验证的 Parser。
+**产出物**
+
+- `openstoryline/web/static/mcode_panel.mjs`（新增）：前端**纯策略层** —— 来源校验、
+  `run_id + seq` 闸门、事件路由（`routeEvent`）、面板模型（实时流与恢复共用同一份）；
+- `openstoryline/web/static/app.js`：
+  - `ChatUI.ensureMcodePanel()` / `updateMcodePanel()`（执行过程面板）；
+  - `upsertToolCard()` 支持指定容器（面板内 / 聊天正文）与 `source` 字段；
+  - `onWsEvent()` 按 `routeEvent()` 分发；`assistant.delta` 过三道闸门；
+  - 快照回放时按 `source` 把 MCode 的工具卡片放进**面板**，普通模型的照旧留在正文；
+- `openstoryline/web/static/style.css`：`.mcode-panel` / `.mcode-step` / `.mcode-tools` /
+  `.tool-source` 样式；
+- `openstoryline/agent_fastapi.py`：
+  - `_dispatch_mcode_internal()`（**从端点闭包抽出来的模块级函数**）：内部事件 → WebSocket 事件 + trace 落盘；
+  - `ChatSession.record_mcode_trace()` / `mcode_trace_snapshot()` / `restore_mcode_trace()`；
+  - `_append_assistant_history()`：同一轮内同文的 assistant 记录去重；
+  - `snapshot()` / `dump_state()` / `load_from_state()` 带上 `mcode_trace`；
+  - 工具历史记录补 `source` / `turn_id`；各 WebSocket 事件补 `source` / `turn_id` / `run_id`；
+- `openstoryline/web/tests/mcode_panel.test.mjs`（新增）：前端纯逻辑单测（18 条）；
+- `openstoryline/tests/test_mcode_ws_events.py`（新增）：WS-01…WS-07（跑真链路）；
+- `openstoryline/tests/test_mcode_ws_e2e.py`（新增）：**端到端**——真连
+  `/ws/sessions/{id}/chat`、真发 `chat.send`、真收 WebSocket 帧（4 条）；
+- `openstoryline/tests/test_mcode_trace.py`（新增）：E-4 的六条约束；
+- `openstoryline/tests/test_mcode_frontend_policy.py`（新增）：把 Node 单测包进 pytest；
+- `openstoryline/tests/fixtures/mcode_stream/ws_timeline_mcode.jsonl`（新增）：WS 事件时间线证据；
+- `docs/修正/MCode_Agent流式输出改造_阶段E执行记录.md`（新增）：执行记录与验收证据。
+
+**关键实现说明**
+
+- 路由规则**只有一份**：写在 `mcode_panel.mjs` 的 `routeEvent()` 里，`app.js` 按它分发、
+  单测按它断言 —— 不会出现「测的是一份、跑的是另一份」。
+- 过程与正文严格分离：`assistant.delta` → 助手气泡；`agent.status` / `agent.step` /
+  `tool.*` → 执行过程面板。MCode 的工具卡片**在面板里**，普通模型的**仍在正文里**。
+- 实时流与刷新恢复走**同一个模型**：实时是 `applyEventToPanelModel()` 逐条喂，
+  恢复是 `buildPanelModel(trace)` 一次性重建 ⇒ 两边长得一样。
+- trace 与 `history` 分开：trace 只装过程事件、**不含答复正文**，字段走白名单、
+  写入前脱敏、每轮 ≤ 300 条、单条 ≤ 2000 字符、跨轮只留最近 5 轮；
+  **写失败只记日志**，不把成功的 turn 变成失败。
+- 顺手修掉一个重复：同一轮里同一段文本曾被落进 `history` 两次（工具前分段 + 最终正文），
+  刷新回放会看到同一句话两遍 —— 现在按「同轮 + 同文」去重（WS-07 要防的正是这件事）。
+- 补了一层**端到端**用例（真连 WebSocket 端点跑完整一轮）：映射逻辑从端点闭包里抽出来之后，
+  闭包里的 `nonlocal` 写漏了变量也不会被模块级单测发现 —— 端到端用例就是那道防线。
+
+**验收**
+
+- WS-01…WS-07 全绿 ✅
+- UT/SRC 全绿 ✅（`pytest openstoryline/tests` 220 条全绿；根 `tests/` 全绿；Node 18 条全绿）
+- 普通模型无回归 ✅
+- 四件套证据齐全 ✅（CLI 版本 / 脱敏 fixture / 测试结果 / WS 事件时间线）
+
+**回滚点**：前端面板可单独回滚 —— 只回滚 `app.js` / `style.css` / `mcode_panel.mjs`，
+保留已验证的 Parser / Runner / 适配器；要彻底关掉过程事件，改
+`[mcode] show_execution_trace = false` 即可。
+
+**执行记录**：`docs/修正/MCode_Agent流式输出改造_阶段E执行记录.md`
 
 ### 阶段门禁
 
-- **不得倒置**：先确认真实协议（A）→ 实现数据源（B、C）→ 再做接线（D）与前端（E）。
+- **不得倒置**：先确认真实协议(A)→ 实现数据源(B、C)→ 再做接线(D)与前端(E)。
 - **每阶段结束必须**：测试全绿 + 产出物落盘 + 回滚步骤可执行。
-- 阶段 A、B、C、D 已完成并满足上述条件；E 尚未开始。
+- 阶段 A、B、C、D、E 已全部完成并满足上述条件。
