@@ -228,6 +228,7 @@ async def _build_mcode_agent(
     session_id: str,
     store: ArtifactStore,
     model_name: str,
+    event_sink_provider: Optional[Any] = None,
 ):
     """mcode 分支:用 ``mcode exec`` 子进程当模型。
 
@@ -238,6 +239,10 @@ async def _build_mcode_agent(
       mcode 用不了。
     - llm 与 vlm 用**同一个** ``MCodeChatModel`` 实例 —— mcode 不区分多模态,
       素材由服务端生成并校验过的清单承担。
+
+    ``event_sink_provider``:本轮 MCode 事件通道的 provider(阶段 D)。
+    agent 按 session 缓存,每轮 turn 的 sink 都不同,所以传的是
+    「取当前 sink」的函数,不是固定回调。
     """
     cwd = _validate_mcode_cwd(cfg.mcode.cwd)
     mode = _resolve_mcode_mode(model_name, cfg.mcode.mode)
@@ -265,6 +270,8 @@ async def _build_mcode_agent(
         session_id=session_id,
         media_dir=str(media_dir),
         media_manifest=manifest,
+        streaming_transport=cfg.mcode.streaming_transport,
+        event_sink_provider=event_sink_provider,
     )
     vlm = llm  # mcode 不区分多模态:同一个实例
 
@@ -287,6 +294,7 @@ async def build_agent(
     *,
     llm_override: Optional[dict] = None,
     vlm_override: Optional[dict] = None,
+    mcode_event_sink_provider: Optional[Any] = None,
 ):
     def _get(override: Optional[dict], key: str, default: Any) -> Any:
         return (override.get(key) if isinstance(override, dict) and key in override else default)
@@ -308,7 +316,13 @@ async def build_agent(
     # 判定只看**调用方显式传入**的 llm_override["model"] —— 网页端模型下拉
     # 选 mcode 档位时会传 {"model": "mcode-operator"} / {"model": "mcode-chat"}。
     if is_mcode_model(_get(llm_override, "model", "")):
-        return await _build_mcode_agent(cfg, session_id, store, str(llm_override.get("model") or ""))
+        return await _build_mcode_agent(
+            cfg,
+            session_id,
+            store,
+            str(llm_override.get("model") or ""),
+            event_sink_provider=mcode_event_sink_provider,
+        )
 
     # Validate LLM API key before creating the model
     await validate_api_key(llm_base_url, llm_api_key, llm_model, "LLM", llm_timeout)

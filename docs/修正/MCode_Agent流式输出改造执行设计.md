@@ -980,30 +980,88 @@ CLI 报 `too many arguments for 'exec'. Expected 1 argument but got N`。
 
 **回滚点**：新文件未被主链路引用，删除即回滚。
 
-### 阶段 C —— `MCodeChatModel` 真正流式化（未执行）
+### 阶段 C —— `MCodeChatModel` 真正流式化 ✅ 已执行
 
 **目标**：模型层能按增量吐出文本，且不破坏既有调用方式。
 
-- C-1 `mcode_chat_model.py` 的 `--output-format json` 改为按 `streaming_transport` 取值（`stream_json` / `final_json`）。
-- C-2 实现 `_astream()`：消费 Runner 事件，`agent_message.contentDelta` → `AIMessageChunk(content=delta)`；`reasoning` **不**转 `AIMessageChunk`。
-- C-3 保留 `_generate()` / `_agenerate()` 原路径。
-- C-4 事件回调注入通道：加一个 **sink provider** 字段（不写死在实例上）—— agent 按 session 缓存，每 turn 必须能换 sink。
-- C-5 能力检测：启动前探测 CLI 是否支持 `stream-json`；不支持则降级 `final_json` 并发降级状态。
+| 编号 | 任务 | 状态 |
+|---|---|---|
+| C-1 | `mcode_chat_model.py` 的 `--output-format json` 改为按 `streaming_transport` 取值（`stream_json` / `final_json`） | ✅ |
+| C-2 | 实现 `_astream()`：消费 Runner 事件，`agent_message.contentDelta` → `AIMessageChunk(content=delta)`；`reasoning` **不**转 `AIMessageChunk` | ✅ |
+| C-3 | 保留 `_generate()` / `_agenerate()` 原路径 | ✅ |
+| C-4 | 事件回调注入通道：加一个 **sink provider** 字段（不写死在实例上）—— agent 按 session 缓存，每 turn 必须能换 sink | ✅ |
+| C-5 | 能力检测：启动前探测 CLI 是否支持 `stream-json`；不支持则降级 `final_json` 并发降级状态 | ✅ |
 
-**验收**：UT-03/UT-04 全绿；「首段 `assistant.delta` 早于 CLI 进程退出」用例通过。
+**产出物**
+
+- `openstoryline/src/open_storyline/mcode_chat_model.py`：新增 `_astream()` / `_astream_stream_json()` /
+  `_astream_final_json()` / `_resolve_transport()` / `_probe_stream_json_support()` /
+  `_resolve_event_sink()` / `_emit_event()`；新增字段 `streaming_transport` 与 `event_sink_provider`
+- `openstoryline/src/open_storyline/config.py`：`MCodeConfig` 新增 `streaming_transport` /
+  `show_execution_trace` / `max_trace_events` / `max_event_text_chars`（**合并进既有配置对象**，未新建重复配置）
+- `openstoryline/config.toml`：`[mcode]` 段补齐上述四个键
+- `openstoryline/tests/test_mcode_streaming.py`：19 条用例
+
+**关键实现说明**
+
+- LangGraph 的 model node 走 `ainvoke`，但只要 `run_manager` 上挂着 `_StreamingCallbackHandler`
+  （LangGraph 的 messages 流就是它），LangChain 会自动改走 `_astream` ——
+  因此**实现 `_astream()` 就够了**，现有 `agent.astream(..., stream_mode=["messages"])` 自动拿到增量。
+- `_generate()` / `_agenerate()` 的命令行**仍是 `--output-format json`**，普通 `invoke` / `ainvoke` 零回归。
+- 降级路径 `_astream_final_json()` 退回 `_agenerate()` 并只吐一个 chunk，
+  同时 `transport_degraded` 置位 —— 降级是**显式**的，不是静默的。
+
+**验收**
+
+- UT-03 全绿：多次增量按顺序产出 ✅
+- UT-04 全绿：最终结果与增量并存 —— 不重复（`甲`+`乙` 只发一次）、不丢字（漏掉的尾段补齐）✅
+- UT-05 全绿：`reasoning` 原文既不进 chunk，也不进事件通道 ✅
+- 「首段 `assistant.delta` 早于 CLI 进程退出」用例通过 ✅（首段 <1.5s，进程本身跑 2s）
+- 能力探测：CLI 不支持 `stream-json` 时自动降级并留痕 ✅
+
 **回滚点**：`streaming_transport = "final_json"` 一行回滚。
 
-### 阶段 D —— 来源隔离与 WebSocket 接线（未执行）
+### 阶段 D —— 来源隔离与 WebSocket 接线 ✅ 已执行
 
 **目标**：MCode 事件进同一个 `out_q`，且**绝不**与普通模型混淆。
 
-- D-1 服务端判定 `turn_source`：用 `_resolve_mcode_tier()` + `is_mcode_model()`，以**服务端会话配置**为准，不信任浏览器传参。
-- D-2 `out_q` 新增 `kind = "mcode.event"`；主循环新增分支：文本 → `assistant.delta`（带 `source`/`run_id`/`seq`）；状态 → `agent.status`；工具 → `tool.start`/`tool.progress`/`tool.end`（`server="MCode Agent"`）。
-- D-3 **MCode turn 抑制 LangGraph 通用 delta**，避免同一份文本双发。
-- D-4 工具事件适配器：按 §3.1.6 的 status 枚举表驱动 start/progress/end；工具输出摘要化 + 长度截断。
-- D-5 收口：`exec.completed.result.output` 作为 `assistant.end.text`。
+| 编号 | 任务 | 状态 |
+|---|---|---|
+| D-1 | 服务端判定 `turn_source`：用 `_resolve_mcode_tier()` + `is_mcode_model()`，以**服务端会话配置**为准，不信任浏览器传参 | ✅ |
+| D-2 | `out_q` 新增 `kind = "mcode.event"`；主循环新增分支：文本 → `assistant.delta`（带 `source`/`run_id`/`seq`）；状态 → `agent.status`；工具 → `tool.start`/`tool.progress`/`tool.end`（`server="MCode Agent"`） | ✅ |
+| D-3 | **MCode turn 抑制 LangGraph 通用 delta**，避免同一份文本双发 | ✅ |
+| D-4 | 工具事件适配器：按 §3.1.6 的 status 枚举表驱动 start/progress/end；工具输出摘要化 + 长度截断 | ✅ |
+| D-5 | 收口：`exec.completed.result.output` 作为 `assistant.end.text` | ✅ |
 
-**验收**：SRC-01…SRC-07 全绿；MCode turn 内 LangGraph 发出的 model chunk **不**被 WebSocket 重复转发。
+**产出物**
+
+- `openstoryline/src/open_storyline/mcode_event_adapter.py`（新增）：`MCodeEventAdapter` +
+  `MCodeInternalEvent` + 工具摘要化工具函数；状态/阶段枚举与 §7.2 对齐
+- `openstoryline/agent_fastapi.py`：
+  - `_resolve_turn_source()` / `_should_forward_langgraph_text()` / `_make_mcode_adapter()` 三个判定函数；
+  - `ChatSession.mcode_sink_provider()`（每轮可换的 sink provider）；
+  - `ensure_agent()` 把 provider 透传给 `build_agent()` → `MCodeChatModel`；
+  - WS 主循环新增 `mcode.event` 分支与 `_handle_mcode_internal()`；
+  - `assistant.start` / `assistant.end` / `error` 带上 `source` 与 `turn_id`
+- `openstoryline/src/open_storyline/agent.py`：`build_agent()` 新增 `mcode_event_sink_provider` 参数并透传
+- `openstoryline/tests/test_mcode_source_isolation.py`：25 条用例（SRC-01…SRC-07 + 适配器细节）
+
+**关键实现说明**
+
+- 来源隔离落在 **WebSocket 层**：MCode turn 的浏览器文本**只**来自 `mcode.event` 通道，
+  LangGraph `messages` 通道的同一份 chunk 在 `pump_agent()` 里被 `continue` 掉。
+  两条通道拿到的是同一份文本 —— 集成用例已验证。
+- 工具事件复用既有 `sess.apply_tool_event()` 记账，与普通模型链路共用同一套工具卡片，
+  前端不需要为 mcode 写第二套。工具输出**摘要化 + 截断 + 脱敏**后才出浏览器。
+- `show_execution_trace` 只控制**过程事件**（状态 / 工具卡片）；文本增量与最终正文不受它影响。
+- 每轮结束在 `finally` 里注销 `sess._mcode_event_sink`，避免下一轮拿到上一轮的 sink。
+
+**验收**
+
+- SRC-01…SRC-07 全绿 ✅
+- MCode turn 内 LangGraph 发出的 model chunk **不**被 WebSocket 重复转发 ✅
+- 普通模型链路零回归：`_resolve_turn_source` 判定为 `llm`、不建适配器、不注册事件通道 ✅
+
 **回滚点**：关闭 `source=mcode` 事件注册开关，退回旧 `json` 路径。
 
 ### 阶段 E —— 前端执行过程面板与全量验收（未执行）
@@ -1024,4 +1082,4 @@ CLI 报 `too many arguments for 'exec'. Expected 1 argument but got N`。
 
 - **不得倒置**：先确认真实协议（A）→ 实现数据源（B、C）→ 再做接线（D）与前端（E）。
 - **每阶段结束必须**：测试全绿 + 产出物落盘 + 回滚步骤可执行。
-- 阶段 A、B 已完成并满足上述条件；C、D、E 尚未开始。
+- 阶段 A、B、C、D 已完成并满足上述条件；E 尚未开始。

@@ -269,6 +269,12 @@ class MCodeConfig(ConfigBaseModel):
       history_turns  拼 prompt 时保留的完整对话轮次上限
       max_prompt_chars 拼 prompt 的字符上限
       media_root     素材白名单根;空 = 从 AUTO_VIDEO_EDITOR_DIR 推导
+      streaming_transport 流式传输方式。auto = 探测 CLI 是否支持 stream-json,
+                        不支持就降级 final_json;stream_json = 强制走实时事件流;
+                        final_json = 强制退回旧的整段 JSON(回滚开关)
+      show_execution_trace 是否把 MCode 执行过程事件推给前端(阶段 D 事件注册开关)
+      max_trace_events 单轮最多转发多少条过程事件(防高频输出打爆内存)
+      max_event_text_chars 单条事件文本最多保留多少字符(工具输出摘要化后还要再截)
     """
 
     cwd: str = ""
@@ -280,6 +286,12 @@ class MCodeConfig(ConfigBaseModel):
     history_turns: int = 10
     max_prompt_chars: int = 60000
     media_root: str = ""
+
+    # -- 流式传输(阶段 C / D)----------------------------------------------
+    streaming_transport: Literal["auto", "stream_json", "final_json"] = "auto"
+    show_execution_trace: bool = True
+    max_trace_events: int = 300
+    max_event_text_chars: int = 2000
 
 
 class Settings(ConfigBaseModel):

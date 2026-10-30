@@ -50,7 +50,23 @@ if spec_path and os.path.isfile(spec_path):
     with open(spec_path, "r", encoding="utf-8") as fh:
         spec = json.load(fh)
 
-data = sys.stdin.read()
+# 必须按 **UTF-8** 解码:生产侧(MCodeChatModel / MCodeRunner)写 stdin 用的是
+# ``prompt.encode("utf-8")``。这里若用 ``sys.stdin.read()``,Python 会按系统
+# locale 编码解码(本机 Windows 是 GBK/cp936),中文会被解成乱码甚至孤立代理字符,
+# 后续 json.dump 直接炸 UnicodeEncodeError —— 那是**测试夹具**的锅,不是被测代码的。
+data = sys.stdin.buffer.read().decode("utf-8", errors="replace")
+
+
+def emit(text):
+    """stdout 也必须按 **UTF-8** 写。
+
+    父进程(MCodeChatModel / MCodeRunner)用 ``decode("utf-8")`` 读子进程输出,
+    而子进程 ``sys.stdout`` 默认是系统 locale 编码(本机 Windows 是 GBK)——
+    两边不一致就会把中文变成乱码。stdout / stdin 的编码必须对齐。
+    """
+    sys.stdout.buffer.write(text.encode("utf-8"))
+    sys.stdout.buffer.flush()
+
 
 child_pid = None
 if spec.get("spawn_child"):
@@ -91,12 +107,11 @@ if delay:
     time.sleep(delay)
 
 if spec.get("raw") is not None:
-    sys.stdout.write(spec["raw"])
+    emit(spec["raw"])
 elif spec.get("result") is not None:
-    sys.stdout.write(json.dumps(spec["result"], ensure_ascii=False))
+    emit(json.dumps(spec["result"], ensure_ascii=False))
 else:
-    sys.stdout.write(json.dumps({"type": "exec.result", "status": "succeeded", "output": "OK"}))
-sys.stdout.flush()
+    emit(json.dumps({"type": "exec.result", "status": "succeeded", "output": "OK"}))
 
 exit_code = spec.get("exit_code")
 if exit_code:
@@ -220,3 +235,217 @@ def tmp_media_root(tmp_path):
     root = tmp_path / "inputs"
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+# --------------------------------------------------------------------------
+# 假 mcode CLI(会说 stream-json 的那种)
+# --------------------------------------------------------------------------
+
+#: 会说 ``stream-json`` 的假 CLI。
+#:
+#: 和上面的 ``fake_mcode_cli`` 的区别:
+#:
+#: * 按 ``--output-format`` 决定输出形态 —— ``json`` 吐一整段结果(旧路径),
+#:   ``stream-json`` 吐 NDJSON 事件流(阶段 C 的流式路径);
+#: * 支持 ``exec --help`` 能力探测(用来测「CLI 不支持 stream-json 就降级」);
+#: * 能控制首段增量与后续增量之间的停顿(测「首段早于进程退出」)。
+_FAKE_STREAM_CLI_PY = r'''
+import json, os, sys, time
+
+# spec / record 的路径由**脚本自身所在目录**决定,不用环境变量。
+# 环境变量是全局的 —— 两个并发的假 CLI 会互相覆盖对方的 spec,
+# 那样测出来的「隔离」是假的。
+_here = os.path.dirname(os.path.abspath(__file__))
+
+spec = {}
+spec_path = os.path.join(_here, "spec.json")
+if os.path.isfile(spec_path):
+    with open(spec_path, "r", encoding="utf-8") as fh:
+        spec = json.load(fh)
+
+
+def emit(text):
+    """stdout 一律按 UTF-8 写(父进程用 UTF-8 解)。"""
+    sys.stdout.buffer.write(text.encode("utf-8"))
+    sys.stdout.buffer.flush()
+
+
+argv = sys.argv[1:]
+
+# ---- 能力探测:<bin> exec --help ----
+if "--help" in argv:
+    if spec.get("help_text") is not None:
+        emit(spec["help_text"])
+    elif spec.get("supports_stream_json", True):
+        emit("--output-format <format>  output format: text, json, or stream-json\n")
+    else:
+        emit("--output-format <format>  output format: text, json\n")
+    sys.exit(0)
+
+data = sys.stdin.buffer.read().decode("utf-8", errors="replace")
+
+record_path = os.path.join(_here, "record.json")
+with open(record_path, "w", encoding="utf-8") as fh:
+    json.dump(
+        {"argv": argv, "stdin": data, "pid": os.getpid()},
+        fh,
+        ensure_ascii=False,
+    )
+
+output_format = "json"
+if "--output-format" in argv:
+    idx = argv.index("--output-format")
+    if idx + 1 < len(argv):
+        output_format = argv[idx + 1]
+
+deltas = spec.get("deltas")
+if deltas is None:
+    deltas = [spec.get("first_delta", "第一段"), "第二段"]
+
+final_output = spec.get("final_output")
+if final_output is None:
+    final_output = "".join(deltas)
+
+if output_format != "stream-json":
+    # 旧路径:一整段结果 JSON。
+    if spec.get("fail_hard"):
+        # 模拟「CLI 跑挂了」:什么都不输出,直接非零退出。
+        sys.exit(int(spec.get("exit_code") or 1))
+    emit(json.dumps({
+        "type": "exec.result",
+        "status": "succeeded",
+        "output": final_output,
+    }, ensure_ascii=False))
+    exit_code = spec.get("exit_code")
+    sys.exit(int(exit_code) if exit_code else 0)
+
+
+def event(seq, event_type, **extra):
+    obj = {
+        "schemaVersion": 1,
+        "sequence": seq,
+        "timestampMs": 1700000000000 + seq,
+        "runId": spec.get("run_id", "run-1"),
+        "sessionId": spec.get("session_id", "sess-1"),
+        "turnId": spec.get("turn_id", "turn-1"),
+        "type": event_type,
+    }
+    obj.update(extra)
+    emit(json.dumps(obj, ensure_ascii=False) + "\n")
+
+
+seq = 1
+if spec.get("fail_hard"):
+    # 模拟「CLI 跑挂了」:一个事件都不吐,直接非零退出。
+    sys.exit(int(spec.get("exit_code") or 1))
+
+event(seq, "exec.started"); seq += 1
+event(seq, "session.started"); seq += 1
+event(seq, "turn.started"); seq += 1
+
+if spec.get("include_reasoning"):
+    # 隐藏思维链:整条都不该进 chunk。
+    event(seq, "item.started", item={
+        "id": "u1:reasoning", "type": "reasoning",
+        "contentDelta": spec.get("reasoning_text", "内部思维链原文"),
+    }); seq += 1
+
+for i, delta in enumerate(deltas):
+    etype = "item.started" if i == 0 else "item.updated"
+    event(seq, etype, item={
+        "id": "u1:message", "type": "agent_message", "contentDelta": delta,
+    }); seq += 1
+    if i == 0 and spec.get("hold_s"):
+        time.sleep(float(spec["hold_s"]))
+
+event(seq, "exec.completed", result={
+    "schemaVersion": 1, "type": "exec.result", "status": "succeeded",
+    "output": final_output,
+})
+
+exit_code = spec.get("exit_code")
+if exit_code:
+    sys.exit(int(exit_code))
+'''
+
+
+@pytest.fixture
+def fake_mcode_stream_cli(tmp_path, monkeypatch):
+    """假 mcode CLI 工厂(会吐 ``stream-json`` 事件流)。
+
+    用法::
+
+        cli = fake_mcode_stream_cli(deltas=["甲", "乙"], hold_s=1.0)
+        model = MCodeChatModel(cwd=str(tmp_path), mcode_bin=cli.path,
+                                streaming_transport="stream_json")
+
+    参数:
+      deltas               agent_message 的增量列表(默认 ``["第一段", "第二段"]``)
+      hold_s               首段增量之后的停顿秒数(用来测「首段早于进程退出」)
+      final_output         ``exec.completed.result.output``;不给就是 deltas 拼接
+      include_reasoning    是否额外吐一条 reasoning 事件
+      supports_stream_json 能力探测时 ``--help`` 里是否出现 stream-json
+      exit_code            退出码
+    """
+    counter = {"n": 0}
+
+    def make(
+        *,
+        deltas: Optional[List[str]] = None,
+        first_delta: str = "第一段",
+        hold_s: float = 0.0,
+        final_output: Optional[str] = None,
+        include_reasoning: bool = False,
+        reasoning_text: str = "内部思维链原文",
+        supports_stream_json: bool = True,
+        help_text: Optional[str] = None,
+        exit_code: Optional[int] = None,
+        fail_hard: bool = False,
+        run_id: str = "run-1",
+        session_id: str = "sess-1",
+        turn_id: str = "turn-1",
+    ) -> SimpleNamespace:
+        counter["n"] += 1
+        work = tmp_path / f"fake_stream_{counter['n']}"
+        work.mkdir()
+
+        spec: Dict[str, Any] = {
+            "deltas": deltas,
+            "first_delta": first_delta,
+            "hold_s": hold_s,
+            "final_output": final_output,
+            "include_reasoning": include_reasoning,
+            "reasoning_text": reasoning_text,
+            "supports_stream_json": supports_stream_json,
+            "help_text": help_text,
+            "exit_code": exit_code,
+            "fail_hard": fail_hard,
+            "run_id": run_id,
+            "session_id": session_id,
+            "turn_id": turn_id,
+        }
+        spec_path = work / "spec.json"
+        spec_path.write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+        record_path = work / "record.json"
+
+        script_path = work / "fake_stream.py"
+        script_path.write_text(_FAKE_STREAM_CLI_PY, encoding="utf-8")
+
+        if os.name == "nt":
+            cli_path = work / "fake_stream.cmd"
+            cli_path.write_text(
+                "@echo off\r\n"
+                f'"{sys.executable}" "{script_path}" %*\r\n',
+                encoding="ascii",
+            )
+        else:
+            cli_path = script_path
+            script_path.write_text(
+                "#!/usr/bin/env python3\n" + _FAKE_STREAM_CLI_PY, encoding="utf-8"
+            )
+            cli_path.chmod(cli_path.stat().st_mode | stat.S_IEXEC)
+
+        # 注意:spec / record 不用环境变量传(环境变量是全局的,并发时会串台)。
+        # 假 CLI 按自身脚本所在目录定位这两个文件。
+        return SimpleNamespace(path=str(cli_path), record_path=record_path, spec_path=spec_path)
+    return make

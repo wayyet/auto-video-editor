@@ -45,7 +45,18 @@ if spec_path and os.path.isfile(spec_path):
     with open(spec_path, "r", encoding="utf-8") as fh:
         spec = json.load(fh)
 
-data = sys.stdin.read()
+data = sys.stdin.buffer.read().decode("utf-8", errors="replace")
+
+
+def emit_line(text):
+    """stdout 按 **UTF-8** 写。
+
+    父进程用 ``decode("utf-8")`` 读子进程输出,子进程 ``sys.stdout`` 默认却是
+    系统 locale 编码(本机 Windows 是 GBK)—— 两边不一致中文就成乱码。
+    """
+    sys.stdout.buffer.write(text.encode("utf-8"))
+    sys.stdout.buffer.flush()
+
 
 child_pid = None
 if spec.get("spawn_child"):
@@ -76,14 +87,12 @@ def emit(seq, event_type, **extra):
     obj = {"schemaVersion":1,"sequence":seq,"timestampMs":1700000000000+seq,
            "runId":"run-1","sessionId":"sess-1","turnId":"turn-1","type":event_type}
     obj.update(extra)
-    sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
-    sys.stdout.flush()
+    emit_line(json.dumps(obj, ensure_ascii=False) + "\n")
 
 if spec.get("bad_schema"):
     obj = {"schemaVersion":2,"sequence":1,"timestampMs":1,"runId":"r","sessionId":"s",
            "turnId":"t","type":"exec.started"}
-    sys.stdout.write(json.dumps(obj) + "\n")
-    sys.stdout.flush()
+    emit_line(json.dumps(obj) + "\n")
     time.sleep(30)
 elif spec.get("no_events"):
     pass

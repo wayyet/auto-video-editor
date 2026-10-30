@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import json
 import logging
 import os
@@ -36,12 +37,12 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Mapping, Optional, Sequence
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
-from pydantic import ConfigDict, Field
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from pydantic import ConfigDict, Field, PrivateAttr
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,38 @@ _ROLE_BY_TYPE = {
     "function": "function",
     "chat": "chat",
 }
+
+
+# --------------------------------------------------------------------------
+# 流式传输(阶段 C)
+# --------------------------------------------------------------------------
+
+#: 自动:启动前探测 CLI 是否支持 ``stream-json``,不支持就降级 ``final_json``。
+TRANSPORT_AUTO = "auto"
+
+#: 实时事件流:``mcode exec --output-format stream-json``。
+TRANSPORT_STREAM_JSON = "stream_json"
+
+#: 兼容降级:``mcode exec --output-format json``,跑完一次性拿最终结果。
+#: **不是**实时流式 —— 前端必须明确标记「当前 CLI 不支持实时文本流」。
+TRANSPORT_FINAL_JSON = "final_json"
+
+#: CLI 的 ``--output-format`` 取值 <-> 内部传输名。
+_TRANSPORT_TO_CLI_FORMAT = {
+    TRANSPORT_STREAM_JSON: "stream-json",
+    TRANSPORT_FINAL_JSON: "json",
+}
+
+#: 事件 sink 的类型:收一个事件,返回 awaitable(也可以直接是同步 None)。
+#: 真正的签名是 ``async def sink(event: MCodeEvent) -> None``。
+MCodeEventSink = Callable[[Any], Awaitable[None]]
+
+#: sink provider:无参可调用对象,返回**本轮**的 sink(没有就返回 None)。
+#:
+#: 为什么是 provider 而不是固定回调:agent 按 session 缓存,同一个
+#: ``MCodeChatModel`` 实例会被多轮 turn 复用,每轮的 sink 不一样。
+#: 所以模型层只持有「取当前 sink」的能力,具体回调由 WebSocket 层每轮换。
+MCodeSinkProvider = Callable[[], Optional[MCodeEventSink]]
 
 
 # --------------------------------------------------------------------------
@@ -554,6 +587,25 @@ class MCodeChatModel(BaseChatModel):
     """用 ``mcode exec`` 子进程当 ChatModel。
 
     字段与 ``open_storyline.config.MCodeConfig`` 对齐,只是这里还带了运行时参数。
+
+    流式(阶段 C)
+    ------------
+
+    ``_astream()`` 会真的按增量吐文本:CLI 走 ``--output-format stream-json``,
+    解析层把 ``agent_message`` 的 ``contentDelta`` 变成 ``AIMessageChunk``。
+    ``reasoning``(隐藏思维链)在解析层就整条丢了,这里根本拿不到原文。
+
+    ``_generate()`` / ``_agenerate()`` 原路径**保留不动**:它们仍然用
+    ``--output-format json`` 一次性拿结果。``streaming_transport`` 决定的是
+    *流式路径*走哪种传输方式;降级成 ``final_json`` 时,``_astream()`` 会退回到
+    ``_agenerate()`` 并只吐一个 chunk —— 那**不是**实时流式。
+
+    事件通道
+    --------
+
+    ``event_sink_provider`` 是**provider**,不是固定回调:agent 按 session 缓存,
+    同一个实例会被多轮 turn 复用,每轮的 sink 不一样。
+    provider 在每轮流开始时被调用一次,返回本轮的 sink(没有就返回 None)。
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -572,9 +624,28 @@ class MCodeChatModel(BaseChatModel):
     media_manifest: List[Dict[str, Any]] = Field(default_factory=list)
     extra_args: List[str] = Field(default_factory=list)
 
+    #: 流式传输方式:``auto`` / ``stream_json`` / ``final_json``。
+    streaming_transport: str = TRANSPORT_AUTO
+
+    #: 本轮 MCode 事件 sink 的 provider(见模块级 :data:`MCodeSinkProvider`)。
+    #: 用 ``Any`` 标注是为了避开 pydantic 对可调用对象的签名校验 ——
+    #: 实际类型是 :data:`MCodeSinkProvider`。
+    event_sink_provider: Optional[Any] = None
+
+    #: CLI 是否支持 ``stream-json``(探测结果,按实例缓存)。
+    _stream_json_supported: Optional[bool] = PrivateAttr(default=None)
+
+    #: 本轮是不是因为 CLI 不支持而降级了(前端据此提示「非实时流」)。
+    _transport_degraded: bool = PrivateAttr(default=False)
+
     @property
     def _llm_type(self) -> str:
         return "mcode-cli"
+
+    @property
+    def transport_degraded(self) -> bool:
+        """本轮是否因为 CLI 不支持 ``stream-json`` 而降级成了整段 JSON。"""
+        return self._transport_degraded
 
     @property
     def _identifying_params(self) -> Dict[str, Any]:
@@ -628,17 +699,20 @@ class MCodeChatModel(BaseChatModel):
             )
         return resolved
 
-    def _build_command(self, bridge_prompt_path: str) -> List[str]:
+    def _build_command(self, bridge_prompt_path: str, output_format: str = "json") -> List[str]:
         """组装 mcode 命令行。
 
         约定与 ``agent_gate/launcher.py`` 的 ``McodeLauncher.command()`` 一致,
         另外补 ``--mode`` 与 ``--append-system-prompt-file``。
+
+        ``output_format``:``json`` = 旧的整段结果(默认,``_generate`` /
+        ``_agenerate`` 走这条);``stream-json`` = 实时事件流(``_astream`` 走这条)。
         """
         cmd = [
             self._resolve_executable(),
             "exec",
             "--input", "-",
-            "--output-format", "json",
+            "--output-format", output_format,
             "--permission", self.permission,
             "--max-steps", str(self.max_steps),
             "--timeout", f"{max(1, int(self.timeout_s))}s",
@@ -945,3 +1019,256 @@ class MCodeChatModel(BaseChatModel):
             self.session_id, result.get("status"), elapsed_ms, len(self.media_manifest),
         )
         return ChatResult(generations=[ChatGeneration(message=message)])
+
+    # -- 流式传输(阶段 C)--------------------------------------------------
+
+    async def _resolve_transport(self) -> str:
+        """决定本轮用哪种传输方式。
+
+        * ``stream_json`` / ``final_json`` —— 用户显式指定,**不探测**;
+        * ``auto`` —— 探测一次 CLI 是否支持 ``stream-json``(按实例缓存),
+          不支持就降级 ``final_json`` 并记下降级状态。
+
+        降级**不是**静默的:``transport_degraded`` 会为 True,
+        调用方据此告诉前端「当前不是实时文本流」。
+        """
+        configured = str(self.streaming_transport or TRANSPORT_AUTO).strip().lower()
+        if configured in (TRANSPORT_STREAM_JSON, TRANSPORT_FINAL_JSON):
+            self._transport_degraded = False
+            return configured
+
+        if self._stream_json_supported is None:
+            self._stream_json_supported = await self._probe_stream_json_support()
+        if self._stream_json_supported:
+            self._transport_degraded = False
+            return TRANSPORT_STREAM_JSON
+
+        self._transport_degraded = True
+        logger.warning(
+            "mcode CLI 不支持 --output-format stream-json,本轮降级为整段 JSON(非实时流)。"
+            "session_id=%s", self.session_id,
+        )
+        return TRANSPORT_FINAL_JSON
+
+    async def _probe_stream_json_support(self) -> bool:
+        """探测 CLI 是否支持 ``--output-format stream-json``。
+
+        探测方式:跑 ``<bin> exec --help``,看输出里有没有 ``stream-json``。
+
+        探测不出来(起不来 / 超时 / 输出看不懂)一律按**不支持**处理 ——
+        宁可退回旧的整段 JSON 路径,也不要拿一个没验证过的协议去跑生产。
+        """
+        try:
+            executable = self._resolve_executable()
+        except MCodeExecError as exc:
+            logger.info("mcode 可执行文件解析失败,跳过 stream-json 探测: %s", exc)
+            return False
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                executable, "exec", "--help",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+                cwd=self.cwd or None,
+                **_spawn_kwargs(),
+            )
+        except (OSError, ValueError) as exc:
+            logger.info("stream-json 能力探测启动失败: %s", exc)
+            return False
+
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
+        except (asyncio.TimeoutError, OSError) as exc:
+            logger.info("stream-json 能力探测失败: %s", exc)
+            with contextlib.suppress(OSError, ValueError):
+                proc.kill()
+            return False
+
+        text = (stdout or b"").decode("utf-8", "replace")
+        supported = "stream-json" in text
+        logger.info("stream-json 能力探测: supported=%s", supported)
+        return supported
+
+    def _resolve_event_sink(self) -> Optional[MCodeEventSink]:
+        """取**本轮**的 MCode 事件 sink(没有就返回 None)。
+
+        provider 每轮调用一次 —— 它返回的是当前 turn 的 sink,
+        不是模型实例上写死的回调(agent 按 session 缓存,每轮 sink 都不同)。
+        """
+        provider = self.event_sink_provider
+        if provider is None:
+            return None
+        try:
+            sink = provider()
+        except Exception:  # noqa: BLE001 —— provider 坏了不该拖垮整轮
+            logger.warning("取 MCode 事件 sink 失败,本轮不转发过程事件", exc_info=True)
+            return None
+        return sink if callable(sink) else None
+
+    async def _emit_event(self, sink: MCodeEventSink, event: Any) -> None:
+        """把一条 CLI 事件交给本轮 sink。
+
+        sink 抛错**不能**影响模型调用本身 —— 事件通道只是附加能力。
+        """
+        try:
+            result = sink(event)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:  # noqa: BLE001
+            logger.warning("MCode 事件 sink 回调失败(已忽略)", exc_info=True)
+
+    def _text_chunk(self, delta: str, event: Any = None) -> ChatGenerationChunk:
+        """把一段文本增量包成 ``ChatGenerationChunk``。"""
+        metadata: Dict[str, Any] = {"model": self.model}
+        if event is not None:
+            metadata.update({
+                "mcode_run_id": getattr(event, "run_id", None),
+                "mcode_session_id": getattr(event, "session_id", None),
+                "mcode_turn_id": getattr(event, "turn_id", None),
+                "mcode_sequence": getattr(event, "sequence", None),
+            })
+        return ChatGenerationChunk(
+            message=AIMessageChunk(content=delta, response_metadata=metadata)
+        )
+
+    async def _astream(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        """按增量吐文本。
+
+        为什么实现 ``_astream`` 就够了:LangGraph 的 model node 走的是
+        ``ainvoke``,但只要 ``run_manager`` 上挂着 ``_StreamingCallbackHandler``
+        (LangGraph 的 messages 流就是它),LangChain 就会自动改走 ``_astream`` ——
+        所以现有 ``agent.astream(..., stream_mode=["messages"])`` 直接就拿到增量了。
+
+        ``reasoning``(隐藏思维链)在解析层就整条丢了,这里**拿不到**原文。
+        """
+        transport = await self._resolve_transport()
+        if transport != TRANSPORT_STREAM_JSON:
+            async for chunk in self._astream_final_json(
+                messages, stop=stop, run_manager=run_manager, **kwargs
+            ):
+                yield chunk
+            return
+
+        async for chunk in self._astream_stream_json(messages):
+            yield chunk
+
+    async def _astream_final_json(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        """降级路径:走旧的整段 JSON,只吐**一个** chunk。
+
+        这**不是**实时流式 —— 调用方必须把它标记成降级。
+        """
+        result = await self._agenerate(
+            messages, stop=stop, run_manager=run_manager, **kwargs
+        )
+        generation = result.generations[0]
+        message = generation.message
+        content = message.content if isinstance(message.content, str) else ""
+        yield ChatGenerationChunk(
+            message=AIMessageChunk(
+                content=content,
+                response_metadata=dict(message.response_metadata or {}),
+                usage_metadata=message.usage_metadata,
+            )
+        )
+
+    async def _astream_stream_json(
+        self,
+        messages: List[BaseMessage],
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        """真的按 ``stream-json`` 事件流吐增量。"""
+        # 局部 import:mcode_runner 复用本模块的进程清理 helper,
+        # 模块级反向 import 会成环 —— 只能延迟到调用时。
+        from open_storyline.mcode_events import MCodeSchemaError
+        from open_storyline.mcode_runner import (
+            MCodeRunner,
+            MCodeRunnerError,
+            MCodeRunnerTimeout,
+        )
+
+        prompt = self._build_prompt(messages)
+        bridge_path = self._write_bridge_prompt()
+        sink = self._resolve_event_sink()
+        started = time.monotonic()
+        streamed_text = ""
+        final_output = ""
+
+        try:
+            cmd = self._build_command(
+                bridge_path,
+                output_format=_TRANSPORT_TO_CLI_FORMAT[TRANSPORT_STREAM_JSON],
+            )
+            logger.info(
+                "mcode exec 启动(stream-json): session_id=%s mode=%s cwd=%s timeout_s=%s prompt_chars=%d",
+                self.session_id, self.mode, self.cwd, self.timeout_s, len(prompt),
+            )
+            runner = MCodeRunner(
+                cmd,
+                cwd=self.cwd or None,
+                stdin_text=prompt,
+                timeout_s=float(self.timeout_s),
+            )
+            try:
+                async with runner:
+                    async for event in runner.stream():
+                        if sink is not None:
+                            await self._emit_event(sink, event)
+                        delta = event.text_delta
+                        if delta:
+                            streamed_text += delta
+                            yield self._text_chunk(delta, event)
+                        if event.is_exec_completed:
+                            final_output = event.final_output
+            except MCodeRunnerTimeout as exc:
+                raise MCodeExecError(
+                    f"mcode exec 超时(>{self.timeout_s}s),已清理进程树。"
+                    f"session_id={self.session_id}"
+                ) from exc
+            except MCodeSchemaError as exc:
+                # 协议版本对不上:必须明确失败,不能当成空文本。
+                raise MCodeExecError(
+                    f"mcode stream-json 协议不兼容: {exc}"
+                ) from exc
+            except MCodeRunnerError as exc:
+                raise MCodeExecError(
+                    f"mcode exec 失败: {exc}"
+                ) from exc
+        finally:
+            with contextlib.suppress(OSError):
+                os.unlink(bridge_path)
+
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        logger.info(
+            "mcode exec 结束(stream-json): session_id=%s elapsed_ms=%d streamed_chars=%d final_chars=%d",
+            self.session_id, elapsed_ms, len(streamed_text), len(final_output),
+        )
+
+        # UT-04:最终结果与增量并存 —— 不重复、不丢字。
+        if final_output and final_output != streamed_text:
+            if final_output.startswith(streamed_text):
+                # 增量漏了尾段:补齐缺的字符(不重复已发过的)。
+                missing = final_output[len(streamed_text):]
+                if missing:
+                    streamed_text = final_output
+                    yield self._text_chunk(missing)
+            else:
+                # 增量与最终正文对不上(例如一轮里有多条 agent_message,
+                # 增量是「过程说明 + 最终答复」的拼接):**不重复发**,
+                # 以最终正文为准,差异只记诊断。
+                logger.info(
+                    "mcode 增量拼接与最终正文不一致,以最终正文为准: "
+                    "streamed=%d chars final=%d chars",
+                    len(streamed_text), len(final_output),
+                )
+

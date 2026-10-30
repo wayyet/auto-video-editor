@@ -81,6 +81,15 @@ from open_storyline.mcode_media import (
     prepare_media_copies,
     resolve_media_root,
 )
+from open_storyline.mcode_event_adapter import (
+    KIND_FINAL,
+    KIND_STATUS,
+    KIND_TEXT,
+    KIND_TOOL_END,
+    KIND_TOOL_PROGRESS,
+    KIND_TOOL_START,
+    MCodeEventAdapter,
+)
 
 WEB_DIR = os.path.join(ROOT_DIR, "web")
 STATIC_DIR = os.path.join(WEB_DIR, "static")
@@ -258,6 +267,59 @@ def _resolve_mcode_tier(*keys: Any) -> str:
         if is_mcode_model(s):
             return s.lower()
     return ""
+
+
+#: 本轮的模型来源。``mcode`` = MCode Agent 档位,``llm`` = 普通模型链路。
+TURN_SOURCE_MCODE = "mcode"
+TURN_SOURCE_LLM = "llm"
+
+
+def _resolve_turn_source(*keys: Any) -> str:
+    """判定本轮的真实模型来源。
+
+    **服务端判定**:只看会话**已生效**的模型配置(``chat_model_key`` /
+    ``vlm_model_key``),不信任浏览器单独传来的模型名 ——
+    ``ensure_agent()`` 建的 agent 也是按这份配置来的,两边必须一致,
+    否则会出现「界面说是 mcode、实际跑的是 DeepSeek」这种张冠李戴。
+    """
+    tier = _resolve_mcode_tier(*keys)
+    if tier and is_mcode_model(tier):
+        return TURN_SOURCE_MCODE
+    return TURN_SOURCE_LLM
+
+
+def _should_forward_langgraph_text(turn_source: str) -> bool:
+    """LangGraph 的 model chunk 能不能作为 ``assistant.delta`` 转发。
+
+    MCode turn 的文本已经由 CLI 事件通道(``mcode.event``)送出 ——
+    再转发一次就是**同一份文本双发**。所以 mcode turn 一律不转发。
+    普通模型链路保持原样。
+    """
+    return turn_source != TURN_SOURCE_MCODE
+
+
+def _make_mcode_adapter(
+    turn_source: str,
+    cfg: Any,
+    *,
+    session_id: str,
+    turn_id: str,
+) -> Optional[MCodeEventAdapter]:
+    """本轮要不要 MCode 事件适配器。
+
+    普通模型链路返回 ``None`` —— 那一侧**不注册** MCode 事件通道,
+    也就不会往 ``mcode.event`` 队列里写任何东西(SRC-03:
+    选了 DeepSeek 就不该出现「MCode Agent 执行面板」事件)。
+    """
+    if turn_source != TURN_SOURCE_MCODE:
+        return None
+    mcode_cfg = getattr(cfg, "mcode", None)
+    return MCodeEventAdapter(
+        session_id=session_id,
+        turn_id=turn_id,
+        max_text_chars=int(getattr(mcode_cfg, "max_event_text_chars", 2000)),
+        max_trace_events=int(getattr(mcode_cfg, "max_trace_events", 300)),
+    )
 
 
 def _dedup_models(models: List[str]) -> List[str]:
@@ -1540,6 +1602,11 @@ class ChatSession:
         self.agent: Any = None
         self.node_manager = None
         self.client_context = None
+
+        # 当前 turn 的 MCode 事件 sink(阶段 D)。每轮换 —— agent 按 session 缓存,
+        # 同一个 MCodeChatModel 实例会被多轮复用,每轮的 sink 都不同。
+        # None = 本轮不注册 MCode 事件通道(普通模型链路恒为 None)。
+        self._mcode_event_sink: Optional[Any] = None
         
         # 锁分离：避免“流式输出”阻塞上传/删除 pending
         self.chat_lock = asyncio.Lock()
@@ -2312,6 +2379,9 @@ class ChatSession:
                 ],
                 llm_override=llm_override,
                 vlm_override=vlm_override,
+                # 阶段 D:MCode 事件通道的 provider。每轮换 sink,这里传的是
+                # 「取当前 sink」的函数,不是写死的回调。
+                mcode_event_sink_provider=self.mcode_sink_provider(),
             )
             self._agent_build_key = agent_build_key
 
@@ -2494,6 +2564,17 @@ class ChatSession:
             self._tool_history_index[tcid] = len(self.history) - 1
             return rec
         return self.history[idx]
+
+    def mcode_sink_provider(self):
+        """给 ``MCodeChatModel`` 的事件 sink provider(阶段 D)。
+
+        返回的是**取当前 sink** 的函数,不是固定回调:
+        agent 按 session 缓存,每轮 turn 的 sink 都不一样,
+        模型层在每轮流开始时调用一次 provider 拿当轮的 sink。
+        """
+        def _provider():
+            return self._mcode_event_sink
+        return _provider
 
     def apply_tool_event(self, raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         et = raw.get("type")
@@ -4025,6 +4106,17 @@ async def ws_chat(ws: WebSocket, session_id: str):
 
                         sess._ensure_system_prompt()
 
+                        # 阶段 D:服务端判定本轮来源。
+                        # 只看会话**已生效**的模型配置(ensure_agent 建的 agent 也是
+                        # 按这份配置来的),不信任浏览器单独传来的模型名。
+                        turn_source = _resolve_turn_source(sess.chat_model_key, sess.vlm_model_key)
+                        turn_id = uuid.uuid4().hex
+                        # 执行过程事件(状态 / 工具卡片)是否推给前端。
+                        # 文本增量**不受**这个开关影响 —— 那是答复本体,不是过程。
+                        trace_enabled = bool(
+                            getattr(app.state.cfg.mcode, "show_execution_trace", True)
+                        )
+
                         if sess.client_context:
                             sess.client_context.lang = sess.lang
 
@@ -4089,6 +4181,23 @@ async def ws_chat(ws: WebSocket, session_id: str):
                             if isinstance(ev, dict):
                                 loop.call_soon_threadsafe(out_q.put_nowait, ("mcp", ev))
 
+                        # 阶段 D:MCode 事件通道。
+                        # 只有 mcode turn 才注册 —— 普通模型链路**不写** mcode.event。
+                        mcode_adapter: Optional[MCodeEventAdapter] = _make_mcode_adapter(
+                            turn_source,
+                            app.state.cfg,
+                            session_id=session_id,
+                            turn_id=turn_id,
+                        )
+                        mcode_final_text = ""
+
+                        async def _mcode_event_sink(event: Any) -> None:
+                            """把**本轮真实** MCode CLI 事件推进 out_q。
+
+                            单一发送协程不变:这里只入队,真正 send 的还是主循环。
+                            """
+                            await out_q.put(("mcode.event", event))
+
                         new_messages: List[BaseMessage] = []
 
                         # Guard first: sanitize protocol on sess.lc_messages before we build
@@ -4121,6 +4230,12 @@ async def ws_chat(ws: WebSocket, session_id: str):
                                 )
                                 async for mode, chunk in stream:
                                     if mode == "messages":
+                                        if not _should_forward_langgraph_text(turn_source):
+                                            # MCode 的文本已经由 CLI 事件通道(mcode.event)
+                                            # 送出。这里再发一遍就是**同一份文本双发**。
+                                            # LangGraph 的 chunk 仍然留给内部机制用,
+                                            # 但 WebSocket 层不转发它。
+                                            continue
                                         msg_chunk, meta = chunk
                                         if meta.get("langgraph_node") == "model":
                                             delta = extract_text_delta(msg_chunk)
@@ -4162,7 +4277,10 @@ async def ws_chat(ws: WebSocket, session_id: str):
                             return ok
 
                         # turn 开始（前端可禁用发送按钮/显示占位）
-                        await emit_turn_event("assistant.start", {})
+                        await emit_turn_event("assistant.start", {
+                            "turn_id": turn_id,
+                            "source": turn_source,
+                        })
 
                         # 当前 assistant 分段缓冲：用于在 tool_start 到来前“封口”
                         seg_text = ""
@@ -4189,6 +4307,102 @@ async def ws_chat(ws: WebSocket, session_id: str):
 
                             seg_text = ""
                             seg_ts = None
+
+                        async def _handle_mcode_internal(internal: Any) -> None:
+                            """把一条内部 MCode 事件翻成 WebSocket 事件。
+
+                            工具事件走 ``sess.apply_tool_event`` —— 与普通模型链路
+                            共用同一套工具卡片记账,前端不用为 mcode 写第二套。
+                            """
+                            nonlocal seg_text, seg_ts, mcode_final_text
+                            data = dict(getattr(internal, "data", {}) or {})
+                            kind_ = getattr(internal, "kind", "")
+
+                            if kind_ == KIND_TEXT:
+                                delta = data.get("delta") or ""
+                                if not delta:
+                                    return
+                                if seg_ts is None:
+                                    seg_ts = time.time()
+                                seg_text += delta
+                                await emit_turn_event("assistant.delta", data)
+                                return
+
+                            if kind_ == KIND_FINAL:
+                                # 最终正文以 exec.completed.result.output 为权威。
+                                mcode_final_text = str(data.get("text") or "")
+                                return
+
+                            if not trace_enabled:
+                                # 执行过程事件被关掉了 —— 文本与最终正文照发。
+                                return
+
+                            if kind_ == KIND_STATUS:
+                                await emit_turn_event("agent.status", data)
+                                return
+
+                            if kind_ == KIND_TOOL_START:
+                                await flush_segment(send_flush_event=True)
+                                rec = sess.apply_tool_event({
+                                    "type": "tool_start",
+                                    "tool_call_id": data.get("tool_call_id"),
+                                    "server": data.get("server"),
+                                    "name": data.get("name"),
+                                    "args": data.get("args") or {},
+                                })
+                                if rec:
+                                    await emit_turn_event("tool.start", {
+                                        "tool_call_id": rec["tool_call_id"],
+                                        "server": rec["server"],
+                                        "name": rec["name"],
+                                        "args": rec["args"],
+                                        "source": data.get("source"),
+                                        "seq": data.get("seq"),
+                                        "run_id": data.get("run_id"),
+                                    })
+                                return
+
+                            if kind_ == KIND_TOOL_PROGRESS:
+                                rec = sess.apply_tool_event({
+                                    "type": "tool_progress",
+                                    "tool_call_id": data.get("tool_call_id"),
+                                    "server": data.get("server"),
+                                    "name": data.get("name"),
+                                    "message": data.get("message") or "",
+                                })
+                                if rec:
+                                    await emit_turn_event("tool.progress", {
+                                        "tool_call_id": rec["tool_call_id"],
+                                        "server": rec["server"],
+                                        "name": rec["name"],
+                                        "progress": rec["progress"],
+                                        "message": rec["message"],
+                                        "source": data.get("source"),
+                                        "seq": data.get("seq"),
+                                    })
+                                return
+
+                            if kind_ == KIND_TOOL_END:
+                                rec = sess.apply_tool_event({
+                                    "type": "tool_end",
+                                    "tool_call_id": data.get("tool_call_id"),
+                                    "server": data.get("server"),
+                                    "name": data.get("name"),
+                                    "is_error": bool(data.get("is_error")),
+                                    # 工具输出摘要化之后还要脱敏 —— 摘要里也可能带密钥。
+                                    "summary": _mask_secrets_recursive(data.get("summary")),
+                                })
+                                if rec:
+                                    await emit_turn_event("tool.end", {
+                                        "tool_call_id": rec["tool_call_id"],
+                                        "server": rec["server"],
+                                        "name": rec["name"],
+                                        "is_error": rec["state"] == "error",
+                                        "summary": rec["summary"],
+                                        "source": data.get("source"),
+                                        "seq": data.get("seq"),
+                                    })
+                                return
 
                         pump_task: Optional[asyncio.Task] = None
 
@@ -4362,6 +4576,13 @@ async def ws_chat(ws: WebSocket, session_id: str):
 
                         was_interrupted = False  # 本 turn 是否已经走了“打断收尾”
 
+                        # 阶段 D:注册本轮的 MCode 事件通道。
+                        # 放在 try 之前一刻 —— 这样上面任何一步抛异常,下面的 finally
+                        # 都还管得到(否则这一轮的 sink 会漏给下一轮)。
+                        sess._mcode_event_sink = (
+                            _mcode_event_sink if mcode_adapter is not None else None
+                        )
+
                         try:
                             async with mcp_sink_context(sink):
                                 pump_task = asyncio.create_task(pump_agent())
@@ -4462,6 +4683,21 @@ async def ws_chat(ws: WebSocket, session_id: str):
                                     # ------------------------
                                     # 2) 事件处理
                                     # ------------------------
+                                    if kind == "mcode.event":
+                                        # 本轮真实 MCode CLI 事件(阶段 D)。
+                                        # 普通模型链路永远不会进这里 —— 它压根不注册事件通道。
+                                        event = payload
+                                        if mcode_adapter is None:
+                                            continue
+                                        try:
+                                            for internal in mcode_adapter.adapt(event):
+                                                await _handle_mcode_internal(internal)
+                                        except Exception as e:  # noqa: BLE001
+                                            logger.warning(
+                                                "处理 mcode 事件失败(忽略): %s", e
+                                            )
+                                        continue
+
                                     if kind == "assistant.delta":
                                         delta = payload or ""
                                         if delta:
@@ -4505,7 +4741,12 @@ async def ws_chat(ws: WebSocket, session_id: str):
                                         continue
 
                                     if kind == "agent.done":
-                                        final_text = (seg_text or "").strip()
+                                        if turn_source == TURN_SOURCE_MCODE:
+                                            # MCode 的最终正文以 exec.completed.result.output
+                                            # 为权威(设计文档 D-5);增量拼接只作兜底。
+                                            final_text = (mcode_final_text or seg_text or "").strip()
+                                        else:
+                                            final_text = (seg_text or "").strip()
 
                                         if final_text:
                                             sess.history.append({
@@ -4518,7 +4759,10 @@ async def ws_chat(ws: WebSocket, session_id: str):
                                         if new_messages:
                                             sess.lc_messages.extend(new_messages)
 
-                                        await emit_turn_event("assistant.end", {"text": final_text})
+                                        await emit_turn_event("assistant.end", {
+                                            "text": final_text,
+                                            "source": turn_source,
+                                        })
                                         await store.save_session_state(sess)
                                         break
 
@@ -4540,7 +4784,11 @@ async def ws_chat(ws: WebSocket, session_id: str):
                                             sess.lc_messages.extend(new_messages)
 
                                         # ★ 真异常：只发 error（并带 partial_text 让前端结束当前气泡）
-                                        await emit_turn_event("error", {"message": err_text, "partial_text": partial})
+                                        await emit_turn_event("error", {
+                                            "message": err_text,
+                                            "partial_text": partial,
+                                            "source": turn_source,
+                                        })
                                         await store.save_session_state(sess)
                                         break
                         
@@ -4557,6 +4805,10 @@ async def ws_chat(ws: WebSocket, session_id: str):
                             logger.error(_format_exc(e))
                             return
                         finally:
+                            # 阶段 D:本轮结束 —— 注销 MCode 事件通道。
+                            # 不注销的话,下一轮会拿到上一轮的 sink(串台)。
+                            sess._mcode_event_sink = None
+
                             # 结束 cancel_wait_task
                             if cancel_wait_task and (not cancel_wait_task.done()):
                                 cancel_wait_task.cancel()
