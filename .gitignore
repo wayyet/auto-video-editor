@@ -22,8 +22,10 @@ artifacts/draft_content.json
 .vscode/
 .idea/
 
+# Legacy root-level checkpoint directory; no longer used by runtime
+/checkpoints/
+
 # Week 3 runtime state
-checkpoints/
 drafts/
 
 # Git worktrees (本地并行开发目录，不入库)
