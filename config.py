@@ -372,9 +372,16 @@ CAPCUT_DECRYPT_CMD: list[str] = ["capcut", "decrypt"]
 #   默认值与本地容器契约一致(edb-postgres16:postgres/devpass@5432/video_workflow),
 #   保证"直接跑 Python"时也能连上本地库。
 #   库名统一为 video_workflow(计划 D1)——本仓库不再使用 langgraph / auto_video_editor。
-POSTGRES_URI: str = os.environ.get(
-    "POSTGRES_URI",
-    "postgresql://postgres:devpass@localhost:5432/video_workflow",
+#   空值防御(2026-10-31 worker `no password supplied` 故障 P1 根因):环境变量
+#   存在但为空串/纯空白时必须**回退默认值** —— ``os.environ.get(name, 默认)``
+#   在"变量存在但为空"时返回空串而不是默认值,会让"没注入成功"从
+#   "用默认 DSN"劣化成"拿空 DSN 连接"。
+_DEFAULT_POSTGRES_URI = (
+    "postgresql://postgres:devpass@localhost:5432/video_workflow"
+)
+POSTGRES_URI: str = (
+    os.environ.get("POSTGRES_URI", "").strip()
+    or _DEFAULT_POSTGRES_URI
 )
 # WORKFLOW_ENV 只用于选择同步/异步执行路径(见 scripts/run_workflow.py),
 # **不再**参与存储后端选择。

@@ -14,8 +14,10 @@ import sys
 import threading
 import traceback
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 from agent_gate import service
 from agent_gate.agent_bin import augment_path
@@ -106,8 +108,29 @@ DEFAULT_POSTGRES_URI = "postgresql://postgres:devpass@localhost:5432/video_workf
 _CKPT_BACKENDS = ("postgres", "memory")
 
 
-def postgres_uri() -> str:
-    """worker 用的 Postgres 连接串。
+@dataclass(frozen=True)
+class PostgresTarget:
+    """worker 最终使用的 Postgres 连接目标,及其 DSN 来源。
+
+    ``source`` 取值:
+    - ``env:AGENT_GATE_POSTGRES_URI`` / ``env:POSTGRES_URI`` —— 环境变量注入
+    - ``config.POSTGRES_URI``        —— 仓库根 ``config.py``
+    - ``runner.DEFAULT_POSTGRES_URI`` —— 纯 kit 场景(仓库不在 sys.path 上)的最后兜底
+    """
+
+    uri: str
+    source: str
+
+
+def _non_empty_env(name: str) -> Optional[str]:
+    """读环境变量并归一化:未设置 / 空串 / 纯空白一律视为"没有提供"。"""
+    value = os.environ.get(name)
+    value = value.strip() if value else ""
+    return value or None
+
+
+def resolve_postgres_target() -> PostgresTarget:
+    """解析 worker 实际使用的 Postgres DSN 与来源。
 
     顺序:``AGENT_GATE_POSTGRES_URI`` → ``POSTGRES_URI`` 环境变量 →
     仓库 ``config.POSTGRES_URI`` → 默认值。
@@ -115,17 +138,80 @@ def postgres_uri() -> str:
     ``AGENT_GATE_POSTGRES_URI`` 放在最前面,是为了让 agent_gate 的测试能用
     **独立测试库**(见 ``agent_gate/tests/conftest.py``),不污染工作库里真实的
     checkpoint —— 也避免改到仓库全局的 ``POSTGRES_URI``。
+
+    空值防御(2026-10-31 worker `no password supplied` 故障):候选值未设置 /
+    空串 / 纯空白一律跳过、落到下一档,保证**永远不会返回空 DSN**。
+
+    Returns:
+        :class:`PostgresTarget`(uri + source)。
     """
     for env in ("AGENT_GATE_POSTGRES_URI", "POSTGRES_URI"):
-        uri = os.environ.get(env, "").strip()
-        if uri:
-            return uri
+        value = _non_empty_env(env)
+        if value:
+            return PostgresTarget(uri=value, source=f"env:{env}")
     try:
         from config import POSTGRES_URI as _cfg_uri
 
-        return str(_cfg_uri)
+        value = str(_cfg_uri or "").strip()
+        if value:
+            return PostgresTarget(uri=value, source="config.POSTGRES_URI")
     except Exception:  # noqa: BLE001 — 纯 kit 场景(仓库不在 sys.path 上)
-        return DEFAULT_POSTGRES_URI
+        pass
+    return PostgresTarget(uri=DEFAULT_POSTGRES_URI, source="runner.DEFAULT_POSTGRES_URI")
+
+
+def postgres_uri() -> str:
+    """worker 用的 Postgres 连接串(:func:`resolve_postgres_target` 的薄封装)。
+
+    保留返回 ``str`` 的旧签名 —— 既有调用点(``make_checkpointer`` /
+    ``checkpoint_exists``)无需改动;需要 DSN 来源时直接用
+    :func:`resolve_postgres_target`。
+    """
+    return resolve_postgres_target().uri
+
+
+def describe_postgres_target(target: Optional[PostgresTarget] = None) -> dict[str, Any]:
+    """把 :class:`PostgresTarget` 变成**可安全落日志**的脱敏诊断字段。
+
+    只暴露来源 / 主机 / 端口 / 库名 / 用户名 / 是否带密码 / 脱敏 URI;
+    绝不输出密码本身,也不输出 query(里面可能带敏感参数)。
+
+    注意 ``password_present=False`` 只说明"URI 里没写密码",不代表一定连不上
+    (``.pgpass`` / 证书等认证方式依然可用);诊断字段只作定位线索,
+    不在通用路径强制拒绝无密码 DSN。
+    """
+    t = target if target is not None else resolve_postgres_target()
+    info: dict[str, Any] = {
+        "source": t.source,
+        "host": None,
+        "port": None,
+        "dbname": None,
+        "user": None,
+        "password_present": False,
+        "uri_masked": "<uri 解析失败>",
+    }
+    try:
+        parts = urlsplit(t.uri)
+        # 只对"绝对 postgres URI"做脱敏回显;其它形态(无 scheme / 无 netloc /
+        # 裸文本)不回显原文 —— 无 netloc 时 userinfo 不会被识别,原文里可能
+        # 夹带凭据,原样落日志就是泄漏。
+        if parts.scheme.lower() not in ("postgresql", "postgres") or not parts.netloc:
+            raise ValueError(f"not an absolute postgres URI: scheme={parts.scheme!r}")
+        host = parts.hostname or ""
+        info["host"] = host or None
+        info["port"] = parts.port
+        info["dbname"] = (parts.path or "").lstrip("/") or None
+        info["user"] = parts.username or None
+        info["password_present"] = parts.password is not None
+        netloc = f"[{host}]" if host and ":" in host else host  # IPv6 字面量要带回方括号
+        if parts.username:
+            netloc = parts.username + (":***" if parts.password else "") + "@" + netloc
+        if parts.port:
+            netloc += f":{parts.port}"
+        info["uri_masked"] = urlunsplit((parts.scheme, netloc, parts.path or "", "", ""))
+    except Exception:  # noqa: BLE001 — 脱敏失败也不能把原始 URI 抛进日志
+        pass
+    return info
 
 
 def checkpoint_backend() -> str:
@@ -435,6 +521,11 @@ def run_worker(
 
         client = client_factory(mb) if client_factory else build_client(backend, mb)
         install_client(client)
+        # worker 眼中的最终 DSN(脱敏诊断,2026-10-31 `no password supplied` 故障):
+        # 在 checkpointer 连接**之前**落事件,连接失败时才有"到底用了哪个来源、
+        # 哪个目标"可查(事件里只有来源/主机/端口/库/用户/是否带密码,没有密码)。
+        if checkpoint_backend() == "postgres":
+            mb.log_event("postgres_target", **describe_postgres_target())
         # checkpointer 由 worker 自己建并注入(方案 §4.7):仓库的
         # ``graph.build_graph()`` 已改为"未注入就报错",不再自动兜底。
         with checkpointer_session(thread_id) as saver:
