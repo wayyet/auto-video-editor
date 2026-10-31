@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import os
 import sys
@@ -17,7 +18,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP, Image
 
-from agent_gate import runner, service
+from agent_gate import lease, runner, service
 from agent_gate.mailbox import Mailbox
 from agent_gate.safety import (
     UnsafeIdentifier,
@@ -49,6 +50,11 @@ def build_server(
 ) -> FastMCP:
     mcp = FastMCP("video-agent")
 
+    # 操作员租约(阶段 D):本进程消费触点取得的租约,在正常退出时统一释放
+    # —— 让下一个会话(MCode 下一轮 / ZCode 新会话)立即接管,不必等 TTL。
+    # 进程被强杀时不会有 atexit,由租约的 PID 存活检测 / TTL 兜底。
+    atexit.register(lease.release_owned_leases)
+
     def mb_for(thread_id: str) -> Mailbox | None:
         """拿信箱。thread_id 不过白名单时返回 None(各工具自己转成拒绝返回体)。"""
         try:
@@ -74,6 +80,10 @@ def build_server(
 
         多视频:给 ``video_paths``(列表)即可,每个路径都要过素材白名单;
         此时 ``video_path`` 会被忽略,初始 state 写入 ``video_input_paths``。
+
+        操作员租约(阶段 D):同一个 thread 同一时刻只允许一个 Agent 消费。
+        其他活操作员还持有租约时,本工具返回 operator_already_claimed;
+        上一个会话已结束(进程退出)则可以立即接管。
 
         ⚠️ 本工具**不接受**初始 state 文件路径:参数由 Agent 发起,不能把 Agent 提供的
         文件路径当可信配置。video_path 必须落在服务端配置的素材白名单里
@@ -113,7 +123,8 @@ def build_server(
             init.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         return runner.spawn_worker(thread_id=thread_id, outputs_root=outputs_root,
                                    graph_factory=graph_factory, initial_state_file=init,
-                                   backend=backend, mode=mode)
+                                   backend=backend, mode=mode,
+                                   operator=lease.owner_id())
 
     @mcp.tool()
     def run_status(thread_id: str) -> dict[str, Any]:
@@ -137,7 +148,8 @@ def build_server(
         if mb is None:
             return [json.dumps(rejection(UnsafeIdentifier("bad_thread_id")), ensure_ascii=False)]
         res = service.wait_for_work(mb, thread_id=thread_id,
-                                    wait_s=min(max(wait_s, 0.0), MAX_WAIT_S), limit=limit)
+                                    wait_s=min(max(wait_s, 0.0), MAX_WAIT_S), limit=limit,
+                                    operator=lease.owner_id())
         res["tasks"], res["deferred_tasks"], pairs = service.pack_for_images(res["tasks"], MAX_IMAGES)
         return [json.dumps(res, ensure_ascii=False, indent=2), *image_blocks(pairs)]
 
@@ -160,7 +172,7 @@ def build_server(
         mb = mb_for(thread_id)
         if mb is None:
             return rejection(UnsafeIdentifier("bad_thread_id"))
-        return service.submit_result(mb, task_id, answer)
+        return service.submit_result(mb, task_id, answer, operator=lease.owner_id())
 
     @mcp.tool()
     def gate_submit_batch(thread_id: str, results_file: str) -> dict[str, Any]:
@@ -174,7 +186,7 @@ def build_server(
             results = json.loads(p.read_text(encoding="utf-8-sig"))   # 容忍 BOM
         except (OSError, ValueError) as e:
             return {"ok": False, "code": "bad_file", "message": str(e)}
-        return service.submit_batch(mb, results)
+        return service.submit_batch(mb, results, operator=lease.owner_id())
 
     if with_human_tool:
         @mcp.tool(meta={"anthropic/requiresUserInteraction": True})

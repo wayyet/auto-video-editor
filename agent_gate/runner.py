@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 from urllib.parse import urlsplit, urlunsplit
 
-from agent_gate import service
+from agent_gate import lease, service
 from agent_gate.agent_bin import augment_path
 from agent_gate.mailbox import Mailbox
 from agent_gate.protocol import (
@@ -654,6 +654,7 @@ def spawn_worker(
     cwd: Optional[Path] = None,
     python: str = sys.executable,
     require_preflight: bool = False,
+    operator: Optional[str] = None,
 ) -> dict[str, Any]:
     try:
         safe_thread_id(thread_id)
@@ -676,6 +677,18 @@ def spawn_worker(
     bad = check_mode(mode=mode, cur=cur, thread_id=thread_id, resume_values=resume_values)
     if bad is not None:
         return bad
+
+    # 操作员租约(阶段 D / 设计 §6.4):start / continue_after_crash 只做
+    # **检查** —— 其他活操作员还持有租约时,不允许第二个消费者启动或接管
+    # (稳定错误码 operator_already_claimed)。mode=resume 是人工放行,不拦。
+    # 取得租约交给第一次真正的消费动作(gate_next_tasks / submit),
+    # 这样 drive 模式(父进程拉起、agent 会话消费)不会被父进程身份挡住。
+    if mode in ("start", "continue_after_crash"):
+        claimed = lease.ensure_can_start(thread_id, operator=operator)
+        if claimed is not None:
+            mb.log_event("operator_lease_rejected", mode=mode, code=claimed.get("code"),
+                         owner=claimed.get("owner"))
+            return claimed
 
     # worker 在仓库根目录里启动:`python -m` 会把 cwd 放进 sys.path,`graph:build_graph` 才导入得到
     if cwd is None and os.environ.get("AGENT_GATE_REPO_ROOT"):

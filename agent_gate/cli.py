@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-from agent_gate import runner, service
+from agent_gate import lease, runner, service
 from agent_gate.mailbox import Mailbox
 from agent_gate.safety import (
     UnsafeIdentifier,
@@ -194,6 +194,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         sys.stderr.reconfigure(encoding="utf-8")
     except (AttributeError, OSError):
         pass
+    # 操作员租约(阶段 D):CLI 命令取得的租约在进程退出时释放(尽力而为),
+    # 免得下一条命令 / 下一个消费者干等 TTL。强杀时由 PID 存活检测 / TTL 兜底。
+    import atexit
+
+    atexit.register(lease.release_owned_leases)
     args = build_parser().parse_args(argv)
 
     if args.cmd == "worker":

@@ -74,6 +74,16 @@ class Mailbox:
         self.frames_root = self.root / "frames"
         self.tasks_dir.mkdir(parents=True, exist_ok=True)
 
+    @property
+    def thread_id(self) -> str:
+        """这个信箱属于哪个 thread。
+
+        Mailbox 一律由 ``runner.gate_root(outputs_root, thread_id)``
+        (= ``<outputs_root>/<thread_id>/agent_gate``)构造,所以根目录的
+        父目录名就是 thread_id。租约(阶段 D)靠它把信箱和操作员租约对上。
+        """
+        return self.root.parent.name
+
     # ---- 路径 ----
     # 所有按 task_id 拼出来的路径都**重复**过一遍白名单 + 目录归属(F1)。
     # 入口层(service / mcp_server / cli)已经校验过一次,这里再过一次是纵深防御:

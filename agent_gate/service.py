@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+from agent_gate import lease
 from agent_gate.mailbox import Mailbox
 from agent_gate.protocol import (
     DEFAULT_MAX_ATTEMPTS,
@@ -99,13 +100,20 @@ def get_task(mb: Mailbox, tid: str) -> Optional[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------- 提交
-def submit_result(mb: Mailbox, tid: str, answer: Any) -> dict[str, Any]:
+def submit_result(mb: Mailbox, tid: str, answer: Any, *,
+                  operator: Optional[str] = None) -> dict[str, Any]:
     # task_id 由 Agent 传进来,先过白名单(F1):非法一律拒,不碰文件系统。
     try:
         safe_task_id(tid)
     except (UnsafeIdentifier, UnsafePath) as e:
         mb.log_event("input_rejected", code="bad_task_id")
         return rejection(e)
+
+    # 操作员租约(阶段 D):提交也是消费行为 —— 没有租约就取得,有别人的
+    # 活租约就拒绝,防止被抢走消费权的消费者继续往信箱里写答案。
+    lease_res = lease.require_operator(mb, operator=operator)
+    if not lease_res.get("ok"):
+        return lease_res
 
     task = mb.read_task(tid)
     if task is None:
@@ -159,11 +167,12 @@ def submit_result(mb: Mailbox, tid: str, answer: Any) -> dict[str, Any]:
     return {"ok": True}
 
 
-def submit_batch(mb: Mailbox, results: dict[str, Any]) -> dict[str, Any]:
+def submit_batch(mb: Mailbox, results: dict[str, Any], *,
+                 operator: Optional[str] = None) -> dict[str, Any]:
     """results: {task_id: answer}。逐个提交,汇总结果。"""
     per: dict[str, Any] = {}
     for tid, answer in results.items():
-        per[tid] = submit_result(mb, tid, answer)
+        per[tid] = submit_result(mb, tid, answer, operator=operator)
     return {"ok": all(r.get("ok") for r in per.values()), "results": per}
 
 
@@ -228,8 +237,19 @@ def status_summary(mb: Mailbox, *, thread_id: str) -> dict[str, Any]:
 
 
 def wait_for_work(mb: Mailbox, *, thread_id: str, wait_s: float, poll_s: float = 0.5,
-                  limit: int = 5, max_chars: Optional[int] = 6000) -> dict[str, Any]:
-    """长轮询:最多等 wait_s 秒,直到出现待办任务或 worker 进入终态,然后返回。"""
+                  limit: int = 5, max_chars: Optional[int] = 6000,
+                  operator: Optional[str] = None) -> dict[str, Any]:
+    """长轮询:最多等 wait_s 秒,直到出现待办任务或 worker 进入终态,然后返回。
+
+    入口先过操作员租约(阶段 D):取得 / 续约失败时返回
+    ``{"ok": False, "code": "operator_already_claimed", ...}``(带空 tasks,
+    形状与正常 summary 兼容,调用方原样返回给 Agent)。
+    """
+    lease_res = lease.require_operator(mb, operator=operator)
+    if not lease_res.get("ok"):
+        lease_res["worker_state"] = None
+        lease_res["tasks"] = []
+        return lease_res
     deadline = time.monotonic() + max(0.0, wait_s)
     while True:
         summary = status_summary(mb, thread_id=thread_id)

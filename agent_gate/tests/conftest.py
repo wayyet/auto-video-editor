@@ -122,14 +122,23 @@ def _agent_gate_postgres():
 
 @pytest.fixture(autouse=True)
 def _clean_checkpoints(_agent_gate_postgres):
-    """每个用例前后清空测试库的检查点表 ⇒ 用例之间完全隔离。"""
+    """每个用例前后清空测试库的检查点表 ⇒ 用例之间完全隔离。
+
+    阶段 D 起**连操作员租约表一起清**:租约以 thread_id 为键,遗留的行会让
+    后续用例(尤其是 MCP server 子进程那种「另一个进程身份」的消费者)莫名
+    撞上 operator_already_claimed。表还不存在时先建(与 lease 模块同 DDL)。
+    """
     import psycopg
+
+    from agent_gate import lease
 
     def _truncate() -> None:
         with psycopg.connect(_agent_gate_postgres, autocommit=True, connect_timeout=10) as conn:
             with conn.cursor() as cur:
                 for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
                     cur.execute(f"TRUNCATE TABLE {table}")
+                cur.execute(lease._DDL)
+                cur.execute(f"DELETE FROM {lease.LEASE_TABLE}")
 
     _truncate()
     yield
