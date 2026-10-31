@@ -5,8 +5,12 @@
 #   Phase 0    准备视频输入 + 生成 initial-state.json
 #   Phase 0.5  Docker Desktop daemon 就绪
 #   Phase 0.55 openstoryline 资源/模型校验
+#   Phase 0.58 scripts\preflight.ps1(6 步自检,**只跑一次**)
+#              —— 排在 Web 启动之前:preflight Step 4-6 负责拉起 Postgres 容器 +
+#              连通性 + checkpoint schema,而 Web 每次会话读取都硬依赖 Postgres。
+#              (2026-11-01 故障:原 Phase 1 排在健康检查之后,容器停了 → Web 永远
+#              不健康 → 本块永远执行不到 → 一键启动必败。前移后数据库先于 Web 在线。)
 #   Phase 0.6/0.7  OpenStoryline Web 生命周期(仅 human 模式)+ 健康检查
-#   Phase 1    scripts\preflight.ps1(6 步自检,**只跑一次**)
 #   Phase 2    scripts\run_workflow.py --production --skip-preflight
 #   Phase 3    验收(checkpoints / heartbeat / drafts / outputs)
 #
@@ -178,6 +182,22 @@ function Test-OsPortOpen {
     return $open
 }
 
+function Test-TcpPortOpen {
+    # 快速 TCP 探测(TcpClient 异步连接 + 显式超时)。
+    # 比 Test-NetConnection 快;SYN 被丢弃(防火墙/代理)时也能在超时内返回 $false。
+    param([string]$Hostname, [int]$Port, [int]$TimeoutMs = 1500)
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $task = $client.ConnectAsync($Hostname, $Port)
+        if ($task.Wait($TimeoutMs) -and $client.Connected) { return $true }
+        return $false
+    } catch {
+        return $false
+    } finally {
+        $client.Dispose()
+    }
+}
+
 # ---------------------------------------------------------------
 # WhatIf:仅打印计划,**零副作用**
 #   必须在"建 logs/ 目录 / 建日志文件 / banner / 生成 initial_state JSON"之前。
@@ -193,13 +213,13 @@ if ($WhatIf) {
     Write-Host '  Phase 0   : 复制视频 + 生成 initial_state JSON' -ForegroundColor Cyan
     Write-Host '  Phase 0.5 : 确保 Docker Desktop daemon 在线(只服务 Postgres)' -ForegroundColor Cyan
     Write-Host '  Phase 0.55: 校验 openstoryline 资源/模型(.storyline/models + resource/)' -ForegroundColor Cyan
+    Write-Host "  Phase 0.58: $Preflight(完整预检,先拉起 Postgres 再起 Web;**本次运行只执行一次**)" -ForegroundColor Cyan
     if ($StorylineMode -eq 'auto') {
         Write-Host '  Phase 0.6/0.7: 跳过(auto 模式不起 OpenStoryline Web)' -ForegroundColor Cyan
     } else {
         Write-Host "  Phase 0.6/0.7: OpenStoryline Web(:$OsWebPort)—— 端口在听且 HTTP 200 → 复用;端口空闲 → 起一个 uvicorn;端口占用但 HTTP≠200 → 报冲突退出(23)" -ForegroundColor Cyan
         Write-Host "              写 PID 文件:$OsPidFile(MCP 端口 $OsMcpPort 不再起子进程,仅作常量保留)" -ForegroundColor Cyan
     }
-    Write-Host "  Phase 1   : $Preflight(完整预检,**本次运行只执行一次**)" -ForegroundColor Cyan
     Write-Host "  Phase 2   : $VenvPy $RunScript --production --skip-preflight --thread-id $ThreadId --initial-state-json $StateJson" -ForegroundColor Cyan
     if (-not $SkipPhase3) {
         Write-Host '  Phase 3   : checkpoints SQL(带 THREAD_ID)+ heartbeat + outputs/drafts 列目录' -ForegroundColor Cyan
@@ -425,6 +445,41 @@ try {
     Write-PhaseOk "openstoryline 资源/模型已就绪"
 
     # ===============================================================
+    # Phase 0.58 — preflight.ps1(本次运行**唯一一次**完整预检)
+    #   2026-11-01 前移到 Web 启动之前(原 Phase 1,排在 Phase 0.7 之后):
+    #   preflight Step 4-6 负责拉起 Postgres 容器 + 连通性 + checkpoint schema,
+    #   而 Web 的每次会话读取都硬依赖 Postgres(agent_fastapi load_from_state)。
+    #   旧顺序下容器一旦未运行,Web 永远不健康 → 在 Phase 0.7 exit 22,本块
+    #   永远执行不到(2026-11-01 01:16 线上故障根因)。前移后:数据库先于
+    #   Web 在线;preflight 失败也会带着精确的 Step 退出码(10-16/20)直接中止。
+    #   注:POSTGRES_URI 等环境变量已在脚本头部(envBackup 段)、任何
+    #   Start-Process 之前注入,preflight 与 Phase 2/3 子进程直接继承本次值。
+    # ===============================================================
+    Write-Phase ''
+    Write-Phase "Phase 0.58:Pre-flight 自检(6 步:先拉起 Postgres,再起 Web;本次运行只执行一次)" 'Cyan'
+
+    if (-not (Test-Path $Preflight)) {
+        Write-PhaseErr "找不到 $Preflight"
+        exit 13
+    }
+
+    # 用 & 直接调用,exit code 经 $LASTEXITCODE 回传。
+    # 顺序写日志(不用 Tee-Object):见 Write-Phase 的「单写者」说明。
+    # 同时保持**实时**输出(preflight 里的 docker pull 可能耗时较久)。
+    & $Preflight -PostgresUri $PostgresUri *>&1 | ForEach-Object {
+        $t = "$_"
+        Write-Host "  $t" -ForegroundColor DarkGray
+        Add-Content -Path $LogFile -Value "  $t" -Encoding UTF8 -ErrorAction SilentlyContinue
+    }
+    $preflightExit = $LASTEXITCODE
+    if ($preflightExit -ne 0) {
+        Write-PhaseErr "preflight.ps1 退出码 $preflightExit"
+        Write-Phase "    请查看上方日志或 README 「失败与恢复」表处理后重跑" 'Yellow'
+        exit $preflightExit
+    }
+    Write-PhaseOk "preflight.ps1 全部通过(Postgres 已在线,checkpoint schema 已就绪)"
+
+    # ===============================================================
     # Phase 0.6 / 0.7 — OpenStoryline Web 生命周期(仅 human 模式)
     #   方案 A:生产脚本管 Web 生命周期;nodes\node_02 只探测复用,绝不启动。
     #   三分支:
@@ -585,6 +640,22 @@ set PYTHONUNBUFFERED=1
             Write-Phase ("    端口 : {0} 在听 = {1}" -f $OsWebPort, (Test-OsPortOpen $OsWebPort)) 'Yellow'
             Write-Phase ("    URL  : {0}" -f $webUrl) 'Yellow'
             Write-Phase ("    复用 : {0}" -f $osPidReused) 'Yellow'
+
+            # 精确根因提示(2026-11-01 加固):先探测 Postgres 端口,把「数据库
+            # 未在线」这个最常见根因从笼统的 180s 超时里摘出来再报错。
+            $pgTcpOk = Test-TcpPortOpen -Hostname $target.Host -Port $target.Port
+            if (-not $pgTcpOk) {
+                Write-Phase ("    Postgres : {0}:{1} 不可达(TCP 探测 {2}ms 超时)" -f $target.Host, $target.Port, 1500) 'Yellow'
+                if ($target.Kind -eq 'local-managed') {
+                    Write-Phase '    → 根因大概率:本地 Postgres 容器(edb-postgres16)未运行。' 'Yellow'
+                    Write-Phase '      先 docker start edb-postgres16(或 scripts\start_postgres.ps1)再重跑。' 'Yellow'
+                } else {
+                    Write-Phase "    → 外部 Postgres(host=$($target.Host):$($target.Port))不可达,请检查实例与网络后重跑。" 'Yellow'
+                }
+            } else {
+                Write-Phase ("    Postgres : {0}:{1} 端口可达(数据库在线;Web 未就绪是应用自身问题,见下方日志尾)" -f $target.Host, $target.Port) 'Yellow'
+            }
+
             if (-not $osPidReused) {
                 Write-Phase ("    进程 : PID={0} 存活 = {1}" -f $webPyPid, ($null -ne (Get-Process -Id $webPyPid -ErrorAction SilentlyContinue))) 'Yellow'
                 if (Test-Path $OsWebLog) {
@@ -600,43 +671,8 @@ set PYTHONUNBUFFERED=1
     }
 
     # ===============================================================
-    # 环境变量说明(不再在此注入)
-    #   POSTGRES_URI / STORYLINE_MODE / THREAD_ID 等已在脚本头部、所有
-    #   Start-Process 之前注入(见 envBackup 段)——子进程只在创建瞬间继承
-    #   父进程环境快照,后置注入补不到已运行的 Uvicorn/MCode/MCP/Worker
-    #   进程链。preflight 与 Phase 2/3 的 Python 子进程继承的正是前置注入值。
-    # ===============================================================
-
-    # ===============================================================
-    # Phase 1 — preflight.ps1(本次运行**唯一一次**完整预检)
-    # ===============================================================
-    Write-Phase ''
-    Write-Phase "Phase 1:Pre-flight 自检(6 步,本次运行只执行一次)" 'Cyan'
-
-    if (-not (Test-Path $Preflight)) {
-        Write-PhaseErr "找不到 $Preflight"
-        exit 13
-    }
-
-    # 用 & 直接调用,exit code 经 $LASTEXITCODE 回传。
-    # 顺序写日志(不用 Tee-Object):见 Write-Phase 的「单写者」说明。
-    # 同时保持**实时**输出(preflight 里的 docker pull 可能耗时较久)。
-    & $Preflight -PostgresUri $PostgresUri *>&1 | ForEach-Object {
-        $t = "$_"
-        Write-Host "  $t" -ForegroundColor DarkGray
-        Add-Content -Path $LogFile -Value "  $t" -Encoding UTF8 -ErrorAction SilentlyContinue
-    }
-    $preflightExit = $LASTEXITCODE
-    if ($preflightExit -ne 0) {
-        Write-PhaseErr "preflight.ps1 退出码 $preflightExit"
-        Write-Phase "    请查看上方日志或 README 「失败与恢复」表处理后重跑" 'Yellow'
-        exit $preflightExit
-    }
-    Write-PhaseOk "preflight.ps1 全部通过"
-
-    # ===============================================================
     # Phase 2 — run_workflow.py --production --skip-preflight
-    #   --skip-preflight:预检已在 Phase 1 做过,这里不能再跑第二遍。
+    #   --skip-preflight:预检已在 Phase 0.58 做过,这里不能再跑第二遍。
     # ===============================================================
     Write-Phase ''
     Write-Phase "Phase 2:端到端 invoke(run_workflow.py --production --skip-preflight)" 'Cyan'
