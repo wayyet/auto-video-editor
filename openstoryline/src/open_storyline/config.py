@@ -251,6 +251,33 @@ class PlanTimelineProConfig(ConfigBaseModel):
     is_text_beats: bool = False  
     # Whether text start time should align with detected music beats
 
+class GLMConfig(ConfigBaseModel):
+    """GLM API(BigModel OpenAI 兼容)预设(ZCode 接入设计 §10.4 阶段 C)。
+
+    这是一个**模型服务**预设,不是 ZCode Agent —— 两者必须分开命名
+    (设计 §3.5 / §7 约束 8:用户选 GLM API 就显示模型来源,禁止标成 ZCode Agent)。
+
+    字段说明:
+      model       文本对话模型(LLM 侧)
+      vlm_model   图像理解模型(VLM 侧);空 = 只做 LLM 预设,VLM 下拉不出现
+                  (设计 C-T2:VLM 能力未验证前不默认放开)
+      base_url    BigModel 通用 OpenAI 兼容 endpoint。
+                  注意**不是** Coding Plan 专属 endpoint(``/api/coding/paas/v4``),
+                  视频规划/素材理解任务不应默认套用 Coding Plan(设计 §3.5)
+      api_key     只放 ``config.toml.local`` 或环境变量 ``OPENSTORYLINE_GLM_API_KEY``,
+                  不写入受 Git 跟踪的 config.toml(设计 §7 约束 6)
+      timeout     单次请求超时秒数。VLM 带图出 JSON 常超 20 秒,与 [llm]/[vlm] 对齐取 120
+    """
+
+    model: str = "glm-4.6"
+    vlm_model: str = ""
+    base_url: str = "https://open.bigmodel.cn/api/paas/v4"
+    api_key: str = ""
+    timeout: float = 120.0
+    temperature: Optional[float] = None
+    max_retries: int = 2
+
+
 class MCodeConfig(ConfigBaseModel):
     """mcode CLI 接入配置。
 
@@ -318,6 +345,8 @@ class Settings(ConfigBaseModel):
     plan_timeline_pro: PlanTimelineProConfig
     # mcode 接入:用 default_factory,没有 [mcode] 段的既有 config.toml 仍能加载
     mcode: MCodeConfig = Field(default_factory=MCodeConfig)
+    # GLM API 预设:同理,default_factory 保证旧 config.toml 不需要改动
+    glm: GLMConfig = Field(default_factory=GLMConfig)
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -341,6 +370,8 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
     变量名与 agent_fastapi.MODEL_ENV_KEYS 保持一致:
       OPENSTORYLINE_LLM_MODEL / OPENSTORYLINE_LLM_BASE_URL / OPENSTORYLINE_LLM_API_KEY
       OPENSTORYLINE_VLM_MODEL / OPENSTORYLINE_VLM_BASE_URL / OPENSTORYLINE_VLM_API_KEY
+      OPENSTORYLINE_GLM_MODEL / OPENSTORYLINE_GLM_BASE_URL / OPENSTORYLINE_GLM_API_KEY
+      OPENSTORYLINE_GLM_VLM_MODEL(GLM 预设的 VLM 侧模型名)
 
     mcode 接入相关(只覆盖路径类字段;mode / permission / 数值项走 config 文件):
       OPENSTORYLINE_MCODE_CWD        —— 操作员目录
@@ -349,12 +380,16 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
 
     只写其中一部分也可以(没写的沿用文件里的值)。
     """
-    for section in ("llm", "vlm"):
+    for section in ("llm", "vlm", "glm"):
         block = data.setdefault(section, {})
         for field_name in ("model", "base_url", "api_key"):
             val = os.getenv(f"OPENSTORYLINE_{section.upper()}_{field_name.upper()}")
             if val:
                 block[field_name] = val
+
+    glm_vlm_model = os.getenv("OPENSTORYLINE_GLM_VLM_MODEL")
+    if glm_vlm_model:
+        data.setdefault("glm", {})["vlm_model"] = glm_vlm_model
 
     mcode_block = data.setdefault("mcode", {})
     for field_name in ("cwd", "bin", "media_root"):

@@ -30,6 +30,24 @@ timeout = 120.0 # 鍗曚綅锛氱銆俈LM 璧伴潪娴佸紡璋冪敤锛屾�
 temperature = 0.1
 max_retries = 2
 
+
+# ============= GLM API(智谱 BigModel)预设 / GLM API preset (ZCode 接入设计 阶段 C) =============
+# 这是一个「模型服务」预设,走 ChatOpenAI -> BigModel OpenAI 兼容 endpoint。
+# ⚠️ 它不是 ZCode Agent,也不代表 ZCode Agent 可用 —— 两者必须分开命名。
+# ⚠️ api_key 只放 config.toml.local(已被 .gitignore 排除)或环境变量
+#    OPENSTORYLINE_GLM_API_KEY,不要把真 Key 写进本文件(不入 Git)。
+# 凭证配好后,左侧模型下拉会自动出现「GLM API / BigModel」选项。
+# vlm_model 留空 = 只做 LLM 预设;填视觉模型名(如 glm-4.6v)后 VLM 下拉才会出现该选项。
+# base_url 用通用 API endpoint;不要套用 Coding Plan 专属 endpoint(/api/coding/paas/v4)。
+[glm]
+model = "glm-4.6"
+vlm_model = ""
+base_url = "https://open.bigmodel.cn/api/paas/v4"
+api_key = ""                                # 真实 Key 写在 config.toml.local 或环境变量
+timeout = 120.0
+temperature = 0.1
+max_retries = 2
+
 # ============= MCP Server 鐩稿叧 / MCP Server Related =============
 [local_mcp_server]
 server_name = "storyline"

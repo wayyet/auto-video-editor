@@ -106,6 +106,15 @@ USE_SESSION_SUBDIR = True
 
 CUSTOM_MODEL_KEY = "__custom__"
 
+# GLM API(BigModel OpenAI 兼容)预设(ZCode 接入设计 §10.4 阶段 C)。
+# 这是一条**模型服务**链路:走 ChatOpenAI -> BigModel endpoint,和内置模型同构。
+# ⚠️ 命名约束(设计 §7 约束 8):菜单标识就是 ``GLM API / BigModel``,
+#    **禁止**命名为 ``ZCode Agent`` —— GLM API 是模型调用,ZCode Agent 是
+#    外部 Agent Runtime,两者不是一回事,来源标识不可混用。
+# 这个 key 本身就是前端下拉里的显示文本(app.js 直接渲染模型 key 作为标签),
+# 所以它必须保持人类可读,不能改成 "__glm__" 这类内部代号。
+GLM_MODEL_KEY = "GLM API / BigModel"
+
 # mcode 档位:网页端模型下拉里的两个可选项。
 #   mcode-operator -> mcode standard 模式(完整 agent 能力,开销大)
 #   mcode-chat     -> mcode lightweight 模式(轻量,便宜)
@@ -265,6 +274,64 @@ def _builtin_credentials_usable(cfg: Settings, kind: str = "llm") -> bool:
     """内置模型(``[llm]`` / ``[vlm]``)的凭证是否真的可用。"""
     cfg_block = cfg.llm if kind == "llm" else cfg.vlm
     resolved, err = _resolve_builtin_model_override(kind, cfg_block)
+    if err or not resolved:
+        return False
+    return not _looks_like_placeholder_secret(resolved.get("api_key"))
+
+
+# --------------------------------------------------------------------------
+# GLM API 预设(阶段 C)
+# --------------------------------------------------------------------------
+# 不复用 _resolve_builtin_model_override:那个函数对 [llm]/[vlm] 的语义是
+# 「config 三项任一缺失 → 整组回落到环境变量」。GLM 的 model/base_url 有
+# 合理默认值,只有 api_key 需要 Key,整组回落会把默认的 model/base_url 一并
+# 冲掉。这里按字段逐项合并:config 值优先,环境变量只补缺失的字段。
+
+def _resolve_glm_override(cfg: Settings) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """把 ``[glm]`` 段(+ 环境变量补洞)解析成一份 ChatOpenAI override。
+
+    Returns:
+        (override, None) 或 (None, 错误信息)。override 只含模型请求必需项,
+        不含任何 ZCode 私有凭据(GLM API 与 ZCode Agent 是两条独立链路)。
+    """
+    g = getattr(cfg, "glm", None)
+    if g is None:
+        return None, "glm config missing (internal error: GLMConfig should always exist)"
+
+    model = _s(g.model) or _s(os.getenv("OPENSTORYLINE_GLM_MODEL"))
+    base_url = _norm_url(g.base_url) or _norm_url(os.getenv("OPENSTORYLINE_GLM_BASE_URL"))
+    api_key = _s(g.api_key) or _s(os.getenv("OPENSTORYLINE_GLM_API_KEY"))
+
+    if not (model and base_url and api_key):
+        return None, (
+            "GLM API 配置不完整。请在 config.toml.local 的 [glm] 段填 api_key"
+            "(model/base_url 已有默认值),"
+            "或设置环境变量 OPENSTORYLINE_GLM_API_KEY"
+            "(/ OPENSTORYLINE_GLM_MODEL / OPENSTORYLINE_GLM_BASE_URL)。"
+        )
+
+    override: Dict[str, Any] = {"model": model, "base_url": base_url, "api_key": api_key}
+    for k in ("timeout", "temperature", "max_retries", "top_p", "max_tokens"):
+        v = getattr(g, k, None)
+        if v not in (None, ""):
+            override[k] = v
+    return override, None
+
+
+def _glm_vlm_model_name(cfg: Settings) -> str:
+    """GLM 预设的 VLM 侧模型名;空 = 未配置,VLM 下拉不出现 GLM 选项。"""
+    g = getattr(cfg, "glm", None)
+    return _s(getattr(g, "vlm_model", "") if g is not None else "") or \
+        _s(os.getenv("OPENSTORYLINE_GLM_VLM_MODEL"))
+
+
+def _glm_preset_available(cfg: Settings) -> bool:
+    """GLM API 预设当前能不能选。
+
+    判据:``[glm]`` 三要素(model/base_url/api_key)齐全**且** api_key 不是
+    占位符。与 mcode 档位同款策略:凭证没配好就不给一个「点了就 401」的选项。
+    """
+    resolved, err = _resolve_glm_override(cfg)
     if err or not resolved:
         return False
     return not _looks_like_placeholder_secret(resolved.get("api_key"))
@@ -1834,10 +1901,20 @@ class ChatSession:
         # mcode 档位:操作员目录配好了才加进下拉。
         mcode_tiers = _mcode_tiers_available(self.cfg)
 
-        self.chat_models = _dedup_models([default_llm] + mcode_tiers + [CUSTOM_MODEL_KEY])
+        # GLM API 预设(阶段 C):``[glm]`` 凭证齐了才加进 LLM 下拉;
+        # VLM 侧还要求显式配置 vlm_model —— 图像输入能力未经 C-T2 验证前
+        # 不默认放开(设计 §10.4 C-T2「不满足则只做 LLM 预设」)。
+        glm_llm_ready = _glm_preset_available(self.cfg)
+        glm_vlm_ready = glm_llm_ready and bool(_glm_vlm_model_name(self.cfg))
+        glm_llm_options = [GLM_MODEL_KEY] if glm_llm_ready else []
+        glm_vlm_options = [GLM_MODEL_KEY] if glm_vlm_ready else []
+
+        self.chat_models = _dedup_models(
+            [default_llm] + glm_llm_options + mcode_tiers + [CUSTOM_MODEL_KEY])
         self.chat_model_key = default_llm
 
-        self.vlm_models = _dedup_models([default_vlm] + mcode_tiers + [CUSTOM_MODEL_KEY])
+        self.vlm_models = _dedup_models(
+            [default_vlm] + glm_vlm_options + mcode_tiers + [CUSTOM_MODEL_KEY])
         self.vlm_model_key = default_vlm
 
         # 默认档位:内置模型没有可用凭证(占位符 / 缺失)而 mcode 可用时,
@@ -2459,6 +2536,19 @@ class ChatSession:
             if _is_missing(cfg.get("model")) or _is_missing(cfg.get("base_url")) or _is_missing(cfg.get("api_key")):
                 missing.append("custom_vlm")
 
+        if self.chat_model_key == GLM_MODEL_KEY:
+            # GLM 预设的凭证来自服务端 [glm] 段/环境变量,会话恢复后 config
+            # 可能已经变掉(比如 local 文件被清了)→ 这里兜住,给出可读的
+            # requires_reconfig,而不是等第一次请求才撞 401。
+            resolved, err = _resolve_glm_override(self.cfg)
+            if err or not resolved:
+                missing.append("glm_llm")
+
+        if self.vlm_model_key == GLM_MODEL_KEY:
+            resolved, err = _resolve_glm_override(self.cfg)
+            if err or not resolved or not _glm_vlm_model_name(self.cfg):
+                missing.append("glm_vlm")
+
         if (self.pexels_key_mode or "").lower() == "custom":
             if _is_missing(self.pexels_custom_key):
                 missing.append("pexels_custom")
@@ -2613,6 +2703,12 @@ class ChatSession:
                 if not isinstance(self.custom_llm_config, dict):
                     raise RuntimeError("please fill in model/base_url/api_key of custom LLM")
                 llm_override = self.custom_llm_config
+            elif self.chat_model_key == GLM_MODEL_KEY:
+                # GLM API 预设(阶段 C):和内置模型同构的 ChatOpenAI 链路,
+                # 只是 model/base_url/api_key 来自 [glm] 段(+环境变量补洞)。
+                llm_override, err = _resolve_glm_override(self.cfg)
+                if err or not llm_override:
+                    raise RuntimeError(f"requires_reconfig: {err}")
             else:
                 llm_override, err = _resolve_builtin_model_override("llm", self.cfg.llm)
                 if err:
@@ -2623,6 +2719,18 @@ class ChatSession:
                 if not isinstance(self.custom_vlm_config, dict):
                     raise RuntimeError("please fill in model/base_url/api_key of custom VLM")
                 vlm_override = self.custom_vlm_config
+            elif self.vlm_model_key == GLM_MODEL_KEY:
+                # GLM 的 VLM 侧:凭证同 [glm],模型名用 vlm_model(与文本模型分开,
+                # 因为图像理解需要视觉模型,不是所有 GLM 文本模型都支持图像输入)。
+                vlm_override, err = _resolve_glm_override(self.cfg)
+                if err or not vlm_override:
+                    raise RuntimeError(f"requires_reconfig: {err}")
+                vlm_name = _glm_vlm_model_name(self.cfg)
+                if not vlm_name:
+                    raise RuntimeError(
+                        "requires_reconfig: GLM VLM 未配置。请在 [glm].vlm_model 填视觉模型名,"
+                        "或设置环境变量 OPENSTORYLINE_GLM_VLM_MODEL。")
+                vlm_override = {**vlm_override, "model": vlm_name}
             else:
                 vlm_override, err = _resolve_builtin_model_override("vlm", self.cfg.vlm)
                 if err:
