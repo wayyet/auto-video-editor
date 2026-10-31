@@ -164,7 +164,6 @@ _STORYLINE_MODE_OVERRIDE: contextvars.ContextVar[str | None] = contextvars.Conte
 )
 
 from config import (
-    POSTGRES_URI,
     STORYLINE_MODE,
     resolve_draft_dir,
 )
@@ -426,15 +425,16 @@ async def get_checkpointer():
             await graph.ainvoke(state, config)
 
     关键步骤:
-    1. ``AsyncPostgresSaver.from_conn_string(POSTGRES_URI)`` — 内部起连接池
+    1. ``AsyncPostgresSaver.from_conn_string(uri)`` — uri 来自统一 DSN 解析层
     2. ``await saver.setup()`` — 首次使用建表(checkpoints / checkpoint_blobs /
        checkpoint_writes),幂等
     3. yield saver 供 build_graph 使用
     4. context manager 退出时 saver 自行清理
 
     Raises:
-        RuntimeError: 未安装 ``langgraph-checkpoint-postgres``。
-        ValueError: ``POSTGRES_URI`` 未配置或格式错误。
+        RuntimeError: 未安装 ``langgraph-checkpoint-postgres``;或
+            ``APP_ENV=production`` 且设置了 ``AGENT_GATE_POSTGRES_URI``
+            (统一解析层 B-T4 生产防护)。
     """
     try:
         from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -444,9 +444,13 @@ async def get_checkpointer():
             "请先 pip install langgraph-checkpoint-postgres psycopg[binary,pool]"
         ) from e
 
-    uri = os.environ.get("POSTGRES_URI", POSTGRES_URI)
-    if not uri:
-        raise ValueError("POSTGRES_URI 环境变量未设置")
+    # B-T2(环境变量传播链路优化):改用统一 DSN 解析层,与 agent_gate worker
+    # 共用同一套优先级与空值回退 —— 两条 LangGraph 路径不再可能因解析规则
+    # 不同而连到不同数据库(执行设计 §4.3 的 P0;原 ``os.environ.get`` 自有
+    # 解析与空值检查一并删除)。
+    from db.postgres_config import resolve_postgres_target
+
+    uri = resolve_postgres_target().uri
 
     # ⚠️ 必须先设 JSONB 的 dumps:本机库编码是 SQL_ASCII,psycopg3 默认
     # ``ensure_ascii=True`` 会把中文写成 ``\uXXXX``,PG 无法把它翻译成 SQL_ASCII

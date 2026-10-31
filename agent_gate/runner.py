@@ -8,16 +8,16 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
 import os
 import subprocess
 import sys
 import threading
 import traceback
 from contextlib import contextmanager
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
 from agent_gate import lease, service
 from agent_gate.agent_bin import augment_path
@@ -39,6 +39,19 @@ from agent_gate.safety import (
     safe_gate_root,
     safe_thread_id,
 )
+
+# 统一 DSN 解析层(阶段 B-T1):主图与 worker 共用 ``db.postgres_config``。
+# 本模块 re-export 既有公开名 —— ``from agent_gate.runner import
+# resolve_postgres_target`` 等旧导入(scripts/verify_agent_gate_postgres.py、
+# agent_gate/tests/test_postgres_target.py)不受影响。
+from db.postgres_config import (
+    DEFAULT_POSTGRES_URI,
+    PostgresTarget,
+    describe_postgres_target,
+    resolve_postgres_target,
+)
+
+_logger = logging.getLogger("agent_gate.runner")
 
 
 def load_callable(spec: str) -> Callable[..., Any]:
@@ -103,61 +116,12 @@ def _isolate_draft_dir(outputs_root: Path | str, thread_id: str) -> tuple[Path, 
 #: - ``memory``  :``InMemorySaver``(沙箱 / 单测;进程内,无持久化)
 CKPT_BACKEND_ENV = "AGENT_GATE_CKPT_BACKEND"
 
-DEFAULT_POSTGRES_URI = "postgresql://postgres:devpass@localhost:5432/video_workflow"
-
 _CKPT_BACKENDS = ("postgres", "memory")
 
 
-@dataclass(frozen=True)
-class PostgresTarget:
-    """worker 最终使用的 Postgres 连接目标,及其 DSN 来源。
-
-    ``source`` 取值:
-    - ``env:AGENT_GATE_POSTGRES_URI`` / ``env:POSTGRES_URI`` —— 环境变量注入
-    - ``config.POSTGRES_URI``        —— 仓库根 ``config.py``
-    - ``runner.DEFAULT_POSTGRES_URI`` —— 纯 kit 场景(仓库不在 sys.path 上)的最后兜底
-    """
-
-    uri: str
-    source: str
-
-
-def _non_empty_env(name: str) -> Optional[str]:
-    """读环境变量并归一化:未设置 / 空串 / 纯空白一律视为"没有提供"。"""
-    value = os.environ.get(name)
-    value = value.strip() if value else ""
-    return value or None
-
-
-def resolve_postgres_target() -> PostgresTarget:
-    """解析 worker 实际使用的 Postgres DSN 与来源。
-
-    顺序:``AGENT_GATE_POSTGRES_URI`` → ``POSTGRES_URI`` 环境变量 →
-    仓库 ``config.POSTGRES_URI`` → 默认值。
-
-    ``AGENT_GATE_POSTGRES_URI`` 放在最前面,是为了让 agent_gate 的测试能用
-    **独立测试库**(见 ``agent_gate/tests/conftest.py``),不污染工作库里真实的
-    checkpoint —— 也避免改到仓库全局的 ``POSTGRES_URI``。
-
-    空值防御(2026-10-31 worker `no password supplied` 故障):候选值未设置 /
-    空串 / 纯空白一律跳过、落到下一档,保证**永远不会返回空 DSN**。
-
-    Returns:
-        :class:`PostgresTarget`(uri + source)。
-    """
-    for env in ("AGENT_GATE_POSTGRES_URI", "POSTGRES_URI"):
-        value = _non_empty_env(env)
-        if value:
-            return PostgresTarget(uri=value, source=f"env:{env}")
-    try:
-        from config import POSTGRES_URI as _cfg_uri
-
-        value = str(_cfg_uri or "").strip()
-        if value:
-            return PostgresTarget(uri=value, source="config.POSTGRES_URI")
-    except Exception:  # noqa: BLE001 — 纯 kit 场景(仓库不在 sys.path 上)
-        pass
-    return PostgresTarget(uri=DEFAULT_POSTGRES_URI, source="runner.DEFAULT_POSTGRES_URI")
+# PostgresTarget / resolve_postgres_target() / describe_postgres_target() 已上移到
+# 统一解析层 db.postgres_config(阶段 B-T1),本模块经顶部 import re-export。
+# 解析语义(APP_ENV=production 拒绝测试库变量 / 空值防御)以该模块为准。
 
 
 def postgres_uri() -> str:
@@ -168,50 +132,6 @@ def postgres_uri() -> str:
     :func:`resolve_postgres_target`。
     """
     return resolve_postgres_target().uri
-
-
-def describe_postgres_target(target: Optional[PostgresTarget] = None) -> dict[str, Any]:
-    """把 :class:`PostgresTarget` 变成**可安全落日志**的脱敏诊断字段。
-
-    只暴露来源 / 主机 / 端口 / 库名 / 用户名 / 是否带密码 / 脱敏 URI;
-    绝不输出密码本身,也不输出 query(里面可能带敏感参数)。
-
-    注意 ``password_present=False`` 只说明"URI 里没写密码",不代表一定连不上
-    (``.pgpass`` / 证书等认证方式依然可用);诊断字段只作定位线索,
-    不在通用路径强制拒绝无密码 DSN。
-    """
-    t = target if target is not None else resolve_postgres_target()
-    info: dict[str, Any] = {
-        "source": t.source,
-        "host": None,
-        "port": None,
-        "dbname": None,
-        "user": None,
-        "password_present": False,
-        "uri_masked": "<uri 解析失败>",
-    }
-    try:
-        parts = urlsplit(t.uri)
-        # 只对"绝对 postgres URI"做脱敏回显;其它形态(无 scheme / 无 netloc /
-        # 裸文本)不回显原文 —— 无 netloc 时 userinfo 不会被识别,原文里可能
-        # 夹带凭据,原样落日志就是泄漏。
-        if parts.scheme.lower() not in ("postgresql", "postgres") or not parts.netloc:
-            raise ValueError(f"not an absolute postgres URI: scheme={parts.scheme!r}")
-        host = parts.hostname or ""
-        info["host"] = host or None
-        info["port"] = parts.port
-        info["dbname"] = (parts.path or "").lstrip("/") or None
-        info["user"] = parts.username or None
-        info["password_present"] = parts.password is not None
-        netloc = f"[{host}]" if host and ":" in host else host  # IPv6 字面量要带回方括号
-        if parts.username:
-            netloc = parts.username + (":***" if parts.password else "") + "@" + netloc
-        if parts.port:
-            netloc += f":{parts.port}"
-        info["uri_masked"] = urlunsplit((parts.scheme, netloc, parts.path or "", "", ""))
-    except Exception:  # noqa: BLE001 — 脱敏失败也不能把原始 URI 抛进日志
-        pass
-    return info
 
 
 def checkpoint_backend() -> str:
@@ -257,7 +177,7 @@ def _configure_json_dumps() -> None:
     set_json_dumps(lambda obj, context=None: json.dumps(obj, ensure_ascii=False))
 
 
-def make_checkpointer(thread_id: str = "default"):
+def make_checkpointer(thread_id: str = "default", mailbox: Optional[Mailbox] = None):
     """构造 worker 用的 checkpointer(调用方负责释放,见 ``close_checkpointer``)。
 
     worker 是**同步**进程(``graph.invoke``),所以用**同步**的
@@ -266,10 +186,13 @@ def make_checkpointer(thread_id: str = "default"):
 
     Args:
         thread_id: 工作流线程 ID;仅用于日志 / 错误信息。
+        mailbox: worker 信箱;提供时在连接**之前**落 ``postgres_target`` 脱敏事件
+            (阶段 B-T6,事件名/字段与原 run_worker 内联版本一致)。
+            脚本 / 单测等无信箱调用方可省略,此时只走 logging。
 
     Returns:
         同步 saver 实例(PostgresSaver 或 InMemorySaver)。
-        PostgresSaver 上挂了 ``_agent_gate_pool`` 属性,供 ``close_checkpointer`` 释放。
+        PostgresSaver 上挂了 ``_agent_gate_conn`` 属性,供 ``close_checkpointer`` 释放。
 
     Raises:
         RuntimeError: Postgres 不可用 / 表未建 / 包未安装。
@@ -285,12 +208,32 @@ def make_checkpointer(thread_id: str = "default"):
     try:
         from langgraph.checkpoint.postgres import PostgresSaver
         from psycopg import Connection
+        from psycopg.conninfo import make_conninfo
         from psycopg.rows import dict_row
     except ImportError as e:  # pragma: no cover — 依赖缺失
         raise RuntimeError(
             "agent_gate 需要 langgraph-checkpoint-postgres 与 psycopg[binary,pool]:"
             "pip install langgraph-checkpoint-postgres 'psycopg[binary,pool]'"
         ) from e
+
+    # B-T6:连接**之前**落一次脱敏 DSN 诊断(来源/主机/端口/库/用户/是否带密码)。
+    # 诊断挪进连接路径本身 —— 任何直接调用 make_checkpointer 的入口(脚本/单测)
+    # 也先有"到底用了哪个来源、哪个目标"可查;事件里没有密码,也没有 URI 原文。
+    if mailbox is not None:
+        mailbox.log_event("postgres_target", **describe_postgres_target())
+    else:
+        _logger.info("make_checkpointer postgres target: %s", describe_postgres_target())
+
+    # B-T5:连接超时 —— Postgres 不可达时快速失败,worker 不能长时间停在
+    # starting。复用 db/connection.py 的统一策略(默认 10s,可用环境变量
+    # ``POSTGRES_CONNECT_TIMEOUT`` 覆盖);纯 kit 场景退回同款默认值。
+    # 超时用 ``psycopg.conninfo.make_conninfo`` 合并进 conninfo,**不拼接字符串**。
+    try:
+        from db.connection import _connect_timeout_s
+
+        connect_timeout = _connect_timeout_s()
+    except Exception:  # noqa: BLE001 — 纯 kit 场景
+        connect_timeout = 10  # 与 db.connection.DEFAULT_CONNECT_TIMEOUT_S 一致
 
     # 写 JSONB 的全局 dumps 设置(见 ``_configure_json_dumps``)
     _configure_json_dumps()
@@ -300,7 +243,7 @@ def make_checkpointer(thread_id: str = "default"):
     # 会打 "couldn't stop thread" 噪声,单连接没有这个问题。
     try:
         conn = Connection.connect(
-            uri,
+            make_conninfo(uri, connect_timeout=connect_timeout),
             autocommit=True,
             prepare_threshold=0,
             row_factory=dict_row,
@@ -335,7 +278,7 @@ def close_checkpointer(saver: Any) -> None:
 
 
 @contextmanager
-def checkpointer_session(thread_id: str):
+def checkpointer_session(thread_id: str, mailbox: Optional[Mailbox] = None):
     """构造 worker 用的 checkpointer,退出时释放连接池。
 
     语义同 ``make_checkpointer``,但保证连接池被回收。
@@ -344,29 +287,49 @@ def checkpointer_session(thread_id: str):
         RuntimeError: Postgres 不可用 / 表未建 / 包未安装。
         ValueError: ``AGENT_GATE_CKPT_BACKEND`` 取值非法。
     """
-    saver = make_checkpointer(thread_id)
+    saver = make_checkpointer(thread_id, mailbox=mailbox)
     try:
         yield saver
     finally:
         close_checkpointer(saver)
 
 
-def checkpoint_exists(thread_id: str) -> bool:
-    """这个 thread 在 Postgres 里有没有 checkpoint。
+def _scrub_dsn_text(text: str, uri: str) -> str:
+    """把文本里可能出现的 DSN 密码子串替换成 ``***``(B-T7 诊断脱敏)。
+
+    psycopg 的连接错误不会回显密码,但按"不信任异常文本"处理:
+    只要解析出的 URI 带密码,就把该子串从任何要落日志的文本中抹掉。
+    """
+    password = urlsplit(uri).password
+    if password:
+        text = text.replace(password, "***")
+    return text
+
+
+def checkpoint_exists(thread_id: str) -> Optional[bool]:
+    """这个 thread 在 Postgres 里有没有 checkpoint(**三态**,阶段 B-T7)。
 
     统一改造后 checkpoint 不再是本地文件,而是 ``checkpoints`` 表里的行
     (方案 §4.7)。查两套 thread_id:文本版 + ``\\x<hex>`` 字面量版 ——
     后者是历史遗留(bytes 传进 saver 造成的,见方案 §3.1 M2)。
 
-    查不到 / 连不上 ⇒ 返回 ``False``(fail-closed:宁可不许续跑,也不盲目重跑)。
+    Returns:
+        ``True``  —— 数据库可连,存在 checkpoint;
+        ``False`` —— 数据库可连,确实不存在;
+        ``None``  —— 查询本身失败(数据库不可达等)。调用方**必须**按
+            ``database_unavailable`` 处理:仍然 fail-closed(不许盲目续跑),
+            但错误语义不再是"无 checkpoint",避免把"数据库挂了"误导成
+            "换新 thread_id 重跑"(执行设计 §6.5)。
+
+    查询失败会先落一条脱敏诊断日志(密码打码),再返回 ``None``。
     """
     safe_thread_id(thread_id)
-    uri = postgres_uri()
+    target = resolve_postgres_target()
     hex_literal = "\\x" + thread_id.encode("utf-8").hex()
     try:
         import psycopg
 
-        with psycopg.connect(uri, connect_timeout=5, client_encoding="utf-8") as conn:
+        with psycopg.connect(target.uri, connect_timeout=5, client_encoding="utf-8") as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT 1 FROM checkpoints"
@@ -374,8 +337,15 @@ def checkpoint_exists(thread_id: str) -> bool:
                     (thread_id, hex_literal),
                 )
                 return cur.fetchone() is not None
-    except Exception:  # noqa: BLE001 — 查不到就当没有(fail-closed)
-        return False
+    except Exception as e:  # noqa: BLE001 — 查询失败 ≠ 无 checkpoint:返回 None(fail-closed)
+        diag = describe_postgres_target(target)
+        _logger.warning(
+            "checkpoint_exists 查询失败(thread_id=%s source=%s host=%s port=%s db=%s): %s",
+            thread_id, diag.get("source"), diag.get("host"), diag.get("port"),
+            diag.get("dbname"),
+            _scrub_dsn_text(f"{type(e).__name__}: {e}", target.uri)[:500],
+        )
+        return None
 
 
 # ------------------------------------------------------------------ 恢复(同步版)
@@ -521,14 +491,12 @@ def run_worker(
 
         client = client_factory(mb) if client_factory else build_client(backend, mb)
         install_client(client)
-        # worker 眼中的最终 DSN(脱敏诊断,2026-10-31 `no password supplied` 故障):
-        # 在 checkpointer 连接**之前**落事件,连接失败时才有"到底用了哪个来源、
-        # 哪个目标"可查(事件里只有来源/主机/端口/库/用户/是否带密码,没有密码)。
-        if checkpoint_backend() == "postgres":
-            mb.log_event("postgres_target", **describe_postgres_target())
         # checkpointer 由 worker 自己建并注入(方案 §4.7):仓库的
         # ``graph.build_graph()`` 已改为"未注入就报错",不再自动兜底。
-        with checkpointer_session(thread_id) as saver:
+        # worker 眼中的最终 DSN 脱敏诊断(postgres_target 事件)已挪进
+        # make_checkpointer 连接路径本身(B-T6);传 mb 让它落 events.jsonl,
+        # 事件名/字段与原内联版本一致,连接失败时才有"哪个来源、哪个目标"可查。
+        with checkpointer_session(thread_id, mailbox=mb) as saver:
             graph = load_callable(graph_factory)(
                 checkpointer=saver,
                 thread_id=thread_id,
@@ -599,7 +567,9 @@ def check_mode(
     ``already_used``    mode=start,但这个 thread 已经有 status 或 checkpoint
     ``already_running`` 正在 starting / running —— 保留的第 4 条独立检查
     ``not_restartable`` mode=continue_after_crash,但状态不是 crashed / failed
-    ``no_checkpoint``   mode=continue_after_crash,但 Postgres 里没有这个 thread 的检查点
+    ``no_checkpoint``   mode=continue_after_crash,但 Postgres 里(可连、可查)没有这个 thread 的检查点
+    ``database_unavailable`` mode=continue_after_crash,但 checkpoint 查询本身失败
+                        (数据库不可达;B-T7 三态化,fail-closed 不许盲目续跑)
     ``not_waiting_human`` mode=resume,但状态不是 waiting_human
     ``bad_checkpoint``  mode=resume,但传入的 checkpoint 不在挂起列表里
     ==================  ==========================================================
@@ -624,6 +594,13 @@ def check_mode(
                     "message": f"当前状态是 {state!r},只有 crashed / failed 才可以从检查点继续。"}
         if has_checkpoint is None:
             has_checkpoint = checkpoint_exists(thread_id)
+        if has_checkpoint is None:
+            # B-T7 三态:查询失败(数据库不可达)≠ 无 checkpoint。
+            # fail-closed 不许盲目续跑,但错误语义要准确,避免误导排障方向。
+            return {"ok": False, "code": "database_unavailable", "status": dict(cur),
+                    "message": "无法确认该 thread 是否有 checkpoint(Postgres 查询失败,"
+                               "见 worker 侧 checkpoint_exists 诊断日志)。请先恢复数据库"
+                               "连接再重试 continue_after_crash;不要新建 thread_id 盲目重跑。"}
         if not has_checkpoint:
             return {"ok": False, "code": "no_checkpoint", "status": dict(cur),
                     "message": "没有找到这个 thread 的检查点(Postgres 里没有记录),无法从崩溃处继续。"

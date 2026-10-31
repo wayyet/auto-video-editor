@@ -376,13 +376,16 @@ CAPCUT_DECRYPT_CMD: list[str] = ["capcut", "decrypt"]
 #   存在但为空串/纯空白时必须**回退默认值** —— ``os.environ.get(name, 默认)``
 #   在"变量存在但为空"时返回空串而不是默认值,会让"没注入成功"从
 #   "用默认 DSN"劣化成"拿空 DSN 连接"。
-_DEFAULT_POSTGRES_URI = (
-    "postgresql://postgres:devpass@localhost:5432/video_workflow"
-)
-POSTGRES_URI: str = (
-    os.environ.get("POSTGRES_URI", "").strip()
-    or _DEFAULT_POSTGRES_URI
-)
+#
+#   B-T3(环境变量传播链路优化):本常量改由统一解析器 db.postgres_config 取值,
+#   与主图(graph.get_checkpointer)和 worker(agent_gate.runner)共用同一套
+#   优先级(AGENT_GATE_POSTGRES_URI → POSTGRES_URI → 默认)与空值回退,
+#   消除双份回退逻辑漂移。解析器对 config 的引用是延迟导入 + try/except:
+#   本模块导入到这一行时还没定义 POSTGRES_URI,解析器的 config 档会静默跳过、
+#   落到默认值(与旧 _DEFAULT_POSTGRES_URI 一致),不会循环导入。
+from db.postgres_config import resolve_postgres_target as _resolve_postgres_target
+
+POSTGRES_URI: str = _resolve_postgres_target().uri
 # WORKFLOW_ENV 只用于选择同步/异步执行路径(见 scripts/run_workflow.py),
 # **不再**参与存储后端选择。
 WORKFLOW_ENV: str = os.environ.get("WORKFLOW_ENV", "development")  # "development" | "production"
