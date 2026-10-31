@@ -656,3 +656,70 @@ flowchart LR
 - [BigModel：在 ZCode 中使用 GLM Coding Plan](https://docs.bigmodel.cn/cn/coding-plan/tool/zcode)
 - [BigModel：通用 API Base URL 示例](https://docs.bigmodel.cn/cn/best-practice/case/ai-search-engine)
 
+---
+
+## 附录 A. E-T0：官方外部 Agent 调用接口跟踪（2026-10-31 核查）
+
+> 本附录是 §10.6 阶段 E 任务 E-T0 的交付物：固化当前核查到的接口形态、
+> 认证方式与版本，并记录硬门禁的判定结论。
+
+### A.1 本次新发现：CLI 发行版内含无头调用形态
+
+对官方渠道分发的 `zcode` CLI（npm 全局包，**版本 0.17.1**，本机 `zcode --help`
+实测）核查到以下此前未记录的对外调用形态：
+
+| 形态 | 证据 | 说明 |
+|---|---|---|
+| 无头单次执行 | `zcode --help` 列出 `-p, --prompt <text>`（"Run a single prompt without opening the TUI"） | 形态与 `mcode exec` 同级：非交互、单次、可配 `--mode`（权限）、`--attach`（附件）、`--cwd`、`--resume <sessionId>` |
+| 协议服务 | `zcode app-server`（"Run the ZCode Protocol stdio app server"） | stdio 上的 ZCode Protocol；`--help` 未给出报文规范 |
+| 会话恢复 | `--resume <sessionId>`（sess_* ID） | 与本仓库 OpenStoryline 会话映射相关 |
+
+**冒烟验证**（2026-10-31）：在空临时目录执行
+`zcode -p "只回复两个字:正常" --mode plan`，返回 `正常`，退出码 0 ——
+无头链路真实可用。认证走 CLI 本机登录态（`zcode login [zai|bigmodel]`
+浏览器授权），未观察到面向第三方的独立 API 凭据机制。
+
+### A.2 官方文档核查：仍无受支持的外部调用契约
+
+核查页面与检索（均于 2026-10-31）：
+
+- 文档首页全部章节（[zcode.z.ai/cn/docs](https://zcode.z.ai/cn/docs)）：
+  无 headless / `--prompt` / app-server / SDK / ZCode Protocol 任何条目。
+- [Remote Control](https://zcode.z.ai/cn/docs/remote-control)：二维码/浏览器
+  个人远程控制面，明确非编程接口。
+- FAQ：无相关内容（仅有 config 键更名等条目）。
+- [Changelog](https://zcode.z.ai/en/changelog)（至 v3.16.3）：无 headless /
+  app-server / SDK / 第三方编程集成的发布条目。
+- 站内与全网检索 `--prompt` / `app-server` / "ZCode Protocol" / headless：
+  无官方文档命中，第三方文章亦未记载。
+
+### A.3 门禁判定（2026-10-31）
+
+§10.6 硬门禁要求：**"Z.ai 发布受支持的外部 Agent 调用接口（CLI / SDK /
+HTTP / ACP 之一）并明确授权第三方集成"**。
+
+| 门禁条件 | 现状 | 判定 |
+|---|---|---|
+| 接口形态存在（CLI 之一） | CLI 0.17.1 实测含 `-p/--prompt`、`app-server` | 满足 |
+| **受支持**（官方文档化的契约） | 官方文档零记载，无报文规范、无版本承诺 | **不满足** |
+| **明确授权第三方集成** | 无任何授权/条款声明 | **不满足** |
+
+**结论：门禁未满足。** 依据本设计 §4.2 的既定标准（"直接假设存在
+`zcode exec`…都不属于受支持的集成方式，此类实现会造成版本脆弱、认证风险
+和不可测试的运行时依赖"），未文档化的 CLI 旗标不构成受支持契约。
+
+**处置：E-T1～E-T7 维持冻结**，本阶段仅交付本附录（E-T0）。
+冻结决定由仓库所有者于 2026-10-31 执行确认。
+
+### A.4 解冻条件与届时入口
+
+以下条件**同时**满足时可解除冻结，按 E-T1～E-T7 执行：
+
+1. 官方文档发布 headless / app-server / SDK 之一的调用契约（报文、认证、
+   版本承诺）；
+2. 官方明确第三方集成授权（文档条款或许可声明）。
+
+届时以本附录 A.1 记录的形态为起点重核（`zcode --help` + 文档对照），
+从 E-T1（`ZCodeAgentAdapter` 调用协议定义）开始，配合阶段 D 已就绪的
+操作员租约（§10.5）落实 §6.4 单消费者约束。
+
