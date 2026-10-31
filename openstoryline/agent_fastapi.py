@@ -63,7 +63,7 @@ if REPO_ROOT_DIR not in sys.path:
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
 
-from open_storyline.agent import build_agent, ClientContext, is_mcode_model
+from open_storyline.agent import build_agent, ClientContext, is_mcode_model, is_zcode_model
 from open_storyline.utils.prompts import get_prompt
 from open_storyline.utils.media_handler import scan_media_dir
 from open_storyline.utils.ai_transition_cancel import (
@@ -90,6 +90,8 @@ from open_storyline.mcode_event_adapter import (
     KIND_TOOL_START,
     MCodeEventAdapter,
 )
+from open_storyline.zcode_event_adapter import ZCODE_SOURCE, ZCodeEventAdapter, make_zcode_sink
+from open_storyline.zcode_agent_adapter import resolve_zcode_bin, zcode_selfcheck
 
 WEB_DIR = os.path.join(ROOT_DIR, "web")
 STATIC_DIR = os.path.join(WEB_DIR, "static")
@@ -121,6 +123,13 @@ GLM_MODEL_KEY = "GLM API / BigModel"
 # 选中任何一个,整个会话的 LLM/VLM 都由 `mcode exec` 子进程驱动
 # (mcode 不区分多模态),不再走 OpenAI 兼容网关,也不需要 API key。
 MCODE_MODEL_KEYS: Tuple[str, ...] = ("mcode-operator", "mcode-chat")
+
+# zcode CLI(智谱 ZCode)无头档位:网页端模型下拉里的可选项(阶段 E)。
+# 选中后整个会话由 `zcode -p ... --json` 子进程驱动(认证走 CLI 本机登录态,
+# 不需要 API key)。key 本身就是前端下拉的显示文本,保持人类可读。
+# 命名约束(设计 §7 约束 8):这是 **Agent Runtime** 档位,与 GLM API 模型服务
+# 是两条独立链路,"GLM API / BigModel" 与 "ZCode Agent" 的来源标识不可混用。
+ZCODE_MODEL_KEY = "ZCode Agent"
 
 SESSION_STATE_FILENAME = "session_state.json"
 SESSION_STATE_MAX_HISTORY = 2000
@@ -357,6 +366,53 @@ def _mcode_tiers_available(cfg: Settings) -> List[str]:
     return list(MCODE_MODEL_KEYS)
 
 
+def _zcode_available(cfg: Settings) -> bool:
+    """ZCode Agent 档位当前能不能选(阶段 E)。
+
+    判据:``[zcode].cwd`` 已配置、目录存在、bin 可解析且**启动自检通过**
+    (设计 §4.2 第二级前提 2:``--help`` 缺 ``-p, --prompt`` 旗标 = 选项不暴露)。
+    自检结果在 ``zcode_agent_adapter`` 内有缓存,失败短 TTL 后允许复检。
+    """
+    zcode_cfg = getattr(cfg, "zcode", None)
+    cwd = str(getattr(zcode_cfg, "cwd", "") or "").strip()
+    if not cwd:
+        return False
+    try:
+        if not Path(cwd).expanduser().is_dir():
+            return False
+    except OSError:
+        return False
+    bin_path = resolve_zcode_bin(str(getattr(zcode_cfg, "bin", "") or ""))
+    if not bin_path:
+        return False
+    ok, _reason = zcode_selfcheck(bin_path)
+    return ok
+
+
+def _zcode_note(cfg: Settings) -> str:
+    """ZCode Agent「配了但不可用」时的**禁用原因**(给快照 ``model_notes``)。
+
+    完全没配 ``[zcode].cwd`` 返回空串 —— 那是「功能未开启」,不是「坏了」,
+    选项直接从下拉消失(与 mcode/GLM 同款策略),不需要解释。
+    """
+    zcode_cfg = getattr(cfg, "zcode", None)
+    cwd = str(getattr(zcode_cfg, "cwd", "") or "").strip()
+    if not cwd:
+        return ""
+    try:
+        if not Path(cwd).expanduser().is_dir():
+            return f"zcode 工作区目录不存在: {cwd}"
+    except OSError as exc:
+        return f"zcode 工作区目录不可访问: {cwd}({exc})"
+    bin_path = resolve_zcode_bin(str(getattr(zcode_cfg, "bin", "") or ""))
+    if not bin_path:
+        return "找不到 zcode 可执行文件(设置 [zcode].bin 或环境变量 OPENSTORYLINE_ZCODE_BIN)"
+    ok, reason = zcode_selfcheck(bin_path)
+    if not ok:
+        return f"zcode 启动自检未通过: {reason}"
+    return ""
+
+
 def _resolve_mcode_tier(*keys: Any) -> str:
     """从若干个模型 key 里解析出「生效的 mcode 档位」。
 
@@ -369,9 +425,23 @@ def _resolve_mcode_tier(*keys: Any) -> str:
     return ""
 
 
-#: 本轮的模型来源。``mcode`` = MCode Agent 档位,``llm`` = 普通模型链路。
+#: 本轮的模型来源。``mcode`` = MCode Agent 档位,``llm`` = 普通模型链路,
+#: ``zcode`` = ZCode Agent 档位(阶段 E)。
 TURN_SOURCE_MCODE = "mcode"
 TURN_SOURCE_LLM = "llm"
+TURN_SOURCE_ZCODE = "zcode"
+
+
+def _resolve_zcode_key(*keys: Any) -> str:
+    """从若干个模型 key 里解析出「生效的 zcode 档位」。
+
+    LLM 优先;LLM 不是 zcode 档位时再看 VLM。返回空串 = 不走 zcode。
+    """
+    for key in keys:
+        s = str(key or "").strip()
+        if is_zcode_model(s):
+            return s
+    return ""
 
 
 def _resolve_turn_source(*keys: Any) -> str:
@@ -382,6 +452,8 @@ def _resolve_turn_source(*keys: Any) -> str:
     ``ensure_agent()`` 建的 agent 也是按这份配置来的,两边必须一致,
     否则会出现「界面说是 mcode、实际跑的是 DeepSeek」这种张冠李戴。
     """
+    if _resolve_zcode_key(*keys):
+        return TURN_SOURCE_ZCODE
     tier = _resolve_mcode_tier(*keys)
     if tier and is_mcode_model(tier):
         return TURN_SOURCE_MCODE
@@ -393,9 +465,11 @@ def _should_forward_langgraph_text(turn_source: str) -> bool:
 
     MCode turn 的文本已经由 CLI 事件通道(``mcode.event``)送出 ——
     再转发一次就是**同一份文本双发**。所以 mcode turn 一律不转发。
+    ZCode turn 同理:最终正文由结果 JSON 经 ``zcode.event`` 通道送出
+    (KIND_FINAL 只出一次),转发 LangGraph chunk 也会双发。
     普通模型链路保持原样。
     """
-    return turn_source != TURN_SOURCE_MCODE
+    return turn_source not in (TURN_SOURCE_MCODE, TURN_SOURCE_ZCODE)
 
 
 def _make_mcode_adapter(
@@ -420,6 +494,44 @@ def _make_mcode_adapter(
         max_text_chars=int(getattr(mcode_cfg, "max_event_text_chars", 2000)),
         max_trace_events=int(getattr(mcode_cfg, "max_trace_events", 300)),
     )
+
+
+def _make_zcode_adapter(
+    turn_source: str,
+    cfg: Any,
+    *,
+    session_id: str,
+    turn_id: str,
+) -> Optional[ZCodeEventAdapter]:
+    """本轮要不要 ZCode 事件适配器(阶段 E)。
+
+    普通模型链路返回 ``None`` —— 那一侧**不注册** zcode 事件通道,
+    也就不会往 ``zcode.event`` 队列里写任何东西(SRC-03 同款约束:
+    选了 DeepSeek 就不该出现「ZCode Agent 执行面板」事件)。
+    """
+    if turn_source != TURN_SOURCE_ZCODE:
+        return None
+    return ZCodeEventAdapter(
+        source=ZCODE_SOURCE,
+        session_id=session_id,
+        turn_id=turn_id,
+    )
+
+
+def _capture_zcode_session_id(sess: Any, new_messages: List[BaseMessage]) -> bool:
+    """从本轮最终 AIMessage 里取 zcode sessionId 落到会话(阶段 E)。
+
+    返回 True 表示映射发生了变化(调用方据此记日志 / 落库)。找不到就保持
+    原值 —— resume 用旧值顶多续到旧会话,不该让整轮失败。
+    """
+    for message in reversed(new_messages or []):
+        meta = getattr(message, "response_metadata", None)
+        if isinstance(meta, dict) and meta.get("zcode_session_id"):
+            sid = str(meta["zcode_session_id"]).strip()
+            if sid and sid != str(getattr(sess, "zcode_session_id", "") or ""):
+                sess.zcode_session_id = sid
+                return True
+    return False
 
 
 # --------------------------------------------------------------------------
@@ -1909,19 +2021,33 @@ class ChatSession:
         glm_llm_options = [GLM_MODEL_KEY] if glm_llm_ready else []
         glm_vlm_options = [GLM_MODEL_KEY] if glm_vlm_ready else []
 
+        # ZCode Agent 档位(阶段 E):[zcode].cwd 配好且启动自检通过才可选;
+        # 「配了 cwd 但自检不过」时选项仍进下拉,由 model_notes 标成禁用 + 原因。
+        zcode_available = _zcode_available(self.cfg)
+        zcode_note = "" if zcode_available else _zcode_note(self.cfg)
+        zcode_options = [ZCODE_MODEL_KEY] if (zcode_available or zcode_note) else []
+
         self.chat_models = _dedup_models(
-            [default_llm] + glm_llm_options + mcode_tiers + [CUSTOM_MODEL_KEY])
+            [default_llm] + glm_llm_options + mcode_tiers + zcode_options + [CUSTOM_MODEL_KEY])
         self.chat_model_key = default_llm
 
         self.vlm_models = _dedup_models(
-            [default_vlm] + glm_vlm_options + mcode_tiers + [CUSTOM_MODEL_KEY])
+            [default_vlm] + glm_vlm_options + mcode_tiers + zcode_options + [CUSTOM_MODEL_KEY])
         self.vlm_model_key = default_vlm
 
-        # 默认档位:内置模型没有可用凭证(占位符 / 缺失)而 mcode 可用时,
-        # 直接默认走 mcode —— 否则用户每次开新会话都要先撞一次 401。
-        if mcode_tiers and not _builtin_credentials_usable(self.cfg, "llm"):
-            self.chat_model_key = mcode_tiers[0]
-            self.vlm_model_key = mcode_tiers[0]
+        self._zcode_disabled_notes: Dict[str, str] = (
+            {ZCODE_MODEL_KEY: zcode_note} if zcode_note else {}
+        )
+
+        # 默认档位:内置模型没有可用凭证(占位符 / 缺失)而 mcode/zcode 可用时,
+        # 直接默认走 agent 档位 —— 否则用户每次开新会话都要先撞一次 401。
+        if not _builtin_credentials_usable(self.cfg, "llm"):
+            if mcode_tiers:
+                self.chat_model_key = mcode_tiers[0]
+                self.vlm_model_key = mcode_tiers[0]
+            elif zcode_available:
+                self.chat_model_key = ZCODE_MODEL_KEY
+                self.vlm_model_key = ZCODE_MODEL_KEY
 
         self.developer_mode = is_developer_mode(cfg)
 
@@ -1942,7 +2068,14 @@ class ChatSession:
         # 同一个 MCodeChatModel 实例会被多轮复用,每轮的 sink 都不同。
         # None = 本轮不注册 MCode 事件通道(普通模型链路恒为 None)。
         self._mcode_event_sink: Optional[Any] = None
-        
+
+        # 当前 turn 的 ZCode 事件 sink(阶段 E,机制与 mcode sink 同款)。
+        self._zcode_event_sink: Optional[Any] = None
+
+        # zcode 会话映射(阶段 E):结果 JSON 的 sessionId 落在这里,
+        # 下轮 ``--resume`` 续接。随 dump_state 落库,重启后仍能续会话。
+        self.zcode_session_id: str = ""
+
         # 锁分离：避免“流式输出”阻塞上传/删除 pending
         self.chat_lock = asyncio.Lock()
         self.media_lock = asyncio.Lock()
@@ -2225,6 +2358,8 @@ class ChatSession:
             "mcode_trace": _to_json_safe(self.mcode_trace_snapshot()),
             "chat_model_key": self.chat_model_key,
             "vlm_model_key": self.vlm_model_key,
+            # 阶段 E:zcode 会话映射跟着会话走(重启后 --resume 仍能续上)。
+            "zcode_session_id": str(self.zcode_session_id or ""),
             "load_media": self._serialize_load_media(),
             "pending_media_ids": [str(x) for x in (self.pending_media_ids or [])],
             "lc_messages_serialized": self._serialize_lc_messages(),
@@ -2462,6 +2597,8 @@ class ChatSession:
             builtin_name=sess.builtin_vlm_name,
             builtin_usable=_builtin_credentials_usable(sess.cfg, "vlm"),
         )
+        # 阶段 E:恢复 zcode 会话映射(空值安全;旧状态里没有这个键)。
+        sess.zcode_session_id = str(data.get("zcode_session_id") or "").strip()
         try:
             sess.sent_media_total = int(data.get("sent_media_total", 0) or 0)
         except Exception:
@@ -2689,14 +2826,18 @@ class ChatSession:
                 f"missing={','.join(missing)}"
             )
 
-        # 0) mcode 档位:网页端选了 mcode-operator / mcode-chat。
-        #    mcode 不走 OpenAI 兼容网关,所以**不查**内置模型配置、
+        # 0) agent 档位:网页端选了 ZCode Agent / mcode-operator / mcode-chat。
+        #    这些档位不走 OpenAI 兼容网关,所以**不查**内置模型配置、
         #    **不做** API key 校验 —— 凭据那套在这里完全不适用。
-        #    LLM 与 VLM 用同一个档位(mcode 不区分多模态)。
+        #    LLM 与 VLM 用同一个档位(agent runtime 不区分多模态)。
+        zcode_key = _resolve_zcode_key(self.chat_model_key, self.vlm_model_key)
         mcode_tier = _resolve_mcode_tier(self.chat_model_key, self.vlm_model_key)
-        if mcode_tier:
-            llm_override: Dict[str, Any] = {"model": mcode_tier}
-            vlm_override: Dict[str, Any] = {"model": mcode_tier}
+        if zcode_key:
+            llm_override: Dict[str, Any] = {"model": zcode_key}
+            vlm_override: Dict[str, Any] = {"model": zcode_key}
+        elif mcode_tier:
+            llm_override = {"model": mcode_tier}
+            vlm_override = {"model": mcode_tier}
         else:
             # 1) resolve LLM override
             if self.chat_model_key == CUSTOM_MODEL_KEY:
@@ -2760,6 +2901,9 @@ class ChatSession:
                 # 阶段 D:MCode 事件通道的 provider。每轮换 sink,这里传的是
                 # 「取当前 sink」的函数,不是写死的回调。
                 mcode_event_sink_provider=self.mcode_sink_provider(),
+                # 阶段 E:ZCode 事件通道 + --resume sessionId 映射,同款 provider 机制。
+                zcode_event_sink_provider=self.zcode_sink_provider(),
+                zcode_resume_id_provider=self.zcode_resume_id_provider(),
             )
             self._agent_build_key = agent_build_key
 
@@ -2842,6 +2986,8 @@ class ChatSession:
             "llm_models": self.chat_models,
             "vlm_model_key": self.vlm_model_key,
             "vlm_models": self.vlm_models,
+            # 阶段 E:配了但不可用的档位 -> 禁用原因(前端渲染 disabled + title)。
+            "model_notes": self.model_notes(),
             "lang": self.lang,
         }
 
@@ -2960,6 +3106,32 @@ class ChatSession:
         def _provider():
             return self._mcode_event_sink
         return _provider
+
+    def zcode_sink_provider(self):
+        """给 ``ZCodeChatModel`` 的事件 sink provider(阶段 E,与 mcode 同款机制)。"""
+        def _provider():
+            return self._zcode_event_sink
+        return _provider
+
+    def zcode_resume_id_provider(self):
+        """给 ``ZCodeChatModel`` 的 ``--resume`` sessionId provider(阶段 E)。
+
+        zcode 结果里的 sessionId 落在本会话(``zcode_session_id``),下轮建
+        命令时经 provider 取**当前**值 —— agent 按 session 缓存,不能把某个
+        固定 sessionId 写死在模型实例里。
+        """
+        def _provider():
+            return str(self.zcode_session_id or "").strip()
+        return _provider
+
+    def model_notes(self) -> Dict[str, str]:
+        """模型档位的禁用原因(阶段 E)。
+
+        当前只有 ZCode Agent 会出现「配了但不可用」(mcode/GLM 的策略是
+        直接从下拉消失)。选项在列表里但带 note 时,前端把它渲染成
+        disabled + title,让用户知道为什么点不了(§8.3:禁用要有原因)。
+        """
+        return dict(getattr(self, "_zcode_disabled_notes", {}) or {})
 
     def apply_tool_event(self, raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         et = raw.get("type")
@@ -4633,6 +4805,11 @@ async def ws_chat(ws: WebSocket, session_id: str):
                         trace_enabled = bool(
                             getattr(app.state.cfg.mcode, "show_execution_trace", True)
                         )
+                        if turn_source == TURN_SOURCE_ZCODE:
+                            # zcode 只有状态事件(没有工具卡片、没有文本增量),
+                            # 关掉它前端面板就永远停在 Running —— 所以 zcode
+                            # 不受 [mcode] show_execution_trace 开关约束(阶段 E)。
+                            trace_enabled = True
 
                         if sess.client_context:
                             sess.client_context.lang = sess.lang
@@ -4707,6 +4884,16 @@ async def ws_chat(ws: WebSocket, session_id: str):
                             turn_id=turn_id,
                         )
                         mcode_final_text = ""
+
+                        # 阶段 E:ZCode 事件通道。只有 zcode turn 才注册 ——
+                        # 普通模型链路**不写** zcode.event(SRC-03 同款)。
+                        zcode_adapter: Optional[ZCodeEventAdapter] = _make_zcode_adapter(
+                            turn_source,
+                            app.state.cfg,
+                            session_id=session_id,
+                            turn_id=turn_id,
+                        )
+                        zcode_final_text = ""
 
                         async def _mcode_event_sink(event: Any) -> None:
                             """把**本轮真实** MCode CLI 事件推进 out_q。
@@ -4860,6 +5047,33 @@ async def ws_chat(ws: WebSocket, session_id: str):
                             )
                             if final is not None:
                                 mcode_final_text = final
+
+                        async def _handle_zcode_internal(internal: Any) -> None:
+                            """把一条内部 ZCode 事件翻成 WebSocket 事件(阶段 E)。
+
+                            zcode **没有**工具事件(无头形态不外发,设计附录 A.5);
+                            状态与最终正文走同一条 ``_dispatch_mcode_internal``
+                            映射 —— 词表与来源无关,zcode 不需要第二套翻译。
+                            """
+                            nonlocal seg_text, seg_ts, zcode_final_text
+
+                            def _append_text(delta: str) -> None:
+                                nonlocal seg_text, seg_ts
+                                if seg_ts is None:
+                                    seg_ts = time.time()
+                                seg_text += delta
+
+                            final = await _dispatch_mcode_internal(
+                                internal,
+                                sess=sess,
+                                turn_id=turn_id,
+                                trace_enabled=trace_enabled,
+                                emit=emit_turn_event,
+                                flush_segment=flush_segment,
+                                append_text=_append_text,
+                            )
+                            if final is not None:
+                                zcode_final_text = final
 
                         pump_task: Optional[asyncio.Task] = None
 
@@ -5040,6 +5254,14 @@ async def ws_chat(ws: WebSocket, session_id: str):
                             _mcode_event_sink if mcode_adapter is not None else None
                         )
 
+                        # 阶段 E:注册本轮的 ZCode 事件通道(原始事件在 sink 里补戳
+                        # 成内部事件再入队;与 mcode 的"适配器在队列外"不同,
+                        # zcode 的 stamp 是纯函数,放 sink 里做省一次闭包)。
+                        sess._zcode_event_sink = (
+                            make_zcode_sink(zcode_adapter, _handle_zcode_internal)
+                            if zcode_adapter is not None else None
+                        )
+
                         try:
                             async with mcp_sink_context(sink):
                                 pump_task = asyncio.create_task(pump_agent())
@@ -5163,6 +5385,19 @@ async def ws_chat(ws: WebSocket, session_id: str):
                                             )
                                         continue
 
+                                    if kind == "zcode.event":
+                                        # 本轮真实 ZCode 事件(阶段 E)。
+                                        # payload 已是补戳后的内部事件(make_zcode_sink)。
+                                        if zcode_adapter is None:
+                                            continue
+                                        try:
+                                            await _handle_zcode_internal(payload)
+                                        except Exception as e:  # noqa: BLE001
+                                            logger.warning(
+                                                "处理 zcode 事件失败(忽略): %s", e
+                                            )
+                                        continue
+
                                     if kind == "assistant.delta":
                                         delta = payload or ""
                                         if delta:
@@ -5222,6 +5457,10 @@ async def ws_chat(ws: WebSocket, session_id: str):
                                             # MCode 的最终正文以 exec.completed.result.output
                                             # 为权威(设计文档 D-5);增量拼接只作兜底。
                                             final_text = (mcode_final_text or seg_text or "").strip()
+                                        elif turn_source == TURN_SOURCE_ZCODE:
+                                            # ZCode 的最终正文以结果 JSON response 为权威
+                                            # (阶段 E,附录 A.5);增量拼接只作兜底。
+                                            final_text = (zcode_final_text or seg_text or "").strip()
                                         else:
                                             final_text = (seg_text or "").strip()
 
@@ -5236,6 +5475,14 @@ async def ws_chat(ws: WebSocket, session_id: str):
 
                                         if new_messages:
                                             sess.lc_messages.extend(new_messages)
+
+                                        if turn_source == TURN_SOURCE_ZCODE:
+                                            # 阶段 E:落 zcode sessionId 映射(下轮 --resume)。
+                                            if _capture_zcode_session_id(sess, new_messages):
+                                                logger.info(
+                                                    "zcode sessionId 映射更新: sid=%s zsess=%s",
+                                                    session_id, sess.zcode_session_id,
+                                                )
 
                                         await emit_turn_event("assistant.end", {
                                             "text": final_text,
@@ -5294,6 +5541,9 @@ async def ws_chat(ws: WebSocket, session_id: str):
                             # 阶段 D:本轮结束 —— 注销 MCode 事件通道。
                             # 不注销的话,下一轮会拿到上一轮的 sink(串台)。
                             sess._mcode_event_sink = None
+
+                            # 阶段 E:注销 ZCode 事件通道(同款串台防护)。
+                            sess._zcode_event_sink = None
 
                             # 结束 cancel_wait_task
                             if cancel_wait_task and (not cancel_wait_task.done()):

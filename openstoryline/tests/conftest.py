@@ -223,6 +223,183 @@ def wait_until_dead(pid: Optional[int], timeout_s: float = 15.0) -> bool:
 
 
 # --------------------------------------------------------------------------
+# 假 zcode CLI(阶段 E)
+# --------------------------------------------------------------------------
+
+#: 假 zcode CLI 的实现(**node**,不是 python —— 见下)。
+#: 形状贴近真的 zcode(附录 A.5 契约):``--version`` / ``--help`` 可模拟
+#: (自检用);``-p <text> --json`` 输出**结束单块**结果 JSON;
+#: ``--resume <sid>`` 的值会回显进结果 sessionId(续会话语义)。
+#:
+#: 为什么必须是 node + npm 同款 shim:Windows 上 cmd.exe 会把命令行里的换行
+#: 当命令分隔符,**多行 prompt 过 .cmd 的 ``%*`` 展开必被截断**(2026-10-31
+#: 实测)。生产适配器因此解析 shim 直启 ``node + 入口脚本``。假 CLI 要测的就是
+#: 这条直启路径,所以 shim 必须是 npm 同款形状(node.exe + .cjs),
+#: 让解析器像解析真 shim 一样解析它。
+#: spec / record 相对**脚本自身目录**存放 —— 同一测试可起多个互不串台的假 CLI。
+_FAKE_ZCODE_CLI_JS = r'''#!/usr/bin/env node
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const here = path.dirname(__filename);
+
+let spec = {};
+try { spec = JSON.parse(fs.readFileSync(path.join(here, 'spec.json'), 'utf-8')); } catch (e) {}
+
+function emit(text) { process.stdout.write(text); }
+
+const argv = process.argv.slice(2);
+
+function flagValue(name) {
+  const idx = argv.indexOf(name);
+  return idx >= 0 && idx + 1 < argv.length ? argv[idx + 1] : '';
+}
+
+if (argv.includes('--version')) {
+  // 显式 undefined 判断而不是 ||:version="" 要按「空输出」如实发出(自检失败用例依赖)。
+  emit(spec.version !== undefined && spec.version !== null ? spec.version : '0.17.1');
+  process.exit(0);
+}
+if (argv.includes('--help')) {
+  emit(spec.help || 'Usage:\n  -p, --prompt <text>  Run a single prompt\n  --json ...');
+  process.exit(0);
+}
+
+const prompt = flagValue('-p');
+const resumeId = flagValue('--resume');
+let stdinData = '';
+try { stdinData = fs.readFileSync(0, 'utf-8'); } catch (e) {}
+
+let childPid = null;
+if (spec.spawn_child) {
+  const { spawn } = require('child_process');
+  childPid = spawn(process.execPath, ['-e', 'setInterval(()=>{},60000)'], { stdio: 'ignore' }).pid;
+}
+
+// record 在 delay 之前落盘:超时 / 取消路径(子进程没跑到 emit)也要能拿到 child_pid。
+fs.writeFileSync(
+  path.join(here, 'record.json'),
+  JSON.stringify({ argv, prompt, resume_id: resumeId, stdin: stdinData, pid: process.pid, child_pid: childPid }),
+  'utf-8',
+);
+
+function main() {
+  const sessionId = spec.session_id || (resumeId || 'sess_fake_new');
+  const turnId = spec.turn_id || 'turn_fake';
+  let response = spec.response;
+  if (response === undefined || response === null) response = 'OK';
+  const usage = spec.usage || { inputTokens: 100, outputTokens: 5, totalTokens: 105 };
+  if (spec.raw !== undefined && spec.raw !== null) {
+    emit(spec.raw);
+  } else {
+    emit(JSON.stringify({
+      sessionId,
+      traceId: 'trace_fake',
+      turnId,
+      response,
+      usage,
+      eventCount: 3,
+    }));
+  }
+  process.exit(spec.exit_code ? parseInt(spec.exit_code, 10) : 0);
+}
+
+const delay = parseFloat(spec.delay_s || 0);
+if (delay > 0) { setTimeout(main, delay * 1000); } else { main(); }
+'''
+
+#: npm 同款 Windows shim(%~dp0 变量、_prog 赋值 —— 与真 zcode.cmd 同形状)。
+_FAKE_ZCODE_SHIM_CMD = (
+    "@ECHO off\r\n"
+    'IF EXIST "%~dp0\\node.exe" (\r\n'
+    '  SET "_prog=%~dp0\\node.exe"\r\n'
+    ") ELSE (\r\n"
+    '  SET "_prog=node"\r\n'
+    ")\r\n"
+    '"%_prog%"  "%~dp0\\fake_zcode.cjs" %*\r\n'
+)
+
+
+@pytest.fixture
+def fake_zcode_cli(tmp_path):
+    """假 zcode CLI 工厂(阶段 E)。
+
+    Windows 上是 **npm 同款 .cmd shim**(node.exe + fake_zcode.cjs),
+    POSIX 上是带 shebang 的 node 脚本。spec / record 相对脚本目录存放,
+    支持同测试多实例。
+
+    用法::
+
+        cli = fake_zcode_cli(response="正常")
+        model = ZCodeChatModel(cwd=str(tmp_path), zcode_bin=cli.path)
+
+    返回的 ``cli`` 是个 SimpleNamespace:
+      path / record_path / spec_path / set_spec(kwargs)
+    ``set_spec`` 可以在多次运行间改行为(例如先成功后超时)。
+    """
+
+    counter = {"n": 0}
+
+    def make(
+        *,
+        response: Optional[str] = None,
+        session_id: Optional[str] = None,
+        turn_id: Optional[str] = None,
+        usage: Optional[Dict[str, Any]] = None,
+        raw: Optional[str] = None,
+        delay_s: float = 0.0,
+        spawn_child: bool = False,
+        exit_code: Optional[int] = None,
+        version: str = "0.17.1",
+        help_text: Optional[str] = None,
+    ) -> SimpleNamespace:
+        counter["n"] += 1
+        work = tmp_path / f"fake_zcode_{counter['n']}"
+        work.mkdir()
+
+        js_path = work / "fake_zcode.cjs"
+        js_path.write_text(_FAKE_ZCODE_CLI_JS, encoding="utf-8")
+
+        if os.name == "nt":
+            cli_path = work / "fake_zcode.cmd"
+            cli_path.write_text(_FAKE_ZCODE_SHIM_CMD, encoding="ascii")
+        else:
+            cli_path = js_path
+            js_path.chmod(js_path.stat().st_mode | stat.S_IEXEC)
+
+        spec_path = work / "spec.json"
+        record_path = work / "record.json"
+        cli = SimpleNamespace(
+            path=str(cli_path),
+            record_path=record_path,
+            spec_path=spec_path,
+            set_spec=None,
+        )
+
+        def _set_spec(**kwargs: Any) -> None:
+            spec = {
+                "response": response,
+                "session_id": session_id,
+                "turn_id": turn_id,
+                "usage": usage,
+                "raw": raw,
+                "delay_s": delay_s,
+                "spawn_child": spawn_child,
+                "exit_code": exit_code,
+                "version": version,
+                "help": help_text,
+            }
+            spec.update(kwargs)
+            spec_path.write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+
+        cli.set_spec = _set_spec
+        _set_spec()
+        return cli
+
+    return make
+
+
+# --------------------------------------------------------------------------
 # 临时素材根
 # --------------------------------------------------------------------------
 

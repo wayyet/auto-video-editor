@@ -217,3 +217,18 @@ show_execution_trace = true
 # 单轮最多转发多少条过程事件;单条事件文本最多保留多少字符。
 max_trace_events = 300
 max_event_text_chars = 2000
+
+# ============= zcode CLI headless (Phase E) =============
+# Neutral defaults only: no machine paths, no secrets.
+# Local overrides go to config.toml.local or env vars:
+#   OPENSTORYLINE_ZCODE_CWD / OPENSTORYLINE_ZCODE_BIN / OPENSTORYLINE_ZCODE_MODE
+[zcode]
+cwd = ""              # zcode workspace dir; empty = option hidden from the dropdown
+bin = ""              # zcode executable; empty = resolved from PATH (zcode.cmd on Windows)
+mode = "edit"         # build | edit | plan | yolo | guarded (CLI headless default is yolo -- never rely on it)
+timeout_s = 900
+max_prompt_chars = 30000   # Windows argv limit is 32767; stdin is NOT supported by `-p`
+status_tick_s = 20.0  # heartbeat for the panel while headless run is in flight; 0 = off
+resume_sessions = true     # persist result sessionId and pass --resume next turn
+history_turns = 10    # only used when resume_sessions = false (rollback switch)
+media_root = ""       # media whitelist root; empty = derived from AUTO_VIDEO_EDITOR_DIR / repo root

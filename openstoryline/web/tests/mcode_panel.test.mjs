@@ -16,6 +16,9 @@ import {
   ROUTE_BODY,
   ROUTE_BUBBLE,
   ROUTE_PANEL,
+  ZCODE_SOURCE,
+  agentDisplayName,
+  isAgentSource,
   TurnEventGate,
   applyEventToPanelModel,
   buildPanelModel,
@@ -313,4 +316,68 @@ test("真实事件时间线:文本只进气泡,过程只进面板", () => {
   }
   // 面板里不能出现答复正文
   assert.equal(JSON.stringify(model).includes(bubble), false, "答复正文混进了面板");
+});
+
+// ---------------------------------------------------------------------------
+// 阶段 E:ZCode Agent 路由(mcode/zcode 平级)
+// ---------------------------------------------------------------------------
+
+test("ZCode turn 只收 source=zcode 的事件", () => {
+  assert.equal(shouldAcceptEvent({ turnSource: ZCODE_SOURCE, eventSource: ZCODE_SOURCE }), true);
+  assert.equal(shouldAcceptEvent({ turnSource: ZCODE_SOURCE, eventSource: MCODE_SOURCE }), false);
+  assert.equal(shouldAcceptEvent({ turnSource: ZCODE_SOURCE, eventSource: "llm" }), false);
+});
+
+test("普通 turn 拒绝一切 Agent 来源(mcode/zcode)", () => {
+  assert.equal(shouldAcceptEvent({ turnSource: LLM_SOURCE, eventSource: ZCODE_SOURCE }), false);
+  assert.equal(shouldAcceptEvent({ turnSource: LLM_SOURCE, eventSource: MCODE_SOURCE }), false);
+  assert.equal(shouldAcceptEvent({ turnSource: LLM_SOURCE, eventSource: undefined }), true);
+});
+
+test("isAgentSource / agentDisplayName 身份标识", () => {
+  assert.equal(isAgentSource(MCODE_SOURCE), true);
+  assert.equal(isAgentSource(ZCODE_SOURCE), true);
+  assert.equal(isAgentSource(LLM_SOURCE), false);
+  assert.equal(isAgentSource(undefined), false);
+  assert.equal(agentDisplayName(MCODE_SOURCE), "MCode Agent");
+  assert.equal(agentDisplayName(ZCODE_SOURCE), "ZCode Agent");
+  assert.equal(agentDisplayName("llm"), "MCode Agent");
+});
+
+test("routeEvent:ZCode turn 的状态/终局进面板,增量进气泡", () => {
+  const routes = (type, eventSource) => routeEvent({
+    type, turnSource: ZCODE_SOURCE, eventSource,
+  });
+  assert.deepEqual(routes("agent.status", ZCODE_SOURCE), [ROUTE_PANEL]);
+  assert.deepEqual(routes("assistant.delta", ZCODE_SOURCE), [ROUTE_BUBBLE]);
+  assert.ok(routes("assistant.end", ZCODE_SOURCE).includes(ROUTE_PANEL));
+  assert.ok(routes("assistant.end", ZCODE_SOURCE).includes(ROUTE_BUBBLE));
+  assert.ok(routes("error", ZCODE_SOURCE).includes(ROUTE_PANEL));
+  // 普通模型的事件不该进 ZCode 面板
+  assert.deepEqual(routes("agent.status", MCODE_SOURCE), []);
+});
+
+test("routeEvent:mcode 行为零回归", () => {
+  const routes = routeEvent({
+    type: "agent.status", turnSource: MCODE_SOURCE, eventSource: MCODE_SOURCE,
+  });
+  assert.deepEqual(routes, [ROUTE_PANEL]);
+  const llmTool = routeEvent({
+    type: "tool.start", turnSource: LLM_SOURCE, eventSource: LLM_SOURCE,
+  });
+  assert.deepEqual(llmTool, [ROUTE_BODY]);
+});
+
+test("applyEventToPanelModel:ZCode 状态推进到终态(不卡 Running)", () => {
+  let model = createPanelModel();
+  model = applyEventToPanelModel(model, "agent.status", {
+    status: "running", phase: "initializing", message: "ZCode Agent 进程已启动", source: ZCODE_SOURCE,
+  });
+  assert.equal(model.status, "running");
+  model = applyEventToPanelModel(model, "agent.status", {
+    status: "completed", phase: "completed", message: "本轮已完成", source: ZCODE_SOURCE,
+  });
+  model = applyEventToPanelModel(model, "assistant.end", { text: "正常", source: ZCODE_SOURCE });
+  assert.equal(isTerminalStatus(model.status), true);
+  assert.equal(model.source, ZCODE_SOURCE);
 });

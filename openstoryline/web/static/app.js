@@ -4,7 +4,6 @@
 // 这里只负责「把策略算出来的模型画成 DOM」。
 import {
   LLM_SOURCE,
-  MCODE_DISPLAY_NAME,
   MCODE_SOURCE,
   ROUTE_BODY,
   ROUTE_BUBBLE,
@@ -17,13 +16,15 @@ import {
   buildPanelModel,
   createPanelModel,
   isTerminalStatus,
+  agentDisplayName,
+  isAgentSource,
   normalizeSource,
   phaseI18nKey,
   routeEvent,
   shouldAcceptEvent,
   statusI18nKey,
   statusIcon,
-} from "./mcode_panel.mjs?v=20261031-phaseE";
+} from "./mcode_panel.mjs?v=20261031-phaseE2";
 
 const $ = (sel) => document.querySelector(sel);
 const SIDEBAR_COLLAPSED_KEY = "openstoryline_sidebar_collapsed";
@@ -34,6 +35,11 @@ const CUSTOM_MODEL_KEY = "__custom__";
 // 所以 LLM 与 VLM 必须是同一个档位,选一边就同步另一边。
 const MCODE_MODEL_PREFIX = "mcode";
 const isMcodeTier = (v) => String(v || "").trim().toLowerCase().startsWith(MCODE_MODEL_PREFIX);
+// zcode 档位(ZCode Agent,阶段 E):agent runtime 同样不区分多模态,
+// 与 mcode 平级走同一套「选一边同步另一边」逻辑。
+const ZCODE_MODEL_PREFIX = "zcode";
+const isZcodeTier = (v) => String(v || "").trim().toLowerCase().startsWith(ZCODE_MODEL_PREFIX);
+const isAgentRuntimeTier = (v) => isMcodeTier(v) || isZcodeTier(v);
 const SESSION_ID_KEY = "openstoryline_session_id";
 // 旧客户端把会话列表存在 localStorage。PostgreSQL 改造后**服务端是唯一事实来源**,
 // 这个 key 降级为**一次性对账输入**:启动时读一次,拿里面的标题去给"服务端已存在"的
@@ -112,6 +118,8 @@ const __OS_I18N = {
     "sidebar.ai_transition_warning_title": "高资源消耗提示",
     "sidebar.ai_transition_warning_body": "AI 转场会额外触发模型调用，资源消耗通常显著高于常规文案或配音流程，单条转场价格通常在0.5~4元之间，建议按需使用。",
     "sidebar.use_custom_model": "使用自定义模型",
+    "sidebar.group_agent": "Agent Runtime",
+    "sidebar.group_models": "模型服务",
     "sidebar.llm_label": "LLM 模型",
     "sidebar.vlm_label": "VLM 模型",
     "sidebar.llm_select_aria": "选择 LLM 模型",
@@ -268,6 +276,8 @@ const __OS_I18N = {
     "sidebar.ai_transition_warning_title": "Higher resource usage",
     "sidebar.ai_transition_warning_body": "AI transitions trigger additional model calls and usually consume significantly more resources than regular copywriting or voiceover workflows. The price for a single transition is typically between $0.1 and $0.5. We recommend using as needed.",
     "sidebar.use_custom_model": "Use custom model",
+    "sidebar.group_agent": "Agent Runtime",
+    "sidebar.group_models": "Model services",
     "sidebar.llm_label": "LLM model",
     "sidebar.vlm_label": "VLM model",
     "sidebar.llm_select_aria": "Select LLM model",
@@ -1079,7 +1089,8 @@ class ChatUI {
 
     const badge = document.createElement("span");
     badge.className = "mcode-panel-badge";
-    badge.textContent = MCODE_DISPLAY_NAME;
+    // 阶段 E:按来源显示身份(MCode Agent / ZCode Agent),不混用(§7.8)。
+    badge.textContent = agentDisplayName(source);
 
     const statusEl = document.createElement("span");
     statusEl.className = "mcode-panel-status";
@@ -1176,7 +1187,7 @@ class ChatUI {
         summary: tool.summary,
         message: tool.message,
         progress: tool.progress,
-        source: MCODE_SOURCE,
+        source: panel.source || MCODE_SOURCE,
         __progress_mode: "real",
       }, { container: panel.toolsEl, wrapClass: "mcode-tool-item" });
     }
@@ -1791,12 +1802,12 @@ class ChatUI {
     };
     dom.data = merged;
 
-    // 阶段 E:来源徽标(只有 mcode 才显示)
-    if (merged.source === MCODE_SOURCE) {
+    // 阶段 E:来源徽标(Agent Runtime 才显示;按来源显示身份,§7.8)
+    if (isAgentSource(merged.source)) {
       if (!dom.sourceEl) {
         const badge = document.createElement("span");
         badge.className = "tool-source";
-        badge.textContent = MCODE_DISPLAY_NAME;
+        badge.textContent = agentDisplayName(merged.source);
         dom.sourceEl = badge;
         const left = dom.details && dom.details.querySelector(".tool-left");
         if (left) left.appendChild(badge);
@@ -3414,12 +3425,21 @@ class App {
   //
   // 关键:trace 里只有**过程**事件,没有 assistant 正文 ——
   // 所以恢复出来的面板不会往聊天正文里插一句话(WS-07)。
+  // 来源从 trace 行里推(mcode/zcode),推不出回落 MCode(旧行为)。
   _ensureMcodePanelForTurn(turnId, trace) {
     const key = String(turnId ?? "");
     const existing = this.ui.getMcodePanel(key);
     if (existing) return existing;
 
-    const panel = this.ui.ensureMcodePanel(key, MCODE_SOURCE);
+    let source = MCODE_SOURCE;
+    for (const row of (Array.isArray(trace) ? trace : [])) {
+      if (row && String(row.turn_id ?? "") === key && row.source) {
+        source = normalizeSource(row.source) || MCODE_SOURCE;
+        break;
+      }
+    }
+
+    const panel = this.ui.ensureMcodePanel(key, source);
     const model = buildPanelModel(trace || [], { turnId: key });
     this.ui.updateMcodePanel(key, model);
     return panel;
@@ -3434,8 +3454,8 @@ class App {
       if (item.role === "user") {
         this.ui.appendUserMessage(item.content || "", item.attachments || []);
       } else if (item.role === "assistant") {
-        if (item.source === MCODE_SOURCE) {
-          // MCode 的这一轮:先建执行过程面板(面板在上),再放助手正文。
+        if (isAgentSource(item.source)) {
+          // Agent turn(mcode/zcode):先建执行过程面板(面板在上),再放助手正文。
           this._ensureMcodePanelForTurn(item.turn_id, trace);
         }
         this.ui.startAssistantMessage({placeholder: false});
@@ -3453,9 +3473,9 @@ class App {
         if (String(item.state || "").toLowerCase() === "running") {
           patch.__progress_mode = "real";
         }
-        if (item.source === MCODE_SOURCE) {
-          // MCode 的工具卡片归执行过程面板 —— 不进聊天正文。
-          patch.source = MCODE_SOURCE;
+        if (isAgentSource(item.source)) {
+          // Agent Runtime 的工具卡片归执行过程面板 —— 不进聊天正文。
+          patch.source = item.source;
           const panel = this._ensureMcodePanelForTurn(item.turn_id, trace);
           this.ui.upsertToolCard(item.tool_call_id, patch, {
             container: panel.toolsEl,
@@ -3504,8 +3524,8 @@ class App {
       if (String(item.state || "").toLowerCase() === "running") {
         patch.__progress_mode = "real";
       }
-      if (item.source === MCODE_SOURCE) {
-        patch.source = MCODE_SOURCE;
+      if (isAgentSource(item.source)) {
+        patch.source = item.source;
         const panel = this._ensureMcodePanelForTurn(item.turn_id, trace);
         this.ui.upsertToolCard(item.tool_call_id, patch, {
           container: panel.toolsEl,
@@ -4040,6 +4060,10 @@ class App {
     const vlmModels = (snapshot && Array.isArray(snapshot.vlm_models)) ? snapshot.vlm_models : [];
     const vlmCurrent = (snapshot && typeof snapshot.vlm_model_key === "string") ? snapshot.vlm_model_key : "";
 
+    // 阶段 E:档位禁用原因(后端 model_notes,当前只有 ZCode Agent 会带)。
+    this.modelNotes = (snapshot && snapshot.model_notes && typeof snapshot.model_notes === "object")
+      ? snapshot.model_notes : {};
+
     // 确保至少有一个选项
     const llmList = (llmModels && llmModels.length) ? llmModels.slice() : (llmCurrent ? [llmCurrent] : []);
     const vlmList = (vlmModels && vlmModels.length) ? vlmModels.slice() : (vlmCurrent ? [vlmCurrent] : []);
@@ -4050,12 +4074,7 @@ class App {
     // render LLM select
     if (this.llmSelect) {
       this.llmSelect.innerHTML = "";
-      for (const m of llmList) {
-        const opt = document.createElement("option");
-        opt.value = m;
-        opt.textContent = (m === CUSTOM_MODEL_KEY) ? __t("sidebar.use_custom_model") : m;
-        this.llmSelect.appendChild(opt);
-      }
+      this._renderModelOptions(this.llmSelect, llmList);
       let selected = "";
       if (llmCurrent && llmList.includes(llmCurrent)) selected = llmCurrent;
       else if (llmList.length) selected = llmList[0];
@@ -4066,12 +4085,7 @@ class App {
     // render VLM select
     if (this.vlmSelect) {
       this.vlmSelect.innerHTML = "";
-      for (const m of vlmList) {
-        const opt = document.createElement("option");
-        opt.value = m;
-        opt.textContent = (m === CUSTOM_MODEL_KEY) ? __t("sidebar.use_custom_model") : m;
-        this.vlmSelect.appendChild(opt);
-      }
+      this._renderModelOptions(this.vlmSelect, vlmList);
       let selected = "";
       if (vlmCurrent && vlmList.includes(vlmCurrent)) selected = vlmCurrent;
       else if (vlmList.length) selected = vlmList[0];
@@ -4080,6 +4094,48 @@ class App {
     }
 
     this._syncConfigPanels();
+  }
+
+  // 阶段 E:模型下拉渲染。
+  // - 有 Agent Runtime 档位时按「Agent Runtime / 模型服务」<optgroup> 分区(§6.1);
+  //   没有 agent 档位时保持原来的平铺渲染(零回归)。
+  // - model_notes 里的档位渲染成 disabled + title,让「配了但不可用」有明确原因。
+  _renderModelOptions(selectEl, list) {
+    const notes = (this.modelNotes && typeof this.modelNotes === "object") ? this.modelNotes : {};
+    const makeOption = (m) => {
+      const opt = document.createElement("option");
+      opt.value = m;
+      opt.textContent = (m === CUSTOM_MODEL_KEY) ? __t("sidebar.use_custom_model") : m;
+      const note = notes[m];
+      if (note) {
+        opt.disabled = true;
+        opt.title = String(note);
+      }
+      return opt;
+    };
+
+    const agentItems = list.filter((m) => isAgentRuntimeTier(m));
+    if (!agentItems.length) {
+      // 无 agent 档位:平铺(与历史渲染一致)。
+      for (const m of list) selectEl.appendChild(makeOption(m));
+      return;
+    }
+
+    const agentGroup = document.createElement("optgroup");
+    agentGroup.label = __t("sidebar.group_agent");
+    for (const m of agentItems) agentGroup.appendChild(makeOption(m));
+    selectEl.appendChild(agentGroup);
+
+    const restItems = list.filter((m) => !isAgentRuntimeTier(m) && m !== CUSTOM_MODEL_KEY);
+    if (restItems.length) {
+      const modelGroup = document.createElement("optgroup");
+      modelGroup.label = __t("sidebar.group_models");
+      for (const m of restItems) modelGroup.appendChild(makeOption(m));
+      selectEl.appendChild(modelGroup);
+    }
+
+    const customItems = list.filter((m) => m === CUSTOM_MODEL_KEY);
+    for (const m of customItems) selectEl.appendChild(makeOption(m));
   }
 
 
@@ -4404,8 +4460,8 @@ class App {
       this.llmSelect.addEventListener("change", () => {
         const v = (this.llmSelect.value || "").trim();
         if (v) this.llmModel = v;
-        // mcode 档位:同步 VLM 下拉,别让 UI 显示一个实际没在用的模型
-        if (isMcodeTier(v) && this.vlmSelect) {
+        // agent 档位(mcode/zcode):同步另一个下拉,别让 UI 显示一个实际没在用的模型
+        if (isAgentRuntimeTier(v) && this.vlmSelect) {
           this.vlmSelect.value = v;
           this.vlmModel = v;
         }
@@ -4417,7 +4473,7 @@ class App {
       this.vlmSelect.addEventListener("change", () => {
         const v = (this.vlmSelect.value || "").trim();
         if (v) this.vlmModel = v;
-        if (isMcodeTier(v) && this.llmSelect) {
+        if (isAgentRuntimeTier(v) && this.llmSelect) {
           this.llmSelect.value = v;
           this.llmModel = v;
         }
@@ -4816,9 +4872,10 @@ class App {
       this._mcodeModel = createPanelModel();
       this._mcodeDroppedEvents = 0;
 
-      if (this._turnSource === MCODE_SOURCE) {
-        // MCode turn:先开执行过程面板,再开助手气泡 —— 面板在上、正文在下。
-        this.ui.ensureMcodePanel(this._turnId, MCODE_SOURCE);
+      if (isAgentSource(this._turnSource)) {
+        // Agent Runtime turn(mcode/zcode):先开执行过程面板,再开助手气泡
+        // —— 面板在上、正文在下。zcode 的面板同样走这里(阶段 E)。
+        this.ui.ensureMcodePanel(this._turnId, this._turnSource);
       }
 
       this.ui.startAssistantMessage({placeholder: true});
@@ -4849,8 +4906,8 @@ class App {
         this._mcodeDroppedEvents += 1;
         return;
       }
-      if (this._turnSource === MCODE_SOURCE) {
-        // MCode turn:按 run_id + seq 去重 / 排序(重复的、乱序的丢弃)。
+      if (isAgentSource(this._turnSource)) {
+        // Agent turn(mcode/zcode):按 run_id + seq 去重 / 排序(重复的、乱序的丢弃)。
         const verdict = this._mcodeGate.accept(d);
         if (!verdict.ok) {
           this._mcodeDroppedEvents += 1;
@@ -4959,11 +5016,11 @@ class App {
   // 阶段 E:把一条过程事件应用到执行过程面板。
   //
   // 三道闸门(设计文档 §8.2):
-  //   1. 本轮必须是 mcode —— 普通模型不许出现 MCode 面板;
-  //   2. 事件来源必须是 mcode —— 别的事件混不进来;
+  //   1. 本轮必须是 Agent Runtime(mcode/zcode)—— 普通模型不许出现 Agent 面板;
+  //   2. 事件来源必须与本轮一致 —— 别的事件混不进来;
   //   3. run_id + seq 去重 / 排序 —— 重复的、乱序的丢弃。
   _applyPanelEvent(type, data) {
-    if (this._turnSource !== MCODE_SOURCE) return;
+    if (!isAgentSource(this._turnSource)) return;
 
     const d = data || {};
     if (!shouldAcceptEvent({ turnSource: this._turnSource, eventSource: d.source })) {

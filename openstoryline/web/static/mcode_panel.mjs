@@ -20,11 +20,32 @@
 /** MCode 来源标识。与后端 `TURN_SOURCE_MCODE` 对齐。 */
 export const MCODE_SOURCE = "mcode";
 
+/** ZCode 来源标识(阶段 E)。与后端 `TURN_SOURCE_ZCODE` 对齐。 */
+export const ZCODE_SOURCE = "zcode";
+
 /** 普通模型来源标识。与后端 `TURN_SOURCE_LLM` 对齐。 */
 export const LLM_SOURCE = "llm";
 
+/** Agent Runtime 来源集合(mcode / zcode 平级;面板与工具卡片按它路由)。 */
+export const AGENT_SOURCES = Object.freeze(new Set([MCODE_SOURCE, ZCODE_SOURCE]));
+
 /** 面板标题上显示的来源名(设计文档 §8.1)。 */
 export const MCODE_DISPLAY_NAME = "MCode Agent";
+
+/** ZCode 的来源显示名(阶段 E;§7.8:身份标识不可与 MCode 混用)。 */
+export const ZCODE_DISPLAY_NAME = "ZCode Agent";
+
+/** 是不是 Agent Runtime 来源(mcode 或 zcode)。 */
+export function isAgentSource(value) {
+  return AGENT_SOURCES.has(normalizeSource(value));
+}
+
+/** 来源 -> 面板/徽标显示名。未知来源回落 MCode(历史行为)。 */
+export function agentDisplayName(source) {
+  const s = normalizeSource(source);
+  if (s === ZCODE_SOURCE) return ZCODE_DISPLAY_NAME;
+  return MCODE_DISPLAY_NAME;
+}
 
 /** `status` 枚举(设计文档 §7.2)。 */
 export const STATUS_VALUES = Object.freeze([
@@ -77,16 +98,18 @@ export function isMcodeSource(value) {
 /**
  * 当前 turn 能不能收下这条事件(设计文档 §8.2 第 2 条)。
  *
- * - MCode turn:**只**收 `source=mcode` 的事件 —— 文本与过程都只能来自 MCode 通道;
- * - 普通 turn:凡是自称 mcode 的都拒 —— 普通模型不许出现「MCode Agent」面板。
+ * - Agent turn(mcode/zcode):**只**收 `source` 与本轮一致的事件 ——
+ *   文本与过程都只能来自本轮的 Agent 通道;
+ * - 普通 turn:凡是自称 Agent 来源(mcode/zcode)的都拒 ——
+ *   普通模型不许出现「MCode Agent / ZCode Agent」面板。
  *
  * 普通 turn 下没有 source 字段的老事件照样放行(零回归)。
  */
 export function shouldAcceptEvent({ turnSource, eventSource } = {}) {
   const t = normalizeSource(turnSource) || LLM_SOURCE;
   const e = normalizeSource(eventSource);
-  if (t === MCODE_SOURCE) return e === MCODE_SOURCE;
-  return e !== MCODE_SOURCE;
+  if (isAgentSource(t)) return e === t;
+  return !isAgentSource(e);
 }
 
 // -- run_id + seq 去重 / 排序 --------------------------------------------
@@ -197,7 +220,9 @@ export const ROUTE_BODY = "body";
 export function routeEvent({ type, turnSource, eventSource } = {}) {
   const t = normalizeSource(turnSource) || LLM_SOURCE;
   const e = normalizeSource(eventSource);
-  const mcode = t === MCODE_SOURCE;
+  // 阶段 E:Agent Runtime(mcode/zcode)平级走同一套路由;
+  // zcode 没有工具事件,tool.* 分支对它天然不会被触发。
+  const agent = isAgentSource(t);
   const sourceOk = shouldAcceptEvent({ turnSource: t, eventSource: e });
   const routes = [];
 
@@ -213,20 +238,20 @@ export function routeEvent({ type, turnSource, eventSource } = {}) {
 
     case "assistant.end":
       routes.push(ROUTE_BUBBLE);
-      if (mcode) routes.push(ROUTE_PANEL);
+      if (agent) routes.push(ROUTE_PANEL);
       break;
 
     case "agent.status":
     case "agent.step":
       // 过程事件只进面板;普通 turn 一律忽略(SRC-03)。
-      if (mcode && sourceOk) routes.push(ROUTE_PANEL);
+      if (agent && sourceOk) routes.push(ROUTE_PANEL);
       break;
 
     case "tool.start":
     case "tool.progress":
     case "tool.end":
-      if (mcode) {
-        // MCode 的工具卡片在面板里。
+      if (agent) {
+        // Agent Runtime 的工具卡片在面板里。
         if (sourceOk) routes.push(ROUTE_PANEL);
       } else {
         // 普通模型的工具卡片留在聊天正文(零回归)。
@@ -236,7 +261,7 @@ export function routeEvent({ type, turnSource, eventSource } = {}) {
 
     case "error":
       routes.push(ROUTE_BUBBLE);
-      if (mcode) routes.push(ROUTE_PANEL);
+      if (agent) routes.push(ROUTE_PANEL);
       break;
 
     default:

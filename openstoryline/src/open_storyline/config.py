@@ -321,6 +321,51 @@ class MCodeConfig(ConfigBaseModel):
     max_event_text_chars: int = 2000
 
 
+class ZCodeConfig(ConfigBaseModel):
+    """zcode CLI(智谱 ZCode)无头接入配置(设计 §10.6 阶段 E)。
+
+    调用契约是**事实契约 + 风险接受**(设计 §4.2 第二级,2026-10-31 解除门禁):
+    ``zcode -p <prompt> --json --mode <mode> --cwd <cwd> [--resume sess_*]``。
+    接口未文档化,版本升级可能破坏;适配层启动自检见
+    ``zcode_agent_adapter.zcode_selfcheck``,自检不过选项不暴露。
+
+    注意:路径字段一律用 ``str`` 而不是 ``Path``(同 ``MCodeConfig`` ——
+    ``ConfigBaseModel`` 会把 ``Path`` 字段按 config 目录解析相对路径)。
+
+    字段说明:
+      cwd            zcode 工作区目录;空 = 未配置,ZCode Agent 选项不进下拉。
+                     建议指向 video-ops 操作员目录(里面有 .mcp.json 时,
+                     zcode 会自己拉起 video-agent MCP,与 mcode 同款工作区)。
+      bin            zcode 可执行文件;空 = 从 PATH 解析(Windows 命中 zcode.cmd)。
+                     也可用环境变量 OPENSTORYLINE_ZCODE_BIN。
+      mode           权限模式(build/edit/plan/yolo/guarded)。**必须显式配置**:
+                     CLI 无头默认是 yolo(危险,禁止依赖);默认给 ``edit``
+                     —— 自动应用编辑且无交互暂停(无头运行等不起交互批准,
+                     build/guarded 可能挂起到超时;plan 只读不满足执行需求)。
+                     **不是硬权限边界**,只是软护栏。
+      timeout_s      单次 zcode -p 的超时秒数(超时强杀进程树)。
+      max_prompt_chars prompt(-p 的值)字符上限。Windows argv 上限 32767,
+                     留出旗标余量取 30000;超限先裁历史(仅回滚模式),仍超就报错。
+      status_tick_s  无头运行没有中途事件,靠周期心跳让前端面板知道还活着;
+                     0 = 关闭心跳。同步路径(测试用)不产心跳。
+      resume_sessions True(默认)= 结果里的 sessionId 落库,下轮 ``--resume``
+                     续接(zcode 自己保存历史,prompt 不重烤);
+                     False = 每轮独立,历史按轮烤进 prompt(回滚开关)。
+      history_turns  仅 ``resume_sessions=False`` 时生效:烤进 prompt 的轮数上限。
+      media_root     素材白名单根;空 = 从 AUTO_VIDEO_EDITOR_DIR 推导(同 mcode)。
+    """
+
+    cwd: str = ""
+    bin: str = ""
+    mode: Literal["build", "edit", "plan", "yolo", "guarded"] = "edit"
+    timeout_s: int = 900
+    max_prompt_chars: int = 30000
+    status_tick_s: float = 20.0
+    resume_sessions: bool = True
+    history_turns: int = 10
+    media_root: str = ""
+
+
 class Settings(ConfigBaseModel):
     developer: DeveloperConfig
     project: ProjectConfig
@@ -347,6 +392,8 @@ class Settings(ConfigBaseModel):
     mcode: MCodeConfig = Field(default_factory=MCodeConfig)
     # GLM API 预设:同理,default_factory 保证旧 config.toml 不需要改动
     glm: GLMConfig = Field(default_factory=GLMConfig)
+    # zcode CLI 无头接入(阶段 E):同理,没有 [zcode] 段的旧配置仍能加载
+    zcode: ZCodeConfig = Field(default_factory=ZCodeConfig)
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -378,6 +425,12 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
       OPENSTORYLINE_MCODE_BIN        —— mcode 可执行文件
       OPENSTORYLINE_MCODE_MEDIA_ROOT —— 素材白名单根
 
+    zcode CLI 无头接入(阶段 E;cwd / bin / mode / media_root 可被环境变量覆盖):
+      OPENSTORYLINE_ZCODE_CWD        —— zcode 工作区目录
+      OPENSTORYLINE_ZCODE_BIN        —— zcode 可执行文件
+      OPENSTORYLINE_ZCODE_MODE       —— 权限模式(build/edit/plan/yolo/guarded)
+      OPENSTORYLINE_ZCODE_MEDIA_ROOT —— 素材白名单根
+
     只写其中一部分也可以(没写的沿用文件里的值)。
     """
     for section in ("llm", "vlm", "glm"):
@@ -396,6 +449,12 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
         val = os.getenv(f"OPENSTORYLINE_MCODE_{field_name.upper()}")
         if val:
             mcode_block[field_name] = val
+
+    zcode_block = data.setdefault("zcode", {})
+    for field_name in ("cwd", "bin", "mode", "media_root"):
+        val = os.getenv(f"OPENSTORYLINE_ZCODE_{field_name.upper()}")
+        if val:
+            zcode_block[field_name] = val
     return data
 
 

@@ -24,6 +24,12 @@ from open_storyline.mcode_media import (
     build_media_manifest,
     resolve_media_root,
 )
+from open_storyline.zcode_agent_adapter import (
+    ZCodeChatModel,
+    ZCodeConfigError,
+    resolve_zcode_bin,
+    zcode_selfcheck,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -286,6 +292,121 @@ async def _build_mcode_agent(
     return agent, node_manager
 
 
+# --------------------------------------------------------------------------
+# zcode 分支辅助(阶段 E;设计 §10.6 E-T3)
+# --------------------------------------------------------------------------
+
+def is_zcode_model(model_name: str) -> bool:
+    """这个模型名是不是 ZCode Agent 档位。
+
+    判定标准:名字以 ``zcode`` 开头(大小写不敏感)。
+
+    网页端模型下拉里的档位是 ``ZCode Agent``(key 即显示文本,
+    见 ``agent_fastapi.ZCODE_MODEL_KEY``)。接线在 ``agent_fastapi.py``:
+    选中该档位时以 ``llm_override = {"model": "ZCode Agent"}`` 传入,
+    ``build_agent()`` 走 zcode 分支(跳过 API key 校验、不连 8001、``tools=[]``)。
+    """
+    return str(model_name or "").strip().lower().startswith("zcode")
+
+
+def _validate_zcode_cwd(cwd: str) -> Path:
+    """校验 zcode 工作区目录。**不满足就抛明确错误**,绝不静默回退。
+
+    与 mcode 不同,zcode 工作区**不要求** ``.mcp.json`` / ``AGENTS.md``:
+    目录只是 zcode 的运行工作区;有 ``.mcp.json`` 时 zcode 会自己拉起
+    工作区配置的 MCP(video-ops 工作区即此用法),没有也能跑纯对话。
+    """
+    raw = str(cwd or "").strip()
+    if not raw:
+        raise ZCodeConfigError(
+            "zcode 未配置工作区目录。请设置 openstoryline/config.toml.local 的 "
+            "[zcode].cwd(或环境变量 OPENSTORYLINE_ZCODE_CWD)指向 zcode 工作区。"
+        )
+    path = Path(raw).expanduser()
+    if not path.is_dir():
+        raise ZCodeConfigError(f"zcode 工作区目录不存在: {path}")
+    return path.resolve()
+
+
+def _zcode_startup_check(cfg: Settings) -> None:
+    """建 agent 前的启动自检(设计 §4.2 第二级前提 2)。
+
+    bin 解析不到或 ``--help`` 缺 ``-p, --prompt`` 旗标 -> 抛 ``ZCodeConfigError``。
+    自检结果在 ``zcode_agent_adapter`` 内有缓存,这里每轮建 agent 调一次是便宜的。
+    """
+    bin_path = resolve_zcode_bin(cfg.zcode.bin or "")
+    if not bin_path:
+        raise ZCodeConfigError(
+            "找不到 zcode 可执行文件。请安装 zcode CLI(npm 全局),"
+            "或设置 [zcode].bin / OPENSTORYLINE_ZCODE_BIN 指向可执行文件。"
+        )
+    ok, reason = zcode_selfcheck(bin_path)
+    if not ok:
+        raise ZCodeConfigError(f"zcode 启动自检未通过: {reason}")
+
+
+async def _build_zcode_agent(
+    cfg: Settings,
+    session_id: str,
+    store: ArtifactStore,
+    model_name: str,
+    event_sink_provider: Optional[Any] = None,
+    resume_id_provider: Optional[Any] = None,
+):
+    """zcode 分支:用 ``zcode -p ... --json`` 子进程当模型。
+
+    与 mcode 分支同构(每一条都是有意的):
+    - **跳过** LLM / VLM 两处 ``validate_api_key`` —— 认证走 CLI 本机登录态。
+    - **不连 8001**(``connections = {}``)—— 工具由 zcode 自己的工作区配置决定;
+      OpenStoryline **不得**重复挂载同一组 ``video-agent`` 工具(设计 §6.2 / E-T3)。
+    - ``tools=[]`` 且**不注册** LangChain skills 工具。
+    - llm 与 vlm 用**同一个** ``ZCodeChatModel`` 实例 —— zcode 不区分多模态,
+      素材由服务端生成并校验过的清单承担。
+    - ``resume_id_provider``:取「本轮应 --resume 的 zcode sessionId」的
+      provider(agent 按 session 缓存,映射每轮更新,与 sink 同款机制)。
+    """
+    zcode_cwd = _validate_zcode_cwd(cfg.zcode.cwd)
+    _zcode_startup_check(cfg)
+
+    media_root = resolve_media_root(cfg.zcode)
+    media_dir = (media_root / session_id).resolve()
+    try:
+        manifest = build_media_manifest(media_dir, allowed_media_roots())
+    except Exception as exc:  # noqa: BLE001
+        # 清单生成失败不该阻断建 agent —— 素材清单是「锦上添花」,不是必需项。
+        logger.warning("生成素材清单失败(不阻断): session_id=%s dir=%s err=%s",
+                       session_id, media_dir, exc)
+        manifest = []
+
+    llm = ZCodeChatModel(
+        cwd=str(zcode_cwd),
+        model=str(model_name or "zcode-agent"),
+        mode=cfg.zcode.mode,
+        timeout_s=cfg.zcode.timeout_s,
+        zcode_bin=(cfg.zcode.bin or None),
+        max_prompt_chars=cfg.zcode.max_prompt_chars,
+        status_tick_s=cfg.zcode.status_tick_s,
+        resume_sessions=cfg.zcode.resume_sessions,
+        history_turns=cfg.zcode.history_turns,
+        session_id=session_id,
+        media_dir=str(media_dir),
+        media_manifest=manifest,
+        event_sink_provider=event_sink_provider,
+        resume_id_provider=resume_id_provider,
+    )
+    vlm = llm  # zcode 不区分多模态:同一个实例
+
+    agent = create_agent(
+        model=llm,
+        tools=[],
+        middleware=[log_tool_request, handle_tool_errors],
+        store=store,
+        context_schema=ClientContext,
+    )
+    node_manager = NodeManager([])
+    return agent, node_manager
+
+
 async def build_agent(
     cfg: Settings,
     session_id: str,
@@ -295,6 +416,8 @@ async def build_agent(
     llm_override: Optional[dict] = None,
     vlm_override: Optional[dict] = None,
     mcode_event_sink_provider: Optional[Any] = None,
+    zcode_event_sink_provider: Optional[Any] = None,
+    zcode_resume_id_provider: Optional[Any] = None,
 ):
     def _get(override: Optional[dict], key: str, default: Any) -> Any:
         return (override.get(key) if isinstance(override, dict) and key in override else default)
@@ -322,6 +445,19 @@ async def build_agent(
             store,
             str(llm_override.get("model") or ""),
             event_sink_provider=mcode_event_sink_provider,
+        )
+
+    # ---- zcode 分支:在 key 校验之前分流(与 mcode 同款位置)----
+    # zcode 认证走 CLI 本机登录态,不走 OpenAI 兼容网关,也不连 8001;
+    # 工具由 zcode 自己的工作区配置决定,OpenStoryline 不重复挂载 video-agent。
+    if is_zcode_model(_get(llm_override, "model", "")):
+        return await _build_zcode_agent(
+            cfg,
+            session_id,
+            store,
+            str(llm_override.get("model") or ""),
+            event_sink_provider=zcode_event_sink_provider,
+            resume_id_provider=zcode_resume_id_provider,
         )
 
     # Validate LLM API key before creating the model

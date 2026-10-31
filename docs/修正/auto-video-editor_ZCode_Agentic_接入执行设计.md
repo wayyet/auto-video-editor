@@ -18,11 +18,11 @@
 
    `ZCode Agent → video-agent MCP → agent_gate → LangGraph worker`
 
-2. **当前不能把真正的 ZCode Agent 作为 OpenStoryline 的内嵌下拉选项直接执行**：已核查的 ZCode 官方公开文档说明了桌面 Agent、MCP、Remote、Bot Channel 和 Hooks，但没有找到供第三方应用直接启动/驱动 ZCode Agent 的受支持 CLI、Headless、SDK、HTTP 或 ACP 调用契约。不能照搬 `mcode exec` 方式虚构 `zcode exec`。
+2. **当前不能把真正的 ZCode Agent 作为 OpenStoryline 的内嵌下拉选项直接执行**：已核查的 ZCode 官方公开文档说明了桌面 Agent、MCP、Remote、Bot Channel 和 Hooks，但没有找到供第三方应用直接启动/驱动 ZCode Agent 的受支持 CLI、Headless、SDK、HTTP 或 ACP 调用契约。不能照搬 `mcode exec` 方式虚构 `zcode exec`。（2026-10-31 修订：官方发行版 CLI 实测含无头形态，经所有者风险接受后已开放第二级路径，见 §4.2 与附录 A.5。）
 
 3. **GLM API 与 ZCode Agent 必须分开命名**：OpenStoryline 可以通过现有 OpenAI 兼容模型配置接入 GLM API，但那只是模型调用，不等于运行 ZCode Agent 的规划、工具调度和执行工作流。
 
-4. **不建议先在“LLM 模型”下拉框里放一个不可执行的 ZCode 选项**。应把“模型供应商”和“外部 Agent 运行时”分层。等 Z.ai 提供正式的外部 Agent 调用接口后，再实现 OpenStoryline 内嵌的 `ZCode Agent` 运行时适配器。
+4. **不建议先在“LLM 模型”下拉框里放一个不可执行的 ZCode 选项**。应把“模型供应商”和“外部 Agent 运行时”分层。等 Z.ai 提供正式的外部 Agent 调用接口后，再实现 OpenStoryline 内嵌的 `ZCode Agent` 运行时适配器。（2026-10-31 修订：按 §4.2 第二级解除门禁后即可启动实施。）
 
 因此本设计分为三个阶段：
 
@@ -30,7 +30,7 @@
 |---|---|---|
 | P0 | ZCode 桌面 Agent 通过 `video-agent` MCP 驱动现有 LangGraph 工作流 | **当前可落地，推荐先实施** |
 | P1 | 可选：在 OpenStoryline 中增加独立的 GLM API 模型预设 | 现有 Custom Model 可配置；可按需做 UI 优化 |
-| P2 | ZCode Agent 真正成为 OpenStoryline 内可选择、可流式展示的 Agent Runtime | **等待 Z.ai 发布受支持的外部调用接口** |
+| P2 | ZCode Agent 真正成为 OpenStoryline 内可选择、可流式展示的 Agent Runtime | **2026-10-31 已按 §4.2 第二级解除门禁（附录 A.5）** |
 
 ## 2. 项目现状（`main` 分支）
 
@@ -198,11 +198,21 @@ flowchart TD
 
 本阶段不修改 OpenStoryline 的 `ChatOpenAI`、`MCodeChatModel` 或 WebSocket 事件协议。ZCode 先作为独立外部操作员运行，降低对现有工作流的影响。
 
-### 4.2 为什么不把 ZCode 当成 `MCodeChatModel` 的平替
+### 4.2 外部调用接口的分级判定标准（2026-10-31 修订）
 
-MCode 已有明确的 `mcode exec` 子进程调用方式、stdin/stdout 约定、stream-json 事件协议及进程取消机制。ZCode 官方文档当前没有提供对应的外部 Agent 启动/调用契约。
+MCode 已有明确的 `mcode exec` 子进程调用方式、stdin/stdout 约定、stream-json 事件协议及进程取消机制。OpenStoryline 能否直接驱动 ZCode Agent，按以下**两级判定标准**执行：
 
-直接假设存在 `zcode exec`、调用桌面应用私有 HTTP 端点、抓取内部 IPC，或读取 ZCode 私有 OAuth 凭据，都不属于受支持的集成方式。此类实现会造成版本脆弱、认证风险和不可测试的运行时依赖。
+**第一级（受支持契约，首选）**：ZCode 官方文档发布 headless / SDK / app-server 之一的调用契约（报文、认证、版本承诺）并明确第三方集成授权。满足即按正式契约接入，无附加条件。
+
+**第二级（事实契约 + 风险接受，2026-10-31 起允许）**：官方发行版 CLI 中**实测存在且可稳定复现**的无头调用形态（当前指 `-p/--prompt`，证据与能力边界见附录 A.1、A.5），允许在**同时满足**下列全部前提时作为事实契约（de-facto contract）接入：
+
+1. 仓库所有者明确接受"未文档化接口可能随 CLI 升级变更或消失、且无官方授权声明"的风险（2026-10-31 已确认接受）；
+2. 适配层启动自检：运行时校验 `zcode --version` 与旗标存在性（`--help` 含 `-p, --prompt`），不满足则选项禁用并给出明确原因，不静默降级；
+3. 全部调用收敛在单一适配器模块（`zcode_agent_adapter.py`），官方契约发布后仅在该模块内平替迁移，调用点不散落；
+4. §8.3 验收清单全部通过后才把选项暴露给用户；
+5. 实测能力边界与风险清单固化在附录 A.5，CLI 版本变化时复测。
+
+**仍然无条件禁止**（与修订前一致）：虚构不存在的命令（如凭空造 `zcode exec`）、调用桌面应用私有 HTTP 端点、抓取内部 IPC、读取 ZCode 私有 OAuth 凭据、对未发布报文规范的 `app-server` 协议做逆向。此类实现会造成版本脆弱、认证风险和不可测试的运行时依赖，不在风险接受范围内。
 
 ### 4.3 P1：可选 GLM API 模型预设
 
@@ -357,7 +367,7 @@ OpenStoryline 左侧模型下拉
 
 ## 6. P2：未来把 ZCode Agent 集成到 OpenStoryline 左侧选择器
 
-此阶段只有在 Z.ai 公布并支持第三方应用调用 ZCode Agent 的接口后才能实施。当前先定义边界和代码改造点，不提前编造调用命令。
+此阶段的实施门禁按 §4.2 双轨判定与 §10.6 执行，2026-10-31 已按第二级（CLI 无头形态 + 风险接受）解锁，实测调用形态以附录 A.1/A.5 为准；仍不提前编造未实测的调用方式。以下先定义边界和代码改造点。
 
 ### 6.1 目标 UI
 
@@ -474,7 +484,7 @@ P0 配置接入不应修改已通过的测试预期；若没有修改代码，�
 
 ### 8.3 P2 内嵌 Agent 验收
 
-在官方调用接口确认后，新增以下自动化验收：
+在 §4.2 门禁满足后（2026-10-31 已按第二级满足），新增以下自动化验收：
 
 - 无官方客户端/未配置时，不显示可执行的 ZCode Agent 选项。
 - 官方客户端健康检查失败时，UI 显示明确禁用原因，不自动切换其他模型。
@@ -509,7 +519,7 @@ P0 配置接入不应修改已通过的测试预期；若没有修改代码，�
 
 ### P2：内嵌 ZCode Agent
 
-只有在 Z.ai 官方提供外部调用接口并明确授权第三方集成后开始：
+在 §4.2 双轨门禁满足后开始（2026-10-31 已按第二级解锁，附录 A.5）：
 
 1. 固化官方接口文档、版本和认证方式。
 2. 定义 `ZCodeAgentAdapter` 的命令/HTTP/SDK 调用协议。
@@ -535,7 +545,7 @@ P0 配置接入不应修改已通过的测试预期；若没有修改代码，�
 | B | P0 验收 | 全链路验收、安全用例与回归 | 无 | 阶段 A 完成 |
 | C | P1（可选） | GLM API 模型预设 | OpenStoryline 少量改动 | BigModel / Z.ai API Key；与 A/B 无依赖，可并行 |
 | D | P2 前置 | `agent_gate` 线程级操作员租约 | `agent_gate` | 阶段 B 完成；不依赖官方接口，可先行 |
-| E | P2 | OpenStoryline 内嵌 ZCode Agent Runtime | OpenStoryline 前后端 + `agent_gate` | **Z.ai 发布受支持的外部 Agent 调用接口** |
+| E | P2 | OpenStoryline 内嵌 ZCode Agent Runtime | OpenStoryline 前后端 + `agent_gate` | §4.2 双轨门禁满足（2026-10-31 按第二级解除，附录 A.5） |
 
 ### 10.2 阶段 A：MCP 接入配置（对应 P0）
 
@@ -588,7 +598,12 @@ P0 配置接入不应修改已通过的测试预期；若没有修改代码，�
 
 ### 10.6 阶段 E：内嵌 ZCode Agent Runtime（对应 P2）
 
-**硬性门禁**：Z.ai 发布受支持的外部 Agent 调用接口（CLI / SDK / HTTP / ACP 之一）并明确授权第三方集成。门禁未满足时，本阶段仅允许推进 E-T0，不得提前实现任何私有协议调用。
+**硬性门禁（2026-10-31 修订为双轨）**：满足任一轨道即可实施本阶段——
+
+- 轨道①（原门禁）：Z.ai 发布受支持的外部 Agent 调用接口（CLI / SDK / HTTP / ACP 之一）并明确授权第三方集成；
+- 轨道②（§4.2 第二级）：官方发行版 CLI 实测存在的无头调用形态 + 仓库所有者风险接受（2026-10-31 已确认；实测证据与能力边界见附录 A.1、A.5）。
+
+门禁已按轨道②于 2026-10-31 解除，E-T1～E-T7 解冻。实施仍受 §4.2 第二级五项前提约束（启动自检、适配层收敛、验收后暴露、风险复测）；`app-server` 协议仍不得逆向。原"门禁未满足时仅允许推进 E-T0"的限制随之失效。
 
 | 编号 | 任务 | 对应 6.2 节改动点 |
 |---|---|---|
@@ -603,6 +618,11 @@ P0 配置接入不应修改已通过的测试预期；若没有修改代码，�
 
 阶段出口：8.3 节清单全部通过，ZCode Agent 成为可选 Runtime，与 MCode、Claude Code、普通模型路径互不影响。
 
+**执行状态（2026-11-01）**：E-T1～E-T7 已全部执行完毕并通过出口（8.3 清单
+逐项核验见《auto-video-editor_ZCode_Agentic_阶段E执行记录.md》）。实施期新增
+关键运行发现：**Windows 上多行 prompt 过 `.cmd` shim 会被 cmd.exe 按换行截断**，
+适配器因此解析 npm shim 直启 node.exe + zcode.cjs（见 A.5 补充）。
+
 ### 10.7 阶段依赖与推进方式
 
 ```mermaid
@@ -610,13 +630,13 @@ flowchart LR
     A[阶段 A MCP 接入] --> B[阶段 B 全链路验收]
     B --> D[阶段 D 操作员租约]
     D --> E[阶段 E 内嵌 Runtime]
-    G[官方接口发布] -.解锁.- E
+    G[§4.2 门禁满足 2026-10-31] -.解锁.- E
     C[阶段 C GLM 预设 可选]
 ```
 
 - 阶段 C 与主线无依赖，可在任意时点插入执行。
 - 阶段 D 是阶段 E 的前置子任务（6.4 节），先于阶段 E 完成。
-- 阶段 E 在官方接口可用前保持冻结，仅维护 E-T0 的文档跟踪。
+- 阶段 E 门禁已于 2026-10-31 按 §4.2 第二级解除（附录 A.5），E-T1～E-T7 解冻待执行；官方正式契约发布后按 A.4 入口迁移。
 - 全部阶段完成后，按“交付边界”一节复核交付物完整性。
 
 ## 11. 交付边界
@@ -628,7 +648,7 @@ flowchart LR
 - P1 GLM API 与 ZCode Agent 的区分原则。
 - P2 OpenStoryline 内嵌 ZCode Agent 的代码改造点、运行时契约和验收标准。
 
-本设计**不宣称**当前已经实现 ZCode Agent 在 OpenStoryline 左侧下拉框中的内嵌运行。当前官方公开资料缺少可供项目调用的 Agent Runtime 接口；在接口正式可用前，P0 MCP 接入是可支持、风险较低且可以立即执行的方案。
+本设计**不宣称**当前已经实现 ZCode Agent 在 OpenStoryline 左侧下拉框中的内嵌运行。（2026-10-31 修订：接口门禁已按 §4.2 第二级解除并完成实测评估（附录 A.5），内嵌运行进入阶段 E 实施范围；本句的"不宣称"仅描述修订前的交付状态。）当前官方公开资料缺少**受支持**的项目调用契约；P0 MCP 接入仍是风险最低的方案。
 
 ---
 
@@ -723,3 +743,45 @@ HTTP / ACP 之一）并明确授权第三方集成"**。
 从 E-T1（`ZCodeAgentAdapter` 调用协议定义）开始，配合阶段 D 已就绪的
 操作员租约（§10.5）落实 §6.4 单消费者约束。
 
+### A.5 门禁解除与无头接口实测评估（2026-10-31 同日复核）
+
+**决策**：仓库所有者于 2026-10-31 明确接受非官方 `-p/--prompt` 无头接口的风险
+（未文档化、无授权声明、可能随 CLI 升级变更），按 §4.2 第二级标准解除阶段 E
+门禁。A.3 的冻结判定作为历史记录保留，处置结论自此由本节取代。
+
+**实测契约**（zcode CLI 0.17.1，Windows 10.0.26300 x64 / node v24.19.0，
+共 7 次无头运行，证据与原始输出见阶段 E 门禁解除执行记录）：
+
+| 能力 | 实测结果 |
+|---|---|
+| `-p <text>` 无头单次 | ✓ 退出码 0；`--mode plan --json` 14.1s 返回 |
+| `--json` 结构化结果 | ✓ 结束时单块 JSON：`sessionId`/`traceId`/`turnId`/`response`/`usage`/`eventCount`/`projection` |
+| 流式 | △ 仅纯文本模式逐行到达（约 100ms 间隔）；`--json` 无流式；`--verbose` 对 JSON 契约零增益 |
+| 会话恢复 | ✓ `--resume sess_...` 上下文真实延续（inputTokens 增量吻合），sessionId 稳定 |
+| 工具循环 | ✓ 无头可用（plan 模式下自主探索目录并返回结论） |
+| 取消 | △ 必须击杀真实 node.exe 进程树（taskkill //F //T）；击杀 npm shim PID 无效 |
+| stdin 传 prompt | ✗ `-p -` 收到字面 `-`，不支持 |
+| 中途工具事件 | ✗ 任何 `-p` 形态均不暴露（`eventCount` 仅计数，1424 events 实测不外发） |
+| `app-server` | 存在但 `--help` 零报文规范，维持禁止逆向 |
+| 默认权限 | ⚠️ `-p` 默认 `--mode yolo`，适配器必须显式传 `--mode` |
+| 单次固定开销 | ⚠️ 空 prompt 实测 inputTokens 18267（cacheRead 12864 缓解）；短 prompt 也会自主探索（实测一次 87k tokens / 1424 events） |
+
+**可行性结论**：可按 E-T4 预设的降级形态接入——
+
+- v1 链路：`zcode -p <prompt> --cwd <workspace> --mode <build|plan|guarded> --json`，
+  解析最终 JSON 映射为内部事件；文本流式可选（非 JSON 模式逐行转发）；
+  **过程 trace 不可用**（无中途事件通道），不得伪造（§6.3）。
+- 长 prompt 受 Windows argv 32767 字符硬上限约束且 stdin 不可用 →
+  `max_prompt_chars` 建议默认 30000，超长上下文走 `--attach` 文件通道（E-T1 定协议时验证）。
+- 会话映射：OpenStoryline `thread_id` ↔ `sess_*`，持久化后按 `--resume` 续轮。
+- 取消：Windows Job Object 或真实 PID 树管理（与运行发现 1 同源教训）。
+- 成本护栏：`usage` 随结果回传，适配器按轮记录；畸形/过短 prompt 也会触发
+  自主工具探索，权限模式必须显式指定，禁止依赖默认 `yolo`。
+- 风险复测触发条件：CLI 版本变化时重跑本表冒烟；启动自检不过则选项禁用。
+
+**补充（2026-11-01，阶段 E 实施期实测）**：Windows 上 cmd.exe 把命令行里的
+换行当命令分隔符，**多行 prompt 过 `.cmd` shim（npm 全局 zcode.cmd 同款 `%*`
+机制）必被截断**——`-p "多行"` 只有第一行能到 CLI，后面的旗标一并丢失。
+处置：适配器解析 shim 直启 `node.exe + zcode.cjs`（多行引号参数由
+CreateProcess 引号规则保证完整）；shim 解析失败且 prompt 含换行则明确报错。
+详见阶段 E 执行记录"发现 E-1"。

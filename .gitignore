@@ -66,3 +66,9 @@ out/
 
 # pytest 运行日志
 .pytest_unit.log
+
+# ZCode 会话级产物（plans/plan-sess_*.md 等，本机会话用，不入库）
+.zcode/
+
+# 本机 Agent 工具配置（mcp.json 含本机绝对路径，跨机无意义）
+.agents/
