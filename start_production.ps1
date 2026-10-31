@@ -247,10 +247,17 @@ function Write-SubProcessOutput {
 # 环境变量注入 + 还原
 #   POSTGRES_URI / STORYLINE_MODE / THREAD_ID 由本脚本显式注入给子进程,
 #   不受调用方 shell 残留污染;脚本结束(finally)时还原原值。
+#   ⚠️ 注入必须发生在任何 Start-Process 之前(含 Phase 0.5 的 Docker Desktop
+#   与 Phase 0.6 的 Uvicorn):子进程只在创建瞬间复制父进程的环境快照,
+#   父进程之后补设的变量不会到达已运行的子进程 —— 2026-10-31 worker
+#   "no password supplied" 故障的 P0 根因,就是注入被放在 Phase 0.7 之后,
+#   先起的 Uvicorn → MCode → MCP → Worker 整条进程链都拿不到本次
+#   POSTGRES_URI。
 # ---------------------------------------------------------------
 $envBackup = @{}
 foreach ($name in @(
     'POSTGRES_URI',
+    'AGENT_GATE_POSTGRES_URI',   # agent_gate 测试隔离变量,优先级高于 POSTGRES_URI;生产启动前备份并清除,防遗留值覆盖生产 DSN
     'STORYLINE_MODE',
     'THREAD_ID',
     'PYTHONUNBUFFERED',
@@ -259,6 +266,24 @@ foreach ($name in @(
 )) {
     $envBackup[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
+
+# 统一注入(早于所有子进程创建):Web → MCode → MCP → Worker 整条进程链
+# 都从这里继承本次启动的 DSN 与模式开关。
+$env:POSTGRES_URI  = $PostgresUri
+Remove-Item Env:AGENT_GATE_POSTGRES_URI -ErrorAction SilentlyContinue
+$env:STORYLINE_MODE = $StorylineMode
+$env:THREAD_ID      = $ThreadId
+# Windows 下 python stdout 默认 GBK,PowerShell 按 UTF-8 解码 → 中文乱码。
+# 显式钉 UTF-8,让 Phase 2/Phase 3 的 Python 子进程输出在控制台和日志里都可读。
+$env:PYTHONIOENCODING = 'utf-8'
+# 强制 Python 不缓冲(便于 Web 日志实时落盘)
+$env:PYTHONUNBUFFERED = '1'
+# 外部 URI 模式:Python 侧预检也不该去起本地容器
+if ($target.Kind -ne 'local-managed') {
+    $env:AUTO_VIDEO_EDITOR_PREFLIGHT_SKIP_POSTGRES_START = '1'
+    Write-Phase "  AUTO_VIDEO_EDITOR_PREFLIGHT_SKIP_POSTGRES_START=1(外部 Postgres 模式)"
+}
+Write-Phase ("注入环境变量(所有子进程启动之前;脚本结束时还原): POSTGRES_URI = {0}, STORYLINE_MODE = {1}, THREAD_ID = {2}, PYTHONIOENCODING = {3}" -f $maskedUri, $StorylineMode, $ThreadId, $env:PYTHONIOENCODING)
 
 # ---------------------------------------------------------------
 # 顶部 banner
@@ -575,25 +600,12 @@ set PYTHONUNBUFFERED=1
     }
 
     # ===============================================================
-    # 环境变量注入(preflight 与 Python 子进程都会继承)
+    # 环境变量说明(不再在此注入)
+    #   POSTGRES_URI / STORYLINE_MODE / THREAD_ID 等已在脚本头部、所有
+    #   Start-Process 之前注入(见 envBackup 段)——子进程只在创建瞬间继承
+    #   父进程环境快照,后置注入补不到已运行的 Uvicorn/MCode/MCP/Worker
+    #   进程链。preflight 与 Phase 2/3 的 Python 子进程继承的正是前置注入值。
     # ===============================================================
-    Write-Phase ''
-    Write-Phase "注入环境变量(脚本结束时还原)" 'Cyan'
-    $env:POSTGRES_URI  = $PostgresUri
-    $env:STORYLINE_MODE = $StorylineMode
-    $env:THREAD_ID      = $ThreadId
-    # Windows 下 python stdout 默认 GBK,PowerShell 按 UTF-8 解码 → 中文乱码。
-    # 显式钉 UTF-8,让 Phase 2/Phase 3 的 Python 子进程输出在控制台和日志里都可读。
-    $env:PYTHONIOENCODING = 'utf-8'
-    # 外部 URI 模式:Python 侧预检也不该去起本地容器
-    if ($target.Kind -ne 'local-managed') {
-        $env:AUTO_VIDEO_EDITOR_PREFLIGHT_SKIP_POSTGRES_START = '1'
-        Write-Phase "  AUTO_VIDEO_EDITOR_PREFLIGHT_SKIP_POSTGRES_START=1(外部 Postgres 模式)"
-    }
-    Write-Phase ("  POSTGRES_URI   = {0}" -f $maskedUri)
-    Write-Phase ("  STORYLINE_MODE = {0}" -f $StorylineMode)
-    Write-Phase ("  THREAD_ID      = {0}" -f $ThreadId)
-    Write-Phase ("  PYTHONIOENCODING = {0}" -f $env:PYTHONIOENCODING)
 
     # ===============================================================
     # Phase 1 — preflight.ps1(本次运行**唯一一次**完整预检)
