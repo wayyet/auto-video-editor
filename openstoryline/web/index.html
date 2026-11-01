@@ -35,10 +35,10 @@
         </button>
 
         <button id="importVideoBtn" class="sidebar-action secondary"
-                title="导入视频(手动)"
-                aria-label="导入视频(手动)"
-                data-i18n-title="sidebar.import_video"
-                data-i18n-aria-label="sidebar.import_video">
+                title="导入视频(也支持上传图片)"
+                aria-label="导入视频(也支持上传图片)"
+                data-i18n-title="sidebar.import_video_title"
+                data-i18n-aria-label="sidebar.import_video_title">
           <span class="sidebar-action-icon">📥</span>
           <span class="sidebar-action-text" data-i18n="sidebar.import_video">导入视频</span>
         </button>
@@ -61,11 +61,15 @@
           <span class="sidebar-action-text" data-i18n="sidebar.clean_cache">清理缓存</span>
         </button>
 
-        <!-- 「导入视频」按钮的隐藏文件选择框(hidden,无视觉)
-             multiple:允许一次多选多个视频(缺它时 Windows「打开」对话框是单选模式,
-             不渲染复选框、Ctrl+A / Ctrl+点击多选全部失效)。 -->
+        <!-- 「导入视频」按钮的隐藏文件选择框(hidden,无视觉)。
+             这是 Web UI **唯一**的素材选择入口(旧回形针 #uploadBtn/#fileInput 已并入):
+             - 工作流视频 .mp4/.mov/.mkv/.avi/.webm → pending 区 + 一次工作流握手;
+             - 图片与旧版通用视频(.m4v/.flv/.wmv 等) → 只进 pending 会话素材。
+             multiple:允许一次多选(缺它时 Windows「打开」对话框是单选模式,
+             不渲染复选框、Ctrl+A / Ctrl+点击多选全部失效)。
+             accept 只是选择器的界面提示,最终类型分流由 app.js 按扩展名/MIME 分类。 -->
         <input type="file" id="importVideoFileInput"
-               accept="video/*,.mp4,.mov,.mkv,.avi,.webm" multiple hidden />
+               accept="video/*,image/*,.mp4,.mov,.mkv,.avi,.webm,.m4v,.flv,.wmv,.jpg,.jpeg,.png,.gif,.webp,.bmp,.tiff" multiple hidden />
       </div>
 
       <!-- 中间滚动区：长内容放这里 -->
@@ -409,8 +413,6 @@
 
     <!-- 输入区 -->
     <footer class="composer" role="region" aria-label="消息输入区">
-      <input id="fileInput" class="file-input" type="file" multiple />
-
       <div id="pendingBar" class="pending hidden" aria-label="待发送素材">
         <div class="media-bar-title">待发送素材</div>
         <div id="pendingRow" class="media-row"></div>
@@ -426,12 +428,6 @@
       </div>
 
       <div class="composer-actions">
-        <button id="uploadBtn" class="icon-btn" title="上传素材" aria-label="上传素材">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
-          </svg>
-        </button>
-
         <div class="composer-actions-spacer"></div>
 
         <button
@@ -505,7 +501,7 @@
       };
     </script>
 
-    <script type="module" src="/static/app.js?v=20261031-phaseE2"></script>
+    <script type="module" src="/static/app.js?v=20261101-upload-merge"></script>
   </div>
 
   <!-- 右侧开发者侧边栏（仅 developer_mode=true 时由 JS 显示） -->

@@ -25,6 +25,12 @@ import {
   statusI18nKey,
   statusIcon,
 } from "./mcode_panel.mjs?v=20261031-phaseE2";
+// 「Web UI 上传入口合并」:文件分类 / pending 截断 / 握手载荷的纯策略层(可单测)。
+import {
+  buildImportVideoPayload,
+  limitUploadBatch,
+  planUploadBatch,
+} from "./media_upload.mjs?v=20261101-upload-merge";
 
 const $ = (sel) => document.querySelector(sel);
 const SIDEBAR_COLLAPSED_KEY = "openstoryline_sidebar_collapsed";
@@ -86,6 +92,8 @@ const __OS_I18N = {
     "sidebar.new_chat": "创建新对话",
     "sidebar.clean_cache": "清理缓存",
     "sidebar.import_video": "导入视频",
+    // 「Web UI 上传入口合并」:按钮 tooltip/无障碍文案 —— 图片只进会话素材,不进视频工作流。
+    "sidebar.import_video_title": "导入视频(也支持上传图片)",
     "sidebar.history_title": "对话历史",
     "sidebar.history_empty": "暂无历史会话",
     "sidebar.history_error": "历史会话加载失败，请稍后重试",
@@ -159,22 +167,23 @@ const __OS_I18N = {
     "toast.delete_failed": "删除失败：{msg}",
     "toast.uploading_cannot_send": "素材正在上传中，上传完成后才能发送。",
     "toast.switch_while_streaming": "正在生成回复，暂时无法切换会话。请先等待完成或打断当前回复。",
+    "toast.switch_while_uploading": "素材正在上传中，暂时无法切换会话。请等待上传完成。",
     "toast.session_restore_unavailable": "暂时无法从服务器恢复会话（网络或服务繁忙）。请稍后刷新或重试；本地会话 ID 已保留。",
     "toast.uploading_interrupt_send": "素材正在上传中，暂时无法发送新消息。已为你打断当前回复；上传完成后再按 Enter 发送。",
     "toast.clean_cache_running": "正在清理缓存…",
     "toast.clean_cache_done": "已清理 {n} 个路径",
     "toast.clean_cache_done_none": "没有可清理的缓存",
     "toast.clean_cache_failed": "清理缓存失败：{msg}",
-    "toast.import_video_running": "正在导入视频…",
-    "toast.import_video_progress": "正在导入视频… {pct}%",
     "toast.import_video_done": "视频已导入",
     "toast.import_video_done_multi": "已导入 {n} 个视频",
-    "toast.import_video_partial": "已导入 {ok} 个视频，{fail} 个失败",
     "toast.import_video_uploaded_ready": "已上传 {n} 个视频到当前会话，可继续与 Agent 对话完成规划",
-    "toast.import_video_uploading_file": "正在导入第 {i}/{n} 个：{name}",
     "toast.import_video_no_request": "当前没有待导入的请求：请先启动工作流，等待到「导入视频」关卡。",
-    "toast.import_video_bad_type": "仅支持视频文件。",
     "toast.import_video_failed": "导入视频失败：{msg}",
+    // 「Web UI 上传入口合并」:素材上传成功但工作流握手未确认(429/5xx/网络异常)。
+    // 语义区别于 upload_failed —— 素材已在 pending 区,不自动重试握手。
+    "toast.import_video_handshake_failed": "素材已上传到当前会话，但工作流导入握手未确认：{msg}",
+    "toast.upload_running": "正在上传素材…",
+    "toast.upload_partial": "已上传 {ok} 个素材，{fail} 个失败",
     "toast.media_all_filtered": "仅支持上传视频或图片文件。",
     "toast.media_partial_filtered": "已过滤 {n} 个不支持的文件类型，仅上传视频/图片。",
     "toast.audio_not_supported": "暂不支持音频文件上传（后端尚未支持音频处理）。",
@@ -244,6 +253,8 @@ const __OS_I18N = {
     "sidebar.new_chat": "New chat",
     "sidebar.clean_cache": "Clean cache",
     "sidebar.import_video": "Import video",
+    // 「Web UI 上传入口合并」(upload-merge): tooltip/ARIA for the unified entry.
+    "sidebar.import_video_title": "Import video (images supported too)",
     "sidebar.history_title": "History",
     "sidebar.history_empty": "No past chats yet",
     "sidebar.history_error": "Failed to load chat history. Please retry later.",
@@ -317,22 +328,23 @@ const __OS_I18N = {
     "toast.delete_failed": "Delete failed: {msg}",
     "toast.uploading_cannot_send": "Media is uploading. Please wait until it finishes before sending.",
     "toast.switch_while_streaming": "A reply is still being generated. Please wait or interrupt before switching chats.",
+    "toast.switch_while_uploading": "Media is uploading. Please wait for the upload to finish before switching chats.",
     "toast.session_restore_unavailable": "Could not restore the session from the server (network or temporary overload). Please retry later or refresh. Your local session id is kept.",
     "toast.uploading_interrupt_send": "Media is uploading, so a new message can't be sent yet. I interrupted the current reply; press Enter after the upload finishes.",
     "toast.clean_cache_running": "Cleaning cache…",
     "toast.clean_cache_done": "Cleaned {n} paths",
     "toast.clean_cache_done_none": "No cache to clean",
     "toast.clean_cache_failed": "Cache cleanup failed: {msg}",
-    "toast.import_video_running": "Importing video…",
-    "toast.import_video_progress": "Importing video… {pct}%",
     "toast.import_video_done": "Video imported",
     "toast.import_video_done_multi": "{n} videos imported",
-    "toast.import_video_partial": "{ok} videos imported, {fail} failed",
     "toast.import_video_uploaded_ready": "{n} videos uploaded to this session; continue chatting with the Agent to finish planning",
-    "toast.import_video_uploading_file": "Importing {i}/{n}: {name}",
     "toast.import_video_no_request": "No pending import request. Start the workflow first and wait for the “Import video” gate.",
-    "toast.import_video_bad_type": "Only video files are supported.",
     "toast.import_video_failed": "Video import failed: {msg}",
+    // upload-merge: media uploaded but the workflow import handshake was not confirmed.
+    // Distinct from upload_failed — the files are already in the pending bar; no auto retry.
+    "toast.import_video_handshake_failed": "Media uploaded to this session, but the workflow import handshake was not confirmed: {msg}",
+    "toast.upload_running": "Uploading media…",
+    "toast.upload_partial": "{ok} file(s) uploaded, {fail} failed",
     "toast.media_all_filtered": "Only video or image files are supported.",
     "toast.media_partial_filtered": "{n} unsupported file(s) were filtered; only video/image files will be uploaded.",
     "toast.audio_not_supported": "Audio uploads are not supported yet (backend audio processing is not available).",
@@ -2766,8 +2778,8 @@ class App {
 
     this.localObjectUrlByMediaId = new Map();
 
-    this.fileInput = $("#fileInput");
-    this.uploadBtn = $("#uploadBtn");
+    // upload-merge:旧回形针入口(#uploadBtn/#fileInput)已删除,
+    // #importVideoBtn/#importVideoFileInput 是唯一素材选择入口。
     this.promptInput = $("#promptInput");
     this.sendBtn = $("#sendBtn");
     this.quickPromptBtn = $("#quickPromptBtn");
@@ -2811,7 +2823,12 @@ class App {
 
   _showSwitchWhileStreamingToast() {
     if (!this.ui || !this.ui.showToastI18n) return;
-    this.ui.showToastI18n("toast.switch_while_streaming", {});
+    // upload-merge:根据实际状态提示「正在上传素材」或「正在生成回复」,
+    // 避免上传期间切换会话被拦时显示错误的“生成回复”文案。
+    const key = (!this.streaming && this.uploading)
+      ? "toast.switch_while_uploading"
+      : "toast.switch_while_streaming";
+    this.ui.showToastI18n(key, {});
     setTimeout(() => this.ui.hideToast(), 1800);
   }
 
@@ -2859,14 +2876,18 @@ class App {
     }
   }
 
-  // 「📥 导入视频」按钮：这是**唯一**能让 auto-video-editor 图侧
-  // import_video 节点继续往下走的入口。图自己永不自动导入视频。
-  // 链路：选文件(可多选) → 复用既有 uploadMediaChunked 上传到当前会话
-  //      → POST /api/system/import-video → 端点写回握手结果文件
+  // 「📥 导入视频」按钮：Web UI **唯一**的素材选择入口(upload-merge,旧回形针
+  // #uploadBtn/#fileInput 已并入)。它同时承担两个职责:
+  //   1. 通用素材上传(原回形针能力):视频 + 图片 → 分片上传 → 会话 pending 素材区;
+  //   2. 工作流人工卡点/握手:**唯一**能让 auto-video-editor 图侧 import_video 节点
+  //      继续往下走的入口 —— 图自己永不自动导入视频。
+  // 链路：选文件(可多选,视频/图片) → 统一分类 → 复用既有 uploadMediaChunked 上传
+  //      → 只有工作流白名单视频参加 POST /api/system/import-video → 端点写回握手结果文件
   //      → 图里正在轮询的 import_video 节点命中并自动继续。
   //
-  // 注意:握手 POST **只发一次**(带全部文件)。端点有限流(burst=1/rpm=2),
-  // 分 N 次 POST 必然 429。
+  // 注意:握手 POST **只发一次**(带全部成功的工作流视频)。端点有限流(burst=1/rpm=2),
+  // 分 N 次 POST 必然 429。图片/旧版通用视频(.m4v/.flv/.wmv 等)只进 pending,
+  // 绝不进握手载荷,避免污染 video_input_paths。
   async importVideo() {
     const btn = this.importVideoBtn;
     if (!btn || btn.disabled) return;
@@ -2881,29 +2902,49 @@ class App {
     await this.importVideoFiles(file ? [file] : []);
   }
 
-  // 批量导入:一次选 N 个视频 → 串行上传 → 一次握手。
-  async importVideoFiles(files) {
-    const list = Array.from(files || []).filter(Boolean);
+  // 批量导入:按钮选择与拖拽上传的**唯一**上传编排器(upload-merge)。
+  // 视频+图片统一走这里:统一分类 → pending 容量截断 → 串行分片上传 →
+  // pending 区更新 + 本地 ObjectURL 预览 → 只把成功的工作流白名单视频合并成
+  // 一次 /api/system/import-video 握手。部分成功 = 导入成功。
+  async importVideoFiles(rawFiles) {
+    const list = Array.from(rawFiles || []).filter(Boolean);
     if (!list.length) return;
     if (!this.ui || typeof this.ui.showToastI18n !== "function") {
       console.warn("[importVideo] toast 组件未就绪");
       return;
     }
 
-    // 与后端 detect_media_kind 的 video 白名单保持一致
-    const okExts = [".mp4", ".mov", ".mkv", ".avi", ".webm"];
-    const candidates = [];
-    for (const f of list) {
-      const ext = ("." + String((f && f.name) || "").split(".").pop()).toLowerCase();
-      if (okExts.includes(ext)) candidates.push(f);
-    }
-    if (!candidates.length) {
-      this.ui.showToastI18n("toast.import_video_bad_type", {});
-      setTimeout(() => this.ui.hideToast(), 2200);
+    // 上传锁:按钮/拖拽共用一个活动任务,禁止并发第二个上传(F15/F16)
+    if (this.uploading) {
+      this.ui.showToastI18n("toast.uploading_cannot_send", {});
+      setTimeout(() => this.ui.hideToast(), 1600);
       return;
     }
 
-    // 会话内 pending 上限:超出余量的部分截断(与 📎 上传同一套规则)
+    // 固定会话:后续所有分片上传与握手都用开始时捕获的值(F17),
+    // 不在循环里反复读可变的 this.sessionId —— 上传期间会话切换已被拦,
+    // 这里是第二道防线。
+    const sessionId = this.sessionId;
+
+    // 统一分类(纯策略层):先音频 → 图片 → 工作流视频 → 旧版通用视频。
+    // 无 MIME 的文件按扩展名兜底;`accept` 只是选择器提示,分流以此为准。
+    const plan = planUploadBatch(list);
+    const filteredCount = plan.rejectedAudio + plan.rejectedUnsupported;
+
+    if (!plan.uploadList.length) {
+      // 全部被过滤:直接提示并返回(F08)
+      if (plan.rejectedAudio > 0) {
+        this.ui.showToastI18n("toast.audio_not_supported", {});
+      } else {
+        this.ui.showToastI18n("toast.media_all_filtered", {});
+      }
+      setTimeout(() => this.ui.hideToast(), 1800);
+      return;
+    }
+
+    // 会话内 pending 上限:超出余量的部分截断(与旧 📎 上传同一套规则)。
+    // 截断逻辑收敛在 limitUploadBatch —— 旧实现对 const candidates 重新赋值
+    // 会抛 TypeError,修复点在纯策略层有单测锁住(F10)。
     const maxPending = Number((this.limits && this.limits.max_pending_media_per_session) || 30);
     const remain = Math.max(0, maxPending - (this.pendingMedia.length || 0));
     if (remain <= 0) {
@@ -2911,105 +2952,158 @@ class App {
       setTimeout(() => this.ui.hideToast(), 1600);
       return;
     }
-    if (candidates.length > remain) {
+    const { batch, truncated } = limitUploadBatch(plan.uploadList, remain);
+    if (truncated) {
       this.ui.showToastI18n("toast.pending_limit_partial", { remain, max: maxPending });
       setTimeout(() => this.ui.hideToast(), 1400);
-      candidates = candidates.slice(0, remain);
     }
+
+    // 过滤/截断提示不要单独 toast(会被上传进度覆盖),拼到上传进度 extra 里
+    const extraParts = [];
+    if (filteredCount > 0) {
+      extraParts.push(`（${__t("toast.media_partial_filtered", { n: filteredCount })}）`);
+    }
+    const extra = extraParts.join("");
 
     const btn = this.importVideoBtn;
     const iconEl = btn && btn.querySelector(".sidebar-action-icon");
     const textEl = btn && btn.querySelector(".sidebar-action-text");
     const oldIcon = (iconEl && iconEl.innerHTML) || "📥";
-    if (btn) btn.disabled = true;
     if (iconEl) iconEl.textContent = "⏳";
-    if (textEl) textEl.textContent = __t("toast.import_video_running");
+    if (textEl) textEl.textContent = __t("toast.upload_running");
 
-    // 已上传成功的文件(部分成功 = 导入成功,见 docs/integration 多视频导入设计)
-    const okFiles = [];
+    // 统一上传锁:禁发送(_updateComposerDisabledState)+ 禁再上传 + 禁切换会话
+    this.uploading = true;
+    this._updateComposerDisabledState();
+
+    const okAll = [];      // 全部上传成功的素材 [{ media, file }]
+    const okWorkflow = []; // 其中属于工作流白名单的视频 → 参加一次握手
     const failedNames = [];
 
     try {
-      const totalBytes = Math.max(1, candidates.reduce((s, f) => s + (f.size || 0), 0));
+      const totalBytes = Math.max(1, batch.reduce((s, it) => s + ((it.file && it.file.size) || 0), 0));
       let confirmedBytesAll = 0;
+      this.ui.showToastI18n("toast.uploading", { pct: 0, extra });
 
-      for (let i = 0; i < candidates.length; i++) {
-        const f = candidates[i];
-        this.ui.showToastI18n("toast.import_video_uploading_file", {
-          i: i + 1, n: candidates.length, name: f.name || "",
+      for (let i = 0; i < batch.length; i++) {
+        const { file: f, isWorkflowVideo } = batch[i];
+        this.ui.showToastI18n("toast.uploading_file", {
+          i: i + 1, n: batch.length, name: (f && f.name) || "", pct: 0, extra,
         });
+
+        // 预先创建 ObjectURL(上传成功后绑定本地预览;失败/无 id 时释放)
+        const localUrl = URL.createObjectURL(f);
+
         try {
-          const resp = await this.api.uploadMediaChunked(this.sessionId, f, {
+          const resp = await this.api.uploadMediaChunked(sessionId, f, {
             chunkSize: this.limits && this.limits.upload_chunk_bytes,
-            onProgress: (loaded, total) => {
-              const overallLoaded = Math.min(totalBytes, confirmedBytesAll + (loaded || 0));
-              const pct = total ? Math.round((overallLoaded / total) * 100) : 0;
-              this.ui.showToastI18n("toast.import_video_progress", { pct });
+            onProgress: (loadedInFile, fileTotal) => {
+              const overallLoaded = Math.min(totalBytes, confirmedBytesAll + (loadedInFile || 0));
+              const pct = fileTotal ? Math.round((overallLoaded / totalBytes) * 100) : 0;
+              this.ui.showToastI18n("toast.uploading_file", {
+                i: i + 1, n: batch.length, name: f.name, pct, extra,
+              });
             },
           });
 
           const media = (resp && resp.media) || {};
-          // 素材进入 pending 区，跟 📎 上传保持一致的 UI 表现
+          // 上传完成:media_id -> localUrl 绑定起来(pending 渲染用本地缓存)
+          if (media.id) {
+            this.localObjectUrlByMediaId.set(media.id, localUrl);
+          } else {
+            // 理论不应发生;发生就释放
+            try { URL.revokeObjectURL(localUrl); } catch {}
+          }
+
+          confirmedBytesAll += (f.size || 0);
+
+          // 素材进入 pending 区(绑定 local_url 后再渲染)
           this.setPending((resp && resp.pending_media) ? resp.pending_media : []);
 
-          okFiles.push({
-            media_id: media.id || "",
-            // 后端 public_media 的字段是 name(不是 filename),两者都兜一下
-            filename: media.name || media.filename || f.name || "",
-            stored_path: media.path || media.stored_path || "",
-          });
-          confirmedBytesAll += (f.size || 0);
+          okAll.push({ media, file: f });
+          // 只有工作流白名单视频进入握手集合;图片/旧版通用视频止步 pending(F03/F04/F06)
+          if (isWorkflowVideo && media.id) {
+            okWorkflow.push({ media, file: f });
+          }
         } catch (e) {
-          // 单个文件失败:记录并继续,不丢弃已成功的
-          failedNames.push(f.name || "");
+          // 单个文件失败:释放 URL、记录并继续,不丢弃已成功的(F11/F12)
+          try { URL.revokeObjectURL(localUrl); } catch {}
+          failedNames.push((f && f.name) || "");
         }
       }
 
-      if (!okFiles.length) {
+      if (!okAll.length) {
+        // 一个都没传成功
         throw new Error(failedNames.join(", ") || "upload failed");
       }
 
-      // 一次握手:带全部已上传成功的文件(单值字段 = 第一个,兼容旧端点)
-      const first = okFiles[0];
-      const r = await fetch("/api/system/import-video", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          session_id: this.sessionId,
-          files: okFiles,
-          media_id: first.media_id,
-          filename: first.filename,
-          stored_path: first.stored_path,
-        }),
-      });
-      const data = await r.json().catch(() => ({}));
+      if (!okWorkflow.length) {
+        // 图片/旧版通用视频:止步会话素材,不调工作流握手(F03/F12)
+        this.ui.hideToast();
+        if (failedNames.length) {
+          this.ui.showToastI18n("toast.upload_partial", { ok: okAll.length, fail: failedNames.length });
+          setTimeout(() => this.ui.hideToast(), 2400);
+        }
+        return;
+      }
+
+      // 一次握手:只带成功的工作流视频,单值字段 = 第一个,兼容旧端点(F02/F04)。
+      // 端点双桶限流(burst=1/rpm=2),分 N 次 POST 必然 429 —— 禁止逐文件握手。
+      const payload = buildImportVideoPayload(sessionId, okWorkflow);
+      let r;
+      let data;
+      try {
+        r = await fetch("/api/system/import-video", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        data = await r.json().catch(() => ({}));
+      } catch (e) {
+        // 网络异常:素材已上传成功、保留在 pending;提示握手未确认,不自动重试(F14)
+        this.ui.hideToast();
+        this.ui.showToastI18n("toast.import_video_handshake_failed", {
+          msg: (e && (e.message || e)) || "network error",
+        });
+        setTimeout(() => this.ui.hideToast(), 3200);
+        return;
+      }
 
       if (r.status === 409) {
         // 图还没走到 import_video 节点 → 没有待应答请求。
-        // 但素材**已经进了会话**,规划器(Agent)能立刻用上 —— 不是错误。
-        this.ui.showToastI18n("toast.import_video_uploaded_ready", { n: okFiles.length });
+        // 但素材**已经进了会话**,规划器(Agent)能立刻用上 —— 不是错误(F13):
+        // 不删素材、不算失败、不自动重试握手。
+        this.ui.showToastI18n("toast.import_video_uploaded_ready", { n: okWorkflow.length });
         setTimeout(() => this.ui.hideToast(), 3200);
         return;
       }
       if (!r.ok || !data.ok) {
-        throw new Error(data.detail || data.message || `HTTP ${r.status}`);
-      }
-      if (failedNames.length) {
-        this.ui.showToastI18n("toast.import_video_partial", {
-          ok: okFiles.length, fail: failedNames.length,
+        // 429/5xx/其它:素材保留,明确提示握手未确认;不自动重试(限流与握手协议都不支持)(F14)
+        this.ui.hideToast();
+        this.ui.showToastI18n("toast.import_video_handshake_failed", {
+          msg: data.detail || data.message || `HTTP ${r.status}`,
         });
-      } else if (okFiles.length > 1) {
-        this.ui.showToastI18n("toast.import_video_done_multi", { n: okFiles.length });
+        setTimeout(() => this.ui.hideToast(), 3200);
+        return;
+      }
+
+      // 握手成功:成功素材里若有失败文件,失败信息优先;否则按握手结果提示
+      if (failedNames.length) {
+        this.ui.showToastI18n("toast.upload_partial", { ok: okAll.length, fail: failedNames.length });
+      } else if (okWorkflow.length > 1) {
+        this.ui.showToastI18n("toast.import_video_done_multi", { n: okWorkflow.length });
       } else {
         this.ui.showToastI18n("toast.import_video_done", {});
       }
       setTimeout(() => this.ui.hideToast(), 2200);
     } catch (err) {
-      const msg = (err && (err.message || err)) || "unknown";
-      this.ui.showToastI18n("toast.import_video_failed", { msg });
+      this.ui.hideToast();
+      this.ui.showToastI18n("toast.upload_failed", { msg: (err && (err.message || err)) || "" });
       setTimeout(() => this.ui.hideToast(), 3000);
     } finally {
+      this.uploading = false;
+      this._updateComposerDisabledState();
       if (btn) btn.disabled = false;
       if (iconEl) iconEl.textContent = oldIcon;
       if (textEl) textEl.textContent = __t("sidebar.import_video");
@@ -3017,7 +3111,9 @@ class App {
   }
 
   _isSwitchBlocked() {
-    return !!this.streaming || !!this._switchLockUntilAssistantStart;
+    // upload-merge:上传期间同样禁止切换/新建会话 ——
+    // 分片上传与握手都绑定开始时的 sessionId,避免“素材写入旧会话、UI 显示新会话”。
+    return !!this.streaming || !!this._switchLockUntilAssistantStart || !!this.uploading;
   }
 
   _setSwitchLock() {
@@ -4313,7 +4409,8 @@ class App {
     const disableSend = this.canceling ? true : (!this.streaming && this.uploading);
     if (this.sendBtn) this.sendBtn.disabled = disableSend;
 
-    if (this.uploadBtn) this.uploadBtn.disabled = !!this.uploading;
+    // upload-merge:旧 #uploadBtn 已删除;上传期间统一禁用「导入视频」入口
+    if (this.importVideoBtn) this.importVideoBtn.disabled = !!this.uploading;
 
     this._updateSendButtonUI();
   }
@@ -4496,17 +4593,9 @@ class App {
       this.devbarToggleBtn.addEventListener("click", () => this.toggleDevbar());
     }
 
-    // uploader（按钮选择 + 拖拽上传）
-    if (this.uploadBtn && this.fileInput) {
-      this.uploadBtn.addEventListener("click", () => this.fileInput.click());
-
-      this.fileInput.addEventListener("change", async () => {
-        const files = Array.from(this.fileInput.files || []);
-        this.fileInput.value = "";
-        if (!files.length) return;
-        await this._handleFilesSelected(files);
-      });
-    }
+    // upload-merge:旧回形针上传链(#uploadBtn → #fileInput → _handleFilesSelected)
+    // 已整体删除。#importVideoBtn/#importVideoFileInput 的绑定在上方,
+    // 按钮选择与拖拽上传统一走 importVideoFiles()。
 
     // 拖拽上传：允许用户把文件拖到整个页面
     // 仅对“文件拖拽”拦截，避免影响文本拖动等其他行为
@@ -4568,7 +4657,8 @@ class App {
         const files = Array.from(dt.files || []);
         if (!files.length) return;
 
-        await this._handleFilesSelected(files);
+        // upload-merge:拖拽与按钮选择走同一条统一处理流程(F21)
+        await this.importVideoFiles(files);
       });
     }
 
@@ -4645,129 +4735,6 @@ class App {
     }
   }
 
-  async _handleFilesSelected(rawFiles) {
-    let files = Array.isArray(rawFiles) ? rawFiles.slice() : Array.from(rawFiles || []);
-    if (!files.length) return;
-
-    const isAudioFile = (f) => {
-      if (!f) return false;
-      const type = String(f.type || "").toLowerCase();
-      if (type.startsWith("audio/")) return true;
-      const name = String(f.name || "").toLowerCase();
-      return /\.(mp3|wav|m4a|aac|flac|ogg|opus)$/.test(name);
-    };
-
-    // 仅允许视频/图片（音频暂不支持：后端没有处理逻辑）
-    const isSupportedMediaFile = (f) => {
-      if (!f) return false;
-      const type = String(f.type || "").toLowerCase();
-      if (type.startsWith("video/") || type.startsWith("image/")) {
-        return true;
-      }
-      // 对部分没有正确 MIME 的文件，fallback 到后缀判断
-      const name = String(f.name || "").toLowerCase();
-      return /\.(mp4|mov|m4v|avi|mkv|webm|flv|wmv|jpg|jpeg|png|gif|webp|bmp|tiff)$/.test(name);
-    };
-
-    const beforeCount = files.length;
-    const audioCount = files.filter(isAudioFile).length;
-    files = files.filter((f) => isSupportedMediaFile(f) && !isAudioFile(f));
-    const filteredCount = beforeCount - files.length;
-
-    if (!files.length) {
-      // 全部被过滤，直接提示并返回
-      try {
-        if (audioCount > 0) {
-          this.ui.showToastI18n("toast.audio_not_supported", {});
-        } else {
-          this.ui.showToastI18n("toast.media_all_filtered", {});
-        }
-        setTimeout(() => this.ui.hideToast(), 1800);
-      } catch {}
-      return;
-    }
-    // 注意：过滤提示不要单独 toast（会被上传进度覆盖），拼到上传进度里
-    const extra = filteredCount > 0 ? `（${__t("toast.media_partial_filtered", { n: filteredCount })}）` : "";
-
-    // 已在上传中时，避免并发上传导致状态错乱
-    if (this.uploading) {
-      try {
-        this.ui.showToastI18n("toast.uploading_cannot_send", {});
-        setTimeout(() => this.ui.hideToast(), 1600);
-      } catch {}
-      return;
-    }
-
-    // 会话内 pending 上限
-    const maxPending = Number(this.limits.max_pending_media_per_session || 30);
-    const remain = Math.max(0, maxPending - (this.pendingMedia.length || 0));
-    if (remain <= 0) {
-      this.ui.showToastI18n("toast.pending_limit", { max: maxPending });
-      setTimeout(() => this.ui.hideToast(), 1600);
-      return;
-    }
-    if (files.length > remain) {
-      this.ui.showToastI18n("toast.pending_limit_partial", { remain, max: maxPending });
-      setTimeout(() => this.ui.hideToast(), 1400);
-      files = files.slice(0, remain);
-    }
-
-    const totalBytes = Math.max(1, files.reduce((s, f) => s + (f.size || 0), 0));
-    let confirmedBytesAll = 0;
-
-    this.uploading = true;
-    this._updateComposerDisabledState();
-
-    try {
-      this.ui.showToastI18n("toast.uploading", { pct: 0, extra });
-
-      // 分片
-      for (let i = 0; i < files.length; i++) {
-        const f = files[i];
-
-        // 预先创建 ObjectURL（用于 (3) 预览走本地缓存）
-        const localUrl = URL.createObjectURL(f);
-
-        try {
-          const resp = await this.api.uploadMediaChunked(this.sessionId, f, {
-            chunkSize: this.limits.upload_chunk_bytes,
-            onProgress: (loadedInFile, fileTotal) => {
-              const overallLoaded = Math.min(totalBytes, confirmedBytesAll + (loadedInFile || 0));
-              const pct = Math.round((overallLoaded / totalBytes) * 100);
-              this.ui.showToastI18n("toast.uploading_file", { i: i + 1, n: files.length, name: f.name, pct, extra });
-            },
-          });
-
-          // 上传完成：把 media_id -> localUrl 绑定起来
-          if (resp && resp.media && resp.media.id) {
-            this.localObjectUrlByMediaId.set(resp.media.id, localUrl);
-          } else {
-            // 理论不应发生；发生就释放
-            try { URL.revokeObjectURL(localUrl); } catch {}
-          }
-
-          confirmedBytesAll += (f.size || 0);
-
-          // pending 更新（绑定 local_url 后再渲染）
-          this.setPending((resp && resp.pending_media) ? resp.pending_media : []);
-        } catch (e) {
-          // 本文件失败：释放 URL，避免泄漏
-          try { URL.revokeObjectURL(localUrl); } catch {}
-          throw e;
-        }
-      }
-
-      this.ui.hideToast();
-    } catch (e) {
-      this.ui.hideToast();
-      this.ui.showToastI18n("toast.upload_failed", { msg: (e && (e.message || e)) || "" });
-      setTimeout(() => this.ui.hideToast(), 1800);
-    } finally {
-      this.uploading = false;
-      this._updateComposerDisabledState();
-    }
-  }
-
   setPending(list) {
     const arr = this.bindLocalUrlsToMedia(Array.isArray(list) ? list : []);
     this.pendingMedia = arr;
@@ -4806,6 +4773,12 @@ class App {
   }
 
   async useSession(sessionId, snapshot) {
+    // upload-merge:上传期间禁止真正切换(F17)。点击入口(_isSwitchBlocked)已经挡过
+    // 一次,这里防的是「getSession() 等待期间用户又拖入了新文件开始上传」的竞态窗口。
+    if (this.uploading) {
+      this._showSwitchWhileStreamingToast();
+      return;
+    }
     this._stopRecoveryPoll();
     this.streaming = false;
     this.uploading = false;
