@@ -276,10 +276,10 @@ New-Item -ItemType Directory -Force -Path inputs | Out-Null
 | `Docker Desktop 启动后 90s 内 daemon 未就绪` | 17 | 手动打开 Docker Desktop GUI,等「Docker Desktop is running」后重跑 |
 | `openstoryline/resource/ 缺失或为空` | 26 | 跑 `.\openstoryline\scripts\download_resources.ps1` + `download_models.ps1`(约 642 MB) |
 | `端口 7860 已被占用,但 GET 不返回 200` | 23 | 手动查出占用进程并处理;脚本**不会**杀未确认归属的进程 |
-| `180s 内 OpenStoryline Web 未就绪` | 22 | 看 `logs\openstoryline_web_*.log` 尾部的报错;脚本**不会**带未就绪的服务跑工作流 |
+| `180s 内 OpenStoryline Web 未就绪` | 22 | 看报错里的 `Postgres :` 行——容器未运行时先 `docker start edb-postgres16`;再看 `logs\openstoryline_web_*.log` 尾部。脚本**不会**带未就绪的服务跑工作流 |
 | `preflight.ps1 退出码 15(Postgres 不可达)` | 15 | 确认 `-PostgresUri` 可连;外部库需先自行建库建角色 |
 | `角色/库对齐失败` | 20 | 看 `logs\start_*.log` 里 `align_postgres.py` 的报错(密码已脱敏) |
-| `验收未完成:checkpoint 查询失败` | 25 | 确认 Postgres 可连 + `checkpoints` 表已建(Phase 1 的 Step 6 会建) |
+| `验收未完成:checkpoint 查询失败` | 25 | 确认 Postgres 可连 + `checkpoints` 表已建(Phase 0.58 preflight 的 Step 6 会建) |
 | `OpenStoryline 未就绪,工作流提前终止` | 24 | Web 没起来;human 模式下先确认 `:7860` 的服务健康 |
 
 **日志**
