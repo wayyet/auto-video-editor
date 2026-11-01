@@ -1,0 +1,631 @@
+"""工作流拓扑 Schema 服务(设计《工作流流程图与实时节点追踪》§6.2-A / §4.3)。
+
+职责与边界
+----------
+- **唯一事实来源是编译后的 LangGraph 图**:节点与边一律程序化提取,不在本模块
+  维护第二份边定义(设计 §11.6)。
+- **边真源是 ``compiled_graph.builder``**(产生该编译图的 StateGraph)的
+  ``edges`` / ``waiting_edges`` / ``branches`` 三件套,而**不是**
+  ``compiled_graph.get_graph()``。2026-11-01 实测(langgraph 1.2.9,
+  ``langgraph/pregel/_draw.py``):``get_graph()`` 是**静态模拟 + 画图启发式**,
+  会 (a) 给所有"只入不出"的 termini 节点**合成** ``→__end__`` 边(默认构建下
+  21 个 storyline 死胡同/侧支节点各多一条),并 (b) **漏掉**"有出边的节点的
+  普通边直连 END"(fusion 开启时 ``join_before_delivery→END`` 丢失)。
+  61 条真实边在画图里变成 81 条。偏差规则已在
+  ``tests/integration/test_workflow_graph_schema.py`` 固化为 langgraph 行为护栏。
+- 本模块是**纯函数层**:输入编译图 + config 模块,输出 §4.3 的图 JSON dict。
+  不接 API、不碰前端、不触发任何图执行(阶段 4 再由 FastAPI router 消费)。
+- 元数据(中文显示名 / 分组 / 描述 / 关卡编号 / 条件边标签)来自本模块内的
+  静态注册表 —— 注册表只补**展示信息**,不补拓扑;拓扑漂移由
+  ``tests/integration/test_workflow_graph_schema.py`` 防守。
+- START/END 归一化:``__start__``/``__end__`` 输出为 ``START``/``END``。
+
+输出的节点字段(§4.3 + 两处扩展):
+
+    id / name / group / description / kind / checkpoint / enabled / reachable
+    + modes        —— 该节点归属哪条模式链:"human"/"auto"/两者(§5.2"另一模式的
+                      路径"展示的数据源);clean_cache 与 START/END 为 []
+    + waiting_kind —— 人工等待类别(import_video 为 "web_file_handshake"),
+                      其余节点无此字段
+
+`reachable` 语义:从 START 出发、沿编译图全部边(含条件边 —— 条件边**可能**被
+选中)BFS 可达。``ASSEMBLY_QC_GATE_ENABLED=False`` 时 6 个 assembly 节点注册
+无边、``clean_cache`` 零边,天然不可达 —— 与设计 §6.2-A 的"注册但未连通"
+一致,无需特判。
+
+`enabled` 语义:本构建下是否可能参与执行(与 reachable 互补):
+    - clean_cache:False(只由 Web 按钮经 /api/system/clean-cache 显式触发);
+    - assembly 6 节点:跟随 ``ASSEMBLY_QC_GATE_ENABLED``;
+    - 其余:True。
+
+用法::
+
+    from graph import build_graph, get_checkpointer
+    from monitoring.workflow_graph import build_graph_schema
+
+    async with get_checkpointer() as saver:
+        g = build_graph(checkpointer=saver)
+    schema = build_graph_schema(g)          # config 缺省取 config 模块
+"""
+
+from __future__ import annotations
+
+from collections import deque
+from typing import Any, Optional
+
+__all__ = [
+    "WORKFLOW_ID",
+    "SCHEMA_VERSION",
+    "CHECKPOINT_MARKS",
+    "build_graph_schema",
+]
+
+WORKFLOW_ID = "auto_video_editor_main"
+#: schema 结构版本;布局缓存 key 纳入它(设计 §6.2-F 第 7 条)。改字段结构时 +1。
+SCHEMA_VERSION = 1
+
+#: 关卡编号全集(⓪①②③ + import_video 的文件握手类别)
+CHECKPOINT_MARKS = ("⓪", "①", "②", "③")
+
+QC_FLAG = "ASSEMBLY_QC_GATE_ENABLED"
+FUSION_FLAG = "STORYLINE_HUMAN_FUSION"
+
+_ASSEMBLY_NODES = (
+    "assembly_discover_and_probe",
+    "assembly_asr_and_visual_observe",
+    "assembly_build_timeline",
+    "assembly_validate_render_qc",
+    "assembly_repair_loop",
+    "assembly_write_report",
+)
+
+# ---------------------------------------------------------------------------
+# 节点元数据注册表(只补展示信息,不补拓扑)
+# ---------------------------------------------------------------------------
+# node_id -> {name, group, description, checkpoint(可选), waiting_kind(可选)}
+_NODE_META: dict[str, dict[str, Any]] = {
+    # ---- 终端(START/END 归一化目标) ----
+    "START": {"name": "开始", "group": "terminal", "description": "LangGraph 工作流入口"},
+    "END": {"name": "结束", "group": "terminal", "description": "LangGraph 工作流出口"},
+    # ---- 入口 / 运维 ----
+    "clean_cache": {
+        "name": "清理缓存",
+        "group": "ops",
+        "description": "由 Web「清理缓存」按钮经 /api/system/clean-cache 显式触发;零边注册,不经图执行",
+    },
+    "launch_openstoryline": {
+        "name": "探测 OpenStoryline",
+        "group": "entry",
+        "description": "human 模式只做 HTTP 健康探测(不拉起进程);探测失败时门禁直接 END",
+    },
+    "open_preview": {
+        "name": "打开预览",
+        "group": "entry",
+        "description": "打开 OpenStoryline 预览页,之后按 STORYLINE_MODE 分流 human/auto",
+    },
+    # ---- human 规划链 ----
+    "checkpoint0_storyline_plan": {
+        "name": "人工规划确认关卡⓪",
+        "group": "human_plan",
+        "description": "interrupt:等人工在 OpenStoryline 网页完成分镜/文案/BGM/时间线规划后 resume",
+        "checkpoint": "⓪",
+    },
+    "import_video": {
+        "name": "网页导入视频(文件握手)",
+        "group": "human_plan",
+        "description": "写 import_video_request.json 后轮询结果文件(1s/600s),等网页【导入视频】回写;非 interrupt",
+        "waiting_kind": "web_file_handshake",
+    },
+    "get_storyboard_plan": {
+        "name": "读取分镜规划",
+        "group": "human_plan",
+        "description": "读 vendored 产物目录中的 storyline_plan / shot_plan;无产物则 END",
+    },
+    # ---- 草稿(双模式汇合点) ----
+    "generate_draft": {
+        "name": "生成剪映草稿",
+        "group": "draft",
+        "description": "生成初始剪映草稿;human 与 auto 两条模式链在此汇合",
+    },
+    # ---- assembly QC 通道(ASSEMBLY_QC_GATE_ENABLED 控制) ----
+    "assembly_discover_and_probe": {
+        "name": "素材发现与探测",
+        "group": "assembly_qc",
+        "description": "扫描源视频与渲染产物,做 ffprobe 探测",
+    },
+    "assembly_asr_and_visual_observe": {
+        "name": "ASR 与视觉观察",
+        "group": "assembly_qc",
+        "description": "对草稿素材做语音识别与关键帧观察",
+    },
+    "assembly_build_timeline": {
+        "name": "装配时间线",
+        "group": "assembly_qc",
+        "description": "根据观察结果装配时间线草案",
+    },
+    "assembly_validate_render_qc": {
+        "name": "渲染与质量检查",
+        "group": "assembly_qc",
+        "description": "检查时间线、渲染产物及质量指标;条件边决定修复回路或写报告",
+    },
+    "assembly_repair_loop": {
+        "name": "QC 修复回路",
+        "group": "assembly_qc",
+        "description": "按 QC 结论执行修复动作,复检走回 assembly_validate_render_qc",
+    },
+    "assembly_write_report": {
+        "name": "写 QC 报告",
+        "group": "assembly_qc",
+        "description": "达标/达重试上限后写质检报告,交回关卡①",
+    },
+    # ---- 人工关卡与护栏 ----
+    "node_06_human_reorder": {
+        "name": "人工调整镜头顺序①",
+        "group": "edit_review",
+        "description": "interrupt:关卡①,人工在剪映里调整镜头顺序",
+        "checkpoint": "①",
+    },
+    "node_07_speed_fit": {
+        "name": "时长适配(35s)",
+        "group": "edit_review",
+        "description": "把成片总时长压到目标以内;未达标自环重试,超限升级护栏",
+    },
+    "escalate_guardrail_failure": {
+        "name": "护栏失败升级",
+        "group": "edit_review",
+        "description": "node_07 连续重试超限后的兜底:写 error_log 并终止",
+    },
+    "bridge_snapshot2": {
+        "name": "桥接快照2",
+        "group": "edit_review",
+        "description": "条件边不能改 state,由本节点把 snapshot2 路径写入 state",
+    },
+    # ---- 字幕 / 封面 / 英文线 ----
+    "node_08_add_subtitles": {
+        "name": "添加中文字幕",
+        "group": "subtitles_covers",
+        "description": "同步写 asr_segments_zh 到 state;英文线 16a 显式依赖它",
+    },
+    "node_08b_add_subtitles_en": {
+        "name": "添加英文字幕",
+        "group": "subtitles_covers",
+        "description": "英文字幕写入英文分支草稿",
+    },
+    "node_10_inject_text_fx": {
+        "name": "注入中文花字",
+        "group": "subtitles_covers",
+        "description": "中文字幕花字/描边/入场动画",
+    },
+    "node_10b_inject_text_fx_en": {
+        "name": "注入英文花字",
+        "group": "subtitles_covers",
+        "description": "英文花字先于关卡③落地,人工校对看到最终效果(K3=B)",
+    },
+    "node_14_make_covers": {
+        "name": "生成封面",
+        "group": "subtitles_covers",
+        "description": "生成中文封面",
+    },
+    "node_15_localize_covers_en": {
+        "name": "封面英文本地化",
+        "group": "subtitles_covers",
+        "description": "封面英文化;与 node_17 列表 fan-in 汇合后才触发尾链",
+    },
+    "node_16a_translate_and_check": {
+        "name": "翻译与布局检测",
+        "group": "subtitles_covers",
+        "description": "翻译字幕并做布局检测;命中问题才触发关卡③",
+    },
+    "node_checkpoint3_layout_review": {
+        "name": "布局人工复核③",
+        "group": "subtitles_covers",
+        "description": "interrupt:关卡③,仅布局检测命中时触发;未命中走旁路",
+        "checkpoint": "③",
+    },
+    "node_17_inject_english_tts": {
+        "name": "注入英文 TTS",
+        "group": "subtitles_covers",
+        "description": "调 FireRedTTS2 生成英文配音;与 node_15 列表 fan-in 汇合后才触发尾链",
+    },
+    "fork_draft_for_english_branch": {
+        "name": "复制英文分支草稿",
+        "group": "subtitles_covers",
+        "description": "从中文主草稿复制出英文分支草稿",
+    },
+    # ---- 尾链 / 交付 ----
+    "node_09_inject_fx": {
+        "name": "注入特效",
+        "group": "fx_delivery",
+        "description": "尾链起点;中英两份草稿同时处理",
+    },
+    "node_11_inject_sticker": {
+        "name": "注入贴纸",
+        "group": "fx_delivery",
+        "description": "贴纸注入,同时作用于中英两份草稿",
+    },
+    "node_12_human_add_bgm": {
+        "name": "人工添加 BGM②",
+        "group": "fx_delivery",
+        "description": "interrupt:关卡②,人工选曲一次,post_resume 镜像到英文草稿",
+        "checkpoint": "②",
+    },
+    "node_13_adjust_volume": {
+        "name": "音量调节",
+        "group": "fx_delivery",
+        "description": "各音轨音量调整",
+    },
+    "join_before_delivery": {
+        "name": "交付前 QA 闸门",
+        "group": "fx_delivery",
+        "description": "交付前 QA;单前驱,不再承担 fan-in",
+    },
+    # ---- storyline(auto 链 / human 融合侧支) ----
+    "storyline_load_media": {
+        "name": "载入媒体",
+        "group": "storyline_media",
+        "description": "auto 模式自动导入素材;融合模式下等网页导入成功后才执行",
+    },
+    "storyline_search_media": {
+        "name": "检索素材",
+        "group": "storyline_media",
+        "description": "Pexels 等检索源按 query 拉素材;已配检索源才触发",
+    },
+    "storyline_search_web_topic": {
+        "name": "网页话题检索",
+        "group": "storyline_media",
+        "description": "WEB_TOPIC 开启且有 query 时并行旁支;死胡同,产物由 generate_script 软读取",
+    },
+    "storyline_split_shots": {
+        "name": "分镜切分",
+        "group": "storyline_media",
+        "description": "按镜头切分素材;ASR 分支开启且有音轨时并行 fan-out 出 local_asr",
+    },
+    "storyline_local_asr": {
+        "name": "本地 ASR",
+        "group": "storyline_asr",
+        "description": "funasr 本地识别;死胡同分支,产物经 state 回填 plan_timeline_pro",
+    },
+    "storyline_speech_rough_cut": {
+        "name": "语音粗剪",
+        "group": "storyline_asr",
+        "description": "基于 ASR 的粗剪;死胡同分支,不进任何 fan-in 屏障(D10)",
+    },
+    "storyline_understand_clips": {
+        "name": "理解片段",
+        "group": "storyline_understand",
+        "description": "对片段做语义理解,产出理解摘要",
+    },
+    "storyline_filter_clips": {
+        "name": "过滤片段",
+        "group": "storyline_understand",
+        "description": "按质量/相关性过滤片段",
+    },
+    "storyline_group_clips": {
+        "name": "片段分组",
+        "group": "storyline_understand",
+        "description": "qa 重试回路的目标节点;分组产物供文案/时间线使用",
+    },
+    "storyline_generate_script": {
+        "name": "生成文案",
+        "group": "storyline_script",
+        "description": "按分组与话题生成长文案;并行 fan-out 出模板/配音/BGM/文本四路",
+    },
+    "storyline_script_template_recommendation": {
+        "name": "文案模板推荐",
+        "group": "storyline_script",
+        "description": "为文案推荐呈现模板",
+    },
+    "storyline_generate_voiceover": {
+        "name": "生成配音",
+        "group": "storyline_script",
+        "description": "生成配音时长参考,供 BGM 与时间线对齐",
+    },
+    "storyline_select_bgm": {
+        "name": "选择 BGM",
+        "group": "storyline_script",
+        "description": "等配音完成后选择 BGM",
+    },
+    "storyline_recommend_transition": {
+        "name": "推荐转场",
+        "group": "storyline_script",
+        "description": "等 BGM 完成后推荐转场",
+    },
+    "storyline_recommend_text": {
+        "name": "推荐文本",
+        "group": "storyline_script",
+        "description": "推荐屏幕文本样式",
+    },
+    "storyline_plan_timeline_pro": {
+        "name": "时间线规划",
+        "group": "storyline_timeline",
+        "description": "4 源屏障(分组/文案/配音/BGM)后规划时间线",
+    },
+    "storyline_generate_ai_transition": {
+        "name": "生成 AI 转场",
+        "group": "storyline_timeline",
+        "description": "与 plan_timeline_pro 共用同一道 4 源屏障;按 STORYLINE_ENABLE_AI_TRANSITION 接边",
+    },
+    "storyline_plan_timeline_ai_transition": {
+        "name": "AI 转场时间线规划",
+        "group": "storyline_timeline",
+        "description": "屏障 [plan_timeline_pro, generate_ai_transition] 之后;qa 校验含 AI 转场的最终时间线",
+    },
+    "storyline_render_video": {
+        "name": "渲染视频",
+        "group": "storyline_render",
+        "description": "按时间线渲染;qa 通过后触发",
+    },
+    "storyline_qa_gate": {
+        "name": "剧情 QA 闸门",
+        "group": "storyline_render",
+        "description": "3 源屏障后校验;未过回 group_clips 重试,通过走渲染",
+    },
+    "storyline_join": {
+        "name": "剧情结果汇合",
+        "group": "storyline_render",
+        "description": "反序列化规划产物;有 storyline_plan 进 generate_draft,无则 END",
+    },
+}
+
+# ---------------------------------------------------------------------------
+# 条件边标签注册表:(from, to) -> 标签(归一化后的 id;START/END 用大写)
+# ---------------------------------------------------------------------------
+_EDGE_LABELS: dict[tuple[str, str], str] = {
+    ("launch_openstoryline", "open_preview"): "Web 就绪(auto 恒通)",
+    ("launch_openstoryline", "END"): "human 且 OpenStoryline 未就绪",
+    ("open_preview", "checkpoint0_storyline_plan"): "STORYLINE_MODE=human",
+    ("open_preview", "storyline_load_media"): "STORYLINE_MODE=auto",
+    ("get_storyboard_plan", "generate_draft"): "有 storyline_plan 或 shot_plan",
+    ("get_storyboard_plan", "END"): "无规划产物",
+    ("generate_draft", "assembly_discover_and_probe"): "QC 通道启用时",
+    ("assembly_validate_render_qc", "assembly_repair_loop"): "未达标且仍可重试",
+    ("assembly_validate_render_qc", "assembly_write_report"): "通过/达上限/软降级",
+    ("assembly_repair_loop", "assembly_validate_render_qc"): "修复后复检",
+    ("generate_draft", "node_06_human_reorder"): "QC 通道关闭时",
+    ("node_07_speed_fit", "bridge_snapshot2"): "时长达标",
+    ("node_07_speed_fit", "node_07_speed_fit"): "未达标且可重试",
+    ("node_07_speed_fit", "escalate_guardrail_failure"): "重试超限",
+    ("node_10b_inject_text_fx_en", "node_checkpoint3_layout_review"): "布局检测命中",
+    ("node_10b_inject_text_fx_en", "node_17_inject_english_tts"): "布局无问题",
+    ("node_15_localize_covers_en", "node_09_inject_fx"): "列表 fan-in(与 17 汇合)",
+    ("node_17_inject_english_tts", "node_09_inject_fx"): "列表 fan-in(与 15 汇合)",
+    # ---- auto 链条件边(fusion 关闭时才接线) ----
+    ("storyline_load_media", "storyline_search_media"): "已配检索源",
+    ("storyline_load_media", "storyline_split_shots"): "未配检索源",
+    ("storyline_load_media", "storyline_search_web_topic"): "WEB_TOPIC 开启且有 query",
+    ("storyline_split_shots", "storyline_understand_clips"): "主干",
+    ("storyline_split_shots", "storyline_local_asr"): "ASR 分支开启且有音轨",
+    ("storyline_group_clips", "storyline_plan_timeline_pro"): "列表 fan-in(4 源屏障)",
+    ("storyline_generate_script", "storyline_plan_timeline_pro"): "列表 fan-in(4 源屏障)",
+    ("storyline_generate_voiceover", "storyline_plan_timeline_pro"): "列表 fan-in(4 源屏障)",
+    ("storyline_select_bgm", "storyline_plan_timeline_pro"): "列表 fan-in(4 源屏障)",
+    ("storyline_group_clips", "storyline_generate_ai_transition"): "列表 fan-in(4 源屏障)",
+    ("storyline_generate_script", "storyline_generate_ai_transition"): "列表 fan-in(4 源屏障)",
+    ("storyline_generate_voiceover", "storyline_generate_ai_transition"): "列表 fan-in(4 源屏障)",
+    ("storyline_select_bgm", "storyline_generate_ai_transition"): "列表 fan-in(4 源屏障)",
+    ("storyline_plan_timeline_pro", "storyline_plan_timeline_ai_transition"): "AI 转场屏障",
+    ("storyline_generate_ai_transition", "storyline_plan_timeline_ai_transition"): "AI 转场屏障",
+    ("storyline_plan_timeline_pro", "storyline_qa_gate"): "列表 fan-in(3 源屏障)",
+    ("storyline_plan_timeline_ai_transition", "storyline_qa_gate"): "列表 fan-in(3 源屏障)",
+    ("storyline_recommend_transition", "storyline_qa_gate"): "列表 fan-in(3 源屏障)",
+    ("storyline_recommend_text", "storyline_qa_gate"): "列表 fan-in(3 源屏障)",
+    ("storyline_qa_gate", "storyline_group_clips"): "QA 未过,重试",
+    ("storyline_qa_gate", "storyline_render_video"): "QA 通过",
+    ("storyline_join", "generate_draft"): "有规划产物",
+    ("storyline_join", "END"): "无规划产物",
+}
+
+#: human-only 链节点(auto 模式不经过)
+_HUMAN_ONLY_NODES = frozenset({
+    "checkpoint0_storyline_plan",
+    "import_video",
+    "get_storyboard_plan",
+})
+
+# ---------------------------------------------------------------------------
+# 内部工具
+# ---------------------------------------------------------------------------
+def _normalize_node_id(raw: str) -> str:
+    """``__start__``/``__end__`` → ``START``/``END``,其余原样。"""
+    return {"__start__": "START", "__end__": "END"}.get(raw, raw)
+
+
+def _real_topology(compiled_graph: Any) -> tuple[list[str], set[tuple[str, str, bool]]]:
+    """从编译图提取**真实**节点与边(边真源 = ``compiled_graph.builder``)。
+
+    Returns:
+        (node_ids, edges):``node_ids`` 为 ["START", *注册节点, "END"](注册序);
+        ``edges`` 元素为 (from, to, is_conditional),已做 START/END 归一化。
+        三类真实边:普通 ``add_edge``(含列表 fan-in 逐源展开)、条件边
+        ``add_conditional_edges`` 的 mapping 端点、``→__end__`` 直连。
+
+    Raises:
+        RuntimeError: 编译图上没有 ``.builder``(langgraph 版本行为变化)。
+    """
+    builder = getattr(compiled_graph, "builder", None)
+    if builder is None:
+        raise RuntimeError(
+            "compiled_graph.builder 不存在 —— langgraph 版本行为变化,"
+            "monitoring.workflow_graph 的边真源提取需要相应适配"
+        )
+
+    node_ids = ["START", *builder.nodes.keys(), "END"]
+
+    edges: set[tuple[str, str, bool]] = set()
+    # 普通 add_edge(含 (__start__, x) 与 (x, __end__))
+    for src, dst in getattr(builder, "edges", None) or ():
+        edges.add((_normalize_node_id(src), _normalize_node_id(dst), False))
+    # 列表 fan-in:add_edge([...], dst) → 每个源一条边
+    for srcs, dst in getattr(builder, "waiting_edges", None) or ():
+        for src in srcs:
+            edges.add((_normalize_node_id(src), _normalize_node_id(dst), False))
+    # 条件边:add_conditional_edges(src, fn, mapping) 的每个 mapping 端点
+    branches_map = getattr(builder, "branches", None) or {}
+    for src, named in branches_map.items():
+        for _name, spec in named.items():
+            ends = getattr(spec, "ends", None) or {}
+            for _key, dst in ends.items():
+                edges.add((_normalize_node_id(src), _normalize_node_id(dst), True))
+    return node_ids, edges
+
+
+def _current_mode(config_module: Any) -> str:
+    """解析当前 STORYLINE_MODE,与 ``graph._build_state_graph`` 的读法一致。
+
+    ``graph`` 模块级的 ``STORYLINE_MODE`` 是 import 时绑定(单测 monkeypatch
+    ``config.STORYLINE_MODE`` 不影响它),另有 ``_STORYLINE_MODE_OVERRIDE``
+    contextvar 供测试注入 —— 两者的优先级与 graph.py 相同:override 优先。
+    graph 不可导入时(纯 monitoring 场景)退回 ``config.STORYLINE_MODE``。
+    """
+    try:
+        from graph import _STORYLINE_MODE_OVERRIDE, STORYLINE_MODE as _graph_mode
+    except Exception:  # noqa: BLE001 — 纯监控场景无 graph 依赖
+        return config_module.STORYLINE_MODE
+    return _STORYLINE_MODE_OVERRIDE.get() or _graph_mode
+
+
+def _edge_label(src: str, dst: str, *, fusion_on: bool, qc_enabled: bool) -> Optional[str]:
+    """边的展示标签:注册表优先;融合侧支边统一标注。"""
+    label = _EDGE_LABELS.get((src, dst))
+    if label:
+        return label
+    if fusion_on and not src.startswith("storyline_") and dst.startswith("storyline_"):
+        if (src, dst) != ("open_preview", "storyline_load_media"):
+            return "human 融合侧支"
+    return None
+
+
+# ---------------------------------------------------------------------------
+# 主入口
+# ---------------------------------------------------------------------------
+def build_graph_schema(compiled_graph: Any, config: Any = None) -> dict[str, Any]:
+    """从编译后的 LangGraph 图生成 §4.3 结构的图 JSON(纯函数,不触发执行)。
+
+    Args:
+        compiled_graph: ``build_graph(...)`` 返回的 CompiledStateGraph;
+            边真源取 ``compiled_graph.builder``(见模块 docstring 的画图伪边说明)。
+        config: config 模块(monkeypatch 测试传模块对象);None 时 ``import config``。
+            只读 ``ASSEMBLY_QC_GATE_ENABLED`` / ``STORYLINE_HUMAN_FUSION`` /
+            ``STORYLINE_MODE``(经 :func:`_current_mode`,与构图时的读法一致)。
+
+    Returns:
+        dict: ``workflow_id / schema_version / mode / flags / nodes / edges``。
+    """
+    if config is None:
+        import config as config_module
+    else:
+        config_module = config
+
+    mode = _current_mode(config_module)
+    qc_enabled = bool(getattr(config_module, QC_FLAG))
+    fusion_raw = bool(getattr(config_module, FUSION_FLAG))
+    # 与 graph._build_state_graph 同一条规则:fusion 只在 human 模式生效。
+    fusion_on = mode == "human" and fusion_raw
+
+    node_ids, real_edges = _real_topology(compiled_graph)
+
+    # ---- 边(先收集,reachable BFS 也要用) ----
+    edges: list[dict[str, Any]] = []
+    seen_pairs: set[tuple[str, str, str]] = set()
+    dup_counter: dict[tuple[str, str, str], int] = {}
+    for src, dst, is_conditional in sorted(real_edges, key=lambda t: (t[0], t[1], t[2])):
+        kind = "conditional" if is_conditional else "normal"
+        key = (src, dst, kind)
+        if key in seen_pairs:
+            # 理论上不应出现;防御:同 (from,to,kind) 重复时加序号后缀
+            n = dup_counter.get(key, 1) + 1
+            dup_counter[key] = n
+            edge_id = f"{src}->{dst}#{n}"
+        else:
+            seen_pairs.add(key)
+            edge_id = f"{src}->{dst}"
+        edges.append({
+            "id": edge_id,
+            "from": src,
+            "to": dst,
+            "kind": kind,
+            "label": _edge_label(src, dst, fusion_on=fusion_on, qc_enabled=qc_enabled),
+        })
+
+    # ---- reachable:从 START 沿全部边 BFS(条件边计入 —— 它可能被选中) ----
+    adjacency: dict[str, list[str]] = {}
+    for e in edges:
+        adjacency.setdefault(e["from"], []).append(e["to"])
+    reachable_ids: set[str] = set()
+    queue = deque(["START"])
+    reachable_ids.add("START")
+    while queue:
+        cur = queue.popleft()
+        for nxt in adjacency.get(cur, ()):  # noqa: B007 — BFS 消费
+            if nxt not in reachable_ids:
+                reachable_ids.add(nxt)
+                queue.append(nxt)
+
+    # ---- 节点 ----
+    if fusion_on:
+        try:
+            from nodes.storyline.fusion import FUSION_NODE_NAMES
+        except Exception:  # noqa: BLE001 — 注册表缺失时退回按前缀
+            FUSION_NODE_NAMES = tuple(
+                nid for nid in _NODE_META if nid.startswith("storyline_")
+            )
+        storyline_names = set(FUSION_NODE_NAMES)
+        storyline_modes = ["human"]
+    else:
+        storyline_names = {nid for nid in _NODE_META if nid.startswith("storyline_")}
+        storyline_modes = ["auto"]
+
+    nodes: list[dict[str, Any]] = []
+    for raw_id in node_ids:
+        nid = raw_id
+        is_terminal = raw_id in ("START", "END")
+        meta = _NODE_META.get(nid)
+        if meta is None:
+            # 编译图出现了注册表没有的节点:如实透出,靠 test (c) 防漂移
+            meta = {"name": nid, "group": "misc", "description": ""}
+        if is_terminal:
+            kind = "terminal"
+            node_modes: list[str] = []
+        elif nid == "clean_cache":
+            kind = "task"
+            node_modes = []
+        elif nid in _HUMAN_ONLY_NODES:
+            kind = "task"
+            node_modes = ["human"]
+        elif nid in storyline_names:
+            kind = "task"
+            node_modes = list(storyline_modes)
+        else:
+            kind = "task"
+            node_modes = ["human", "auto"]
+
+        if nid in _ASSEMBLY_NODES:
+            enabled = qc_enabled
+        elif nid == "clean_cache":
+            enabled = False
+        else:
+            enabled = True
+
+        node: dict[str, Any] = {
+            "id": nid,
+            "name": meta["name"],
+            "group": meta["group"],
+            "description": meta["description"],
+            "kind": kind,
+            "checkpoint": meta.get("checkpoint"),
+            "enabled": enabled,
+            "reachable": nid in reachable_ids,
+            "modes": node_modes,
+        }
+        if meta.get("waiting_kind"):
+            node["waiting_kind"] = meta["waiting_kind"]
+        nodes.append(node)
+
+    return {
+        "workflow_id": WORKFLOW_ID,
+        "schema_version": SCHEMA_VERSION,
+        "mode": mode,
+        "flags": {QC_FLAG: qc_enabled, FUSION_FLAG: fusion_raw},
+        "nodes": nodes,
+        "edges": edges,
+    }
