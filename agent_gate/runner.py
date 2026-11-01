@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import traceback
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
@@ -453,6 +454,31 @@ def production_blocker() -> Optional[str]:
     return None
 
 
+def _emit_run_event(
+    thread_id: str,
+    event_type: str,
+    run_id: str,
+    payload: Optional[dict[str, Any]] = None,
+) -> None:
+    """运行级事件写入共享 PG 事件表(阶段3 底线接入,设计 §6.2-B)。
+
+    worker 是**独立进程**且保持同步 ``invoke`` 语义不变(§11.9:节点级 stream
+    改造仅在契约测试证明终态一致后启用)—— 运行级事件是页面可见性的底线。
+    事件走共享 PG 事件表(§11.4:跨进程不可能靠内存队列);延迟 import 保持
+    "纯 kit 场景"(仓库不在 sys.path)可用;任何失败只记 debug —— 观测信号
+    不允许影响 worker 状态机(status.json 挂点不受影响)。
+    """
+    try:
+        from monitoring.workflow_events import make_event
+        from monitoring.workflow_event_store import append_event
+
+        append_event(
+            make_event(event_type, thread_id=thread_id, run_id=run_id, payload=payload)
+        )
+    except Exception as e:  # noqa: BLE001 — 观测信号,不抬高 worker 失败面
+        _logger.debug("run event %s emit failed: %s", event_type, e)
+
+
 def run_worker(
     *,
     thread_id: str,
@@ -467,6 +493,9 @@ def run_worker(
     """返回进程退出码:0=正常停下(挂起/完成),1=失败,3=生产环境被护栏拦下。"""
     safe_thread_id(thread_id)
     mb = Mailbox(gate_root(outputs_root, thread_id))
+    # 阶段3:本次 worker 执行的业务运行标识(run.* 事件关联键;try 外定义,
+    # 任何早期失败也能发 run.failed)
+    run_id = f"run-{uuid.uuid4().hex[:12]}"
     _draft_dir, _prev_draft_env, _draft_env_set_by_us = _isolate_draft_dir(outputs_root, thread_id)
     w = _StatusWriter(mb, {"thread_id": thread_id, "pid": os.getpid(),
                            "started_at": utc_now(), "interrupts": [], "error": None})
@@ -504,9 +533,17 @@ def run_worker(
                 run_preflight=require_preflight,
             )
             cfg = {"configurable": {"thread_id": thread_id}}
-            mb.log_event("worker_started", mode=("resume" if resume_values is not None
-                                                 else "start" if initial_state is not None else "continue"))
+            run_mode = ("resume" if resume_values is not None
+                        else "start" if initial_state is not None else "continue")
+            mb.log_event("worker_started", mode=run_mode)
             w.set(STATE_RUNNING)
+            # 阶段3:运行级事件(设计 §6.2-B 底线)—— resume 用 run.resumed,
+            # 首跑 / 崩溃续跑用 run.started(reason 区分)。
+            if resume_values is not None:
+                _emit_run_event(thread_id, "run.resumed", run_id, {"reason": "resume"})
+            else:
+                _emit_run_event(thread_id, "run.started", run_id,
+                                {"reason": run_mode})
             if resume_values is not None:
                 out = resume_pending_sync(graph, cfg, resume_values)
             elif initial_state is not None:
@@ -518,18 +555,28 @@ def run_worker(
         if intr:
             w.set(STATE_WAITING_HUMAN, interrupts=intr)
             mb.log_event("waiting_human", checkpoints=[i["checkpoint"] for i in intr])
+            # interrupt 挂起不是失败(设计 §11.3);运行级事件如实报等待
+            _emit_run_event(thread_id, "run.interrupted", run_id,
+                            {"detail": {"checkpoints": [i["checkpoint"] for i in intr]}})
         elif snap.next:
             w.set(STATE_FAILED, error={"type": "Incomplete",
                                        "message": f"图没有结束,但也没有挂起;next={list(snap.next)}"})
+            _emit_run_event(thread_id, "run.failed", run_id,
+                            {"reason": "incomplete",
+                             "detail": {"next": [str(n) for n in snap.next]}})
             return 1
         else:
             w.set(STATE_COMPLETED, final_keys=sorted((out or {}).keys()))
             mb.log_event("completed")
+            _emit_run_event(thread_id, "run.completed", run_id,
+                            {"detail": {"final_keys": sorted((out or {}).keys())}})
         return 0
     except BaseException as e:  # noqa: BLE001 — 任何失败都要落盘,方便 Agent 汇报
         w.set(STATE_FAILED, error={"type": type(e).__name__, "message": str(e)[:2000],
                                    "traceback": traceback.format_exc()[-4000:]})
         mb.log_event("worker_failed", error=f"{type(e).__name__}: {e}"[:500])
+        _emit_run_event(thread_id, "run.failed", run_id,
+                        {"error": {"type": type(e).__name__, "message": str(e)[:2000]}})
         return 1
     finally:
         stop.set()

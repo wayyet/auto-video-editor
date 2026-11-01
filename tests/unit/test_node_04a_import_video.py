@@ -7,8 +7,8 @@
 4. ``IMPORT_VIDEO_MANUAL_REQUIRED=False`` → 不写请求文件,直接 ``imported``
    且 ``triggered_by="auto_fallback"``。
 5. ``find_pending_request``:3 个 job,1 个已有 result → 返回剩下里 mtime 最新的。
-6. 守护:源码文本不得出现 ``langgraph`` / ``pydantic`` / ``storyline_capabilities``
-   ——守住"轻依赖"跨 venv 硬约束。
+6. 守护:**模块顶层** import 只允许 stdlib + config + storyline(AST 判定)
+   ——守住"轻依赖"跨 venv 硬约束;函数级延迟 import 允许(阶段3)。
 """
 from __future__ import annotations
 
@@ -177,24 +177,42 @@ def test_find_pending_request_returns_newest_unanswered(tmp_path: Path) -> None:
 # 6. 守护:轻依赖硬约束
 # ---------------------------------------------------------------------------
 def test_module_source_has_no_heavy_dependencies() -> None:
-    """源码文本不得出现 ``langgraph`` / ``pydantic`` / ``storyline_capabilities``。
+    """**模块顶层** import 只允许 stdlib + ``config`` + ``storyline``(AST 判定)。
 
     本模块会被 ``openstoryline/.venv`` 里的 agent_fastapi.py 跨 venv 导入,
     顶层一旦引入重依赖,那个 venv 就会 ImportError(见模块 docstring)。
-    用源码文本断言比运行时试 import 更早失败,且不依赖 openstoryline venv。
+
+    2026-11(阶段3):原实现用全文子串匹配(出现 "langgraph" 即失败),会误伤
+    函数体内的**延迟** import —— 而 ``_emit_waiting_event`` 恰恰需要延迟 import
+    ``langgraph.config.get_stream_writer`` 发 custom 等待事件(工作流流程图设计
+    §7.3 规则 7)。延迟 import 只在函数被调、且处于图运行上下文时才加载,不
+    影响跨 venv 模块导入,不属于本约束的目标。故改用 AST 只查模块顶层
+    import 语句 —— 约束的**真实意图**(顶层轻依赖)反而查得更准。
     """
-    src = (Path(config.__file__).parent / "nodes" / "node_04a_import_video.py").read_text(
-        encoding="utf-8"
-    )
-    # 去掉模块 docstring(里面为了说明原因会提到这些词)再查真正的 import 语句
-    parts = src.split('"""')
-    body = parts[2] if len(parts) > 2 else src
-    # 反向断言:body 必须真的截到了 import 区,否则下面的检查会"空过"
-    assert "import config" in body, "docstring 剥离失败,本用例将失去意义"
-    for forbidden in ("langgraph", "pydantic", "storyline_capabilities"):
-        assert forbidden not in body, (
-            f"node_04a_import_video.py 不得依赖 {forbidden}(跨 venv 硬约束)"
-        )
+    import ast
+    import sys
+
+    path = Path(config.__file__).parent / "nodes" / "node_04a_import_video.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    # 反向断言:顶层确实有 import 区(否则下面的检查会"空过")
+    top_imports = [
+        node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))
+    ]
+    assert top_imports, "AST 解析异常:模块顶层没有任何 import,本用例将失去意义"
+
+    allowed_roots = {"config", "storyline"}
+    stdlib_roots = set(sys.stdlib_module_names)
+    for node in top_imports:
+        if isinstance(node, ast.Import):
+            roots = [alias.name.split(".")[0] for alias in node.names]
+        else:
+            roots = [(node.module or "").split(".")[0]] if node.level == 0 else ["."]
+        for root in roots:
+            assert root in stdlib_roots or root in allowed_roots, (
+                f"node_04a_import_video.py 顶层 import 越界: {root!r}"
+                "(跨 venv 硬约束:顶层只允许 stdlib + config + storyline;"
+                "重依赖只能放函数体内延迟 import)"
+            )
 
 
 # ---------------------------------------------------------------------------

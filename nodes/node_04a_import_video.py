@@ -18,13 +18,16 @@
 硬约束:轻依赖(跨 venv 契约)
 --------------------------------------------------------------------------
 本模块会被 ``openstoryline/.venv`` 里的 ``agent_fastapi.py`` **跨 venv 导入**
-(与既有 ``clean_cache`` 端点同一手法),因此顶层 import 只允许:
+(与既有 ``clean_cache`` 端点同一手法),因此**顶层** import 只允许:
 
     stdlib + ``config`` + ``storyline.output_isolation``
 
-**禁止** ``langgraph`` / ``pydantic`` / 任何 ``nodes.*`` 图节点模块。
-``tests/unit/test_node_04a_import_video.py`` 有一条**源码文本断言**守住这条
-硬约束(比运行时试 import 更早失败,且不依赖 openstoryline venv)。
+**顶层禁止** ``langgraph`` / ``pydantic`` / 任何 ``nodes.*`` 图节点模块。
+``tests/unit/test_node_04a_import_video.py`` 用 **AST 只查模块顶层 import**
+守住这条硬约束(比运行时试 import 更早失败,且不依赖 openstoryline venv)。
+函数体内的**延迟** import 是允许的:只在函数被调用时加载,不影响跨 venv
+模块导入 —— 本文件 ``_emit_waiting_event`` 的 ``langgraph.config`` 延迟
+import 即属此类(阶段3,工作流流程图设计 §7.3 规则 7)。
 同理,类型标注一律用内置 ``dict``,**不要** ``from state import WorkflowState``
 ——那会诱导后人顺手加更重的依赖。
 
@@ -407,6 +410,8 @@ def import_video(
         float(timeout_s) if timeout_s is not None else float(config.IMPORT_VIDEO_WAIT_TIMEOUT_S)
     )
     deadline = time.monotonic() + limit
+    # 5.5 观测(阶段3,§7.3 规则 7):进入轮询前发"等待网页导入"事件
+    _emit_waiting_event(job_id, poll_interval_s=interval, timeout_s=limit)
 
     result: Optional[dict] = None
     while True:
@@ -443,6 +448,37 @@ def import_video(
 # ---------------------------------------------------------------------------
 # 内部
 # ---------------------------------------------------------------------------
+def _emit_waiting_event(job_id: str, *, poll_interval_s: float, timeout_s: float) -> None:
+    """进入轮询前经 LangGraph custom 流发"等待网页导入"事件(阶段3)。
+
+    - **延迟 import**:跨 venv 硬约束只限制顶层 import(守护测试用 AST 只查
+      模块顶层);``langgraph.config`` 只在本函数被调、且处于图运行上下文时
+      才加载。
+    - ``get_stream_writer()`` 在图运行上下文外返回 no-op writer;任何异常都
+      静默吞掉 —— 这是观测信号,绝不允许影响握手轮询本身。
+    - 适配侧(monitoring.workflow_runner.WorkflowStreamAdapter)把它映射为
+      ``node.waiting_input(waiting_kind="web_file_handshake")``;任务正常结束
+      仍由 runner 发 ``node.succeeded``。
+    """
+    try:
+        from langgraph.config import get_stream_writer
+
+        writer = get_stream_writer()
+        if callable(writer):
+            writer({
+                "monitor_event": "waiting_input",
+                "node_id": "import_video",
+                "waiting_kind": "web_file_handshake",
+                "detail": {
+                    "job_id": job_id,
+                    "poll_interval_s": poll_interval_s,
+                    "timeout_s": int(timeout_s),
+                },
+            })
+    except Exception:  # noqa: BLE001 — 观测信号,不影响握手
+        pass
+
+
 def _finalize(
     state: dict,
     job_id: str,

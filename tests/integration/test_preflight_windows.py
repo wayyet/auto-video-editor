@@ -218,10 +218,17 @@ def test_run_workflow_skip_preflight_returns_cleanly(monkeypatch: pytest.MonkeyP
     Postgres checkpointer + ``await g.ainvoke(...)``(原同步 SQLite 分支已删)。
     因此这里的 mock 必须提供**可 await 的** ``ainvoke``;
     同时把 checkpointer 获取与 DB 迁移也 mock 掉,让本用例不依赖活的 Postgres。
+
+    2026-11(阶段3,工作流流程图统一 Runner):执行路径改为
+    ``monitoring.workflow_runner.run_with_events``(astream 消费 + 事件落 PG
+    事件表)。mock 相应改为:``astream`` 空 async 生成器 + ``aget_state``
+    返回空终态;``workflow_event_store.append_event`` 一并 mock —— 保持本用例
+    "不依赖活的 Postgres、不写生产库"的初衷不变。
     """
     import contextlib
     import sys
     from pathlib import Path
+    from types import SimpleNamespace
 
     repo = Path(__file__).resolve().parents[2]
     if str(repo) not in sys.path:
@@ -233,16 +240,23 @@ def test_run_workflow_skip_preflight_returns_cleanly(monkeypatch: pytest.MonkeyP
     async def _fake_get_checkpointer():
         yield mock.MagicMock()
 
+    async def _empty_astream(*_args: object, **_kwargs: object):
+        return
+        yield  # pragma: no cover — 仅使本函数成为 async generator
+
+    _fake_graph = mock.MagicMock(
+        astream=_empty_astream,
+        aget_state=mock.AsyncMock(
+            return_value=SimpleNamespace(values={}, interrupts=[], next=())
+        ),
+    )
+
     # 跳过 ainvoke 实际跑图:替换 build_graph 让它直接返回 mock
     with mock.patch("runtime.preflight._run_powershell_step") as fake_pwsh, \
-         mock.patch(
-             "graph.build_graph",
-             return_value=mock.MagicMock(
-                 ainvoke=mock.AsyncMock(return_value={}),
-             ),
-         ), \
+         mock.patch("graph.build_graph", return_value=_fake_graph), \
          mock.patch("graph.get_checkpointer", _fake_get_checkpointer), \
-         mock.patch("db.migrations.apply_migrations_to_db", return_value=None):
+         mock.patch("db.migrations.apply_migrations_to_db", return_value=None), \
+         mock.patch("monitoring.workflow_event_store.append_event", return_value=1):
         monkeypatch.setattr(
             sys, "argv", ["run_workflow.py", "--skip-preflight", "--thread-id", "ci-test"]
         )
