@@ -10,9 +10,11 @@ import importlib
 import json
 import logging
 import os
+import queue
 import subprocess
 import sys
 import threading
+import time
 import traceback
 import uuid
 from contextlib import contextmanager
@@ -467,16 +469,72 @@ def _emit_run_event(
     事件走共享 PG 事件表(§11.4:跨进程不可能靠内存队列);延迟 import 保持
     "纯 kit 场景"(仓库不在 sys.path)可用;任何失败只记 debug —— 观测信号
     不允许影响 worker 状态机(status.json 挂点不受影响)。
-    """
-    try:
-        from monitoring.workflow_events import make_event
-        from monitoring.workflow_event_store import append_event
 
-        append_event(
-            make_event(event_type, thread_id=thread_id, run_id=run_id, payload=payload)
-        )
+    **写入在单一后台线程里执行(FIFO 保序)**:run.* 事件是可观测性数据,
+    同步 PG 往返不该加进 worker 执行路径 —— 实测(阶段6)同步写会放大
+    ``test_images.py`` 里既有的取任务时序竞态窗口(该测试本就偶发,见执行
+    记录 §6)。``drain_run_events`` 在 worker 退出前最多等 5s 把队列排空,
+    避免进程退出杀掉守护线程丢尾事件。
+    """
+    global _run_event_queue
+    try:
+        with _run_event_queue_lock:
+            if _run_event_queue is None:
+                _run_event_queue = queue.Queue()
+                threading.Thread(
+                    target=_run_event_writer_loop,
+                    args=(_run_event_queue,),
+                    daemon=True,
+                    name="agent-gate-run-events",
+                ).start()
+
+        def _write() -> None:
+            from monitoring.workflow_events import make_event
+            from monitoring.workflow_event_store import append_event
+
+            append_event(
+                make_event(
+                    event_type, thread_id=thread_id, run_id=run_id, payload=payload
+                )
+            )
+
+        _run_event_queue.put(_write)
     except Exception as e:  # noqa: BLE001 — 观测信号,不抬高 worker 失败面
-        _logger.debug("run event %s emit failed: %s", event_type, e)
+        _logger.debug("run event %s enqueue failed: %s", event_type, e)
+
+
+#: 运行级事件的后台写队列(懒建;None = 尚未用过)
+_run_event_queue: Optional["queue.Queue[Callable[[], None]]"] = None
+_run_event_queue_lock = threading.Lock()
+
+
+def _run_event_writer_loop(q: "queue.Queue[Callable[[], None]]") -> None:
+    """单写线程:严格按入队顺序落库,单条失败只记 debug。"""
+    while True:
+        write = q.get()
+        try:
+            write()
+        except Exception as e:  # noqa: BLE001 — 观测信号,吞掉
+            _logger.debug("run event write failed: %s", e)
+        finally:
+            q.task_done()
+
+
+def drain_run_events(timeout_s: float = 5.0) -> None:
+    """worker 退出前排空运行级事件队列(最多等 ``timeout_s`` 秒)。
+
+    只等"已入队"的事件;PG 不可达时单条写最多拖一个连接超时,超时即放弃
+    (观测信号允许丢失,worker 状态机早已落盘 status.json)。
+    """
+    with _run_event_queue_lock:
+        q = _run_event_queue
+    if q is None:
+        return
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if q.unfinished_tasks == 0:
+            return
+        time.sleep(0.05)
 
 
 def run_worker(
@@ -580,6 +638,12 @@ def run_worker(
         return 1
     finally:
         stop.set()
+        # 阶段3:退出前排空运行级事件队列(最多 5s),避免守护线程被进程
+        # 退出杀掉丢尾事件(run.completed/run.failed)。
+        try:
+            drain_run_events()
+        except Exception:  # noqa: BLE001 — 排空失败不影响退出码
+            pass
         # 还原草稿目录环境变量:run_worker 也可能在测试进程里就地调用,
         # 不还原会污染同进程后续用例(以及同进程的第二个 thread)。
         # 只有本次确实是 agent_gate 设的才动 —— 操作员显式设的值要原样留下。
