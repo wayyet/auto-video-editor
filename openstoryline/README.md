@@ -90,9 +90,9 @@ OPENSTORYLINE_MCODE_MEDIA_ROOT  # 素材白名单根
 1. 配好上面的 `[mcode]` 段(操作员目录 + mcode 可执行文件);
 2. 起网页端:`.\openstoryline\.venv\Scripts\python.exe -m uvicorn agent_fastapi:app --host 127.0.0.1 --port 7860`
    (cwd = `openstoryline`);
-3. 左侧「LLM 模型」下拉里选 **`mcode-operator`**(完整能力)或 **`mcode-chat`**(轻量省钱)。
+3. 左侧「LLM 模型」下拉里选 **`mcode-operator`**(完整能力)。
 
-下拉里出现 mcode 档位的前提是 `[mcode].cwd` **已配置且目录存在**;没配就看不到这两个选项
+下拉里出现 mcode 档位的前提是 `[mcode].cwd` **已配置且目录存在**;没配就看不到这个选项
 (不给点了就报错的选项)。选中后 LLM 与 VLM 会自动同步成同一个档位 —— mcode 不区分多模态。
 
 **默认档位**:如果内置模型(`[llm]`)的 api_key 还是占位符(入库的 `config.toml` 里就是
@@ -108,8 +108,7 @@ OPENSTORYLINE_MCODE_MEDIA_ROOT  # 素材白名单根
   读写文件、联网。不要把它当成沙箱。
 - **不连 8001**。mcode 分支不建 MCP 连接,也不做 API key 校验(mcode 不走
   OpenAI 兼容网关)。普通模型分支的 MCP 加载与失败语义**一字未改**。
-- **开销差异很大**。本机实测 `standard` 模式每轮约 19.5K input token,
-  `lightweight` 约 857 token(差 23 倍)。想省钱用 `mcode-chat`。
+- **开销不小**。本机实测 `standard` 模式每轮约 19.5K input token。
 - **取消 mcode ≠ 取消 LangGraph worker**。取消后 mcode 进程树会被清理,
   但 worker 侧的任务可能还在信箱里跑。
 - **两个平级消费者**。网页端 mcode 与命令行 `agent_gate drive` 没有原子认领机制。
@@ -146,7 +145,7 @@ media 目录内」的校验。
 
 | 现象 | 原因 / 处理 |
 |---|---|
-| `LLM API key is invalid or unauthorized ... HTTP 401` | 走的是**内置模型**分支,那把 key 无效。左侧「LLM 模型」改选 `mcode-operator` / `mcode-chat`;或给 `[llm].api_key` 配真 key |
+| `LLM API key is invalid or unauthorized ... HTTP 401` | 走的是**内置模型**分支,那把 key 无效。左侧「LLM 模型」改选 `mcode-operator`;或给 `[llm].api_key` 配真 key |
 | 下拉里**看不到** mcode 选项 | `[mcode].cwd` 没配或目录不存在。配好后**重启**网页端 |
 | 网页端还是「导入失败」toast | 旧版本端点有 `NameError` 缺陷,已修;确认服务已重启 |
 | `找不到 mcode 可执行文件` | 装 MiniMax Code,或设 `[mcode].bin` / `OPENSTORYLINE_MCODE_BIN` |

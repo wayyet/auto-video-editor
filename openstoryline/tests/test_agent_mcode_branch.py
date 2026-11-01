@@ -4,7 +4,7 @@
 - mcode 分支**跳过** LLM / VLM 两处 ``validate_api_key``
 - mcode 分支**不连 8001**(不构造 ``MultiServerMCPClient``)
 - mcode 分支``tools=[]``、**不注册** LangChain skills 工具
-- ``mcode-operator`` -> standard 模式;``mcode-chat`` -> lightweight 模式
+- ``mcode-operator`` -> standard 模式
 - 操作员目录没配 / 缺 ``.mcp.json`` / 缺 ``AGENTS.md`` -> 明确的配置错误
 - **普通模型分支一字未改**:MCP 连不上时仍然照旧失败,不静默降级
 
@@ -168,29 +168,20 @@ async def test_mcode_branch_does_not_register_langchain_skills(
     assert captured["tools"] == [], f"tools 应该是空列表,实际 {captured['tools']!r}"
 
 
-@pytest.mark.parametrize(
-    "model_name,expected_mode",
-    [
-        ("mcode-operator", "standard"),
-        ("mcode-chat", "lightweight"),
-    ],
-)
-async def test_mcode_branch_uses_mcode_model(
-    operator_dir, store, captured, model_name, expected_mode
-):
-    """``mcode-operator`` -> standard;``mcode-chat`` -> lightweight。"""
+async def test_mcode_branch_uses_mcode_model(operator_dir, store, captured):
+    """``mcode-operator`` -> standard。"""
     cfg = _cfg_with_mcode(_base_settings(), cwd=str(operator_dir))
 
     await build_agent(
         cfg=cfg,
         session_id="sess-mcode",
         store=store,
-        llm_override={"model": model_name},
+        llm_override={"model": "mcode-operator"},
     )
 
     model = captured["model"]
     assert isinstance(model, MCodeChatModel), f"模型类型不对: {type(model)!r}"
-    assert model.mode == expected_mode
+    assert model.mode == "standard"
     assert model.cwd == str(operator_dir.resolve())
     assert model.session_id == "sess-mcode"
 

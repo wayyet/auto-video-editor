@@ -117,7 +117,6 @@ def forbid_load_skills(monkeypatch) -> list:
         ("zcode", True),
         ("  ZCode Agent  ", True),
         ("mcode-operator", False),
-        ("mcode-chat", False),
         ("GLM API / BigModel", False),
         ("deepseek-v4-pro", False),
         ("__custom__", False),

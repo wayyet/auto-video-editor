@@ -174,10 +174,9 @@ def is_mcode_model(model_name: str) -> bool:
 
     判定标准:名字以 ``mcode`` 开头(大小写不敏感)。
 
-    网页端模型下拉里的两个档位:
+    网页端模型下拉里的档位:
 
     - ``mcode-operator`` -> ``standard``(完整 agent 能力,开销大)
-    - ``mcode-chat``     -> ``lightweight``(轻量,便宜)
 
     网页端接线在 ``agent_fastapi.py``:模型下拉里的 mcode 档位会以
     ``llm_override = {"model": <档位>}`` 传进来,于是本函数命中、
@@ -194,14 +193,11 @@ def _resolve_mcode_mode(model_name: str, default_mode: str) -> str:
     """mcode 档位 -> 上下文模式。
 
     - ``mcode-operator`` -> ``standard``(完整 agent 能力,开销大)
-    - ``mcode-chat``     -> ``lightweight``(轻量,便宜)
     - 其他 ``mcode*``    -> 用 ``cfg.mcode.mode``
     """
     name = str(model_name or "").strip().lower()
     if name == "mcode-operator":
         return "standard"
-    if name == "mcode-chat":
-        return "lightweight"
     mode = str(default_mode or "standard").strip().lower()
     return mode if mode in ("standard", "lightweight") else "standard"
 
@@ -437,7 +433,7 @@ async def build_agent(
     # ---- mcode 分支:在 key 校验之前分流 ----
     # mcode 不走 OpenAI 兼容网关,所以既不需要 API key,也不连 8001。
     # 判定只看**调用方显式传入**的 llm_override["model"] —— 网页端模型下拉
-    # 选 mcode 档位时会传 {"model": "mcode-operator"} / {"model": "mcode-chat"}。
+    # 选 mcode 档位时会传 {"model": "mcode-operator"}。
     if is_mcode_model(_get(llm_override, "model", "")):
         return await _build_mcode_agent(
             cfg,

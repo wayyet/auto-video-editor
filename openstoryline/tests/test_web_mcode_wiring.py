@@ -150,12 +150,11 @@ def stub_builtin_backend(monkeypatch):
 # --------------------------------------------------------------------------
 
 def test_mcode_tiers_appear_in_model_dropdown(tmp_path, operator_dir):
-    """操作员目录配好了 -> 模型下拉里出现两个 mcode 档位。"""
+    """操作员目录配好了 -> 模型下拉里出现 mcode 档位。"""
     cfg = _settings(tmp_path, mcode_cwd=str(operator_dir))
     sess = web.ChatSession(session_id="sess-web", cfg=cfg)
 
     assert "mcode-operator" in sess.chat_models
-    assert "mcode-chat" in sess.chat_models
     assert "mcode-operator" in sess.vlm_models
     # 内置模型仍然留在下拉里(只是可能不是默认项)
     assert "deepseek-v4-pro" in sess.chat_models
@@ -169,7 +168,6 @@ def test_mcode_tiers_hidden_when_not_configured(tmp_path):
     sess = web.ChatSession(session_id="sess-web", cfg=cfg)
 
     assert "mcode-operator" not in sess.chat_models
-    assert "mcode-chat" not in sess.chat_models
 
 
 def test_mcode_tiers_hidden_when_cwd_missing(tmp_path):
@@ -216,8 +214,8 @@ async def test_ensure_agent_routes_mcode_tier_to_mcode_branch(
     """网页端选了 mcode 档位 -> 真的走 mcode 分支(跳过 key 校验、不连 8001、tools=[])。"""
     cfg = _settings(tmp_path, mcode_cwd=str(operator_dir))
     sess = web.ChatSession(session_id="sess-web", cfg=cfg)
-    sess.chat_model_key = "mcode-chat"
-    sess.vlm_model_key = "mcode-chat"
+    sess.chat_model_key = "mcode-operator"
+    sess.vlm_model_key = "mcode-operator"
 
     await sess.ensure_agent()
 
@@ -225,7 +223,7 @@ async def test_ensure_agent_routes_mcode_tier_to_mcode_branch(
     assert forbid_mcp_client == [], "mcode 分支竟然连了 8001"
     model = captured.get("model")
     assert isinstance(model, MCodeChatModel), f"模型不是 MCodeChatModel: {type(model)}"
-    assert model.mode == "lightweight", "mcode-chat 应该是 lightweight 模式"
+    assert model.mode == "standard", "mcode-operator 应该是 standard 模式"
     assert captured.get("tools") == [], "mcode 分支不该有 LangChain 工具"
 
 
@@ -307,14 +305,14 @@ def test_restore_keeps_mcode_tier(tmp_path, operator_dir):
     _write_state(cfg, "sess-restore", {
         "version": 1,
         "session_id": "sess-restore",
-        "chat_model_key": "mcode-chat",
-        "vlm_model_key": "mcode-chat",
+        "chat_model_key": "mcode-operator",
+        "vlm_model_key": "mcode-operator",
     })
 
     sess = web.ChatSession.load_from_state("sess-restore", cfg)
     assert sess is not None
-    assert sess.chat_model_key == "mcode-chat"
-    assert sess.vlm_model_key == "mcode-chat"
+    assert sess.chat_model_key == "mcode-operator"
+    assert sess.vlm_model_key == "mcode-operator"
 
 
 def test_restore_falls_back_when_builtin_credential_missing(tmp_path, operator_dir):
@@ -369,7 +367,7 @@ def test_restore_drops_unknown_model_key(tmp_path, operator_dir):
 
 def test_resolve_mcode_tier_prefers_llm():
     """LLM 是 mcode 档位时,以 LLM 为准。"""
-    assert web._resolve_mcode_tier("mcode-chat", "mcode-operator") == "mcode-chat"
+    assert web._resolve_mcode_tier("mcode-other", "mcode-operator") == "mcode-other"
     assert web._resolve_mcode_tier("deepseek-v4-pro", "mcode-operator") == "mcode-operator"
     assert web._resolve_mcode_tier("deepseek-v4-pro", "deepseek-v4-pro") == ""
     assert web._resolve_mcode_tier("", None) == ""

@@ -31,7 +31,7 @@ const SIDEBAR_COLLAPSED_KEY = "openstoryline_sidebar_collapsed";
 const DEVBAR_COLLAPSED_KEY = "openstoryline_devbar_collapsed";
 const AUDIO_PREVIEW_MAX = 3;
 const CUSTOM_MODEL_KEY = "__custom__";
-// mcode 档位(mcode-operator / mcode-chat):mcode 不区分多模态,
+// mcode 档位(mcode-operator):mcode 不区分多模态,
 // 所以 LLM 与 VLM 必须是同一个档位,选一边就同步另一边。
 const MCODE_MODEL_PREFIX = "mcode";
 const isMcodeTier = (v) => String(v || "").trim().toLowerCase().startsWith(MCODE_MODEL_PREFIX);

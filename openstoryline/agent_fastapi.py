@@ -117,12 +117,11 @@ CUSTOM_MODEL_KEY = "__custom__"
 # 所以它必须保持人类可读,不能改成 "__glm__" 这类内部代号。
 GLM_MODEL_KEY = "GLM API / BigModel"
 
-# mcode 档位:网页端模型下拉里的两个可选项。
+# mcode 档位:网页端模型下拉里的可选项。
 #   mcode-operator -> mcode standard 模式(完整 agent 能力,开销大)
-#   mcode-chat     -> mcode lightweight 模式(轻量,便宜)
-# 选中任何一个,整个会话的 LLM/VLM 都由 `mcode exec` 子进程驱动
+# 选中后整个会话的 LLM/VLM 都由 `mcode exec` 子进程驱动
 # (mcode 不区分多模态),不再走 OpenAI 兼容网关,也不需要 API key。
-MCODE_MODEL_KEYS: Tuple[str, ...] = ("mcode-operator", "mcode-chat")
+MCODE_MODEL_KEYS: Tuple[str, ...] = ("mcode-operator",)
 
 # zcode CLI(智谱 ZCode)无头档位:网页端模型下拉里的可选项(阶段 E)。
 # 选中后整个会话由 `zcode -p ... --json` 子进程驱动(认证走 CLI 本机登录态,
@@ -2826,7 +2825,7 @@ class ChatSession:
                 f"missing={','.join(missing)}"
             )
 
-        # 0) agent 档位:网页端选了 ZCode Agent / mcode-operator / mcode-chat。
+        # 0) agent 档位:网页端选了 ZCode Agent / mcode-operator。
         #    这些档位不走 OpenAI 兼容网关,所以**不查**内置模型配置、
         #    **不做** API key 校验 —— 凭据那套在这里完全不适用。
         #    LLM 与 VLM 用同一个档位(agent runtime 不区分多模态)。

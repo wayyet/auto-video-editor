@@ -6,7 +6,6 @@
 编号    场景                                        验收标准
 ======  ==========================================  ==========================
 SRC-01  选择 ``mcode-operator``                     过程事件全部 ``source=mcode``
-SRC-02  选择 ``mcode-chat``                         过程事件全部 ``source=mcode``
 SRC-03  选择 DeepSeek                              不出现 MCode 执行面板事件
 SRC-04  MCode turn 内 LangGraph 发出 model chunk   WebSocket 不重复转发
 SRC-05  MCode CLI 失败                             不用 DeepSeek 内容冒充
@@ -50,7 +49,6 @@ from open_storyline.mcode_events import MCodeEvent, MCodeItem, MCodeToolCall, MC
 OPENSTORYLINE_DIR = Path(__file__).resolve().parent.parent
 
 MCODE_OPERATOR = "mcode-operator"
-MCODE_CHAT = "mcode-chat"
 DEEPSEEK = "deepseek-v4-pro"
 
 
@@ -110,20 +108,20 @@ def _tool_item(tool_id: str, name: str, status: MCodeToolStatus, **extra: Any) -
 
 
 # --------------------------------------------------------------------------
-# SRC-01 / SRC-02:mcode 档位 -> 过程事件全部 source=mcode
+# SRC-01:mcode 档位 -> 过程事件全部 source=mcode
 # --------------------------------------------------------------------------
 
-@pytest.mark.parametrize("tier", [MCODE_OPERATOR, MCODE_CHAT])
+@pytest.mark.parametrize("tier", [MCODE_OPERATOR])
 def test_mcode_tiers_resolve_to_mcode_source(tier):
-    """SRC-01 / SRC-02:两个 mcode 档位都判成 mcode 来源。"""
+    """SRC-01:mcode 档位判成 mcode 来源。"""
     assert web._resolve_turn_source(tier) == web.TURN_SOURCE_MCODE
     assert web._resolve_turn_source(tier, DEEPSEEK) == web.TURN_SOURCE_MCODE
     assert web._resolve_turn_source(DEEPSEEK, tier) == web.TURN_SOURCE_MCODE
 
 
-@pytest.mark.parametrize("tier", [MCODE_OPERATOR, MCODE_CHAT])
+@pytest.mark.parametrize("tier", [MCODE_OPERATOR])
 def test_mcode_events_all_carry_mcode_source(tier, tmp_path):
-    """SRC-01 / SRC-02:适配器产出的每条事件都带 ``source=mcode``。"""
+    """SRC-01:适配器产出的每条事件都带 ``source=mcode``。"""
     adapter = web._make_mcode_adapter(
         web.TURN_SOURCE_MCODE, _settings(tmp_path), session_id="sess-1", turn_id="turn-1"
     )
