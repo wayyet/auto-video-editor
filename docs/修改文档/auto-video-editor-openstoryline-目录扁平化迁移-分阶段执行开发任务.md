@@ -4,7 +4,7 @@
 > 上游设计：《auto-video-editor：OpenStoryline 目录扁平化迁移执行设计》（`docs/修改文档/auto-video-editor-openstoryline-目录扁平化迁移执行设计.md`，下称"设计文档"）
 > 创建日期：2026-11-01
 > 执行环境：Windows / pwsh + Git Bash / 仓库根 `E:\Documents\kuaishou\auto-video-editor`
-> 状态：**阶段 0–4 已完成（2026-11-01，本轮按用户指示仅执行 0–4）；阶段 5–9 未开始**
+> 状态：**阶段 0–9 全部完成（2026-11-01；阶段 5–9 于同日第二轮执行完毕，A01–A15 全过，旧目录已移出仓库进入备份观察期）**
 
 ---
 
@@ -24,11 +24,11 @@
 | 阶段 2 | 目标路径冲突检查 | §6 阶段 2 | 冲突清单 = 0 | 已完成 2026-11-01 |
 | 阶段 3 | 目录与文件搬迁 | §6 阶段 3 | 根目录扁平化文件就位 | 已完成 2026-11-01 |
 | 阶段 4 | 虚拟环境重建 | §6 阶段 4 | `.venv-openstoryline/` 可用 | 已完成 2026-11-01 |
-| 阶段 5 | 代码与配置改造 | §5 + §6 阶段 5 | 14 项路径适配完成 | 未开始 |
-| 阶段 6 | 静态验证 | §6 阶段 6 | 文件 / 配置 / 忽略规则检查通过 | 未开始 |
-| 阶段 7 | 测试验证 | §6 阶段 7 | 四套测试通过 | 未开始 |
-| 阶段 8 | 启动与集成验收 | §6 阶段 8 | A01–A15 全过 | 未开始 |
-| 阶段 9 | 旧目录清理与收尾 | §6 阶段 9 | 活动树中无 `openstoryline/` | 未开始 |
+| 阶段 5 | 代码与配置改造 | §5 + §6 阶段 5 | 14 项路径适配完成 | 已完成 2026-11-01 |
+| 阶段 6 | 静态验证 | §6 阶段 6 | 文件 / 配置 / 忽略规则检查通过 | 已完成 2026-11-01 |
+| 阶段 7 | 测试验证 | §6 阶段 7 | 四套测试通过 | 已完成 2026-11-01 |
+| 阶段 8 | 启动与集成验收 | §6 阶段 8 | A01–A15 全过 | 已完成 2026-11-01 |
+| 阶段 9 | 旧目录清理与收尾 | §6 阶段 9 | 活动树中无 `openstoryline/` | 已完成 2026-11-01 |
 
 提交拆分（对应设计文档 §10）：
 
@@ -157,10 +157,10 @@
 
 前置条件：阶段 5 门通过。
 
-- [ ] 6.1 设计文档 §6 阶段 6 的 RequiredPaths 15 项存在性检查，无 Warning
-- [ ] 6.2 `config.toml` 路径值核对：`outputs_dir` / `media_dir` / `bgm_dir` / 模型路径（`.storyline/models/`）/ 缓存路径（`.storyline/.server_cache/`）
-- [ ] 6.3 `git check-ignore config.toml.local` 生效；`git status` 不出现该文件；入库 `config.toml` 无真实密钥
-- [ ] 6.4 用 pwsh 对 4 个 ps1（`start_production` / `install` / `download_resources` / `download_models`）做解析校验（不执行）
+- [x] 6.1 设计文档 §6 阶段 6 的 RequiredPaths 15 项存在性检查，无 Warning
+- [x] 6.2 `config.toml` 路径值核对：`outputs_dir` / `media_dir` / `bgm_dir` / 模型路径（`.storyline/models/`）/ 缓存路径（`.storyline/.server_cache/`）
+- [x] 6.3 `git check-ignore config.toml.local` 生效；`git status` 不出现该文件；入库 `config.toml` 无真实密钥
+- [x] 6.4 用 pwsh 对 4 个 ps1（`start_production` / `install` / `download_resources` / `download_models`）做解析校验（不执行）
 
 **阶段门**：全部通过，无缺失项、无路径解析到旧位置。
 
@@ -168,11 +168,11 @@
 
 前置条件：阶段 6 门通过；`edb-postgres16` 运行中、5432 可连。
 
-- [ ] 7.1 环境准备：`$env:PYTHONUTF8='1'`、`$env:PYTHONIOENCODING='utf-8'`；确认 Postgres 存活（阶段 1 若停过则 `docker start edb-postgres16`）
-- [ ] 7.2 OpenStoryline 测试：`.\.venv-openstoryline\Scripts\python.exe -m pytest .\tests_openstoryline -q --junitxml="$env:TEMP\openstoryline.xml"`
-- [ ] 7.3 主项目测试：`.\.venv\Scripts\python.exe -m pytest .\tests -q --junitxml="$env:TEMP\main.xml"`（基线 0 失败）
-- [ ] 7.4 agent_gate 测试：`.\.venv\Scripts\python.exe -m pytest .\agent_gate\tests -q -p no:cacheprovider --junitxml="$env:TEMP\agent-gate.xml"`
-- [ ] 7.5 前端测试：`node --test .\web\tests\*.test.mjs`
+- [x] 7.1 环境准备：`$env:PYTHONUTF8='1'`、`$env:PYTHONIOENCODING='utf-8'`；确认 Postgres 存活（阶段 1 若停过则 `docker start edb-postgres16`）
+- [x] 7.2 OpenStoryline 测试：`.\.venv-openstoryline\Scripts\python.exe -m pytest .\tests_openstoryline -q --junitxml="$env:TEMP\openstoryline.xml"`
+- [x] 7.3 主项目测试：`.\.venv\Scripts\python.exe -m pytest .\tests -q --junitxml="$env:TEMP\main.xml"`（基线 0 失败）
+- [x] 7.4 agent_gate 测试：`.\.venv\Scripts\python.exe -m pytest .\agent_gate\tests -q -p no:cacheprovider --junitxml="$env:TEMP\agent-gate.xml"`
+- [x] 7.5 前端测试：`node --test .\web\tests\*.test.mjs`
 
 **阶段门**：四套测试通过；OpenStoryline 已知的 3 个 config 泄漏怪癖若在 `tests_openstoryline` 定向作用域复现，按既有怪癖记录，不判为迁移回归；主套件出现任何新失败即触发回滚评估。
 
@@ -180,10 +180,10 @@
 
 前置条件：阶段 7 门通过。
 
-- [ ] 8.1 手工启动：仓库根目录 `.\.venv-openstoryline\Scripts\python.exe -m uvicorn agent_fastapi:app --host 127.0.0.1 --port 7860`，验收：首页 200、静态资源加载、提示词不报 `Template not found`、`config.toml`+`config.toml.local` 正常合并、上传视频落 `outputs/openstoryline/<sid>/media/`、计划落 `outputs/openstoryline/<sid>/plan_timeline_pro/`、`.storyline/.server_cache/` 可写
-- [ ] 8.2 生产 human 模式：`.\start_production.ps1 -StorylineMode human`，验收：脚本从根目录找到 `.venv-openstoryline`、PID 文件 `os_dir` = 仓库根、`node_02` 健康检查通过、`node_04b` 从 `outputs/openstoryline/` 读到计划
-- [ ] 8.3 生产 auto 模式：`.\start_production.ps1 -StorylineMode auto`，验收：原有行为不回归，模型 / ASR 资源经根目录路径可访问
-- [ ] 8.4 清缓存安全：触发 Web 清理缓存或对应单测，验收：只清 `.storyline/.server_cache`（走回收站），`.storyline/models`、`resource/`、`outputs/openstoryline/`、两个 venv 全部原样
+- [x] 8.1 手工启动：仓库根目录 `.\.venv-openstoryline\Scripts\python.exe -m uvicorn agent_fastapi:app --host 127.0.0.1 --port 7860`，验收：首页 200、静态资源加载、提示词不报 `Template not found`、`config.toml`+`config.toml.local` 正常合并、上传视频落 `outputs/openstoryline/<sid>/media/`、计划落 `outputs/openstoryline/<sid>/plan_timeline_pro/`、`.storyline/.server_cache/` 可写
+- [x] 8.2 生产 human 模式：`.\start_production.ps1 -StorylineMode human`，验收：脚本从根目录找到 `.venv-openstoryline`、PID 文件 `os_dir` = 仓库根、`node_02` 健康检查通过、`node_04b` 从 `outputs/openstoryline/` 读到计划
+- [x] 8.3 生产 auto 模式：`.\start_production.ps1 -StorylineMode auto`，验收：原有行为不回归，模型 / ASR 资源经根目录路径可访问
+- [x] 8.4 清缓存安全：触发 Web 清理缓存或对应单测，验收：只清 `.storyline/.server_cache`（走回收站），`.storyline/models`、`resource/`、`outputs/openstoryline/`、两个 venv 全部原样
 
 **阶段门**：设计文档 §7 验收标准 **A01–A15 全部通过**（对照见本文 §7）；生产 Web 需重启加载新代码，健康检查假阴性先排查 Karing 代理。
 
@@ -191,10 +191,10 @@
 
 前置条件：阶段 8 门通过（A01–A15 全过）。
 
-- [ ] 9.1 `Move-Item` 将 `openstoryline/` 整体移入备份区（`openstoryline-before-cleanup`），不直接删除
-- [ ] 9.2 确认活动树中已无 `openstoryline/` 目录
-- [ ] 9.3 Commit 3 落地：测试与验收记录、目录清理；推送 GitHub（走 socks5 代理）
-- [ ] 9.4 更新设计文档与本文状态为"已完成"；备份目录进入观察期，稳定运行一段时间后手动清理
+- [x] 9.1 `Move-Item` 将 `openstoryline/` 整体移入备份区（`openstoryline-before-cleanup`），不直接删除
+- [x] 9.2 确认活动树中已无 `openstoryline/` 目录
+- [x] 9.3 Commit 3 落地：测试与验收记录、目录清理；推送 GitHub（走 socks5 代理）
+- [x] 9.4 更新设计文档与本文状态为"已完成"；备份目录进入观察期，稳定运行一段时间后手动清理
 
 **阶段门**：`git status` 干净、远端已推送、活动树无 `openstoryline/`。
 
@@ -237,3 +237,8 @@
 | 2026-11-01 | 2 | 门通过：8 对目录递归同名扫描 0 冲突；3 个根文件无占用 | — | `scripts/` 为唯一合并点（见 §4 执行修正）；2.3 无冲突未触发 |
 | 2026-11-01 | 3 | 门通过：7 对目录源/目标文件数逐一相等；RequiredPaths 15 项在位 | 5f98602 = 阶段 3-4 搬迁快照（175 文件 +49342 行），已推送（main 同步） | 先复制后验证，源 `openstoryline/` 未动；根 `.gitignore` 新旧规则并存（旧 5 条保留至阶段 9，新增 `.venv-openstoryline/`、`/.storyline/`、`/resource/`、`/config.toml.local`） |
 | 2026-11-01 | 4 | 门通过：14 关键包 freeze 与旧环境全等；`import uvicorn/fastapi/torch/torchaudio` OK | — | `py -3.13` 重建；pip.ini site 级教训与 torch 回钉见 §4 执行补充 |
+| 2026-11-01 | 5 | 门通过：14 项改造全落地;全文检索逐项分类(运行时清零/历史 docs 加标记/包名未误改);冒烟=config/node_02/node_04b/agent_fastapi/prompts 全部指向新根 | 635d5bf(Commit A,48 文件) | 计划外发现并修复:mcode_media/mcode_chat_model 仓库根推导 parents[3]→parents[2];主套件两个会话测试 `OPENSTORYLINE_DIR=REPO_ROOT/"openstoryline"` 装配修复;web/tests 两处 .mjs 回溯层级 |
+| 2026-11-01 | 6 | 门通过:RequiredPaths 15 项 0 缺失;config.toml 路径值+占位密钥核对通过;check-ignore(config.toml.local/.storyline/.venv-openstoryline/resource)全生效;4 个 ps1 pwsh Parser 解析 0 错误 | — | — |
+| 2026-11-01 | 7 | 门通过:OS 318(skip 9,live 门控)/主 1413(skip 32)/agent_gate 274(skip 17)/前端 node --test 54 全过 **0 失败**;3 个 config 泄漏怪癖未复现 | — | 补装 pytest 9.1.1+pytest-asyncio 1.4.0 到 .venv-openstoryline(旧 venv 手工装过,requirements 未含);首跑主套件 1 失败=phase5_e2e 解耦扫描器 skip 集未含新 venv/新包位,已修 |
+| 2026-11-01 | 8 | 门通过:8.1 手工 Web(首页/静态/node-map 200,配置合并,上传落 outputs/openstoryline/<sid>/media/,server_cache 可写,无 Template not found);8.2 human 提权 start_production exit 0(PID 文件 os_dir=仓库根,node_02 探测过,关卡⓪ 等待=预期);8.3 auto 提权 exit 0(21 节点全程,checkpoints 283);8.4 禁清审查(models/resource/两 venv/outputs-openstoryline 均 0 项,server_cache 在列,outputs 清空保留 openstoryline)+17 单测过 | — | 计划外修复:__pycache__ 递归排除串补 `.venv-openstoryline`;plan_reader 相对 session_dir 的 pathlib 翻倍系**既有潜伏怪癖**(生产用绝对根不受影响,未改) |
+| 2026-11-01 | 9 | 门通过:openstoryline/ 整体 Move-Item 入备份区 `openstoryline-before-cleanup`(未删除);活动树确认无残留;.gitignore 旧 5 条规则删除;Commit B 落地并推送 | 635d5bf + Commit B | 备份目录进入观察期(基线备份 210457 + before-cleanup),稳定运行后手动清理 |

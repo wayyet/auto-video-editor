@@ -1,6 +1,7 @@
 # auto-video-editor：OpenStoryline 目录扁平化迁移执行设计
 
 > 文档类型：执行设计 / 迁移 Runbook  
+> **状态：已于 2026-11-01 全部执行完毕（阶段 0–9，分支 `refactor/flatten-openstoryline`）；执行过程与验收记录见《…-分阶段执行开发任务.md》§8。旧 `openstoryline/` 目录已移出仓库进入备份观察期。**  
 > 分析基线：`wayyet/auto-video-editor` 仓库 `main` 分支  
 > 分析日期：2026-11-01  
 > 迁移目标：移除 `auto-video-editor/openstoryline/` 这一层目录，将代码、配置、提示词、前端和脚本整合到仓库根目录，同时保留运行环境与数据隔离。

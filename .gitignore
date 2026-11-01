@@ -47,13 +47,10 @@ inputs/
 # OpenStoryline 本地运行时配置（config.toml 含 API key 占位符，本机填入真实 key 后不入库）
 openstoryline-config/
 
-# OpenStoryline 嵌入式子系统本地实例（代码+模板入库，运行时不入库）
-# 注：目录扁平化迁移进行中（旧 openstoryline/ 保留至阶段9），新旧两套规则并存
-openstoryline/.venv/
-openstoryline/outputs/
-openstoryline/.storyline/
-openstoryline/resource/
-openstoryline/config.toml.local
+# OpenStoryline 嵌入式子系统（代码+模板入库）
+# 2026-11-01 目录扁平化完成：代码入库于仓库根（agent_fastapi.py / src/open_storyline/ 等），
+# 旧 openstoryline/ 目录已于阶段9整体移出仓库（备份区观察期），其旧忽略规则一并删除；
+# 运行时忽略规则见下节（.venv-openstoryline / .storyline / resource / config.toml.local）
 
 # 扁平化迁移后的根目录运行时（.storyline 模型权重/resource 素材均不入库，脚本可重建）
 .venv-openstoryline/
