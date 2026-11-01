@@ -241,6 +241,32 @@ $$;
 
 
 # ---------------------------------------------------------------------------
+# 004 — workflow_run_events(逐节点事件明细,工作流流程图设计 §6.2-D)
+# ---------------------------------------------------------------------------
+# 与 workflow_runs 台账分工:台账 = 线程最新状态(覆盖式单行);
+# 本表 = append-only 事件序列,供 SSE 断线补发与整场回放。
+# 游标 = 全局 BIGSERIAL id:``WHERE thread_id = $1 AND id > $2`` 一条索引完成
+# Last-Event-ID 补发;恢复运行同 thread_id 续写,游标天然不回退。
+_WORKFLOW_RUN_EVENTS_SQL = """
+CREATE TABLE IF NOT EXISTS workflow_run_events (
+    id          BIGSERIAL PRIMARY KEY,
+    thread_id   TEXT NOT NULL,
+    run_id      TEXT,
+    event_type  TEXT NOT NULL,
+    node_id     TEXT,
+    attempt     INT NOT NULL DEFAULT 1 CHECK (attempt >= 1),
+    occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    payload     JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+"""
+
+_WORKFLOW_RUN_EVENTS_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_wre_thread ON workflow_run_events (thread_id, id);
+CREATE INDEX IF NOT EXISTS idx_wre_run ON workflow_run_events (run_id);
+"""
+
+
+# ---------------------------------------------------------------------------
 # 迁移清单
 # ---------------------------------------------------------------------------
 MIGRATIONS: tuple[Migration, ...] = (
@@ -270,6 +296,14 @@ MIGRATIONS: tuple[Migration, ...] = (
         version=3,
         name="set_client_encoding_utf8",
         statements=(_CLIENT_ENCODING_UTF8_SQL,),
+    ),
+    Migration(
+        version=4,
+        name="create_workflow_run_events",
+        statements=(
+            _WORKFLOW_RUN_EVENTS_SQL,
+            _WORKFLOW_RUN_EVENTS_INDEX_SQL,
+        ),
     ),
 )
 
