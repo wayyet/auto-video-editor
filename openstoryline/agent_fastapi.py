@@ -4566,6 +4566,14 @@ async def preview_local_file(session_id: str, path: str):
 
 app.include_router(api)
 
+# ---- 工作流监控 API(/api/workflow/*,阶段4,设计 §6.2-E)----
+# 独立 router 模块挂载,避免继续膨胀主文件(设计 §11.8b);端点实现见
+# web/api_workflow.py(重依赖全部延迟 import,跨 venv 安全;启动/订阅分离,
+# events 只读事件表,绝不触发图执行)。
+from web.api_workflow import router as workflow_api_router  # noqa: E402
+
+app.include_router(workflow_api_router)
+
 
 # -------------------------
 # WebSocket: session-scoped chat stream
