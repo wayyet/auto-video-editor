@@ -7,7 +7,7 @@
 
 行为(对照原 plan §4.3):
 - 关卡⓪ 已通过人工 resume,产物应已落在
-  ``openstoryline/outputs/<sid>/plan_timeline_pro/<artifact>.json``。
+  ``outputs/openstoryline/<sid>/plan_timeline_pro/<artifact>.json``。
 - 读最新一份,经 :mod:`storyline.plan_reader` 拍平为 ``CanonicalTimeline``,
   写入 ``state["storyline_plan"]``。
 - 幂等:``outputs/{job_id}/manifest.json`` 命中 ``idempotency_key`` 直接复用。
@@ -48,8 +48,10 @@ from nodes.storyline._common import resolve_video_input_paths, video_input_paths
 # ---------------------------------------------------------------------------
 # 路径常量
 # ---------------------------------------------------------------------------
+# 2026-11-01 目录扁平化:OpenStoryline 会话产物根改为仓库根 outputs/openstoryline/
+# (与主工作流 outputs/job-* 隔离,读侧逻辑不变)。
 OPENSTORYLINE_OUTPUTS_ROOT: Path = (
-    Path(__file__).resolve().parent.parent / "openstoryline" / "outputs"
+    Path(__file__).resolve().parent.parent / "outputs" / "openstoryline"
 )
 
 
@@ -121,7 +123,7 @@ def get_storyboard_plan(
                 + [f"[node_04b] idempotency hit, reuse manifest draft_path={manifest.draft_path}"],
             }
 
-    # 2. 在 openstoryline/outputs/ 下找最新会话的 plan_timeline_pro 产物
+    # 2. 在 outputs/openstoryline/ 下找最新会话的 plan_timeline_pro 产物
     session_dir = find_latest_session_dir(os_outputs_root)
     if session_dir is None:
         errors.append(

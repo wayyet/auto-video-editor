@@ -5,7 +5,7 @@
 而不是等到 ``plan_timeline_pro`` 定剪时才发现超标。
 
 为什么本地化一份而不直接 import vendored:
-vendored 包在 ``openstoryline/src/open_storyline/`` 下,依赖 vendored venv 的
+vendored 包(2026-11-01 扁平化后在 ``src/open_storyline/``)依赖独立 venv 的
 import 路径;本仓库的 storyline 能力层明确要求"无 vendored 依赖"。
 纯 Python,语义与 vendored 逐字对齐(改文案时两处一起改)。
 

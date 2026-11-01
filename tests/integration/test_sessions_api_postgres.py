@@ -39,12 +39,14 @@ from db.session_repository import SessionRepository
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-OPENSTORYLINE_DIR = REPO_ROOT / "openstoryline"
+# 2026-11-01 目录扁平化:OpenStoryline 根 == 仓库根(agent_fastapi.py / config.toml
+# 在仓库根,``open_storyline`` 包在 ``<repo>/src`` 下),别名保留、语义不变。
+OPENSTORYLINE_DIR = REPO_ROOT
 
 # ``open_storyline.nodes.node_manager`` 用的是 ``src.open_storyline...`` 这种写法
-# ⇒ 需要把 ``openstoryline/`` 放进 sys.path(生产环境靠 cwd=openstoryline/ 达成);
-# ``open_storyline`` 包本身在 ``openstoryline/src`` 下。
-# 一律放**末尾**:仓库根的 ``config.py`` 必须优先于 ``openstoryline/config.py``。
+# ⇒ 需要把仓库根放进 sys.path(生产由根目录 agent_fastapi.py 的 sys.path 初始化达成);
+# ``open_storyline`` 包本身在 ``<repo>/src`` 下。
+# 仓库根放**末尾**:主项目 ``config.py`` 已在 sys.path 上,保持优先。
 for _p in (str(OPENSTORYLINE_DIR / "src"), str(OPENSTORYLINE_DIR)):
     if _p not in sys.path:
         sys.path.append(_p)
@@ -156,7 +158,7 @@ def _run_async(coro):
 # ---------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
 def _chdir_openstoryline(monkeypatch):
-    """prompt 模板走相对路径(``prompts/tasks/...``)⇒ cwd 必须是 ``openstoryline/``。"""
+    """与生产 Web 的工作目录对齐(扁平化后为仓库根;prompts 已绝对路径化,此处仅保持环境一致)。"""
     monkeypatch.chdir(OPENSTORYLINE_DIR)
 
 

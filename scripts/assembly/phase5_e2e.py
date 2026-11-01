@@ -515,8 +515,12 @@ def case_decoupling() -> dict[str, Any]:
         re.MULTILINE,
     )
     py_files = list(ROOT.rglob("*.py"))
-    skip_dirs = {".venv", "__pycache__", ".git", "node_modules", ".worktrees",
-                 "openstoryline", ".pytest_cache", ".video_agent", ".docker-proxy"}
+    # 2026-11-01 目录扁平化:vendored OpenStoryline 包(src/open_storyline/)与其独立
+    # 虚拟环境(.venv-openstoryline/)按旧 openstoryline/ 同口径豁免 —— 解耦验收约束的
+    # 是主工作流,不约束独立子系统;``openstoryline`` 条目保留兜底(历史残留时仍跳过)。
+    skip_dirs = {".venv", ".venv-openstoryline", "venv", "__pycache__", ".git",
+                 "node_modules", ".worktrees", "openstoryline", "open_storyline",
+                 ".pytest_cache", ".video_agent", ".docker-proxy"}
     for p in py_files:
         rel = p.relative_to(ROOT)
         if any(part in skip_dirs for part in rel.parts):

@@ -2,7 +2,12 @@ from pathlib import Path
 from typing import Dict, Any
 import re
 
-PROMPTS_DIR = Path("prompts/tasks")
+# 2026-11-01 目录扁平化:提示词目录改为按本模块位置推导的**绝对路径**,
+# 不再依赖进程当前工作目录 —— 用户从任意目录手工启动 Web(或跑测试)时,
+# prompts/tasks 都能解析到仓库根下的同一位置。
+# 本文件位于 <repo>/src/open_storyline/utils/prompts.py,parents[3] 即仓库根。
+REPO_ROOT = Path(__file__).resolve().parents[3]
+PROMPTS_DIR = REPO_ROOT / "prompts" / "tasks"
 
 
 class PromptBuilder:

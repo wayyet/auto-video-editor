@@ -179,7 +179,7 @@ def test_find_pending_request_returns_newest_unanswered(tmp_path: Path) -> None:
 def test_module_source_has_no_heavy_dependencies() -> None:
     """**模块顶层** import 只允许 stdlib + ``config`` + ``storyline``(AST 判定)。
 
-    本模块会被 ``openstoryline/.venv`` 里的 agent_fastapi.py 跨 venv 导入,
+    本模块会被 ``.venv-openstoryline`` 里的 agent_fastapi.py 跨 venv 导入,
     顶层一旦引入重依赖,那个 venv 就会 ImportError(见模块 docstring)。
 
     2026-11(阶段3):原实现用全文子串匹配(出现 "langgraph" 即失败),会误伤

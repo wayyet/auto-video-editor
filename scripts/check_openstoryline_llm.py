@@ -1,7 +1,7 @@
 """OpenStoryline LLM/VLM 连通性自检。
 
 用法(在仓库根目录):
-    .\\openstoryline\\.venv\\Scripts\\python.exe scripts\\check_openstoryline_llm.py
+    .\\.venv-openstoryline\\Scripts\\python.exe scripts\\check_openstoryline_llm.py
 
 它做三件事:
   1. 按「config.toml → config.toml.local → 环境变量」的顺序算出**生效**配置;
@@ -26,11 +26,13 @@ except (AttributeError, OSError):
     pass
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-OPENSTORYLINE_DIR = Path(os.environ.get("OPENSTORYLINE_DIR", REPO_ROOT / "openstoryline"))
+# 2026-11-01 目录扁平化:OpenStoryline 根 == 仓库根;保留 OPENSTORYLINE_DIR
+# 环境变量覆盖能力(指向含 config.toml + src/ 的 OpenStoryline 根目录)。
+OPENSTORYLINE_DIR = Path(os.environ.get("OPENSTORYLINE_DIR", REPO_ROOT))
 
 
 def _bootstrap() -> None:
-    """把 openstoryline 与其 src 挂到 sys.path,才能 import open_storyline。"""
+    """把 OpenStoryline 根与其 src 挂到 sys.path,才能 import open_storyline。"""
     for p in (OPENSTORYLINE_DIR, OPENSTORYLINE_DIR / "src"):
         if str(p) not in sys.path:
             sys.path.insert(0, str(p))

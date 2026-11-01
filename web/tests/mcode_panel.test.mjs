@@ -34,8 +34,9 @@ import {
 } from "../static/mcode_panel.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+// 2026-11-01 扁平化:web/ 上移仓库根;OS 测试 fixtures 现在是 tests_openstoryline/fixtures/
 const TIMELINE_PATH = path.join(
-  HERE, "..", "..", "tests", "fixtures", "mcode_stream", "ws_timeline_mcode.jsonl",
+  HERE, "..", "..", "tests_openstoryline", "fixtures", "mcode_stream", "ws_timeline_mcode.jsonl",
 );
 
 // ---------------------------------------------------------------------------

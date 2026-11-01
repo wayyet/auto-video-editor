@@ -4,7 +4,7 @@
 
 运行::
 
-    OPENSTORYLINE_ZCODE_LIVE=1 .venv/Scripts/python.exe -m pytest openstoryline/tests/test_zcode_live.py -q
+    OPENSTORYLINE_ZCODE_LIVE=1 .venv-openstoryline/Scripts/python.exe -m pytest tests_openstoryline/test_zcode_live.py -q
 
 (值任意非空即可。注意门控变量是 _LIVE 不是 _BIN —— 后者是真实的 bin 覆盖配置,
 拿来当门控会把 "1" 当成可执行文件路径。CLI 从 PATH / [zcode].bin 解析。)

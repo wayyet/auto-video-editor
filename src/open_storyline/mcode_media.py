@@ -2,7 +2,7 @@
 
 为什么需要这一层
 ----------------
-网页端上传的视频落在 ``openstoryline/outputs/<session_id>/media/``,**不在**
+网页端上传的视频落在 ``outputs/openstoryline/<session_id>/media/``,**不在**
 mcode / agent_gate 的素材白名单里。白名单由 ``video-ops/.mcp.json`` 的
 ``AGENT_GATE_MEDIA_ROOTS`` 定义(默认 ``<repo>/inputs`` + ``<repo>/tests/fixtures``)。
 mcode 想用这些素材,就必须有一份**落在白名单内**的副本。
@@ -35,8 +35,9 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
 
-#: 仓库根 = 本文件所在的 ``openstoryline/src/open_storyline`` 往上 3 层。
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+#: 仓库根 = 本文件所在的 ``src/open_storyline`` 往上 2 层
+#: (2026-11-01 目录扁平化后本包直接位于 ``<repo>/src/`` 下)。
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 #: 会话 ID 必须匹配的形状。同时满足 ``agent_gate.protocol.THREAD_ID_RE``
 #: 与「目录名安全」两个要求。

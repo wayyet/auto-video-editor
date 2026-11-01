@@ -209,7 +209,8 @@ test("WORKFLOW_VIDEO_EXTS 与后端 ACCEPT_EXTS 完全一致", async () => {
   const path = await import("node:path");
   const here = path.dirname(fileURLToPath(import.meta.url));
   const nodeSrc = readFileSync(
-    path.join(here, "..", "..", "..", "nodes", "node_04a_import_video.py"),
+    // 2026-11-01 扁平化:web/ 上移仓库根,回溯两级即仓库根(原 openstoryline/web/ 需三级)
+    path.join(here, "..", "..", "nodes", "node_04a_import_video.py"),
     "utf-8",
   );
   const m = nodeSrc.match(/ACCEPT_EXTS[^=]*=\s*\(([^)]*)\)/);

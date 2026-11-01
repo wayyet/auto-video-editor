@@ -401,3 +401,36 @@ def test_trash_roots_recycle_failure_keeps_child(
     assert any("清理失败" in e for e in out["error_log"])
     assert child.exists(), "回收失败的子项必须保留原处"
     assert root.exists()
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-01 目录扁平化增补:outputs/openstoryline/ 是三根内容清空的保留子项
+# ---------------------------------------------------------------------------
+
+def test_resolved_trash_children_keeps_outputs_openstoryline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """outputs/ 内容清空必须跳过 outputs/openstoryline/(业务数据,迁移设计 §5.1 / A15)。
+
+    其他根(outputs 同名子项除外 / inputs / out)不受保留规则影响。
+    """
+    import config as config_mod
+    from config import resolved_trash_children
+
+    outputs = tmp_path / "outputs"
+    outputs.mkdir()
+    (outputs / "openstoryline").mkdir()
+    (outputs / "job-abc").mkdir()
+    (outputs / "stray.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(config_mod, "CACHE_TRASH_CHILDREN_ROOTS", [str(outputs)])
+    kids = {p.name for p in resolved_trash_children()}
+    assert "openstoryline" not in kids, "outputs/openstoryline 是保留子项,不得进入清理列表"
+    assert kids == {"job-abc", "stray.json"}
+
+    # inputs/ 根:同名规则只按根目录名生效,inputs 下即使有同名目录也照常清理
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    (inputs / "openstoryline").mkdir()
+    monkeypatch.setattr(config_mod, "CACHE_TRASH_CHILDREN_ROOTS", [str(inputs)])
+    assert [p.name for p in resolved_trash_children()] == ["openstoryline"]

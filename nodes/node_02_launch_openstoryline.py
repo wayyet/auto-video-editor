@@ -44,15 +44,12 @@ from state import WorkflowState
 # ---------------------------------------------------------------------------
 # 路径常量
 # ---------------------------------------------------------------------------
-# auto-video-editor/ → openstoryline/ → openstoryline/agent_fastapi.py
-OPENSTORYLINE_DIR: Path = (
-    Path(__file__).resolve().parent.parent / "openstoryline"
-)
+# 2026-11-01 目录扁平化:OpenStoryline 代码上移仓库根,OPENSTORYLINE_DIR == 仓库根;
+# 独立 venv 为根目录 .venv-openstoryline(仅作诊断/测试引用,节点本身只探测不启动)。
+OPENSTORYLINE_DIR: Path = Path(__file__).resolve().parent.parent
 OPENSTORYLINE_AGENT: Path = OPENSTORYLINE_DIR / "agent_fastapi.py"
-# Windows: openstoryline/.venv/Scripts/python.exe
-# (迁移后是本仓独立 venv,不再指向 FireRed 外部)
 OPENSTORYLINE_VENV_PY: Path = (
-    OPENSTORYLINE_DIR / ".venv" / "Scripts" / "python.exe"
+    OPENSTORYLINE_DIR / ".venv-openstoryline" / "Scripts" / "python.exe"
 )
 
 

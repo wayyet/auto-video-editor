@@ -1,5 +1,8 @@
 # OpenStoryline「导入视频」多选支持 + 多视频接入剪辑流水线
 
+> ⚠️ **历史状态标记(2026-11-01)**:OpenStoryline 目录扁平化迁移(见《docs/修改文档/auto-video-editor-openstoryline-目录扁平化迁移执行设计.md》)完成后,本文中的 `openstoryline/...` 路径已上移至仓库根(`agent_fastapi.py`、`web/`、`src/open_storyline/`、`outputs/openstoryline/` 等)。本文仅作历史记录,不代表当前目录结构,请勿按本文路径操作。
+
+
 > 实施记录。2026-10-20。
 > 计划原文:`C:/Users/wayyet/.minimax/v2/sessions/2026/10/20/06-38-30-443-session_bXZzXzY1Y2FjMjM4MGQ3ODQ5NzU4OWQ5ZDYyMjQzZWM0OWFj/artifacts/plan.md`
 

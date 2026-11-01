@@ -1,6 +1,6 @@
 """「Web UI 上传入口合并」:前端纯策略层的 Node 单测(pytest 包装)。
 
-前端纯逻辑在 ``openstoryline/web/static/media_upload.mjs`` —— 文件分类、
+前端纯逻辑在 ``web/static/media_upload.mjs`` —— 文件分类、
 pending 容量截断(含旧 ``const candidates`` 重赋值缺陷的回归)、握手载荷
 结构,不碰 DOM,所以用 ``node --test`` 直接跑。
 
@@ -8,7 +8,7 @@ pending 容量截断(含旧 ``const candidates`` 重赋值缺陷的回归)、握
 --------------------
 
 与 ``test_mcode_frontend_policy.py`` 同一套路:验收命令是
-``pytest openstoryline/tests``,把 Node 用例纳入同一条命令,前端和后端
+``pytest tests_openstoryline``,把 Node 用例纳入同一条命令,前端和后端
 一次跑完 —— 少一个「忘了跑前端测试」的缺口。
 
 Node 不在环境里时**跳过**(不判失败):前端测试只是补充证据,不是主链路。

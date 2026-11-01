@@ -178,7 +178,7 @@ def test_happy_path_reads_latest_plan_timeline_pro(tmp_path: Path) -> None:
 
 
 def test_no_session_dir_falls_back_to_shot_plan(tmp_path: Path) -> None:
-    """openstoryline/outputs/ 下没有任何目录 → fallback shot_plan。"""
+    """outputs/openstoryline/ 下没有任何目录 → fallback shot_plan。"""
     state = {
         "session_id": "job-empty",
         "video_input_path": "/tmp/30s.mp4",

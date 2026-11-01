@@ -2,12 +2,15 @@
 
 sys.path 顺序(有讲究,别乱插)
 ----------------------------
-1. ``<repo>/openstoryline/src``  —— ``open_storyline`` 包在这里,必须最先
-2. ``<repo>/openstoryline``      —— 顶层 ``agent_fastapi`` 在这里
-3. ``<repo>``                    —— 只为 ``import agent_gate``,放最后
+1. ``<repo>/src``  —— ``open_storyline`` 包在这里,必须最先
+2. ``<repo>``      —— 顶层 ``agent_fastapi`` 在这里;``db``/``nodes``/``agent_gate`` 同层
 
-为什么 ``<repo>`` 放最后:仓库根有一个顶层 ``config.py``。
-``<repo>`` 一旦进了 ``sys.path``,裸 ``import config`` 就会解析到它。
+2026-11-01 目录扁平化:OpenStoryline 根 == 仓库根(原 ``openstoryline/tests/`` →
+``tests_openstoryline/``)。``OPENSTORYLINE_DIR`` 语义(OpenStoryline 根目录)保持
+不变,现等于 ``REPO_ROOT`` —— 保留别名,测试代码无需逐个改名。
+
+为什么 ``<repo>`` 进 ``sys.path`` 要小心:仓库根有一个顶层 ``config.py``,
+裸 ``import config`` 就会解析到它。
 ``open_storyline`` 内部一律用 ``from open_storyline.config import ...``,
 **新测试也不得写裸 ``import config``**。
 """
@@ -25,12 +28,12 @@ from typing import Any, Dict, Optional
 import pytest
 
 TESTS_DIR = Path(__file__).resolve().parent
-OPENSTORYLINE_DIR = TESTS_DIR.parent
-REPO_ROOT = OPENSTORYLINE_DIR.parent
-SRC_DIR = OPENSTORYLINE_DIR / "src"
+REPO_ROOT = TESTS_DIR.parent
+OPENSTORYLINE_DIR = REPO_ROOT  # 兼容别名:扁平化后 OpenStoryline 根 == 仓库根
+SRC_DIR = REPO_ROOT / "src"
 
-# 倒序 insert(0) -> 最终顺序正好是 SRC -> OPENSTORYLINE -> REPO
-for _p in (str(REPO_ROOT), str(OPENSTORYLINE_DIR), str(SRC_DIR)):
+# 倒序 insert(0) -> 最终顺序正好是 SRC -> REPO(根下同时有 agent_fastapi/config/db/nodes)
+for _p in (str(REPO_ROOT), str(SRC_DIR)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 

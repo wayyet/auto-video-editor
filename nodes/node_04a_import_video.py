@@ -17,7 +17,7 @@
 --------------------------------------------------------------------------
 硬约束:轻依赖(跨 venv 契约)
 --------------------------------------------------------------------------
-本模块会被 ``openstoryline/.venv`` 里的 ``agent_fastapi.py`` **跨 venv 导入**
+本模块会被 ``.venv-openstoryline`` 里的 ``agent_fastapi.py`` **跨 venv 导入**
 (与既有 ``clean_cache`` 端点同一手法),因此**顶层** import 只允许:
 
     stdlib + ``config`` + ``storyline.output_isolation``

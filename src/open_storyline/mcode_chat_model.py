@@ -59,8 +59,9 @@ KILL_GRACE_S = 5.0
 #: 错误信息里保留的输出片段长度(字符)。
 SNIPPET_CHARS = 500
 
-#: 仓库根 = 本文件所在的 ``openstoryline/src/open_storyline`` 往上 3 层。
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+#: 仓库根 = 本文件所在的 ``src/open_storyline`` 往上 2 层
+#: (2026-11-01 目录扁平化后本包直接位于 ``<repo>/src/`` 下)。
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 #: prompt 的分段标题。固定文案,便于测试断言,也便于模型定位段落。
 _HEADER_SESSION = "=== 会话上下文 ==="
@@ -429,8 +430,8 @@ def _check_status(result: Mapping[str, Any], exit_code: Optional[int] = None) ->
 def _agent_bin_module():
     """拿到 ``agent_gate.agent_bin`` 模块。
 
-    ``openstoryline`` 是独立子系统:启动时只把 ``openstoryline/src`` 加进 ``sys.path``,
-    **仓库根不一定在路径上**。这里按需把仓库根补进去。
+    OpenStoryline 是独立子系统(2026-11-01 扁平化后位于仓库根):启动时把
+    仓库根与 ``src`` 加进 ``sys.path``,**两者不一定已在路径上**。这里按需把仓库根补进去。
 
     返回**模块**而不是函数,是故意的:调用时再 ``module.resolve_agent_bin(...)``,
     这样测试可以 monkeypatch ``agent_gate.agent_bin.resolve_agent_bin``。

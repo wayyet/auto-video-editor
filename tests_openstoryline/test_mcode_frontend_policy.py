@@ -1,12 +1,12 @@
 """阶段 E:前端策略层的 Node 单测(包装成 pytest)。
 
-前端纯逻辑在 ``openstoryline/web/static/mcode_panel.mjs`` —— 它不碰 DOM,
+前端纯逻辑在 ``web/static/mcode_panel.mjs`` —— 它不碰 DOM,
 所以可以用 ``node --test`` 直接跑。
 
 为什么要包一层 pytest
 --------------------
 
-验收命令是 ``pytest openstoryline/tests``(这条目录**不在**
+验收命令是 ``pytest tests_openstoryline``(这条目录**不在**
 ``pyproject.toml`` 的 ``testpaths`` 里,必须显式指定)。
 把 Node 的用例也纳入这一条命令,前端和后端一次跑完 —— 少一个「忘了跑前端测试」
 的缺口。

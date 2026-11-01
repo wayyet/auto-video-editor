@@ -54,7 +54,7 @@
 本机路径写 `config.toml.local`(**不入库**,`.gitignore` 已排除):
 
 ```toml
-# openstoryline/config.toml.local
+# config.toml.local(2026-11-01 扁平化后位于仓库根)
 [mcode]
 cwd  = "E:/Documents/kuaishou/video-ops"          # 操作员目录
 bin  = "C:/Users/wayyet/.minimax-code/mcode.cmd"  # mcode 可执行文件

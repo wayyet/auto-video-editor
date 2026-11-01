@@ -37,7 +37,7 @@ GLM_KEY = web.GLM_MODEL_KEY
 
 @pytest.fixture(autouse=True)
 def _in_openstoryline_dir(monkeypatch):
-    """prompt 模板用相对路径,生产以 ``openstoryline/`` 为 cwd,这里对齐。"""
+    """生产 Web 以仓库根为 cwd(2026-11-01 扁平化后 OpenStoryline 根 == 仓库根),这里对齐。"""
     monkeypatch.chdir(OPENSTORYLINE_DIR)
 
 

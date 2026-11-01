@@ -207,7 +207,7 @@ def _validate_mcode_cwd(cwd: str) -> Path:
     raw = str(cwd or "").strip()
     if not raw:
         raise MCodeConfigError(
-            "mcode 未配置操作员目录。请设置 openstoryline/config.toml.local 的 "
+            "mcode 未配置操作员目录。请设置仓库根 config.toml.local 的 "
             "[mcode].cwd(或环境变量 OPENSTORYLINE_MCODE_CWD)指向操作员目录。"
         )
     path = Path(raw).expanduser()
@@ -315,7 +315,7 @@ def _validate_zcode_cwd(cwd: str) -> Path:
     raw = str(cwd or "").strip()
     if not raw:
         raise ZCodeConfigError(
-            "zcode 未配置工作区目录。请设置 openstoryline/config.toml.local 的 "
+            "zcode 未配置工作区目录。请设置仓库根 config.toml.local 的 "
             "[zcode].cwd(或环境变量 OPENSTORYLINE_ZCODE_CWD)指向 zcode 工作区。"
         )
     path = Path(raw).expanduser()

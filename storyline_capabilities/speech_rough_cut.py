@@ -6,7 +6,7 @@ vendored ``SpeechRoughCutNode`` 接收 ASR 单句 + 上下文 + 历史 + 用户�
     {"reason": str, "res": [{"text", "start", "end"}, ...]}
 
 本地化版本去 ``NodeState`` 依赖、纯函数化,Prompt 文件从
-``openstoryline/prompts/tasks/speech_rough_cut/zh/{system,user}.md`` 拷到
+``prompts/tasks/speech_rough_cut/zh/{system,user}.md``(扁平化后仓库根路径)拷到
 ``storyline_capabilities/prompts/speech_rough_cut/zh/``(阶段 4 已拷)。
 
 设计纪律(plan §5 阶段 5):

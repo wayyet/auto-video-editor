@@ -82,7 +82,7 @@
 
 2026-09 关键改动(对照 plan §4/§5):
 - OpenStoryline 改为本地 uvicorn 子进程 + 读盘(node_02 不再有 MCP 链路,
-  node_04b 读 ``openstoryline/outputs/<sid>/plan_timeline_pro/``)。
+  node_04b 读 ``outputs/openstoryline/<sid>/plan_timeline_pro/``)。
 - 新增关卡⓪ ``checkpoint0_storyline_plan``:在 ``open_preview`` 与
   ``import_video`` 之间挂起,等人工在 OpenStoryline 网页完成规划后 resume,
   再走读盘路径。

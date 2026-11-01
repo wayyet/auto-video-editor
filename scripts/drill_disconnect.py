@@ -111,12 +111,12 @@ def main() -> int:
     print(f"目标 URI: {DEAD_URI}")
     print()
 
-    # OpenStoryline 的配置与 prompt 模板都是**相对 cwd** 的 ⇒ 切到
-    # ``openstoryline/``,和真实服务一致(见 ``_dummy_settings`` 的说明)。
+    # OpenStoryline 的配置与 prompt 模板都以仓库根为基准(2026-11-01 扁平化后
+    # config.toml / prompts/ 都在仓库根;prompts 已绝对路径化,这里切到仓库根
+    # 与真实服务的工作目录一致,见 ``_dummy_settings`` 的说明)。
     original_cwd = os.getcwd()
-    openstoryline_dir = ROOT / "openstoryline"
-    if openstoryline_dir.is_dir():
-        os.chdir(openstoryline_dir)
+    if Path.cwd().resolve() != ROOT.resolve():
+        os.chdir(ROOT)
 
     try:
         return _run_drill()
@@ -244,9 +244,9 @@ def _dummy_settings(tmp: Path):
     - ``default_config_path()`` → ``"config.toml"``
     - prompt 模板 → ``prompts\\tasks\\instruction\\<lang>\\system.md``
 
-    真实服务就是以 ``openstoryline/`` 为 cwd 启动的(见
+    真实服务就是以仓库根为 cwd 启动的(2026-11-01 扁平化;见
     ``tests/unit/test_session_store_repository.py`` 的 ``_chdir_openstoryline``)。
-    演练脚本从仓库根目录跑 ⇒ 必须自己 chdir,否则配置和模板都找不到。
+    演练脚本若从别处启动 ⇒ 必须自己 chdir 回仓库根,否则配置和模板都找不到。
 
     拿不到配置时**明确报错**,不静默返回 None。
     """

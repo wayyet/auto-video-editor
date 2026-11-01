@@ -5,9 +5,9 @@ print_context = false # 鍦ㄦ嫤鎴櫒鎵撳嵃妯″瀷鎷垮埌鐨勫叏�
 
 # ============= 椤圭洰璺緞 / Project Paths ======================
 [project]
-media_dir = "./outputs/media"
+media_dir = "./outputs/openstoryline/media"
 bgm_dir = "./resource/bgms"
-outputs_dir = "./outputs"
+outputs_dir = "./outputs/openstoryline"
 
 # ============= 妯″瀷閰嶇疆 for user / Model Config for User =============
 # 鍙敤妯″瀷 / Available models:

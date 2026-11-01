@@ -1,11 +1,15 @@
 ﻿# =============================================================================
 #  OpenStoryline · Windows 资源下载脚本（替代官方仅限 Linux/Mac 的 download.sh）
 #  作用：下载并解压 models.zip 与 resource.zip 到正确目录。
-#  用法：在 FireRed-OpenStoryline 仓库根目录用 PowerShell 运行：
-#        powershell -ExecutionPolicy Bypass -File .\download_resources.ps1
+#  用法（2026-11-01 扁平化后，在仓库根目录）：
+#        powershell -ExecutionPolicy Bypass -File .\scripts\download_resources.ps1
+#  资源解压到仓库根 resource/，模型解压到仓库根 .storyline\models\；
+#  仓库根由 $PSScriptRoot 推导（脚本并入根 scripts/ 后不再依赖调用方 CWD）。
 # =============================================================================
 
 $ErrorActionPreference = "Stop"
+$RepoRoot = Split-Path -Parent $PSScriptRoot
+Set-Location $RepoRoot
 $base = "https://image-url-2-feature-1251524319.cos.ap-shanghai.myqcloud.com/openstoryline"
 
 Write-Host "[i] 准备目录 .storyline / resource ..." -ForegroundColor Blue

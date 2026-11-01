@@ -40,28 +40,22 @@ from fastapi.staticfiles import StaticFiles
 
 from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage, AIMessage, ToolMessage
 
-# ---- 确保 src 可导入（避免环境差异导致找不到模块）----
+# ---- 路径初始化(2026-11-01 目录扁平化:本文件已上移仓库根)----
+# ROOT_DIR == 仓库根:主项目 config.py / db / nodes 与 OpenStoryline 的
+# src/、web/、prompts/、resource/ 都直接在其下。
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 SRC_DIR = os.path.join(ROOT_DIR, "src")
-if SRC_DIR not in sys.path:
-    sys.path.insert(0, SRC_DIR)
 
-# ---- 仓库根目录:``db`` 包(PostgreSQL 仓储,阶段 D)在仓库根下 ----
-# agent_fastapi.py 由 ``openstoryline/.venv`` 启动(``uvicorn agent_fastapi:app``),
-# sys.path[0] 是 openstoryline/ ⇒ 仓库根不在其中 ⇒ ``import db`` 会失败。
-# 注意:仓库根有顶层 ``config.py``;本模块用的是 ``open_storyline.config``
-# (带包名),不受影响。
-REPO_ROOT_DIR = os.path.dirname(ROOT_DIR)
-if REPO_ROOT_DIR not in sys.path:
-    sys.path.insert(0, REPO_ROOT_DIR)
-
-# ---- 确保 ``src.open_storyline.*`` 这种写法能 import ----
-# ``open_storyline.nodes.node_manager`` 里写的是 ``from src.open_storyline... import ...``,
-# 即把 ``openstoryline/`` 当成 ``src`` 的父目录。生产环境靠 cwd=openstoryline/ 达成;
-# 这里补上,保证从仓库根 ``import openstoryline.agent_fastapi`` 也能用。
-# ⚠️ 放**末尾**:仓库根的 ``config.py`` 必须优先于 ``openstoryline/config.py``。
+# 根目录放 sys.path 最前,保证主项目 config.py、db、nodes 等模块可导入
+# (本模块用 ``open_storyline.config`` 带包名导入,与仓库根 config.py 不冲突)。
 if ROOT_DIR not in sys.path:
-    sys.path.append(ROOT_DIR)
+    sys.path.insert(0, ROOT_DIR)
+
+# OpenStoryline Python 包位于 src/open_storyline;
+# ``open_storyline.nodes.node_manager`` 里 ``from src.open_storyline...`` 的写法
+# 也由 ROOT_DIR 兜住(src 的父目录就是仓库根)。
+if SRC_DIR not in sys.path:
+    sys.path.insert(1, SRC_DIR)
 
 from open_storyline.agent import build_agent, ClientContext, is_mcode_model, is_zcode_model
 from open_storyline.utils.prompts import get_prompt
@@ -3957,7 +3951,8 @@ async def clean_cache_endpoint(request: Request):
       回收失败的项保留原处并写入返回的 errors。
     - 不在 LangGraph ``graph.invoke`` 时自动跑(2026-09 计划改造后)。
     - 速率限制:全局 + 每 IP 双重桶,默认 burst=1 rpm=2(防误连点)。
-    - 路径定位:``AUTO_VIDEO_EDITOR_DIR`` 环境变量优先,默认 ``E:\\Documents\\kuaishou\\auto-video-editor``。
+    - 路径定位:``AUTO_VIDEO_EDITOR_DIR`` 环境变量优先,默认 ROOT_DIR(仓库根;
+      2026-11-01 扁平化后本文件就在仓库根,不再硬编码盘符路径)。
     """
     # ---- 速率限制(双桶:全局 + 每 IP)----
     ip = _client_ip_from_http_scope(request.scope, RATE_LIMIT_TRUST_PROXY_HEADERS)
@@ -3981,7 +3976,7 @@ async def clean_cache_endpoint(request: Request):
     # ---- 路径解析 ----
     auto_editor_dir = Path(os.environ.get(
         "AUTO_VIDEO_EDITOR_DIR",
-        r"E:\Documents\kuaishou\auto-video-editor",
+        ROOT_DIR,
     ))
     node_path = auto_editor_dir / "nodes" / "node_01_clean_cache.py"
     if not node_path.exists():
@@ -4026,7 +4021,7 @@ async def import_video_endpoint(request: Request):
 
     - 速率限制:全局 + 每 IP 双重桶,默认 burst=1 rpm=2(防误连点)。
     - 路径定位:``AUTO_VIDEO_EDITOR_DIR`` 环境变量优先,默认
-      ``E:\\Documents\\kuaishou\\auto-video-editor``。
+      ROOT_DIR(仓库根;2026-11-01 扁平化后不再硬编码盘符路径)。
     """
     # ---- 速率限制(双桶:全局 + 每 IP)----
     ip = _client_ip_from_http_scope(request.scope, RATE_LIMIT_TRUST_PROXY_HEADERS)
@@ -4065,7 +4060,7 @@ async def import_video_endpoint(request: Request):
     # ---- 路径解析 ----
     auto_editor_dir = Path(os.environ.get(
         "AUTO_VIDEO_EDITOR_DIR",
-        r"E:\Documents\kuaishou\auto-video-editor",
+        ROOT_DIR,
     ))
     node_path = auto_editor_dir / "nodes" / "node_04a_import_video.py"
     if not node_path.exists():
@@ -4076,10 +4071,10 @@ async def import_video_endpoint(request: Request):
 
     # ---- 跨 venv 加载握手函数(幂等:首次 sys.path.insert 之后无副作用)----
     # ``node_04a_import_video`` 顶层只依赖 stdlib + config + storyline.output_isolation,
-    # 本文件跑在 openstoryline/.venv 里也能安全 import(见该模块 docstring)。
+    # 本文件跑在 .venv-openstoryline 里也能安全 import(见该模块 docstring)。
     # 载荷解析/结果构造都下沉到该模块的纯函数(``parse_import_payload`` /
     # ``build_result_payload``),本端点只做**薄转发** —— 这样主仓 pytest
-    # (主 venv)就能覆盖协议逻辑,不必起 openstoryline venv。
+    # (主 venv)就能覆盖协议逻辑,不必起 .venv-openstoryline。
     av_root = str(auto_editor_dir)
     if av_root not in sys.path:
         sys.path.insert(0, av_root)
@@ -4123,7 +4118,7 @@ async def import_video_endpoint(request: Request):
     job_id, _req = pending
 
     # ---- 素材准备:复制到 agent_gate 素材白名单目录 ----
-    # 网页端上传的视频落在 ``openstoryline/outputs/<sid>/media/``,**不在**白名单里。
+    # 网页端上传的视频落在 ``outputs/openstoryline/<sid>/media/``,**不在**白名单里。
     # mcode / agent_gate 只能用白名单内的绝对路径,所以这里做一份**副本**:
     # 副本落在 ``<auto-video-editor>/inputs/<session_id>/``。
     # 源文件不动(不移动、不删除、不覆盖)。

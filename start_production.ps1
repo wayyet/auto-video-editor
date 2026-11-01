@@ -76,13 +76,13 @@ $RunScript  = Join-Path $RepoRoot 'scripts\run_workflow.py'
 $StateJson  = Join-Path $RepoRoot ("runtime\initial_state_${ThreadId}.json")
 $VenvActivate = Join-Path $RepoRoot '.venv\Scripts\Activate.ps1'
 
-# OpenStoryline 本地直起路径(Phase 0.6 / 0.7 用,2026-09 迁移解耦后)
-# 仓库根下的 openstoryline/ 子目录(含独立 .venv/ + agent_fastapi.py)。
-# 取消对外部 FireRed-OpenStoryline 仓库的引用 — 改为本仓自包含子模块。
-$OsDir     = Join-Path $RepoRoot 'openstoryline'
-$OsVenvPy  = Join-Path $OsDir '.venv\Scripts\python.exe'
-$OsAgent   = Join-Path $OsDir 'agent_fastapi.py'
-$OsSrc     = Join-Path $OsDir 'src'
+# OpenStoryline 本地直起路径(Phase 0.6 / 0.7 用)
+# 2026-11-01 目录扁平化:OpenStoryline 代码上移仓库根(不再有 openstoryline/ 子目录),
+# agent_fastapi.py / src / web 均在仓库根,独立 venv 为根目录 .venv-openstoryline/。
+$OsDir     = $RepoRoot
+$OsVenvPy  = Join-Path $RepoRoot '.venv-openstoryline\Scripts\python.exe'
+$OsAgent   = Join-Path $RepoRoot 'agent_fastapi.py'
+$OsSrc     = Join-Path $RepoRoot 'src'
 # 端口:Web 7860(走 uvicorn agent_fastapi:app);MCP 8001 保留常量但不再起子进程。
 $OsMcpPort = 8001
 $OsWebPort = 7860
@@ -474,34 +474,35 @@ try {
     }
 
     # ===============================================================
-    # Phase 0.55 — 校验 openstoryline 资源/模型(2026-09 迁移后新增)
+    # Phase 0.55 — 校验 OpenStoryline 资源/模型(2026-09 迁移后新增)
     #   resource/ ~526 MB; .storyline/models/ ~116 MB; 入 .gitignore,需手工拉。
-    #   auto 模式也保留本步(auto 依赖 vendored venv 的 ASR)。
+    #   auto 模式也保留本步(auto 依赖 .venv-openstoryline 的 ASR)。
+    #   2026-11-01 扁平化:resource/ 与 .storyline/ 都在仓库根。
     # ===============================================================
     Write-Phase ''
-    Write-Phase "Phase 0.55:校验 openstoryline 资源/模型" 'Cyan'
+    Write-Phase "Phase 0.55:校验 OpenStoryline 资源/模型" 'Cyan'
 
-    $OsResource = Join-Path $OsDir 'resource'
-    $OsModels   = Join-Path $OsDir '.storyline\models'
+    $OsResource = Join-Path $RepoRoot 'resource'
+    $OsModels   = Join-Path $RepoRoot '.storyline\models'
 
     $needDownload = $false
     if (-not (Test-Path $OsResource) -or -not (Get-ChildItem $OsResource -ErrorAction SilentlyContinue)) {
-        Write-PhaseWarn "openstoryline/resource/ 缺失或为空"
+        Write-PhaseWarn "resource/ 缺失或为空"
         $needDownload = $true
     }
     if (-not (Test-Path $OsModels) -or -not (Get-ChildItem $OsModels -ErrorAction SilentlyContinue)) {
-        Write-PhaseWarn "openstoryline/.storyline/models/ 缺失或为空"
+        Write-PhaseWarn ".storyline/models/ 缺失或为空"
         $needDownload = $true
     }
     if ($needDownload) {
         Write-Phase "    请运行以下命令手动下载(总大小约 642 MB):" 'Yellow'
-        Write-Phase "      .\openstoryline\scripts\download_resources.ps1" 'Yellow'
-        Write-Phase "      .\openstoryline\scripts\download_models.ps1" 'Yellow'
-        Write-Phase "    或一键: .\openstoryline\scripts\install.ps1" 'Yellow'
+        Write-Phase "      .\scripts\download_resources.ps1" 'Yellow'
+        Write-Phase "      .\scripts\download_models.ps1" 'Yellow'
+        Write-Phase "    或一键: .\scripts\install.ps1" 'Yellow'
         Write-Phase "    完成后重跑 start_production.ps1" 'Yellow'
         exit 26
     }
-    Write-PhaseOk "openstoryline 资源/模型已就绪"
+    Write-PhaseOk "OpenStoryline 资源/模型已就绪"
 
     # ===============================================================
     # Phase 0.58 — preflight.ps1(本次运行**唯一一次**完整预检)
@@ -561,11 +562,11 @@ try {
         # 路径校验(venv / 入口文件 / 包)
         if (-not (Test-Path $OsVenvPy)) {
             Write-PhaseErr "找不到 $OsVenvPy"
-            Write-Phase "    请先跑 openstoryline\scripts\install.ps1 建 venv 并装依赖" 'Yellow'
+            Write-Phase "    请先跑 scripts\install.ps1 建 .venv-openstoryline 并装依赖" 'Yellow'
             exit 18
         }
         if (-not (Test-Path $OsAgent)) {
-            Write-PhaseErr "找不到 $OsAgent(请确认 openstoryline/ 子目录代码搬运完整)" 'Yellow'
+            Write-PhaseErr "找不到 $OsAgent(扁平化后 agent_fastapi.py 应在仓库根,请确认代码完整)" 'Yellow'
             exit 18
         }
         if (-not (Test-Path (Join-Path $OsSrc 'open_storyline\__init__.py'))) {
@@ -681,7 +682,7 @@ set PYTHONUNBUFFERED=1
             $webProc = Start-Process `
                 -FilePath 'cmd.exe' `
                 -ArgumentList "/c `"$webBatPath`"" `
-                -WorkingDirectory $OsDir `
+                -WorkingDirectory $RepoRoot `
                 -WindowStyle Hidden `
                 -PassThru
             $webPyPid = $null

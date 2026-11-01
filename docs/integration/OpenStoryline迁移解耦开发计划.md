@@ -1,5 +1,8 @@
 # OpenStoryline 迁移解耦开发计划
 
+> ⚠️ **历史状态标记(2026-11-01)**:OpenStoryline 目录扁平化迁移(见《docs/修改文档/auto-video-editor-openstoryline-目录扁平化迁移执行设计.md》)完成后,本文中的 `openstoryline/...` 路径已上移至仓库根(`agent_fastapi.py`、`web/`、`src/open_storyline/`、`outputs/openstoryline/` 等)。本文仅作历史记录,不代表当前目录结构,请勿按本文路径操作。
+
+
 > 本计划基于对两个真实仓库源码的核实结果编写，不是凭文档推测：
 > - `FireRed-OpenStoryline`：https://github.com/wayyet/FireRed-OpenStoryline （Apache-2.0 协议）
 > - `auto-video-editor`：https://github.com/wayyet/auto-video-editor

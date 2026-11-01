@@ -23,7 +23,8 @@ from agent_gate import protocol
 
 TESTS_DIR = Path(__file__).resolve().parent
 OPENSTORYLINE_DIR = TESTS_DIR.parent
-REPO_ROOT = OPENSTORYLINE_DIR.parent
+# 2026-11-01 目录扁平化:OpenStoryline 根 == 仓库根,REPO_ROOT 不再是它的父目录。
+REPO_ROOT = OPENSTORYLINE_DIR
 PKG_DIR = OPENSTORYLINE_DIR / "src" / "open_storyline"
 
 #: mcode 接入涉及、且会产出 / 消费状态的源文件(全部要扫「done」字面量)。

@@ -4,9 +4,9 @@
 
 - 不再有运行时调用方(:class:`OpenStorylineMCPClient` 已删除,见
   ``mcp_clients/openstoryline_client.py`` 的删除记录)。
-- 仅供人工核对「openstoryline/src/open_storyline/nodes/core_nodes/ 下节点接口」
+- 仅供人工核对「src/open_storyline/nodes/core_nodes/ 下节点接口」
   与 ``TOOL_REGISTRY`` 是否一致;新工具上下线时手工同步这里。
-- 真正部署时以 ``openstoryline/agent_fastapi.py`` 运行时 ``list_tools()`` 输出为准
+- 真正部署时以仓库根 ``agent_fastapi.py`` 运行时 ``list_tools()`` 输出为准
   (Phase 0 锁定必需工具清单已固化)。
 
 模块用途(历史):

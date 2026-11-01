@@ -4,7 +4,7 @@
 只有设置了 ``OPENSTORYLINE_GLM_API_KEY`` 才运行。跑法::
 
     OPENSTORYLINE_GLM_API_KEY=sk-xxx ./.venv/.../python.exe -m pytest \\
-        openstoryline/tests/test_glm_live.py -q
+        tests_openstoryline/test_glm_live.py -q
 
 覆盖(设计 §10.4 C-T1/C-T2/C-T5):
 - C-T1:文本对话(OpenAI 兼容 chat completions)

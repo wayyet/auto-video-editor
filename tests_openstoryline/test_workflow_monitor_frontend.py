@@ -1,6 +1,6 @@
 """「工作流流程图前端实时化」:前端纯逻辑层的 Node 单测(pytest 包装)。
 
-前端纯逻辑在 ``openstoryline/web/static/workflow_monitor.mjs`` —— §7.1 事件
+前端纯逻辑在 ``web/static/workflow_monitor.mjs`` —— §7.1 事件
 归约状态机、``Last-Event-ID`` 补发去重、并行活动节点、重试 attempt 历史、
 布局 key 隔离(workflow_id + mode + schema_version)、已走边投影、主图数据
 归一,不碰 DOM,所以用 ``node --test`` 直接跑。
@@ -9,7 +9,7 @@
 --------------------
 
 与 ``test_media_upload_frontend.py`` 同一套路:验收命令是
-``pytest openstoryline/tests``,把 Node 用例纳入同一条命令,前端和后端
+``pytest tests_openstoryline``,把 Node 用例纳入同一条命令,前端和后端
 一次跑完 —— 少一个「忘了跑前端测试」的缺口。
 
 Node 不在环境里时**跳过**(不判失败):前端测试只是补充证据,不是主链路。

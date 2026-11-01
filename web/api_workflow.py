@@ -6,8 +6,8 @@
   start_production.ps1:678)。本模块是**独立 router**,由主文件
   ``app.include_router(...)`` 挂载 —— 与 ``/api/system/import-video`` 同层,
   不进 FastMCP 的 ``server.py``,也不再膨胀主文件(设计 §11.8)。
-- 导入方式:``from web.api_workflow import router``(openstoryline/ 在
-  sys.path 上,``web`` 为命名空间包)。
+- 导入方式:``from web.api_workflow import router``(仓库根在 sys.path 上,
+  ``web`` 为命名空间包;2026-11-01 扁平化后本文件随 web/ 上移仓库根)。
 
 五个端点(设计 §6.2-E 表)
 ------------------------

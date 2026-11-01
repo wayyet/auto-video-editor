@@ -7,7 +7,7 @@ vendored ``LocalASRNode`` 依赖 funasr + torchaudio + 模型权重,主 venv 不
    mode 端到端联调用)。plan_timeline_pro 在无 ASR 数据时退化为无 speech_
    rough_cut 路径。
 2. ``STORYLINE_ASR_MODE=vendored``:subprocess 调 vendored venv 的 funasr 子
-   任务。需要 ``funasr`` 已装到 vendored ``openstoryline/.venv``。
+   任务。需要 ``funasr`` 已装到独立环境 ``.venv-openstoryline``。
 
 本模块**不**在主 venv import funasr / torchaudio;不引入新依赖。
 """

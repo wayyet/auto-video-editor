@@ -10,9 +10,9 @@
 --------
 - **幂等**:用 ``SessionRepository.create_if_absent`` ⇒ 重复运行**不覆盖**已存在的
   会话(导入之后新创建的会话也不会被冲掉)。
-- **两个根目录都扫**:``outputs/`` 和 ``openstoryline/outputs/`` —— 输出根目录历史上
-  搬过家,只扫一个会漏(方案 §5.4 明确警告)。
-- **先脱敏再入库**:复用 ``openstoryline.agent_fastapi.ChatSession`` 的脱敏逻辑
+- **输出根都扫**:``outputs/`` 与 ``outputs/openstoryline/``(2026-11-01 扁平化后
+  OpenStoryline 会话产物在 outputs 下的独立子目录;``outputs/`` 本身也扫,历史会话都能命中)。
+- **先脱敏再入库**:复用仓库根 ``agent_fastapi.ChatSession`` 的脱敏逻辑
   (``_sanitize_custom_model_cfg_for_state`` / ``_sanitize_tts_cfg_for_state``)。
   该模块**延迟导入**且带 ``try/except`` ⇒ 导入失败只告警,退回写原始解析结果,
   绝不因导入问题把整个工具搞崩。
@@ -88,13 +88,12 @@ def _load_chatsession() -> Any:
     """拿 ``ChatSession`` 类;失败返回 ``None`` 并记录原因(不抛异常)。
 
     两条路:
-    1. ``openstoryline.agent_fastapi``(包路径);
-    2. 直接按文件加载 —— 服务端跑在 ``openstoryline/.venv`` 时,包路径导入会因
-       ``sys.path`` 里没有 ``openstoryline/`` 而在 ``import src`` 处失败。
+    1. 顶层 ``agent_fastapi``(2026-11-01 扁平化后在仓库根);
+    2. 直接按文件加载 —— 兜底:仓库根不在 ``sys.path`` 时顶层导入会失败。
 
-    ⚠️ 调用前应先解析好 Postgres URI:``agent_fastapi`` 导入时会把
-    ``openstoryline/src`` 插到 ``sys.path`` 最前面(仓库根的 ``config`` 已在
-    ``sys.modules`` 里,不会被顶掉)。
+    ⚠️ 调用前应先解析好 Postgres URI:``agent_fastapi`` 导入时会把仓库根与
+    ``src`` 插到 ``sys.path`` 前面(仓库根的 ``config`` 已在 ``sys.modules`` 里,
+    不会被顶掉)。
     """
     global _CHATSESSION_CACHE, _CHATSESSION_ERROR, _CHATSESSION_LOADED
     if _CHATSESSION_LOADED:
@@ -103,19 +102,20 @@ def _load_chatsession() -> Any:
 
     errors: list[str] = []
 
-    # ``agent_fastapi`` 内部会 ``import src.*`` ⇒ 需要 ``openstoryline/`` 在 sys.path 上。
+    # ``agent_fastapi`` 内部会 ``import src.*`` ⇒ 需要仓库根在 sys.path 上
+    # (2026-11-01 扁平化:agent_fastapi.py / src/ 都在仓库根)。
     # 追加(不是 insert 到最前),免得抢在仓库根的 ``config`` 前面。
-    pkg_dir = ROOT / "openstoryline"
+    pkg_dir = ROOT
     if str(pkg_dir) not in sys.path:
         sys.path.append(str(pkg_dir))
 
     try:
-        from openstoryline.agent_fastapi import ChatSession
+        from agent_fastapi import ChatSession
 
         _CHATSESSION_CACHE = ChatSession
         return _CHATSESSION_CACHE
     except Exception as exc:
-        errors.append(f"openstoryline.agent_fastapi({type(exc).__name__}: {exc})")
+        errors.append(f"agent_fastapi({type(exc).__name__}: {exc})")
 
     try:
         import importlib.util
@@ -174,9 +174,10 @@ def _default_roots() -> list[Path]:
         roots.append(Path(storyline_outputs_root()))
     except Exception as exc:  # pragma: no cover - config 不可导入
         _warn(f"config.storyline_outputs_root() 不可用({type(exc).__name__}: {exc})")
-    # 输出根目录历史上搬过家 ⇒ 两个都扫(方案 §5.4)。
+    # 会话产物根:主工作流 outputs/ 与 OpenStoryline outputs/openstoryline/ 都扫
+    # (2026-11-01 扁平化后 OpenStoryline 会话产物在 outputs 下的独立子目录)。
     roots.append(ROOT / "outputs")
-    roots.append(ROOT / "openstoryline" / "outputs")
+    roots.append(ROOT / "outputs" / "openstoryline")
 
     out: list[Path] = []
     seen: set[str] = set()
@@ -445,7 +446,7 @@ def _parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         action="append",
         default=None,
         metavar="DIR",
-        help="额外要扫的根目录(可重复);默认扫 outputs/ 与 openstoryline/outputs/",
+        help="额外要扫的根目录(可重复);默认扫 outputs/ 与 outputs/openstoryline/",
     )
     p.add_argument(
         "--archive",

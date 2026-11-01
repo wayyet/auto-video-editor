@@ -39,7 +39,7 @@ PLACEHOLDER_KEY = "<YOUR_DEEPSEEK_API_KEY>"
 def _in_openstoryline_dir(monkeypatch):
     """prompt 模板用的是**相对**路径(``prompts/tasks/...``)。
 
-    生产环境以 ``openstoryline/`` 为 cwd 启动,这里对齐,否则
+    生产环境以仓库根为 cwd 启动(2026-11-01 扁平化),这里对齐,否则
     ``ChatSession.__init__`` 里的 ``get_prompt("instruction.system")`` 会找不到模板。
     """
     monkeypatch.chdir(OPENSTORYLINE_DIR)

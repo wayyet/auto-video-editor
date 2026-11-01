@@ -22,7 +22,7 @@ auto-video-editor/
 │   ├── node_02_launch_openstoryline.py │
 │   ├── node_03_open_preview.py         │ Week 2 已有
 │   ├── node_04a_import_video.py        │ 手动导入关卡(等网页【📥 导入视频】按钮)
-│   ├── node_04b_get_storyboard_plan.py │ 读 openstoryline 产物 → storyline_plan
+│   ├── node_04b_get_storyboard_plan.py │ 读 outputs/openstoryline 产物 → storyline_plan
 │   ├── node_05_generate_draft.py       ─┘
 │   ├── node_06_human_reorder.py        [新] 关卡① interrupt + 副作用挪后
 │   ├── node_07_speed_fit.py            [新] 护栏节点 + 帧对齐分配公式
@@ -274,7 +274,7 @@ New-Item -ItemType Directory -Force -Path inputs | Out-Null
 |---|---|---|
 | `当前 PowerShell 不是管理员` | 11 | 用「以管理员身份运行」重开 PowerShell,或按 README §2.4 手动起 `com.docker.service` |
 | `Docker Desktop 启动后 90s 内 daemon 未就绪` | 17 | 手动打开 Docker Desktop GUI,等「Docker Desktop is running」后重跑 |
-| `openstoryline/resource/ 缺失或为空` | 26 | 跑 `.\openstoryline\scripts\download_resources.ps1` + `download_models.ps1`(约 642 MB) |
+| `resource/ 缺失或为空` | 26 | 跑 `.\scripts\download_resources.ps1` + `download_models.ps1`(约 642 MB;2026-11-01 扁平化后资源/模型在仓库根) |
 | `端口 7860 已被占用,但 GET 不返回 200` | 23 | 手动查出占用进程并处理;脚本**不会**杀未确认归属的进程 |
 | `180s 内 OpenStoryline Web 未就绪` | 22 | 看报错里的 `Postgres :` 行——容器未运行时先 `docker start edb-postgres16`;再看 `logs\openstoryline_web_*.log` 尾部。脚本**不会**带未就绪的服务跑工作流 |
 | `preflight.ps1 退出码 15(Postgres 不可达)` | 15 | 确认 `-PostgresUri` 可连;外部库需先自行建库建角色 |
@@ -684,7 +684,7 @@ $env:STORYLINE_ENABLE_AI_TRANSITION = "0"
 - `import_video` 的网页文件握手会发 `node.waiting_input(waiting_kind=web_file_handshake)`,
   与 LangGraph `interrupt` 关卡(⓪①②③)在 UI 上可区分。
 
-### 10.3 监控 API 端点(宿主 `openstoryline/web/api_workflow.py`)
+### 10.3 监控 API 端点(宿主 `web/api_workflow.py`)
 
 | 方法 | 路径 | 说明 |
 |---|---|---|

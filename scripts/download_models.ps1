@@ -1,12 +1,16 @@
 ﻿# =============================================================================
 #  OpenStoryline · Windows 模型下载脚本
-#  作用: 下载并解压 models.zip 到 .storyline\models\ 下。
+#  作用: 下载并解压 models.zip 到仓库根 .storyline\models\ 下。
 #  与 download_resources.ps1 拆开,便于单独重试(模型 ~116 MB)。
-#  用法: 在 openstoryline/ 目录下 PowerShell 运行:
+#  用法(2026-11-01 扁平化后,在仓库根目录):
 #         powershell -ExecutionPolicy Bypass -File .\scripts\download_models.ps1
+#  仓库根由 $PSScriptRoot 推导(脚本并入根 scripts/ 后不再依赖调用方 CWD),
+#  模型一律解压到仓库根 .storyline/models/,不会落到旧 openstoryline/ 路径。
 # =============================================================================
 
 $ErrorActionPreference = "Stop"
+$RepoRoot = Split-Path -Parent $PSScriptRoot
+Set-Location $RepoRoot
 $base = "https://image-url-2-feature-1251524319.cos.ap-shanghai.myqcloud.com/openstoryline"
 
 Write-Host "[i] 准备目录 .storyline\models ..." -ForegroundColor Blue

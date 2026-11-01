@@ -1,11 +1,12 @@
 ﻿# =============================================================================
 #  OpenStoryline (auto-video-editor 嵌入版) · 一键安装脚本 (Windows)
 #  作用:
-#    1. 创建 .venv (本目录独立 venv,含 torch/torchaudio/funasr 等重包)
-#    2. pip install -r requirements.txt
+#    1. 创建 .venv-openstoryline (独立 venv,含 torch/torchaudio/funasr 等重包;
+#       2026-11-01 目录扁平化后位于仓库根,绝不操作主项目 .venv)
+#    2. pip install -r requirements-openstoryline.txt
 #    3. (可选) 拉资源 + 模型 — 642 MB,提示人工按需跑 download_*.ps1
 #
-#  用法(在 openstoryline/ 目录下):
+#  用法(在仓库根目录下):
 #     powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 #
 #  设计:
@@ -30,16 +31,16 @@ Set-Location $root
 Write-Host "[i] OpenStoryline 安装脚本 (auto-video-editor 嵌入版)" -ForegroundColor Cyan
 Write-Host "    Root: $root" -ForegroundColor DarkGray
 
-# 1) venv
-$venvPy = Join-Path $root ".venv\Scripts\python.exe"
+# 1) venv(只建 .venv-openstoryline;主项目 .venv 一律不碰)
+$venvPy = Join-Path $root ".venv-openstoryline\Scripts\python.exe"
 if ($SkipVenv) {
     Write-Host "[i] 跳过 venv 创建 (-SkipVenv)" -ForegroundColor Yellow
 } else {
     if (Test-Path $venvPy) {
         Write-Host "[OK] 已存在 venv: $venvPy" -ForegroundColor Green
     } else {
-        Write-Host "[i] 创建 venv ..." -ForegroundColor Blue
-        python -m venv "$root\.venv"
+        Write-Host "[i] 创建 venv (.venv-openstoryline) ..." -ForegroundColor Blue
+        python -m venv "$root\.venv-openstoryline"
         if ($LASTEXITCODE -ne 0) { throw "venv 创建失败" }
     }
 }
@@ -50,9 +51,9 @@ if ($SkipPip) {
 } else {
     Write-Host "[i] 升级 pip ..." -ForegroundColor Blue
     & $venvPy -m pip install --upgrade pip
-    Write-Host "[i] pip install -r requirements.txt (含 torch/torchaudio/funasr,首次约 5-10 分钟) ..." -ForegroundColor Blue
-    & $venvPy -m pip install -r "$root\requirements.txt"
-    if ($LASTEXITCODE -ne 0) { throw "依赖安装失败,请检查网络或 requirements.txt" }
+    Write-Host "[i] pip install -r requirements-openstoryline.txt (含 torch/torchaudio/funasr,首次约 5-10 分钟) ..." -ForegroundColor Blue
+    & $venvPy -m pip install -r "$root\requirements-openstoryline.txt"
+    if ($LASTEXITCODE -ne 0) { throw "依赖安装失败,请检查网络或 requirements-openstoryline.txt" }
     Write-Host "[OK] 依赖安装完成" -ForegroundColor Green
 }
 
@@ -74,6 +75,5 @@ if ($SkipModels) {
 
 Write-Host ""
 Write-Host "[OK] OpenStoryline 安装完成。" -ForegroundColor Green
-Write-Host "    下一步: 在 openstoryline/config.toml 填入 LLM/VLM/TTS API Key,然后:"
-Write-Host "      cd .."
+Write-Host "    下一步: 在 config.toml(占位)/ config.toml.local(真实 Key)填入 LLM/VLM/TTS API Key,然后:"
 Write-Host "      .\start_production.ps1"

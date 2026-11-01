@@ -1,5 +1,8 @@
 # Web UI 左下「回形针」按钮与左上「导入视频」按钮链路分析
 
+> ⚠️ **历史状态标记(2026-11-01)**:OpenStoryline 目录扁平化迁移(见《docs/修改文档/auto-video-editor-openstoryline-目录扁平化迁移执行设计.md》)完成后,本文中的 `openstoryline/...` 路径已上移至仓库根(`agent_fastapi.py`、`web/`、`src/open_storyline/`、`outputs/openstoryline/` 等)。本文仅作历史记录,不代表当前目录结构,请勿按本文路径操作。
+
+
 > 分析日期:2026-11-01
 > 涉及代码:`openstoryline/web/index.html`、`openstoryline/web/static/app.js`、`openstoryline/agent_fastapi.py`、`nodes/node_04a_import_video.py`
 > 所有行号以当日工作区代码为准(部分文件存在未提交改动)。

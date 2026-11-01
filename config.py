@@ -43,12 +43,21 @@ from typing import Literal
 #
 # ``resolved_cache_paths()`` 在每次调用时把两类 spec 扁平化为 ``list[Path]``,
 # 反映当下的文件系统状态;不在磁盘上的路径会被静默跳过(不计入 cleaned)。
+#
+# 2026-11-01 目录扁平化:本仓(嵌入版 OpenStoryline)的缓存根一律由
+# ``Path(__file__).resolve().parent`` 推导,不再硬编码本机绝对路径;
+# FireRed-OpenStoryline 是外部独立仓库,仍保留绝对路径(维护该外部仓库时才有效)。
+_REPO_ROOT_DIR: Path = Path(__file__).resolve().parent
+
 CACHE_PATHS_TO_CLEAN: list[str] = [
     # 原有:系统级临时目录(低风险,保留)
     r"%LOCALAPPDATA%\Temp\OpenStoryline",
     r"%TEMP%\jianying_workflow_tmp",
     # ---- 新增:剪映草稿回收站(技能一类 §2.3,2026-07-04 已升为常规清理项) ----
     r"%LOCALAPPDATA%\JianyingPro\User Data\Projects\com.lveditor.draft\.recycle_bin",
+    # ---- 新增:本仓(嵌入版)OpenStoryline 服务端可再生缓存(2026-11-01 扁平化后) ----
+    # 只清 .server_cache;.storyline/models、resource/、outputs/openstoryline/、两个 venv 一律禁删。
+    str(_REPO_ROOT_DIR / ".storyline" / ".server_cache"),
     # ---- 新增:FireRed-OpenStoryline 一类项(技能命令模板 #1/#3) ----
     r"E:\Documents\kuaishou\FireRed-OpenStoryline\.storyline\.server_cache",
     r"E:\Documents\kuaishou\FireRed-OpenStoryline\.playwright-cli",
@@ -66,10 +75,10 @@ CACHE_PATHS_TO_CLEAN: list[str] = [
     # ---- 新增:剪映程序日志 + 剪艾 agent boot 日志(技能命令模板 #6) ----
     r"E:\Documents\kuaishou\JianyingPro\5.9.0.11632\log",
     r"E:\Documents\kuaishou\剪艾（剪辑agent）\win-unpacked\boot.log",
-    # ---- 新增:auto-video-editor 自身 .pytest_cache + .docker-proxy 日志 ----
-    r"E:\Documents\kuaishou\auto-video-editor\.pytest_cache",
-    r"E:\Documents\kuaishou\auto-video-editor\.docker-proxy\gost.out.log",
-    r"E:\Documents\kuaishou\auto-video-editor\.docker-proxy\gost.err.log",
+    # ---- 新增:auto-video-editor 自身 .pytest_cache + .docker-proxy 日志(推导,不硬编码) ----
+    str(_REPO_ROOT_DIR / ".pytest_cache"),
+    str(_REPO_ROOT_DIR / ".docker-proxy" / "gost.out.log"),
+    str(_REPO_ROOT_DIR / ".docker-proxy" / "gost.err.log"),
 ]
 
 
@@ -100,11 +109,13 @@ class CacheGlobSpec:
 
 CACHE_GLOB_SPECS: list[CacheGlobSpec] = [
     # 技能一类 #2:源码 __pycache__ —— 排除两个 venv
+    # (2026-11-01 扁平化:OpenStoryline 独立 venv 改名 .venv-openstoryline,
+    #  ``\\.venv\\`` 不再能命中它,需显式补排除串 —— 验收 A15 要求两个 venv 原样)
     CacheGlobSpec(
         root=r"E:\Documents\kuaishou",
         kind="dir_recurse",
         pattern="__pycache__",
-        exclude_substr=("\\venv\\", "\\.venv\\"),
+        exclude_substr=("\\venv\\", "\\.venv\\", "\\.venv-openstoryline\\"),
         description="源码 __pycache__ (排除 venv)",
     ),
     # 技能一类 #7:tmp/ 子目录(保留根下 4 个模板 json)
@@ -135,16 +146,16 @@ CACHE_GLOB_SPECS: list[CacheGlobSpec] = [
         pattern=".backup",
         description="剪映草稿 .backup 目录",
     ),
-    # auto-video-editor 独有:runtime/initial_state_*.json
+    # auto-video-editor 独有:runtime/initial_state_*.json(推导,不硬编码)
     CacheGlobSpec(
-        root=r"E:\Documents\kuaishou\auto-video-editor\runtime",
+        root=str(_REPO_ROOT_DIR / "runtime"),
         kind="file_pattern",
         pattern="initial_state_*.json",
         description="start_production 生成的 initial_state",
     ),
-    # auto-video-editor 独有:logs/*.log
+    # auto-video-editor 独有:logs/*.log(推导,不硬编码)
     CacheGlobSpec(
-        root=r"E:\Documents\kuaishou\auto-video-editor\logs",
+        root=str(_REPO_ROOT_DIR / "logs"),
         kind="file_recurse",
         pattern="*.log",
         description="start/stop/openstoryline/_sanity 日志",
@@ -219,10 +230,19 @@ def resolved_cache_paths() -> list[Path]:
 # media.json 等散文件)。删除方式见 nodes/node_01_clean_cache.py:一律移入
 # Windows 回收站,回收失败只记 error_log,绝不回退成永久删除。
 CACHE_TRASH_CHILDREN_ROOTS: list[str] = [
-    r"E:\Documents\kuaishou\auto-video-editor\outputs",
-    r"E:\Documents\kuaishou\auto-video-editor\inputs",
-    r"E:\Documents\kuaishou\auto-video-editor\out",
+    # 2026-11-01 扁平化:三根由仓库根推导,不再硬编码本机绝对路径。
+    str(_REPO_ROOT_DIR / "outputs"),
+    str(_REPO_ROOT_DIR / "inputs"),
+    str(_REPO_ROOT_DIR / "out"),
 ]
+
+# 三根内容清空的**保留子项**(按根目录名 → 不可清的子项名集合)。
+# 2026-11-01 目录扁平化新增:``outputs/openstoryline/`` 是 OpenStoryline 会话
+# 产物(业务数据,非可再生缓存),迁移设计 §5.1 / 验收 A15 明确禁清 ——
+# 三根内容清空扫到它时必须跳过(其余 job-* 等子项照常回收)。
+CACHE_TRASH_CHILDREN_KEEP_NAMES: dict[str, frozenset] = {
+    "outputs": frozenset({"openstoryline"}),
+}
 
 
 def resolved_trash_children() -> list[Path]:
@@ -230,6 +250,7 @@ def resolved_trash_children() -> list[Path]:
 
     - 根不存在 / 不是目录 → 静默跳过(与 ``resolved_cache_paths`` 同契约)。
     - 文件与目录都返回(区别于 ``dir_children`` glob spec 的只返回目录)。
+    - 命中 ``CACHE_TRASH_CHILDREN_KEEP_NAMES`` 的保留子项**不返回**(禁清)。
     - 每次调用时展开,反映当下文件系统状态。
     """
     children: list[Path] = []
@@ -237,7 +258,8 @@ def resolved_trash_children() -> list[Path]:
         root = Path(os.path.expandvars(raw))
         if not root.is_dir():
             continue
-        children.extend(root.iterdir())
+        keep = CACHE_TRASH_CHILDREN_KEEP_NAMES.get(root.name, frozenset())
+        children.extend(c for c in root.iterdir() if c.name not in keep)
     return children
 
 
@@ -381,12 +403,15 @@ STORYLINE_ENABLE_RENDER_SMOKE_TEST: bool = (
 # ---------------------------------------------------------------------------
 # Phase 4 vendored copy(vendored OpenStoryline)路径常量
 # ---------------------------------------------------------------------------
-# 19 节点的临时透传壳子从 ``openstoryline/`` vendored copy 拉数据 — 由于本地主
-# venv 不能装 torch,阶段 0 走 subprocess 调 vendored venv 跑子任务。后续阶段 7
+# 19 节点的临时透传壳子从 vendored OpenStoryline 拉数据 — 由于本地主
+# venv 不能装 torch,阶段 0 走 subprocess 调独立 venv 跑子任务。后续阶段 7
 # 才彻底解耦。
-VENDORED_OPENSTORYLINE_ROOT: Path = Path(__file__).resolve().parent / "openstoryline"
+# 2026-11-01 目录扁平化:OpenStoryline 代码上移仓库根(不再有 openstoryline/
+# 子目录),独立虚拟环境重建为根目录 ``.venv-openstoryline/``(主 ``.venv``
+# 不装 torch 等重依赖,两环境保持隔离)。
+VENDORED_OPENSTORYLINE_ROOT: Path = Path(__file__).resolve().parent
 VENDORED_OPENSTORYLINE_VENV_PY: Path = (
-    VENDORED_OPENSTORYLINE_ROOT / ".venv" / "Scripts" / "python.exe"
+    VENDORED_OPENSTORYLINE_ROOT / ".venv-openstoryline" / "Scripts" / "python.exe"
 )
 
 

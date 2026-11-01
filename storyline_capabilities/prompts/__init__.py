@@ -1,7 +1,7 @@
 """Prompt 加载器 — 阶段 2/3 用。
 
-vendored copy ``openstoryline/prompts/tasks/<kind>/zh/{system,user}.md`` 是一份,
-本模块读 ``storyline_capabilities/prompts/<kind>/<lang>/<part>.md``。
+vendored copy(仓库根 ``prompts/tasks/<kind>/zh/{system,user}.md``,2026-11-01
+扁平化后位置)是一份,本模块读 ``storyline_capabilities/prompts/<kind>/<lang>/<part>.md``。
 
 阶段 2 起所有 B/C 类能力都从这里读 prompt,不再使用 vendored 路径。
 

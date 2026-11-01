@@ -7,7 +7,7 @@
 协议依据
 --------
 本机实测 ``mcode CLI 0.6.12`` 的 ``mcode exec --output-format stream-json``,
-样本落盘在 ``openstoryline/tests/fixtures/mcode_stream/``。
+样本落盘在 ``tests_openstoryline/fixtures/mcode_stream/``。
 枚举值取自该版本安装包内的状态定义
 (``Start:1, Finished:2, Failed:3, Preparing:4, Prepared:5``)。
 

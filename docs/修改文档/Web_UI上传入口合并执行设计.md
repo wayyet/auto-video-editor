@@ -1,5 +1,8 @@
 # Web UI 上传入口合并执行设计
 
+> ⚠️ **历史状态标记(2026-11-01)**:OpenStoryline 目录扁平化迁移(见《docs/修改文档/auto-video-editor-openstoryline-目录扁平化迁移执行设计.md》)完成后,本文中的 `openstoryline/...` 路径已上移至仓库根(`agent_fastapi.py`、`web/`、`src/open_storyline/`、`outputs/openstoryline/` 等)。本文仅作历史记录,不代表当前目录结构,请勿按本文路径操作。
+
+
 > 项目：`wayyet/auto-video-editor`  
 > 分支：`main`  
 > 设计日期：2026-11-01  
