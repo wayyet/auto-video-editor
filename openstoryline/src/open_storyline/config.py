@@ -353,6 +353,14 @@ class ZCodeConfig(ConfigBaseModel):
                      False = 每轮独立,历史按轮烤进 prompt(回滚开关)。
       history_turns  仅 ``resume_sessions=False`` 时生效:烤进 prompt 的轮数上限。
       media_root     素材白名单根;空 = 从 AUTO_VIDEO_EDITOR_DIR 推导(同 mcode)。
+
+      [模型选择] 不经本配置指定:zcode CLI 0.17.1 无 ``--model`` 旗标,无头会话
+                     模型由 zcode 自己持久化的 ``defaultModelSelection``
+                     (``~/.zcode/v2/provider_config.json``,与 TUI ``/model`` 同源)
+                     决定;``reasoningLevel`` 必填且须在该模型支持档位内,否则
+                     **静默回退**(2026-11-01 实测:GLM-5.3-Flash 只接受 ``high``,
+                     配 ``max`` 会回退到 GLM-5.3)。切换与验证方法见设计文档
+                     附录 A.5"模型选择契约"补充。
     """
 
     cwd: str = ""

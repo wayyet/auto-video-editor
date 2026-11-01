@@ -785,3 +785,40 @@ HTTP / ACP 之一）并明确授权第三方集成"**。
 处置：适配器解析 shim 直启 `node.exe + zcode.cjs`（多行引号参数由
 CreateProcess 引号规则保证完整）；shim 解析失败且 prompt 含换行则明确报错。
 详见阶段 E 执行记录"发现 E-1"。
+
+**补充(2026-11-01,模型选择契约与账号实测)**:zcode CLI 0.17.1 的 `-p` 无头形态
+**没有 `--model` 旗标、也没有模型相关环境变量**(`--help` 与发行版 bundle 双重核查)。
+新会话模型解析链(bundle 取证 + 本机 6 次无头探测实证):
+
+1. 读 `~/.zcode/v2/provider_config.json` 的 `defaultModelSelection`(与 TUI `/model` 写同一份);
+2. 逐项校验:账号在册且凭据可用 → 模型在册 → **`options.reasoningLevel` 必填**且在
+   该模型支持的档位列表内;
+3. 任一不满足 → **静默回退**到第一个可见账号的第一个可选模型(本机实测回退到
+   GLM-5.3),全程不报错。
+
+本机实测陷阱:
+
+- coding-plan 账号上的 GLM-5.3-Flash **不接受 `reasoningLevel: "max"`**(静默回退
+  GLM-5.3),`"high"` 才解析成功 —— TUI 里能选中 max 不代表无头解析可用;
+- `defaultModelSelection` 指向无凭据账号(如 start-plan)同样静默回退。
+
+账号/产品矩阵(2026-11-01 实测):CLI 登录(`zcode login bigmodel`,与桌面版同一
+BigModel 用户)只映射 `account:bigmodel-individual-coding-plan`(bigmodel.cn 通道);
+桌面版 3.17.1 的 start-plan(zcode.z.ai 通道)在 CLI 0.17.1 内置供应商目录
+(zcode-builtin.json revision 43)中**无模板** —— 登录不产生该账号、builtin 实例
+即使改缓存/config 放行也不可选,桌面自带 `zcode.cjs` 亦为 0.17.1。无头 CLI 当前
+**结构性够不着 start-plan 通道**;npm 最新即 0.17.1,无新版可升。
+
+切换模型的操作方法:改 `defaultModelSelection`(或 TUI 内 `/model`),改完**必须**
+用一次无头探测验证结果(配置≠解析结果)::
+
+    OPENSTORYLINE_ZCODE_LIVE=1 .venv/Scripts/python.exe -m pytest openstoryline/tests/test_zcode_live.py::test_live_selfcheck_and_one_turn -q
+
+然后查 `~/.zcode/cli/log/zcode-<date>.jsonl` 新会话的
+`ttft.model.request_started` / `model.request.completed` 事件(`providerId`+`modelId`),
+**以日志为准**。
+
+当前遗留:BigModel 账号所有通道(套餐 OAuth、API Key × anthropic/openai 端点)
+均实测 1113 无余额,ZCode Agent 无头运行将持续失败直至该账号充值/恢复资源包;
+`defaultModelSelection` 已配为 `GLM-5.3-Flash | high`,充值后即生效(若解析回退,
+按上法复测 reasoningLevel)。
