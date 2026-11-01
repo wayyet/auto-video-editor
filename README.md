@@ -656,4 +656,58 @@ $env:STORYLINE_ENABLE_AI_TRANSITION = "0"
 - [LangGraph 官方文档](https://langchain-ai.github.io/langgraph/)
 - [LangGraph 源码仓库](https://github.com/langchain-ai/langgraph)
 - `E:\Documents\kuaishou\.claude\skills\jianying-editor` — Week 3 借鉴字段结构(字幕样式 / AVAILABLE_ASSETS 枚举)
+
+## 10. 工作流流程图与实时节点追踪(2026-11)
+
+主工作流拓扑与逐节点执行状态现在可以在浏览器里实时观察。设计与分阶段执行记录见
+`docs/修改文档/auto-video-editor-工作流流程图与实时节点追踪.md` 与
+`docs/修正/auto-video-editor_工作流流程图_阶段*.md`。
+
+### 10.1 页面入口与能力
+
+- 入口:<http://127.0.0.1:7860/node-map>(agent_fastapi 托管,uvicorn 绑定 127.0.0.1)。
+- **双视图**:「完整 LangGraph 工作流」(拓扑由编译图程序化提取,含 START/END、
+  条件边、并行 fan-in、QC/fusion 开关状态)与「OpenStoryline 子流程」(原 14 节点
+  静态图,布局数据互不影响)。`?view=storyline` 直达旧图。
+- **实时状态**:输入 `thread_id` 点「订阅」即通过 SSE 重放该线程全部事件并持续跟进。
+  节点七态:执行中(蓝脉冲)/已完成(绿)/等待人工或网页导入(琥珀)/重试中(橙)/
+  失败(红)/未参与(虚化)/未连通(虚线);已走路径绿色高亮,未命中分支不预点亮。
+- 布局缓存 key 纳入 `workflow_id + mode + schema_version`,human/auto 与新旧图互不污染。
+
+### 10.2 事件从哪来(双入口统一)
+
+- CLI(`scripts/run_workflow.py`)与 Web `POST /api/workflow/runs` 都经统一 runner
+  (`monitoring/workflow_runner.py`,astream `tasks/updates/custom` + `version="v2"`),
+  事件先落 PostgreSQL `workflow_run_events` 表,再推送;断线重连按全局 `id` 游标补发。
+- `agent_gate` worker(独立进程)保持同步 `invoke` 语义,补发运行级事件
+  (`run.started/resumed/interrupted/completed/failed`);节点级事件为后续可选增强。
+- `import_video` 的网页文件握手会发 `node.waiting_input(waiting_kind=web_file_handshake)`,
+  与 LangGraph `interrupt` 关卡(⓪①②③)在 UI 上可区分。
+
+### 10.3 监控 API 端点(宿主 `openstoryline/web/api_workflow.py`)
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/workflow/graph` | 主图拓扑 JSON(节点/边/元数据/flags;`?refresh=1` 重建缓存) |
+| POST | `/api/workflow/runs` | 显式启动运行(主 venv CLI 子进程);重复启动 409 |
+| GET | `/api/workflow/runs/{thread_id}` | 运行快照(事件计数/游标/派生状态/attempt 汇总) |
+| GET | `/api/workflow/runs/{thread_id}/events` | SSE 事件流;`Last-Event-ID` 补发 |
+| POST | `/api/workflow/runs/{thread_id}/resume` | 挂起探测 + 外部恢复指引(不直接执行 resume) |
+
+访问控制:有 `Origin` 头时必须是本机来源(跨源 403);curl/同源导航不受影响。
+`GET .../events` 只读,绝不触发图执行;刷新页面只重放事件。
+
+### 10.4 排错
+
+- **页面打开但订阅无事件**:先 `curl http://127.0.0.1:7860/api/workflow/runs/<thread_id>`
+  看 `available`。`false` = 事件存储不可用(Postgres 未就绪或 `workflow_run_events`
+  表缺失 —— 跑一次 `python -c "from db.migrations import apply_migrations_to_db; apply_migrations_to_db()"`),
+  `/events` 会显式报错而非静默。
+- **CLI 跑完但页面没动**:CLI 的事件行打在 **stderr**(`[wf] #12 node.started ...`);
+  确认走的是统一 runner(老版本调用 `ainvoke` 不产事件)。
+- **`workflow_run_events` 查询**:`SELECT id, event_type, node_id, attempt, occurred_at,
+  payload FROM workflow_run_events WHERE thread_id = '...' ORDER BY id;`(`id` 即 SSE 游标)。
+- **事件表在库里但页面 503**:Web 进程连的库由 `POSTGRES_URI` 决定,确认与 CLI 一致。
+- 已知限制:事件丢失(存储降级)时该段历史不可回放;Web 进程不执行
+  `Command(resume=...)`(langgraph 版本与生产不同,恢复走 agent_gate/人工脚本)。
 - `E:\Documents\kuaishou\.claude\skills\jianying-speed-fit-35s` — Week 3 节点 7 帧对齐公式金标准
