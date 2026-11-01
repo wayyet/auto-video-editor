@@ -4,7 +4,7 @@
 > 上游设计：《auto-video-editor：OpenStoryline 目录扁平化迁移执行设计》（`docs/修改文档/auto-video-editor-openstoryline-目录扁平化迁移执行设计.md`，下称"设计文档"）
 > 创建日期：2026-11-01
 > 执行环境：Windows / pwsh + Git Bash / 仓库根 `E:\Documents\kuaishou\auto-video-editor`
-> 状态：**未开始**
+> 状态：**阶段 0–4 已完成（2026-11-01，本轮按用户指示仅执行 0–4）；阶段 5–9 未开始**
 
 ---
 
@@ -19,11 +19,11 @@
 
 | 阶段 | 名称 | 对应设计文档 | 主要产出 | 状态 |
 |---|---|---|---|---|
-| 阶段 0 | 前置整备 | §6 阶段 0 | 干净工作区 + 迁移分支 | 未开始 |
-| 阶段 1 | 停服与备份 | §6 阶段 1 | 仓库外全量备份目录 | 未开始 |
-| 阶段 2 | 目标路径冲突检查 | §6 阶段 2 | 冲突清单 = 0 | 未开始 |
-| 阶段 3 | 目录与文件搬迁 | §6 阶段 3 | 根目录扁平化文件就位 | 未开始 |
-| 阶段 4 | 虚拟环境重建 | §6 阶段 4 | `.venv-openstoryline/` 可用 | 未开始 |
+| 阶段 0 | 前置整备 | §6 阶段 0 | 干净工作区 + 迁移分支 | 已完成 2026-11-01 |
+| 阶段 1 | 停服与备份 | §6 阶段 1 | 仓库外全量备份目录 | 已完成 2026-11-01 |
+| 阶段 2 | 目标路径冲突检查 | §6 阶段 2 | 冲突清单 = 0 | 已完成 2026-11-01 |
+| 阶段 3 | 目录与文件搬迁 | §6 阶段 3 | 根目录扁平化文件就位 | 已完成 2026-11-01 |
+| 阶段 4 | 虚拟环境重建 | §6 阶段 4 | `.venv-openstoryline/` 可用 | 已完成 2026-11-01 |
 | 阶段 5 | 代码与配置改造 | §5 + §6 阶段 5 | 14 项路径适配完成 | 未开始 |
 | 阶段 6 | 静态验证 | §6 阶段 6 | 文件 / 配置 / 忽略规则检查通过 | 未开始 |
 | 阶段 7 | 测试验证 | §6 阶段 7 | 四套测试通过 | 未开始 |
@@ -68,6 +68,8 @@
 - `pyproject.toml` 的 `testpaths = ["tests"]`：迁移后 `tests_openstoryline/` 不会被主套件默认收集，保持独立入口。
 - 主测试套件基线：仓库根 0 失败；OpenStoryline 3 个 config 泄漏失败仅在其 tests 定向作用域复现（已知怪癖，迁移后位置变为 `tests_openstoryline/`）。
 - Karing 系统代理可能影响 pwsh 对 localhost 的探活，阶段 8 健康检查如遇假阴性先排查代理。
+- **2026-11-01 执行修正**：根 `scripts/` 实测为根级 20 文件 + `assembly/` 子目录 3 文件（递归 23），基线"17 个文件"为旧计数口径；与 OS 3 脚本合并后递归 23 文件、0 同名冲突。
+- **2026-11-01 执行补充**：`.venv-openstoryline` 以 Python 3.13.11 重建（与旧 venv 同版本）；pip 镜像/代理配置在 **venv site 级 `pip.ini`**（清华源 + `http://127.0.0.1:3067`），新建 venv 必须同步复制该文件，否则 pip 直连 pypi.org 长时间假死；`requirements-openstoryline.txt` 未钉 torch，新解析出 2.15.0，已回钉 **2.14.0** 与旧环境一致（14 关键包 freeze 全等）。
 
 ## 5. 分阶段执行开发任务
 
@@ -75,10 +77,10 @@
 
 前置条件：无。
 
-- [ ] 0.1 将"清理缓存回收站改造"的 6 个文件**单独提交**（feat(fix) 独立提交，不与迁移混合）
-- [ ] 0.2 将设计文档与本文档入库（docs 提交，可并入 0.1 或单独提交）
-- [ ] 0.3 创建迁移分支：`git switch -c refactor/flatten-openstoryline`（若已存在则先确认其状态，勿重复创建）
-- [ ] 0.4 `git status --short` 确认工作区干净
+- [x] 0.1 将"清理缓存回收站改造"的 6 个文件**单独提交**（feat(fix) 独立提交，不与迁移混合）
+- [x] 0.2 将设计文档与本文档入库（docs 提交，可并入 0.1 或单独提交）
+- [x] 0.3 创建迁移分支：`git switch -c refactor/flatten-openstoryline`（若已存在则先确认其状态，勿重复创建）
+- [x] 0.4 `git status --short` 确认工作区干净
 
 **阶段门**：工作区干净、迁移分支就绪、`openstoryline/agent_fastapi.py` 无未提交差异。
 
@@ -86,10 +88,10 @@
 
 前置条件：阶段 0 门通过。
 
-- [ ] 1.1 `.\stop_production.ps1` 停生产服务（会一并停 `edb-postgres16` 容器；阶段 7 前恢复）
-- [ ] 1.2 `Get-NetTCPConnection -LocalPort 7860 -State Listen` 确认无监听；仍有监听则按 PID / 命令行确认归属，不盲杀未知进程
-- [ ] 1.3 robocopy 全量备份 `openstoryline/`（含 `.venv`、`.storyline`、`outputs`、`resource`、`config.toml.local`）到仓库外备份目录，命名带时间戳
-- [ ] 1.4 若根目录已存在 `.storyline/`、`resource/`、`src/`、`prompts/`、`web/` 等目标位，一并备份（当前实测根目录仅 `outputs/`、`scripts/` 被占用）
+- [x] 1.1 `.\stop_production.ps1` 停生产服务（会一并停 `edb-postgres16` 容器；阶段 7 前恢复）
+- [x] 1.2 `Get-NetTCPConnection -LocalPort 7860 -State Listen` 确认无监听；仍有监听则按 PID / 命令行确认归属，不盲杀未知进程
+- [x] 1.3 robocopy 全量备份 `openstoryline/`（含 `.venv`、`.storyline`、`outputs`、`resource`、`config.toml.local`）到仓库外备份目录，命名带时间戳
+- [x] 1.4 若根目录已存在 `.storyline/`、`resource/`、`src/`、`prompts/`、`web/` 等目标位，一并备份（当前实测根目录仅 `outputs/`、`scripts/` 被占用）
 
 **阶段门**：robocopy 退出码 < 8；备份目录包含全部运行时内容（`.venv`、`.storyline\models`、`config.toml.local` 抽查在位）。
 
@@ -97,9 +99,9 @@
 
 前置条件：阶段 1 门通过。
 
-- [ ] 2.1 执行设计文档 §6 阶段 2 的 MergePairs 递归同名扫描（8 对目录，含本机未跟踪文件）
-- [ ] 2.2 文件级检查 `agent_fastapi.py` / `config.toml` / `config.toml.local`（当前实测根目录均无同名，仍须复核）
-- [ ] 2.3 如有冲突项，逐个人工比较裁决，禁止直接覆盖
+- [x] 2.1 执行设计文档 §6 阶段 2 的 MergePairs 递归同名扫描（8 对目录，含本机未跟踪文件）
+- [x] 2.2 文件级检查 `agent_fastapi.py` / `config.toml` / `config.toml.local`（当前实测根目录均无同名，仍须复核）
+- [x] 2.3 如有冲突项，逐个人工比较裁决，禁止直接覆盖
 
 **阶段门**：`$Collisions.Count -eq 0`。
 
@@ -107,13 +109,13 @@
 
 前置条件：阶段 2 门通过。
 
-- [ ] 3.1 新建 `tests_openstoryline/`、`outputs/openstoryline/`
-- [ ] 3.2 robocopy 整体上移 `src/`、`prompts/`、`web/`、`resource/`、`.storyline/` → 根目录（当前实测均为干净上移，无合并）
-- [ ] 3.3 `openstoryline/outputs/` → `outputs/openstoryline/`（隔离，不触碰根 `outputs/` 其他内容）
-- [ ] 3.4 `openstoryline/scripts/` 3 个脚本合并进根 `scripts/`
-- [ ] 3.5 根文件搬迁：`agent_fastapi.py`、`config.toml`、`config.toml.local` 直迁；`README.md → README-OpenStoryline.md`、`LICENSE → LICENSE-OpenStoryline`、`requirements.txt → requirements-openstoryline.txt`
-- [ ] 3.6 `openstoryline/tests/` → `tests_openstoryline/`
-- [ ] 3.7 `openstoryline/.gitignore` 不搬迁，其规则并入根 `.gitignore`（阶段 5 处理）
+- [x] 3.1 新建 `tests_openstoryline/`、`outputs/openstoryline/`
+- [x] 3.2 robocopy 整体上移 `src/`、`prompts/`、`web/`、`resource/`、`.storyline/` → 根目录（当前实测均为干净上移，无合并）
+- [x] 3.3 `openstoryline/outputs/` → `outputs/openstoryline/`（隔离，不触碰根 `outputs/` 其他内容）
+- [x] 3.4 `openstoryline/scripts/` 3 个脚本合并进根 `scripts/`
+- [x] 3.5 根文件搬迁：`agent_fastapi.py`、`config.toml`、`config.toml.local` 直迁；`README.md → README-OpenStoryline.md`、`LICENSE → LICENSE-OpenStoryline`、`requirements.txt → requirements-openstoryline.txt`
+- [x] 3.6 `openstoryline/tests/` → `tests_openstoryline/`
+- [x] 3.7 `openstoryline/.gitignore` 不搬迁，其规则并入根 `.gitignore`（阶段 5 处理）
 
 **阶段门**：设计文档 §6 阶段 6 的 RequiredPaths 核心项（`agent_fastapi.py`、`src\open_storyline\__init__.py`、`prompts\tasks`、`web\index.html`、`tests_openstoryline\conftest.py`、`.storyline\models`、`resource`）抽查在位；源目录 `openstoryline/` 暂不删除。
 
@@ -121,10 +123,10 @@
 
 前置条件：阶段 3 门通过。
 
-- [ ] 4.1 读旧环境 `openstoryline/.venv/pyvenv.cfg` + `python --version`，确认 Python 主 / 次版本
-- [ ] 4.2 以相同版本创建根目录环境：`py -3.x -m venv .venv-openstoryline`
-- [ ] 4.3 `.\.venv-openstoryline\Scripts\python.exe -m pip install -r .\requirements-openstoryline.txt`
-- [ ] 4.4 `pip freeze` 比对新旧环境关键包（uvicorn / fastapi / torch / torchaudio 等）版本一致
+- [x] 4.1 读旧环境 `openstoryline/.venv/pyvenv.cfg` + `python --version`，确认 Python 主 / 次版本
+- [x] 4.2 以相同版本创建根目录环境：`py -3.x -m venv .venv-openstoryline`
+- [x] 4.3 `.\.venv-openstoryline\Scripts\python.exe -m pip install -r .\requirements-openstoryline.txt`
+- [x] 4.4 `pip freeze` 比对新旧环境关键包（uvicorn / fastapi / torch / torchaudio 等）版本一致
 
 **阶段门**：`import uvicorn, fastapi` 通过；关键包版本与旧环境一致。禁止任何写入根 `.venv` 的操作。
 
@@ -230,4 +232,8 @@
 
 | 日期 | 阶段 | 结果 | 提交 / 分支 | 备注 |
 |---|---|---|---|---|
-| | | | | |
+| 2026-11-01 | 0 | 门通过：工作区干净、`openstoryline/agent_fastapi.py` 无未提交差异 | c96c8ab（清理缓存 6 文件）、74560ac（2 文档）→ main；分支 `refactor/flatten-openstoryline` | 两笔提交已随阶段 3-4 快照同步远端 |
+| 2026-11-01 | 1 | 门通过：7860 无监听；备份 2.602G、robocopy exit<8 | 仓库外备份 `auto-video-editor-openstoryline-backup-20261101-210457` | `.venv`、`.storyline/models`（transnetv2+MiniLM）、`config.toml.local` 抽查在位；根 `outputs/`（空）与 `scripts/` 一并备份；`edb-postgres16` 曾被停，收尾已 `docker start` 恢复 |
+| 2026-11-01 | 2 | 门通过：8 对目录递归同名扫描 0 冲突；3 个根文件无占用 | — | `scripts/` 为唯一合并点（见 §4 执行修正）；2.3 无冲突未触发 |
+| 2026-11-01 | 3 | 门通过：7 对目录源/目标文件数逐一相等；RequiredPaths 15 项在位 | 5f98602 = 阶段 3-4 搬迁快照（175 文件 +49342 行），已推送（main 同步） | 先复制后验证，源 `openstoryline/` 未动；根 `.gitignore` 新旧规则并存（旧 5 条保留至阶段 9，新增 `.venv-openstoryline/`、`/.storyline/`、`/resource/`、`/config.toml.local`） |
+| 2026-11-01 | 4 | 门通过：14 关键包 freeze 与旧环境全等；`import uvicorn/fastapi/torch/torchaudio` OK | — | `py -3.13` 重建；pip.ini site 级教训与 torch 回钉见 §4 执行补充 |
