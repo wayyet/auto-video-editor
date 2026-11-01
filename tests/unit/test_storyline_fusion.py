@@ -231,7 +231,7 @@ def _config_value_in_fresh_process(var: str, value: str | None, expr: str) -> st
 
 @pytest.mark.parametrize(
     "raw,expected",
-    [(None, "False"), ("", "False"), ("0", "False"), ("no", "False"),
+    [(None, "True"), ("", "False"), ("0", "False"), ("no", "False"),
      ("1", "True"), ("true", "True"), ("YES", "True"), (" 1 ", "True")],
 )
 def test_fusion_flag_defaults_off_and_parses_env(raw, expected):

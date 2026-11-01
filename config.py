@@ -311,13 +311,15 @@ if STORYLINE_MODE not in ("human", "auto"):
 # ---------------------------------------------------------------------------
 # human 模式融合:auto 的 21 个 storyline 节点以"侧支"并入 human 主图
 # ---------------------------------------------------------------------------
-# - ``STORYLINE_HUMAN_FUSION``:默认关闭。只在 ``STORYLINE_MODE=human`` 时生效;
-#   **构图时**读取(与 ``ASSEMBLY_QC_GATE_ENABLED`` 同一惯例,改完需重新 build_graph)。
-#   关闭时图拓扑与改动前逐边一致。
+# - ``STORYLINE_HUMAN_FUSION``:默认**开启**(2026-11-01 灰度验收通过后转正,见
+#   《剧情线自动模式节点并入人工模式主图设计与执行计划》§10.7)。只在
+#   ``STORYLINE_MODE=human`` 时生效;**构图时**读取(与 ``ASSEMBLY_QC_GATE_ENABLED``
+#   同一惯例,改完需重新 build_graph)。要临时整体关掉,设 ``STORYLINE_HUMAN_FUSION=0``
+#   并重启进程。
 # - ``STORYLINE_FUSION_DISABLE``:逗号分隔的节点名,运行时跳过(例如
 #   ``storyline_local_asr,storyline_render_video``),用来单独关掉某个慢节点。
 STORYLINE_HUMAN_FUSION: bool = (
-    os.environ.get("STORYLINE_HUMAN_FUSION", "0").lower().strip() in ("1", "true", "yes")
+    os.environ.get("STORYLINE_HUMAN_FUSION", "1").lower().strip() in ("1", "true", "yes")
 )
 STORYLINE_FUSION_DISABLE: frozenset = frozenset(
     s.strip()
