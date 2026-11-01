@@ -275,7 +275,23 @@ _MOCK_WAV = re.compile(r"tts_mock_[0-9a-f]{12}")      # Mock TTS 的随机文件
 # Windows ffmpeg 9 对越界 seek(测试 Mock ASR 的最后一条 cue 中点 4.05s 超出 4.0s 视频)
 # 返回 rc≠0,stderr 里的日志前缀带每次进程都不同的堆指针地址(如 ``[mjpeg @ 0000027...]``),
 # 会随 ``layout_issues[].evidence`` 进入 state。两次运行的指针必然不同,与时间戳同类,一并抹平。
+# 且 frame-thread 编码器终止序列([vost#0:0/mjpeg] Could not open encoder before EOF /
+# [vf#0:0] Terminating thread ...)的**行序与行集**随负载抖动 —— 指针抹平后仍会偶发不等。
+# 故含指针占位的整条 stderr 串在 dumps 前归一成占位符(evidence 其余字段照常比较)。
 _FF_PTR = re.compile(r"(?<=@ )[0-9a-f]{12,16}")
+
+
+def _sanitize(value):
+    """递归把内嵌 ffmpeg stderr(含 <PTR> 占位)整串替换为常量占位符。"""
+    if isinstance(value, str):
+        if "<PTR>" in _FF_PTR.sub("<PTR>", value):
+            return "<FFMPEG_STDERR>"
+        return value
+    if isinstance(value, dict):
+        return {k: _sanitize(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitize(v) for v in value]
+    return value
 
 
 def _scrub(text: str, run: Run) -> str:
@@ -287,7 +303,10 @@ def _scrub(text: str, run: Run) -> str:
 
 
 def _norm(value, run: Run) -> str:
-    return _scrub(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str), run)
+    return _scrub(
+        json.dumps(_sanitize(value), ensure_ascii=False, sort_keys=True, default=str),
+        run,
+    )
 
 
 def _human_view(run: Run) -> dict:
