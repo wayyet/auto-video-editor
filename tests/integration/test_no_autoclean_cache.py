@@ -44,6 +44,12 @@ def fake_cache_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "nodes.node_01_clean_cache.resolved_cache_paths",
         lambda: [cache_root],
     )
+    # 2026-11-01:clean_cache 还会清「一键回收根」(outputs/ inputs/ out/ 的
+    # 直接子项);这里同样指到空,防止万一被触发时碰到真实磁盘。
+    monkeypatch.setattr(
+        "nodes.node_01_clean_cache.resolved_trash_children",
+        lambda: [],
+    )
     return cache_root
 
 
@@ -105,12 +111,26 @@ def test_graph_invoke_does_not_auto_trigger_clean_cache(
     assert sentinel.read_text(encoding="utf-8") == "do not delete me by auto-trigger"
 
 
-def test_clean_cache_function_still_works_manually(fake_cache_dir: Path) -> None:
+def test_clean_cache_function_still_works_manually(
+    fake_cache_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """单独调用 ``clean_cache(state)`` 仍能清理路径 — UI 端点依赖它。
 
     这一断言保证:UI 按钮 → POST /api/system/clean-cache →
     ``clean_cache`` 函数的链路在单元测试层面是通的。
+    2026-11-01:删除一律走 ``_send_to_recycle_bin``;测试内换成「直接删除」
+    stub,避免把 tmp_path 里的假缓存塞进真实回收站。
     """
+    import shutil as _shutil
+
+    def fake_recycle(path):
+        if path.is_dir():
+            _shutil.rmtree(path)
+        else:
+            path.unlink()
+
+    monkeypatch.setattr("nodes.node_01_clean_cache._send_to_recycle_bin", fake_recycle)
+
     sentinel = fake_cache_dir / "sentinel.txt"
     assert sentinel.exists()
 
@@ -118,8 +138,8 @@ def test_clean_cache_function_still_works_manually(fake_cache_dir: Path) -> None
 
     assert out["cache_cleaned"] is True
     assert str(fake_cache_dir) in out["cache_cleaned_paths"]
-    assert not fake_cache_dir.exists(), "目录应已被 shutil.rmtree 删除"
-    assert not sentinel.exists(), "sentinel 文件应随目录一起被删除"
+    assert not fake_cache_dir.exists(), "目录应已从原位置消失(回收成功)"
+    assert not sentinel.exists(), "sentinel 文件应随目录一起被清理"
 
 
 def test_clean_cache_has_no_edges_in_compiled_graph() -> None:

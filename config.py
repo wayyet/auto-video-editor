@@ -36,7 +36,10 @@ from typing import Literal
 # - 剪映 ``%LOCALAPPDATA%\JianyingPro\User Data\Cache`` —— 已注入的 VIP 转场/特效/花字/贴纸
 #   需重新联网下载才能渲染,**用户 2026-07-04 指定禁删**,绝对不进入清理清单。
 # - 剪映 ``%LOCALAPPDATA%\JianyingPro\User Data\Log`` —— 用户 2026-07-04 指定禁删。
-# - FireRed ``.venv``、模型权重、``outputs/`` 成片、草稿本体 等一律不进入本表。
+# - FireRed ``.venv``、模型权重、剪映草稿本体 等一律不进入本表。
+# - 2026-11-01 用户决定:``outputs/`` ``inputs/`` ``out/`` 三根的**内容清空**纳入本按钮
+#   (见下方 ``CACHE_TRASH_CHILDREN_ROOTS``),且**所有删除项改为移入 Windows 回收站**,
+#   不再 ``shutil.rmtree`` / ``unlink`` 彻底删除 —— 上面两条剪映禁删约束不变。
 #
 # ``resolved_cache_paths()`` 在每次调用时把两类 spec 扁平化为 ``list[Path]``,
 # 反映当下的文件系统状态;不在磁盘上的路径会被静默跳过(不计入 cleaned)。
@@ -200,6 +203,42 @@ def resolved_cache_paths() -> list[Path]:
     for spec in CACHE_GLOB_SPECS:
         out.extend(_expand_spec(spec))
     return out
+
+
+# ---------------------------------------------------------------------------
+# 节点 1:clean_cache「一键回收根」(2026-11-01 用户指定新增)
+# ---------------------------------------------------------------------------
+# 「清理缓存」按钮除上面的再生缓存清单外,还把以下目录的**直接子项**全部清空
+# (只清内容,根目录本身保留):
+# - ``outputs/``:按 job 隔离的历史任务产物(manifest / draft / artifacts)
+# - ``inputs/``:导入的源素材与抽帧目录
+# - ``out/``:RunContext 默认 scratch(测试残留)
+#
+# 与 ``CACHE_PATHS_TO_CLEAN`` 的区别:那份清单「删条目本身」(目录整体消失),
+# 这里「保留根、清空子项」,且子项**文件与目录都要**(out/ 根下直接躺着
+# media.json 等散文件)。删除方式见 nodes/node_01_clean_cache.py:一律移入
+# Windows 回收站,回收失败只记 error_log,绝不回退成永久删除。
+CACHE_TRASH_CHILDREN_ROOTS: list[str] = [
+    r"E:\Documents\kuaishou\auto-video-editor\outputs",
+    r"E:\Documents\kuaishou\auto-video-editor\inputs",
+    r"E:\Documents\kuaishou\auto-video-editor\out",
+]
+
+
+def resolved_trash_children() -> list[Path]:
+    """把 ``CACHE_TRASH_CHILDREN_ROOTS`` 展开为各根下**当下存在**的直接子项。
+
+    - 根不存在 / 不是目录 → 静默跳过(与 ``resolved_cache_paths`` 同契约)。
+    - 文件与目录都返回(区别于 ``dir_children`` glob spec 的只返回目录)。
+    - 每次调用时展开,反映当下文件系统状态。
+    """
+    children: list[Path] = []
+    for raw in CACHE_TRASH_CHILDREN_ROOTS:
+        root = Path(os.path.expandvars(raw))
+        if not root.is_dir():
+            continue
+        children.extend(root.iterdir())
+    return children
 
 
 # ---------------------------------------------------------------------------

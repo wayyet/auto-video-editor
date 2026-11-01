@@ -3951,7 +3951,10 @@ async def clean_cache_endpoint(request: Request):
     行为:
     - 调用 ``auto-video-editor/nodes/node_01_clean_cache.py`` 的 ``clean_cache`` 函数,
       清理 ``config.CACHE_PATHS_TO_CLEAN`` 里的剪映 / OpenStoryline / jianying_workflow_tmp
-      三类路径。
+      三类路径,并清空 ``config.CACHE_TRASH_CHILDREN_ROOTS``(outputs/ inputs/ out/)
+      三根的直接子项(2026-11-01 新增)。
+    - **所有删除项一律移入 Windows 回收站**(可恢复),不再彻底删除;
+      回收失败的项保留原处并写入返回的 errors。
     - 不在 LangGraph ``graph.invoke`` 时自动跑(2026-09 计划改造后)。
     - 速率限制:全局 + 每 IP 双重桶,默认 burst=1 rpm=2(防误连点)。
     - 路径定位:``AUTO_VIDEO_EDITOR_DIR`` 环境变量优先,默认 ``E:\\Documents\\kuaishou\\auto-video-editor``。

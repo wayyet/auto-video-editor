@@ -1,7 +1,14 @@
-"""节点 1 单测(附件 1.2 节要点)。"""
+"""节点 1 单测(附件 1.2 节要点 + 2026-11-01 回收站语义增补)。
+
+2026-11-01 起 ``clean_cache`` 的所有删除项**一律移入 Windows 回收站**
+(``_send_to_recycle_bin``),不再 ``shutil.rmtree``。本文件所有用例都
+monkeypatch ``nodes.node_01_clean_cache._send_to_recycle_bin``,避免污染
+真实回收站;stub 用 ``_really_delete`` 模拟「回收成功 = 从原位置消失」。
+"""
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -19,6 +26,14 @@ def state_base() -> dict:
     return {"session_id": "test", "error_log": []}
 
 
+def _really_delete(path: Path) -> None:
+    """stub 用:模拟一次成功回收(目标从原位置消失)。"""
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
 def test_nonexistent_path_does_not_error(tmp_path: Path, state_base: dict) -> None:
     """目标目录不存在 → 正常跳过,不影响整体。"""
     missing = tmp_path / "does_not_exist"
@@ -27,20 +42,23 @@ def test_nonexistent_path_does_not_error(tmp_path: Path, state_base: dict) -> No
     assert out["cache_cleaned_paths"] == []  # 不存在的路径不算成功
 
 
-def test_file_lock_exception_writes_error_log(tmp_path: Path, state_base: dict, monkeypatch) -> None:
-    """rmtree 抛 PermissionError → 异常被捕获,写入 error_log,不中断。"""
+def test_recycle_failure_writes_error_log_and_keeps_target(
+    tmp_path: Path, state_base: dict, monkeypatch
+) -> None:
+    """回收站操作抛 PermissionError → 捕获、写 error_log、目标保留原处。"""
     target = tmp_path / "locked_dir"
     target.mkdir()
     (target / "file.txt").write_text("data", encoding="utf-8")
 
-    def fail_rmtree(path, *args, **kwargs):
+    def fail_recycle(path):
         raise PermissionError("locked")
 
-    monkeypatch.setattr("shutil.rmtree", fail_rmtree)
+    monkeypatch.setattr("nodes.node_01_clean_cache._send_to_recycle_bin", fail_recycle)
     out = clean_cache_paths([target], state_base)
     assert out["cache_cleaned"] is True
     assert out["cache_cleaned_paths"] == []  # 失败不算成功
     assert any("清理失败" in e for e in out["error_log"])
+    assert target.exists(), "回收失败的项目必须保留原处,绝不回退成永久删除"
 
 
 def test_only_successful_paths_returned(tmp_path: Path, state_base: dict, monkeypatch) -> None:
@@ -50,14 +68,12 @@ def test_only_successful_paths_returned(tmp_path: Path, state_base: dict, monkey
     fail = tmp_path / "fail_dir"
     fail.mkdir()
 
-    real_rmtree = __import__("shutil").rmtree
-
-    def selective_rmtree(path, *args, **kwargs):
+    def selective_recycle(path):
         if str(path).endswith("fail_dir"):
             raise PermissionError("nope")
-        return real_rmtree(path, *args, **kwargs)
+        _really_delete(path)
 
-    monkeypatch.setattr("shutil.rmtree", selective_rmtree)
+    monkeypatch.setattr("nodes.node_01_clean_cache._send_to_recycle_bin", selective_recycle)
     out = clean_cache_paths([success, fail], state_base)
     assert out["cache_cleaned_paths"] == [str(success)]
     assert any("清理失败" in e for e in out["error_log"])
@@ -286,3 +302,102 @@ def test_clean_cache_paths_idempotent_on_missing_glob_results() -> None:
         # 每项必须是 Path 且当下存在(不存在的不应被列入)
         assert isinstance(p, Path)
         assert p.exists()
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-01 增补:一键回收根(outputs/ inputs/ out/)+ 全量回收站语义
+# ---------------------------------------------------------------------------
+
+def test_resolved_trash_children_expands_files_and_dirs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``resolved_trash_children()`` 返回各根下**当下存在**的直接子项,文件+目录都要。"""
+    import config as config_mod
+    from config import resolved_trash_children
+
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "f.json").write_text("{}", encoding="utf-8")
+    (root / "d").mkdir()
+    (root / "d" / "nested.txt").write_text("x", encoding="utf-8")
+
+    monkeypatch.setattr(config_mod, "CACHE_TRASH_CHILDREN_ROOTS", [str(root)])
+    kids = resolved_trash_children()
+    assert {p.name for p in kids} == {"f.json", "d"}, (
+        f"直接子项应含文件与目录(不含嵌套),实际:{[p.name for p in kids]}"
+    )
+
+    # 根不存在 → 静默跳过,返回空列表
+    monkeypatch.setattr(config_mod, "CACHE_TRASH_CHILDREN_ROOTS", [str(tmp_path / "nope")])
+    assert resolved_trash_children() == []
+
+
+def test_clean_cache_empties_trash_roots_and_keeps_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """clean_cache 清空三根的直接子项(文件+目录),根目录本身保留。"""
+    import nodes.node_01_clean_cache as mod
+
+    root = tmp_path / "outputs"
+    root.mkdir()
+    job = root / "job-1"
+    job.mkdir()
+    (job / "draft_content.json").write_text("{}", encoding="utf-8")
+    video = root / "a.mp4"
+    video.write_bytes(b"x")
+
+    # 双解析器全部指到 tmp,绝不触碰真实磁盘
+    monkeypatch.setattr(mod, "resolved_trash_children", lambda: [job, video])
+    monkeypatch.setattr(mod, "resolved_cache_paths", lambda: [])
+    monkeypatch.setattr(mod, "_send_to_recycle_bin", _really_delete)
+
+    out = mod.clean_cache({"session_id": "t", "error_log": []})
+    assert not job.exists() and not video.exists()
+    assert root.exists(), "根目录本身必须保留(只清内容)"
+    assert set(out["cache_cleaned_paths"]) == {str(job), str(video)}
+
+
+def test_clean_cache_covers_trash_roots_then_cache_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """顺序契约:先清三根子项,再清原有清单;两类都经同一回收站函数。"""
+    import nodes.node_01_clean_cache as mod
+
+    calls: list[str] = []
+    x = tmp_path / "x"
+    y = tmp_path / "y"
+    x.write_text("x", encoding="utf-8")  # 必须真实存在,否则 _recycle_one 会跳过
+    y.write_text("y", encoding="utf-8")
+    monkeypatch.setattr(mod, "resolved_trash_children", lambda: [x])
+    monkeypatch.setattr(mod, "resolved_cache_paths", lambda: [y])
+    monkeypatch.setattr(mod, "_send_to_recycle_bin", lambda p: calls.append(str(p)))
+
+    out = mod.clean_cache({"session_id": "t", "error_log": []})
+    assert [Path(c).name for c in calls] == ["x", "y"]
+    assert out["cache_cleaned_paths"] == calls
+    assert out["cache_cleaned"] is True
+
+
+def test_trash_roots_recycle_failure_keeps_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回收根子项回收失败 → 记 error_log、子项保留、根目录不受影响。"""
+    import nodes.node_01_clean_cache as mod
+
+    root = tmp_path / "inputs"
+    root.mkdir()
+    child = root / "src.mp4"
+    child.write_bytes(b"x")
+
+    monkeypatch.setattr(mod, "resolved_trash_children", lambda: [child])
+    monkeypatch.setattr(mod, "resolved_cache_paths", lambda: [])
+
+    def fail_recycle(path):
+        raise OSError("bin locked")
+
+    monkeypatch.setattr(mod, "_send_to_recycle_bin", fail_recycle)
+    out = mod.clean_cache({"session_id": "t", "error_log": []})
+    assert out["cache_cleaned_paths"] == []
+    assert any("清理失败" in e for e in out["error_log"])
+    assert child.exists(), "回收失败的子项必须保留原处"
+    assert root.exists()

@@ -31,6 +31,19 @@ pytestmark = pytest.mark.xfail(
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_real_cache_cleanup(monkeypatch):
+    """本文件用例会把**真实**的 ``clean_cache`` 节点接进测试图并真跑。
+
+    2026-11-01 起 ``clean_cache`` 还会清空 outputs/ inputs/ out/ 的内容;
+    把两个路径解析器指到空,保证任何用例都不会碰到真实磁盘。
+    """
+    import nodes.node_01_clean_cache as mod
+
+    monkeypatch.setattr(mod, "resolved_cache_paths", lambda: [])
+    monkeypatch.setattr(mod, "resolved_trash_children", lambda: [])
+
+
 # ---------------------------------------------------------------------------
 # 测试辅助:用 monkeypatch 把"外部副作用"全部干掉
 # ---------------------------------------------------------------------------
