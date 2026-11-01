@@ -56,6 +56,30 @@
 - ``node_08 → fork`` 显式依赖:16a 读 node_08 产出的 asr_segments_zh。
 - ②与③ 永不同时挂起(②在尾链,③在英文线)。
 
+2026-10 human 融合(``STORYLINE_HUMAN_FUSION=1``,默认关;设计见
+《剧情线自动模式节点并入人工模式主图设计与执行计划》):
+- ``STORYLINE_MODE=human`` 下,把 auto 模式的 21 个 storyline 节点以"侧支"并入 human 主图:
+  每个节点**各自独立**挂在一个相关的 human 节点后面(``锚点 → storyline_xxx``)。侧支**没有出边**,
+  所以不改变任何 human 节点的执行顺序(LangGraph 超步语义);auto 链内部的边不接。
+- 挂载点(``ASSEMBLY_QC_GATE_ENABLED=true``):
+    checkpoint0_storyline_plan   → storyline_search_web_topic
+    import_video                 → storyline_load_media / storyline_search_media
+    assembly_discover_and_probe  → storyline_split_shots / storyline_local_asr
+    assembly_asr_and_visual_observe → storyline_understand_clips / storyline_speech_rough_cut
+    assembly_build_timeline      → storyline_filter_clips
+    node_06_human_reorder        → storyline_group_clips
+    node_08_add_subtitles        → storyline_generate_script / storyline_script_template_recommendation
+    node_10_inject_text_fx       → storyline_recommend_text
+    node_17_inject_english_tts   → storyline_generate_voiceover / storyline_select_bgm
+    node_09_inject_fx            → storyline_recommend_transition
+    node_12_human_add_bgm        → storyline_generate_ai_transition / storyline_plan_timeline_pro
+    node_13_adjust_volume        → storyline_plan_timeline_ai_transition
+    join_before_delivery         → storyline_render_video / storyline_qa_gate / storyline_join
+  质检关闭(assembly_* 不接边)时其中 6 个节点改挂别处,见 ``nodes/storyline/fusion.py``。
+- 侧支由 ``fusion.wrap_node`` 包装:只写白名单里的 storyline_* 键、缺前置产物就跳过、异常不外溢、
+  产物写到 ``<outputs>/<job>/fusion/``。开关在**构图时**读取(与 ``ASSEMBLY_QC_GATE_ENABLED``
+  同一惯例,改完要重新 build_graph);auto 模式不受影响;开关关闭时图与改动前逐边一致。
+
 2026-09 关键改动(对照 plan §4/§5):
 - OpenStoryline 改为本地 uvicorn 子进程 + 读盘(node_02 不再有 MCP 链路,
   node_04b 读 ``openstoryline/outputs/<sid>/plan_timeline_pro/``)。
@@ -257,6 +281,7 @@ from nodes.storyline.node_plan_timeline_ai_transition import (
     storyline_plan_timeline_ai_transition_node,
 )
 from nodes.storyline.node_render_video import storyline_render_video_node
+from nodes.storyline import fusion as _fusion
 from nodes.storyline._common import media_has_audio, web_topic_query
 from storyline_capabilities.ai_transition_client import is_ai_transition_enabled
 
@@ -600,6 +625,18 @@ def _build_state_graph():
     """
     from langgraph.graph import END, START, StateGraph
 
+    # human 模式融合(设计文档《剧情线自动模式节点并入人工模式主图…》):
+    # 构图时读开关;只在 human 模式 + STORYLINE_HUMAN_FUSION=1 时启用。
+    import config as _config
+    _fusion_on = (
+        (_STORYLINE_MODE_OVERRIDE.get() or STORYLINE_MODE) == "human"
+        and bool(_config.STORYLINE_HUMAN_FUSION)
+    )
+
+    def _sl(name, fn):
+        """融合模式:storyline 节点换成带白名单/跳过/异常隔离的侧支包装;否则原样返回。"""
+        return _fusion.wrap_node(name, fn) if _fusion_on else fn
+
     g = StateGraph(WorkflowState)
 
     # ---- 节点 1-5 (Week 2 已有,节点 5 用 wrapper 注入 draft_dir) ----
@@ -667,34 +704,43 @@ def _build_state_graph():
     # 所有 storyline 节点在两种 mode 下都注册成图节点(便于检查点兼容);
     # 但仅在 ``auto`` 模式下通过 _route_mode 条件边连通,``human`` 模式下完全
     # 不进入这些节点,172 unit / 关卡⓪ interrupt/resume 不回归。
-    g.add_node("storyline_load_media", storyline_load_media_node)
-    g.add_node("storyline_search_media", storyline_search_media_node)
+    g.add_node("storyline_load_media", _sl("storyline_load_media", storyline_load_media_node))
+    g.add_node("storyline_search_media", _sl("storyline_search_media", storyline_search_media_node))
     # 2026-10 已接入:storyline_load_media 之后的并行旁支(见 _storyline_route_after_load_media)
-    g.add_node("storyline_search_web_topic", storyline_search_web_topic_node)
-    g.add_node("storyline_split_shots", storyline_split_shots_node)
+    # (human 融合模式 STORYLINE_HUMAN_FUSION=1 下,它作为侧支挂在 checkpoint0_storyline_plan 后,
+    #  见 nodes/storyline/fusion.py)
+    g.add_node("storyline_search_web_topic", _sl("storyline_search_web_topic", storyline_search_web_topic_node))
+    g.add_node("storyline_split_shots", _sl("storyline_split_shots", storyline_split_shots_node))
     # 2026-10 已接入:storyline_split_shots 之后的并行旁支(见 _storyline_route_after_split_shots)
-    g.add_node("storyline_local_asr", storyline_local_asr_node)
-    g.add_node("storyline_speech_rough_cut", storyline_speech_rough_cut_node)
+    # (human 融合模式下 local_asr / speech_rough_cut 作为侧支挂在 assembly_discover_and_probe 后,
+    #  见 nodes/storyline/fusion.py)
+    g.add_node("storyline_local_asr", _sl("storyline_local_asr", storyline_local_asr_node))
+    g.add_node("storyline_speech_rough_cut", _sl("storyline_speech_rough_cut", storyline_speech_rough_cut_node))
     # 2026-10 已接入:与 plan_timeline_pro 并排(同一道 4 源屏障;建图时按开关接边)
+    # (human 融合模式下作为侧支挂在 node_12_human_add_bgm 后,见 nodes/storyline/fusion.py)
     g.add_node("storyline_generate_ai_transition",
-               storyline_generate_ai_transition_node)
-    g.add_node("storyline_understand_clips", storyline_understand_clips_node)
-    g.add_node("storyline_filter_clips", storyline_filter_clips_node)
-    g.add_node("storyline_group_clips", storyline_group_clips_node)
-    g.add_node("storyline_generate_script", storyline_generate_script_node)
+               _sl("storyline_generate_ai_transition",
+                   storyline_generate_ai_transition_node))
+    g.add_node("storyline_understand_clips", _sl("storyline_understand_clips", storyline_understand_clips_node))
+    g.add_node("storyline_filter_clips", _sl("storyline_filter_clips", storyline_filter_clips_node))
+    g.add_node("storyline_group_clips", _sl("storyline_group_clips", storyline_group_clips_node))
+    g.add_node("storyline_generate_script", _sl("storyline_generate_script", storyline_generate_script_node))
     g.add_node("storyline_script_template_recommendation",
-               storyline_script_template_recommendation_node)
-    g.add_node("storyline_generate_voiceover", storyline_generate_voiceover_node)
-    g.add_node("storyline_select_bgm", storyline_select_bgm_node)
-    g.add_node("storyline_recommend_transition", storyline_recommend_transition_node)
-    g.add_node("storyline_recommend_text", storyline_recommend_text_node)
-    g.add_node("storyline_plan_timeline_pro", storyline_plan_timeline_pro_node)
+               _sl("storyline_script_template_recommendation",
+                   storyline_script_template_recommendation_node))
+    g.add_node("storyline_generate_voiceover", _sl("storyline_generate_voiceover", storyline_generate_voiceover_node))
+    g.add_node("storyline_select_bgm", _sl("storyline_select_bgm", storyline_select_bgm_node))
+    g.add_node("storyline_recommend_transition", _sl("storyline_recommend_transition", storyline_recommend_transition_node))
+    g.add_node("storyline_recommend_text", _sl("storyline_recommend_text", storyline_recommend_text_node))
+    g.add_node("storyline_plan_timeline_pro", _sl("storyline_plan_timeline_pro", storyline_plan_timeline_pro_node))
     # 2026-10 已接入:plan_timeline_pro + generate_ai_transition 之后、qa_gate 之前
+    # (human 融合模式下作为侧支挂在 node_13_adjust_volume 后,见 nodes/storyline/fusion.py)
     g.add_node("storyline_plan_timeline_ai_transition",
-               storyline_plan_timeline_ai_transition_node)
-    g.add_node("storyline_render_video", storyline_render_video_node)
-    g.add_node("storyline_qa_gate", _qa_gate_mod.storyline_qa_gate_node)
-    g.add_node("storyline_join", _join_storyline_mod.storyline_join_node)
+               _sl("storyline_plan_timeline_ai_transition",
+                   storyline_plan_timeline_ai_transition_node))
+    g.add_node("storyline_render_video", _sl("storyline_render_video", storyline_render_video_node))
+    g.add_node("storyline_qa_gate", _sl("storyline_qa_gate", _qa_gate_mod.storyline_qa_gate_node))
+    g.add_node("storyline_join", _sl("storyline_join", _join_storyline_mod.storyline_join_node))
 
     # ---- 边 ----
     # 节点 clean_cache 保留在图中(供 FireRed-OpenStoryline Web UI 的
@@ -818,6 +864,13 @@ def _build_state_graph():
 
     # join → END
     g.add_edge("join_before_delivery", END)
+
+    # ---- human 模式融合:21 个 storyline 节点以侧支挂到相关 human 节点旁 ----
+    # 融合时**不接** auto 链内部边:LM 有出边会把整条 auto 链触发,
+    # 且 storyline_join -> generate_draft 会回环。侧支节点只有入边,没有出边。
+    if _fusion_on:
+        _fusion.wire_human_fusion(g, qc_enabled=bool(_config.ASSEMBLY_QC_GATE_ENABLED))
+        return g
 
     # ---- Phase 4:auto-mode 19 节点图边(plan_v4 §2.2 / §5 阶段 0)----
     # 起点:``_route_mode`` 条件边已把 open_preview 指向 ``storyline_load_media``。

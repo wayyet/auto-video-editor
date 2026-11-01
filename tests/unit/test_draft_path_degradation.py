@@ -85,14 +85,20 @@ def test_plan_timeline_pro_fan_in_excludes_split_shots() -> None:
     split_shots 在 qa_gate 重试点(group_clips)的**上游**,不会重跑;
     留在 barrier 里 → 第二轮补不齐 → 图静默 END。
     """
-    from graph import build_graph
+    from graph import _STORYLINE_MODE_OVERRIDE, build_graph
 
-    graph = build_graph(
-        checkpointer=InMemorySaver(),
-        thread_id="topo-probe",
-        start_heartbeat_thread=False,
-        run_preflight=False,
-    )
+    # 这里守的是 auto 链的 fan-in。human 融合模式(STORYLINE_HUMAN_FUSION)不接 auto 链内部边,
+    # 所以显式按 auto 模式构图:无论融合开关开/关,断言都针对同一张 auto 链。
+    token = _STORYLINE_MODE_OVERRIDE.set("auto")
+    try:
+        graph = build_graph(
+            checkpointer=InMemorySaver(),
+            thread_id="topo-probe",
+            start_heartbeat_thread=False,
+            run_preflight=False,
+        )
+    finally:
+        _STORYLINE_MODE_OVERRIDE.reset(token)
     edges = graph.get_graph().edges
 
     sources_of_ptp: set[str] = set()
