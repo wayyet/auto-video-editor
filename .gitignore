@@ -48,11 +48,18 @@ inputs/
 openstoryline-config/
 
 # OpenStoryline 嵌入式子系统本地实例（代码+模板入库，运行时不入库）
+# 注：目录扁平化迁移进行中（旧 openstoryline/ 保留至阶段9），新旧两套规则并存
 openstoryline/.venv/
 openstoryline/outputs/
 openstoryline/.storyline/
 openstoryline/resource/
 openstoryline/config.toml.local
+
+# 扁平化迁移后的根目录运行时（.storyline 模型权重/resource 素材均不入库，脚本可重建）
+.venv-openstoryline/
+/.storyline/
+/resource/
+/config.toml.local
 
 # 编辑备份与脚本误产物
 *.bak

@@ -1,0 +1,10 @@
+{"data": {"message": "MCode 进程已启动", "phase": "initializing", "run_id": "run-e2e", "seq": 1, "session_id": "sess-e2e-1", "source": "mcode", "status": "running", "turn_id": "turn-e2e-1"}, "type": "agent.status"}
+{"data": {"message": "MCode 会话已就绪", "phase": "initializing", "run_id": "run-e2e", "seq": 2, "session_id": "sess-e2e-1", "source": "mcode", "status": "running", "turn_id": "turn-e2e-1"}, "type": "agent.status"}
+{"data": {"message": "正在分析任务", "phase": "analyzing", "run_id": "run-e2e", "seq": 3, "session_id": "sess-e2e-1", "source": "mcode", "status": "running", "turn_id": "turn-e2e-1"}, "type": "agent.status"}
+{"data": {"delta": "我先看看素材。", "run_id": "run-e2e", "seq": 4, "session_id": "sess-e2e-1", "source": "mcode", "turn_id": "turn-e2e-1"}, "type": "assistant.delta"}
+{"data": {"delta": "整理完了,成片在 outputs/ 下。", "run_id": "run-e2e", "seq": 5, "session_id": "sess-e2e-1", "source": "mcode", "turn_id": "turn-e2e-1"}, "type": "assistant.delta"}
+{"data": {"source": "mcode", "turn_id": "turn-e2e-1"}, "type": "assistant.flush"}
+{"data": {"args": {"value": ""}, "name": "read_notes", "run_id": "run-e2e", "seq": 6, "server": "MCode Agent", "source": "mcode", "tool_call_id": "call_1"}, "type": "tool.start"}
+{"data": {"message": "正在执行", "name": "read_notes", "progress": 0.0, "run_id": "run-e2e", "seq": 7, "server": "MCode Agent", "source": "mcode", "tool_call_id": "call_1"}, "type": "tool.progress"}
+{"data": {"is_error": false, "name": "read_notes", "run_id": "run-e2e", "seq": 8, "server": "MCode Agent", "source": "mcode", "summary": "已读取 5 个素材文件", "tool_call_id": "call_1"}, "type": "tool.end"}
+{"data": {"source": "mcode", "text": "我先看看素材。整理完了,成片在 outputs/ 下。", "turn_id": "turn-e2e-1"}, "type": "assistant.end"}

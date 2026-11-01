@@ -1,0 +1,5593 @@
+# agent_fastapi.py
+from __future__ import annotations
+
+import asyncio
+import errno
+import mimetypes
+import os
+import sys
+import json
+import re
+import time
+import uuid
+import math
+import logging
+import shutil
+from pathlib import Path
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple, Set
+from contextlib import asynccontextmanager
+from starlette.websockets import WebSocketState, WebSocketDisconnect
+try:
+    import tomllib          # Python 3.11+ # type: ignore
+except ModuleNotFoundError:
+    import tomli as tomllib # Python <= 3.10
+import traceback
+
+try:
+    from uvicorn.protocols.utils import ClientDisconnected
+except Exception:
+    ClientDisconnected = None
+
+
+logger = logging.getLogger(__name__)
+
+import anyio
+from fastapi import FastAPI, APIRouter, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect, Request
+from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
+
+from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage, AIMessage, ToolMessage
+
+# ---- 确保 src 可导入（避免环境差异导致找不到模块）----
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.join(ROOT_DIR, "src")
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
+# ---- 仓库根目录:``db`` 包(PostgreSQL 仓储,阶段 D)在仓库根下 ----
+# agent_fastapi.py 由 ``openstoryline/.venv`` 启动(``uvicorn agent_fastapi:app``),
+# sys.path[0] 是 openstoryline/ ⇒ 仓库根不在其中 ⇒ ``import db`` 会失败。
+# 注意:仓库根有顶层 ``config.py``;本模块用的是 ``open_storyline.config``
+# (带包名),不受影响。
+REPO_ROOT_DIR = os.path.dirname(ROOT_DIR)
+if REPO_ROOT_DIR not in sys.path:
+    sys.path.insert(0, REPO_ROOT_DIR)
+
+# ---- 确保 ``src.open_storyline.*`` 这种写法能 import ----
+# ``open_storyline.nodes.node_manager`` 里写的是 ``from src.open_storyline... import ...``,
+# 即把 ``openstoryline/`` 当成 ``src`` 的父目录。生产环境靠 cwd=openstoryline/ 达成;
+# 这里补上,保证从仓库根 ``import openstoryline.agent_fastapi`` 也能用。
+# ⚠️ 放**末尾**:仓库根的 ``config.py`` 必须优先于 ``openstoryline/config.py``。
+if ROOT_DIR not in sys.path:
+    sys.path.append(ROOT_DIR)
+
+from open_storyline.agent import build_agent, ClientContext, is_mcode_model, is_zcode_model
+from open_storyline.utils.prompts import get_prompt
+from open_storyline.utils.media_handler import scan_media_dir
+from open_storyline.utils.ai_transition_cancel import (
+    clear_ai_transition_cancelled,
+    set_ai_transition_cancelled,
+)
+from open_storyline.config import load_settings, default_config_path
+from open_storyline.config import Settings
+from open_storyline.storage.agent_memory import ArtifactStore
+from open_storyline.mcp.hooks.node_interceptors import ToolInterceptor
+from open_storyline.mcp.hooks.chat_middleware import set_mcp_log_sink, reset_mcp_log_sink
+from open_storyline.mcode_media import (
+    MCodeMediaError,
+    allowed_media_roots,
+    prepare_media_copies,
+    resolve_media_root,
+)
+from open_storyline.mcode_event_adapter import (
+    KIND_FINAL,
+    KIND_STATUS,
+    KIND_TEXT,
+    KIND_TOOL_END,
+    KIND_TOOL_PROGRESS,
+    KIND_TOOL_START,
+    MCodeEventAdapter,
+)
+from open_storyline.zcode_event_adapter import ZCODE_SOURCE, ZCodeEventAdapter, make_zcode_sink
+from open_storyline.zcode_agent_adapter import resolve_zcode_bin, zcode_selfcheck
+
+WEB_DIR = os.path.join(ROOT_DIR, "web")
+STATIC_DIR = os.path.join(WEB_DIR, "static")
+INDEX_HTML = os.path.join(WEB_DIR, "index.html")
+NODE_MAP_HTML = os.path.join(WEB_DIR, "node_map/node_map.html")
+NODE_MAP_DIR = os.path.join(WEB_DIR, "node_map")
+
+SERVER_CACHE_DIR = os.path.join(ROOT_DIR, '.storyline' , ".server_cache")
+
+CHUNK_SIZE = 1024 * 1024  # 1MB
+
+# 是否根据session_id隔离用户
+USE_SESSION_SUBDIR = True
+
+CUSTOM_MODEL_KEY = "__custom__"
+
+# GLM API(BigModel OpenAI 兼容)预设(ZCode 接入设计 §10.4 阶段 C)。
+# 这是一条**模型服务**链路:走 ChatOpenAI -> BigModel endpoint,和内置模型同构。
+# ⚠️ 命名约束(设计 §7 约束 8):菜单标识就是 ``GLM API / BigModel``,
+#    **禁止**命名为 ``ZCode Agent`` —— GLM API 是模型调用,ZCode Agent 是
+#    外部 Agent Runtime,两者不是一回事,来源标识不可混用。
+# 这个 key 本身就是前端下拉里的显示文本(app.js 直接渲染模型 key 作为标签),
+# 所以它必须保持人类可读,不能改成 "__glm__" 这类内部代号。
+GLM_MODEL_KEY = "GLM API / BigModel"
+
+# mcode 档位:网页端模型下拉里的可选项。
+#   mcode-operator -> mcode standard 模式(完整 agent 能力,开销大)
+# 选中后整个会话的 LLM/VLM 都由 `mcode exec` 子进程驱动
+# (mcode 不区分多模态),不再走 OpenAI 兼容网关,也不需要 API key。
+MCODE_MODEL_KEYS: Tuple[str, ...] = ("mcode-operator",)
+
+# zcode CLI(智谱 ZCode)无头档位:网页端模型下拉里的可选项(阶段 E)。
+# 选中后整个会话由 `zcode -p ... --json` 子进程驱动(认证走 CLI 本机登录态,
+# 不需要 API key)。key 本身就是前端下拉的显示文本,保持人类可读。
+# 命名约束(设计 §7 约束 8):这是 **Agent Runtime** 档位,与 GLM API 模型服务
+# 是两条独立链路,"GLM API / BigModel" 与 "ZCode Agent" 的来源标识不可混用。
+ZCODE_MODEL_KEY = "ZCode Agent"
+
+SESSION_STATE_FILENAME = "session_state.json"
+SESSION_STATE_MAX_HISTORY = 2000
+SESSION_STATE_MAX_LC_MESSAGES = 4000
+UPLOAD_STATUS_SYSTEM_PREFIX = "【User media upload status】"
+UPLOAD_STATUS_SYSTEM_EMPTY = "【User media upload status】{}"
+MASKED_SECRET = "***"
+
+# -- 阶段 E:执行过程 trace 的边界 ------------------------------------------
+#
+# 设计文档 §9 T7:过程事件**单独**存一份有界 trace,不进 ``sess.history``。
+# 三个上限:
+#   - 每轮最多 MCODE_TRACE_MAX_EVENTS 条(与 ``[mcode] max_trace_events`` 一致);
+#   - 单条摘要最多 MCODE_TRACE_MAX_TEXT_CHARS 字符(与 ``max_event_text_chars`` 一致);
+#   - 跨轮最多留 MCODE_TRACE_MAX_TURNS 轮(再旧就丢,避免会话状态无限长)。
+MCODE_TRACE_MAX_EVENTS = 300
+MCODE_TRACE_MAX_TEXT_CHARS = 2000
+MCODE_TRACE_MAX_TURNS = 5
+
+#: trace 记录里允许出现的字段(白名单)。其余字段一律不落盘 ——
+#: 避免把 prompt、环境变量、完整 stderr 之类的东西顺手存进去。
+MCODE_TRACE_FIELDS: Tuple[str, ...] = (
+    "type",
+    "source",
+    "session_id",
+    "turn_id",
+    "run_id",
+    "seq",
+    "status",
+    "phase",
+    "step_id",
+    "title",
+    "message",
+    "tool_call_id",
+    "name",
+    "server",
+    "is_error",
+    "summary",
+    "timestamp_ms",
+)
+
+def debug_traceback_print(cfg: Settings):
+    if cfg.developer.developer_mode:
+        traceback.print_exc()
+
+def _s(x: Any) -> str:
+    return str(x or "").strip()
+
+def _norm_url(u: Any) -> str:
+    u = _s(u)
+    return u.rstrip("/") if u else ""
+
+
+def _ai_transition_cancel_cache_root(cfg: Settings) -> Path:
+    cache_dir = Path(cfg.local_mcp_server.server_cache_dir)
+    if not cache_dir.is_absolute():
+        cache_dir = Path(ROOT_DIR) / cache_dir
+    return cache_dir
+
+MODEL_ENV_KEYS = {
+    "llm": {
+        "model": "OPENSTORYLINE_LLM_MODEL",
+        "base_url": "OPENSTORYLINE_LLM_BASE_URL",
+        "api_key": "OPENSTORYLINE_LLM_API_KEY",
+    },
+    "vlm": {
+        "model": "OPENSTORYLINE_VLM_MODEL",
+        "base_url": "OPENSTORYLINE_VLM_BASE_URL",
+        "api_key": "OPENSTORYLINE_VLM_API_KEY",
+    },
+}
+
+def _read_model_env(kind: str) -> Dict[str, str]:
+    keys = MODEL_ENV_KEYS[kind]
+    return {
+        "model": os.getenv(keys.get("model", "")) or "",
+        "base_url": _norm_url(os.getenv(keys.get("base_url", ""))),
+        "api_key": os.getenv(keys.get("api_key", "")) or "",
+    }
+
+def _resolve_builtin_model_override(kind: str, cfg_block: Any) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """
+    Default model parsing rules:
+    1. Prioritize using `[llm]/[vlm]` from `config.toml`
+    2. If any of `model`, `base_url`, or `api_key` is missing, the entire set will fall back to environment variables.
+    3. Runtime parameters such as `timeout`, `temperature`, and `max_retries` are still read from the config block.
+    """
+    kind = kind.strip().lower()
+    if kind not in ("llm", "vlm"):
+        return None, f"unknown model kind: {kind}"
+
+    model = _s(getattr(cfg_block, "model", None))
+    base_url = _norm_url(getattr(cfg_block, "base_url", None))
+    api_key = _s(getattr(cfg_block, "api_key", None))
+
+    config_complete = bool(model and base_url and api_key)
+
+    if not config_complete:
+        env_cfg = _read_model_env(kind)
+        model = env_cfg["model"]
+        base_url = env_cfg["base_url"]
+        api_key = env_cfg["api_key"]
+
+    if not (model and base_url and api_key):
+        keys = MODEL_ENV_KEYS[kind]
+        return None, (
+            f"{kind} config incomplete. "
+            f"Please either fill [{kind}].model/base_url/api_key in config.toml, "
+            f"or set env vars: "
+            f"{keys['model']}, {keys['base_url']}, {keys['api_key']}"
+            f"\nand then rerun."
+        )
+
+    override: Dict[str, Any] = {
+        "model": model,
+        "base_url": base_url,
+        "api_key": api_key,
+    }
+
+    for k in ("timeout", "temperature", "max_retries", "top_p", "max_tokens"):
+        v = getattr(cfg_block, k, None)
+        if v not in (None, ""):
+            override[k] = v
+
+    return override, None
+
+def _peek_builtin_model_name(kind: str, cfg: Settings) -> str:
+    # Get the model name displayed on the front end
+    cfg_block = cfg.llm if kind == "llm" else cfg.vlm
+    resolved, _ = _resolve_builtin_model_override(kind, cfg_block)
+    if resolved and resolved.get("model"):
+        return _s(resolved["model"])
+
+    return "unknown model"
+
+
+def _looks_like_placeholder_secret(value: Any) -> bool:
+    """这个密钥字段是不是「空 / 掩码 / 占位符」。
+
+    入库的 ``config.toml`` 里 api_key 是 ``<YOUR_DEEPSEEK_API_KEY>`` 这种占位符,
+    真值只可能来自 ``config.toml.local`` 或环境变量。占位符**不能**当凭证用,
+    拿它去请求网关只会得到 401。
+    """
+    s = str(value or "").strip()
+    if not s or s == MASKED_SECRET:
+        return True
+    return s.startswith("<") and s.endswith(">")
+
+
+def _builtin_credentials_usable(cfg: Settings, kind: str = "llm") -> bool:
+    """内置模型(``[llm]`` / ``[vlm]``)的凭证是否真的可用。"""
+    cfg_block = cfg.llm if kind == "llm" else cfg.vlm
+    resolved, err = _resolve_builtin_model_override(kind, cfg_block)
+    if err or not resolved:
+        return False
+    return not _looks_like_placeholder_secret(resolved.get("api_key"))
+
+
+# --------------------------------------------------------------------------
+# GLM API 预设(阶段 C)
+# --------------------------------------------------------------------------
+# 不复用 _resolve_builtin_model_override:那个函数对 [llm]/[vlm] 的语义是
+# 「config 三项任一缺失 → 整组回落到环境变量」。GLM 的 model/base_url 有
+# 合理默认值,只有 api_key 需要 Key,整组回落会把默认的 model/base_url 一并
+# 冲掉。这里按字段逐项合并:config 值优先,环境变量只补缺失的字段。
+
+def _resolve_glm_override(cfg: Settings) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """把 ``[glm]`` 段(+ 环境变量补洞)解析成一份 ChatOpenAI override。
+
+    Returns:
+        (override, None) 或 (None, 错误信息)。override 只含模型请求必需项,
+        不含任何 ZCode 私有凭据(GLM API 与 ZCode Agent 是两条独立链路)。
+    """
+    g = getattr(cfg, "glm", None)
+    if g is None:
+        return None, "glm config missing (internal error: GLMConfig should always exist)"
+
+    model = _s(g.model) or _s(os.getenv("OPENSTORYLINE_GLM_MODEL"))
+    base_url = _norm_url(g.base_url) or _norm_url(os.getenv("OPENSTORYLINE_GLM_BASE_URL"))
+    api_key = _s(g.api_key) or _s(os.getenv("OPENSTORYLINE_GLM_API_KEY"))
+
+    if not (model and base_url and api_key):
+        return None, (
+            "GLM API 配置不完整。请在 config.toml.local 的 [glm] 段填 api_key"
+            "(model/base_url 已有默认值),"
+            "或设置环境变量 OPENSTORYLINE_GLM_API_KEY"
+            "(/ OPENSTORYLINE_GLM_MODEL / OPENSTORYLINE_GLM_BASE_URL)。"
+        )
+
+    override: Dict[str, Any] = {"model": model, "base_url": base_url, "api_key": api_key}
+    for k in ("timeout", "temperature", "max_retries", "top_p", "max_tokens"):
+        v = getattr(g, k, None)
+        if v not in (None, ""):
+            override[k] = v
+    return override, None
+
+
+def _glm_vlm_model_name(cfg: Settings) -> str:
+    """GLM 预设的 VLM 侧模型名;空 = 未配置,VLM 下拉不出现 GLM 选项。"""
+    g = getattr(cfg, "glm", None)
+    return _s(getattr(g, "vlm_model", "") if g is not None else "") or \
+        _s(os.getenv("OPENSTORYLINE_GLM_VLM_MODEL"))
+
+
+def _glm_preset_available(cfg: Settings) -> bool:
+    """GLM API 预设当前能不能选。
+
+    判据:``[glm]`` 三要素(model/base_url/api_key)齐全**且** api_key 不是
+    占位符。与 mcode 档位同款策略:凭证没配好就不给一个「点了就 401」的选项。
+    """
+    resolved, err = _resolve_glm_override(cfg)
+    if err or not resolved:
+        return False
+    return not _looks_like_placeholder_secret(resolved.get("api_key"))
+
+
+def _mcode_tiers_available(cfg: Settings) -> List[str]:
+    """mcode 档位当前能不能选。
+
+    判据:``[mcode].cwd`` 已配置**且**目录存在。
+
+    目录里缺 ``.mcp.json`` / ``AGENTS.md`` 不在这里判 —— 那属于运行期配置错误,
+    让用户选中了再拿到明确报错,比悄悄把选项藏起来更好排查。
+    """
+    mcode_cfg = getattr(cfg, "mcode", None)
+    cwd = str(getattr(mcode_cfg, "cwd", "") or "").strip()
+    if not cwd:
+        return []
+    try:
+        if not Path(cwd).expanduser().is_dir():
+            return []
+    except OSError:
+        return []
+    return list(MCODE_MODEL_KEYS)
+
+
+def _zcode_available(cfg: Settings) -> bool:
+    """ZCode Agent 档位当前能不能选(阶段 E)。
+
+    判据:``[zcode].cwd`` 已配置、目录存在、bin 可解析且**启动自检通过**
+    (设计 §4.2 第二级前提 2:``--help`` 缺 ``-p, --prompt`` 旗标 = 选项不暴露)。
+    自检结果在 ``zcode_agent_adapter`` 内有缓存,失败短 TTL 后允许复检。
+    """
+    zcode_cfg = getattr(cfg, "zcode", None)
+    cwd = str(getattr(zcode_cfg, "cwd", "") or "").strip()
+    if not cwd:
+        return False
+    try:
+        if not Path(cwd).expanduser().is_dir():
+            return False
+    except OSError:
+        return False
+    bin_path = resolve_zcode_bin(str(getattr(zcode_cfg, "bin", "") or ""))
+    if not bin_path:
+        return False
+    ok, _reason = zcode_selfcheck(bin_path)
+    return ok
+
+
+def _zcode_note(cfg: Settings) -> str:
+    """ZCode Agent「配了但不可用」时的**禁用原因**(给快照 ``model_notes``)。
+
+    完全没配 ``[zcode].cwd`` 返回空串 —— 那是「功能未开启」,不是「坏了」,
+    选项直接从下拉消失(与 mcode/GLM 同款策略),不需要解释。
+    """
+    zcode_cfg = getattr(cfg, "zcode", None)
+    cwd = str(getattr(zcode_cfg, "cwd", "") or "").strip()
+    if not cwd:
+        return ""
+    try:
+        if not Path(cwd).expanduser().is_dir():
+            return f"zcode 工作区目录不存在: {cwd}"
+    except OSError as exc:
+        return f"zcode 工作区目录不可访问: {cwd}({exc})"
+    bin_path = resolve_zcode_bin(str(getattr(zcode_cfg, "bin", "") or ""))
+    if not bin_path:
+        return "找不到 zcode 可执行文件(设置 [zcode].bin 或环境变量 OPENSTORYLINE_ZCODE_BIN)"
+    ok, reason = zcode_selfcheck(bin_path)
+    if not ok:
+        return f"zcode 启动自检未通过: {reason}"
+    return ""
+
+
+def _resolve_mcode_tier(*keys: Any) -> str:
+    """从若干个模型 key 里解析出「生效的 mcode 档位」。
+
+    LLM 优先;LLM 不是 mcode 档位时再看 VLM。返回空串 = 不走 mcode。
+    """
+    for key in keys:
+        s = str(key or "").strip()
+        if is_mcode_model(s):
+            return s.lower()
+    return ""
+
+
+#: 本轮的模型来源。``mcode`` = MCode Agent 档位,``llm`` = 普通模型链路,
+#: ``zcode`` = ZCode Agent 档位(阶段 E)。
+TURN_SOURCE_MCODE = "mcode"
+TURN_SOURCE_LLM = "llm"
+TURN_SOURCE_ZCODE = "zcode"
+
+
+def _resolve_zcode_key(*keys: Any) -> str:
+    """从若干个模型 key 里解析出「生效的 zcode 档位」。
+
+    LLM 优先;LLM 不是 zcode 档位时再看 VLM。返回空串 = 不走 zcode。
+    """
+    for key in keys:
+        s = str(key or "").strip()
+        if is_zcode_model(s):
+            return s
+    return ""
+
+
+def _resolve_turn_source(*keys: Any) -> str:
+    """判定本轮的真实模型来源。
+
+    **服务端判定**:只看会话**已生效**的模型配置(``chat_model_key`` /
+    ``vlm_model_key``),不信任浏览器单独传来的模型名 ——
+    ``ensure_agent()`` 建的 agent 也是按这份配置来的,两边必须一致,
+    否则会出现「界面说是 mcode、实际跑的是 DeepSeek」这种张冠李戴。
+    """
+    if _resolve_zcode_key(*keys):
+        return TURN_SOURCE_ZCODE
+    tier = _resolve_mcode_tier(*keys)
+    if tier and is_mcode_model(tier):
+        return TURN_SOURCE_MCODE
+    return TURN_SOURCE_LLM
+
+
+def _should_forward_langgraph_text(turn_source: str) -> bool:
+    """LangGraph 的 model chunk 能不能作为 ``assistant.delta`` 转发。
+
+    MCode turn 的文本已经由 CLI 事件通道(``mcode.event``)送出 ——
+    再转发一次就是**同一份文本双发**。所以 mcode turn 一律不转发。
+    ZCode turn 同理:最终正文由结果 JSON 经 ``zcode.event`` 通道送出
+    (KIND_FINAL 只出一次),转发 LangGraph chunk 也会双发。
+    普通模型链路保持原样。
+    """
+    return turn_source not in (TURN_SOURCE_MCODE, TURN_SOURCE_ZCODE)
+
+
+def _make_mcode_adapter(
+    turn_source: str,
+    cfg: Any,
+    *,
+    session_id: str,
+    turn_id: str,
+) -> Optional[MCodeEventAdapter]:
+    """本轮要不要 MCode 事件适配器。
+
+    普通模型链路返回 ``None`` —— 那一侧**不注册** MCode 事件通道,
+    也就不会往 ``mcode.event`` 队列里写任何东西(SRC-03:
+    选了 DeepSeek 就不该出现「MCode Agent 执行面板」事件)。
+    """
+    if turn_source != TURN_SOURCE_MCODE:
+        return None
+    mcode_cfg = getattr(cfg, "mcode", None)
+    return MCodeEventAdapter(
+        session_id=session_id,
+        turn_id=turn_id,
+        max_text_chars=int(getattr(mcode_cfg, "max_event_text_chars", 2000)),
+        max_trace_events=int(getattr(mcode_cfg, "max_trace_events", 300)),
+    )
+
+
+def _make_zcode_adapter(
+    turn_source: str,
+    cfg: Any,
+    *,
+    session_id: str,
+    turn_id: str,
+) -> Optional[ZCodeEventAdapter]:
+    """本轮要不要 ZCode 事件适配器(阶段 E)。
+
+    普通模型链路返回 ``None`` —— 那一侧**不注册** zcode 事件通道,
+    也就不会往 ``zcode.event`` 队列里写任何东西(SRC-03 同款约束:
+    选了 DeepSeek 就不该出现「ZCode Agent 执行面板」事件)。
+    """
+    if turn_source != TURN_SOURCE_ZCODE:
+        return None
+    return ZCodeEventAdapter(
+        source=ZCODE_SOURCE,
+        session_id=session_id,
+        turn_id=turn_id,
+    )
+
+
+def _capture_zcode_session_id(sess: Any, new_messages: List[BaseMessage]) -> bool:
+    """从本轮最终 AIMessage 里取 zcode sessionId 落到会话(阶段 E)。
+
+    返回 True 表示映射发生了变化(调用方据此记日志 / 落库)。找不到就保持
+    原值 —— resume 用旧值顶多续到旧会话,不该让整轮失败。
+    """
+    for message in reversed(new_messages or []):
+        meta = getattr(message, "response_metadata", None)
+        if isinstance(meta, dict) and meta.get("zcode_session_id"):
+            sid = str(meta["zcode_session_id"]).strip()
+            if sid and sid != str(getattr(sess, "zcode_session_id", "") or ""):
+                sess.zcode_session_id = sid
+                return True
+    return False
+
+
+# --------------------------------------------------------------------------
+# 阶段 E:内部 MCode 事件 -> WebSocket 事件
+# --------------------------------------------------------------------------
+#
+# 这一层是**纯映射**:一条内部事件进来,产出零到两条 WebSocket 事件,
+# 外加一条可落盘的 trace 记录。
+#
+# 为什么从 WebSocket 端点里抽出来
+# ------------------------------
+#
+# 端点里的闭包没法直接测。抽成模块级函数之后,阶段 E 的验收就能用**真数据**
+# 跑出一条完整的「WebSocket 事件时间线」—— 也就是浏览器真正收到的那串
+# ``{type, data}`` —— 拿来当验收证据(WS-01…WS-07)。
+#
+# 关键约束
+# --------
+# * 文本只走 ``assistant.delta``;过程(状态 / 工具)只走 ``agent.status`` / ``tool.*``;
+# * 过程事件**额外**写一份有界 trace(不进 ``sess.history``);
+# * trace 写失败只记日志,**不能**把已经成功的 turn 变成失败。
+
+def _mcode_trace_row(
+    type_: str,
+    data: Dict[str, Any],
+    *,
+    turn_id: str,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """把一条 WebSocket 事件负载整理成 trace 记录(字段已白名单化)。"""
+    row: Dict[str, Any] = {
+        "type": type_,
+        "source": str(data.get("source") or TURN_SOURCE_MCODE),
+        "session_id": str(data.get("session_id") or ""),
+        "turn_id": turn_id,
+        "run_id": str(data.get("run_id") or ""),
+        "seq": data.get("seq"),
+        "timestamp_ms": int(time.time() * 1000),
+    }
+    for key in ("status", "phase", "step_id", "title", "message",
+                "tool_call_id", "name", "server", "is_error", "summary"):
+        if key in data and data.get(key) is not None:
+            row[key] = data.get(key)
+    if extra:
+        for key, val in extra.items():
+            if val is not None:
+                row[key] = val
+    return row
+
+
+async def _dispatch_mcode_internal(
+    internal: Any,
+    *,
+    sess: "ChatSession",
+    turn_id: str,
+    trace_enabled: bool,
+    emit: Any,
+    flush_segment: Any,
+    append_text: Any,
+) -> Optional[str]:
+    """一条内部 MCode 事件 -> WebSocket 事件。
+
+    Args:
+        internal: ``MCodeEventAdapter`` 产出的内部事件。
+        sess: 当前会话(工具记账 + trace 落点)。
+        turn_id: 本轮 id。
+        trace_enabled: 是否推送执行过程事件(``[mcode] show_execution_trace``)。
+        emit: ``async (type, data) -> bool`` —— 统一的 WebSocket 出口。
+        flush_segment: ``async (send_flush_event: bool) -> None`` —— 封口当前文本段。
+        append_text: ``(delta: str) -> None`` —— 把增量记进本轮文本缓冲。
+
+    Returns:
+        ``KIND_FINAL`` 时返回本轮最终正文;其余情况返回 ``None``。
+    """
+    data = dict(getattr(internal, "data", {}) or {})
+    kind_ = getattr(internal, "kind", "")
+
+    if kind_ == KIND_TEXT:
+        delta = data.get("delta") or ""
+        if not delta:
+            return None
+        # 先记进文本段再发 —— 和原闭包语义一致(发失败也不丢字)。
+        append_text(delta)
+        await emit("assistant.delta", data)
+        return None
+
+    if kind_ == KIND_FINAL:
+        # 最终正文以 exec.completed.result.output 为权威。
+        return str(data.get("text") or "")
+
+    if not trace_enabled:
+        # 执行过程事件被关掉了 —— 文本与最终正文照发。
+        return None
+
+    if kind_ == KIND_STATUS:
+        await emit("agent.status", data)
+        sess.record_mcode_trace(_mcode_trace_row("agent.status", data, turn_id=turn_id))
+        return None
+
+    if kind_ == KIND_TOOL_START:
+        await flush_segment(send_flush_event=True)
+        rec = sess.apply_tool_event({
+            "type": "tool_start",
+            "tool_call_id": data.get("tool_call_id"),
+            "server": data.get("server"),
+            "name": data.get("name"),
+            "args": data.get("args") or {},
+            "source": data.get("source"),
+            "turn_id": turn_id,
+        })
+        if rec:
+            payload = {
+                "tool_call_id": rec["tool_call_id"],
+                "server": rec["server"],
+                "name": rec["name"],
+                "args": rec["args"],
+                "source": data.get("source"),
+                "seq": data.get("seq"),
+                "run_id": data.get("run_id"),
+            }
+            await emit("tool.start", payload)
+            sess.record_mcode_trace(_mcode_trace_row("tool.start", payload, turn_id=turn_id))
+        return None
+
+    if kind_ == KIND_TOOL_PROGRESS:
+        rec = sess.apply_tool_event({
+            "type": "tool_progress",
+            "tool_call_id": data.get("tool_call_id"),
+            "server": data.get("server"),
+            "name": data.get("name"),
+            "message": data.get("message") or "",
+            "source": data.get("source"),
+            "turn_id": turn_id,
+        })
+        if rec:
+            payload = {
+                "tool_call_id": rec["tool_call_id"],
+                "server": rec["server"],
+                "name": rec["name"],
+                "progress": rec["progress"],
+                "message": rec["message"],
+                "source": data.get("source"),
+                "seq": data.get("seq"),
+                "run_id": data.get("run_id"),
+            }
+            await emit("tool.progress", payload)
+            sess.record_mcode_trace(_mcode_trace_row("tool.progress", payload, turn_id=turn_id))
+        return None
+
+    if kind_ == KIND_TOOL_END:
+        rec = sess.apply_tool_event({
+            "type": "tool_end",
+            "tool_call_id": data.get("tool_call_id"),
+            "server": data.get("server"),
+            "name": data.get("name"),
+            "is_error": bool(data.get("is_error")),
+            # 工具输出摘要化之后还要脱敏 —— 摘要里也可能带密钥。
+            "summary": _mask_secrets_recursive(data.get("summary")),
+            "source": data.get("source"),
+            "turn_id": turn_id,
+        })
+        if rec:
+            payload = {
+                "tool_call_id": rec["tool_call_id"],
+                "server": rec["server"],
+                "name": rec["name"],
+                "is_error": rec["state"] == "error",
+                "summary": rec["summary"],
+                "source": data.get("source"),
+                "seq": data.get("seq"),
+                "run_id": data.get("run_id"),
+            }
+            await emit("tool.end", payload)
+            sess.record_mcode_trace(_mcode_trace_row("tool.end", payload, turn_id=turn_id))
+        return None
+
+    return None
+
+
+def _dedup_models(models: List[str]) -> List[str]:
+    """模型下拉去重(保序)。"""
+    out: List[str] = []
+    for m in models:
+        if m and m not in out:
+            out.append(m)
+    return out
+
+
+def _sanitize_model_key(
+    key: Any,
+    allowed: List[str],
+    default: str,
+    *,
+    builtin_name: str,
+    builtin_usable: bool,
+) -> str:
+    """校验「恢复出来的」模型 key 是否还能用,不能用就回落到默认档位。
+
+    两个回落场景:
+
+    1. key 不在当前可选列表里(比如配置变了,旧会话记着一个已下线的模型名);
+    2. key 是内置模型,但它的凭证不可用(占位符 / 缺失)——
+       选它只会每次聊天都报 401,不如直接落到默认档位。
+    """
+    k = str(key or "").strip()
+    if not k or k not in allowed:
+        return default
+    if k == builtin_name and not builtin_usable:
+        return default
+    return k
+
+
+def _stable_dict_key(d: Optional[Dict[str, Any]]) -> str:
+    try:
+        return json.dumps(d or {}, sort_keys=True, ensure_ascii=False)
+    except Exception:
+        return str(d or {})
+
+def _parse_provider_runtime_config(service_cfg: Any, key_name: str) -> Dict[str, Any]:
+    cfg = service_cfg.get(key_name)
+    if not isinstance(cfg, dict):
+        return {}
+
+    provider = _s(cfg.get("provider")).lower()
+    if not provider:
+        return {}
+
+    provider_block = cfg.get(provider)
+    if not isinstance(provider_block, dict):
+        provider_block = {}
+
+    return {"provider": provider, provider: provider_block}
+
+def _parse_service_config(service_cfg: Any) -> Tuple[
+    Optional[Dict[str, Any]],
+    Optional[Dict[str, Any]],
+    Dict[str, Any],
+    Dict[str, Any],
+    Dict[str, Any],
+    Optional[str]]:
+    """
+    返回 (custom_llm, custom_vlm, tts_cfg, ai_transition_cfg, pexels, err)
+    - custom_llm/custom_vlm: {"model","base_url","api_key"} 或 None（允许只传 llm 或只传 vlm）
+    - tts_cfg: dict（可能为空）
+    """
+    if not isinstance(service_cfg, dict):
+        return None, None, {}, {}, {}, None
+
+    # ---- custom models ----
+    custom_llm = None
+    custom_vlm = None
+    custom_models = service_cfg.get("custom_models")
+
+    if custom_models is not None:
+        if not isinstance(custom_models, dict):
+            return None, None, {}, {}, {}, "service_config.custom_models 必须是对象"
+
+        def _pick(m: Any, label: str) -> Tuple[Optional[Dict[str, str]], Optional[str]]:
+            if m is None:
+                return None, None
+            if not isinstance(m, dict):
+                return None, f"service_config.custom_models.{label} 必须是对象"
+
+            model = _s(m.get("model"))
+            base_url = _norm_url(m.get("base_url"))
+            api_key = _s(m.get("api_key"))
+
+            if not (model and base_url and api_key):
+                return None, f"自定义 {label.upper()} 配置不完整：请填写 model/base_url/api_key"
+            if not (base_url.startswith("http://") or base_url.startswith("https://")):
+                return None, f"自定义 {label.upper()} 的 base_url 必须以 http(s) 开头"
+            return {"model": model, "base_url": base_url, "api_key": api_key}, None
+
+        custom_llm, err1 = _pick(custom_models.get("llm"), "llm")
+        if err1:
+            return None, None, {}, {}, {}, err1
+
+        custom_vlm, err2 = _pick(custom_models.get("vlm"), "vlm")
+        if err2:
+            return None, None, {}, {}, {}, err2
+
+    # ---- provider runtime config ----
+    tts_cfg = _parse_provider_runtime_config(service_cfg, "tts")
+    ai_transition_cfg = _parse_provider_runtime_config(service_cfg, "ai_transition")
+
+    # ---- pexels ----
+    pexels_cfg: Dict[str, Any] = {}
+    search_media = service_cfg.get("search_media")
+    if isinstance(search_media, dict):
+        # 支持两种格式：
+        # 1) {search_media:{pexels:{mode, api_key}}}
+        # 2) {search_media:{mode, pexel_api_key}}
+        p = search_media.get("pexels") or search_media.get("pexels")
+        if isinstance(p, dict):
+            mode = _s(p.get("mode")).lower()
+            if mode not in ("default", "custom"):
+                mode = "default"
+            api_key = _s(p.get("api_key") or p.get("pexels_api_key") or p.get("pexels_api_key"))
+            pexels_cfg = {"mode": mode, "api_key": api_key}
+        else:
+            mode = _s(search_media.get("mode") or search_media.get("pexels_mode") or search_media.get("pexels_mode")).lower()
+            if mode not in ("default", "custom"):
+                mode = "default"
+            api_key = _s(search_media.get("pexels_api_key") or search_media.get("pexels_api_key"))
+            pexels_cfg = {"mode": mode, "api_key": api_key}
+
+    return custom_llm, custom_vlm, tts_cfg, ai_transition_cfg, pexels_cfg, None
+
+def is_developer_mode(cfg: Settings) -> bool:
+    try:
+        return bool(cfg.developer.developer_mode)
+    except Exception:
+        return False
+
+def _abs(p: str) -> str:
+    return os.path.abspath(os.path.expanduser(p))
+
+def _format_exc(e: BaseException) -> str:
+    excs = getattr(e, "exceptions", None)
+    if excs:
+        parts = [f"{type(e).__name__}: {e}"]
+        for i, sub in enumerate(excs, 1):
+            parts.append(f"\n--- sub-exception #{i}: {type(sub).__name__}: {sub} ---\n")
+            parts.extend(traceback.format_exception(type(sub), sub, sub.__traceback__))
+        return "".join(parts)
+    return "".join(traceback.format_exception(type(e), e, e.__traceback__))
+
+def resolve_media_dir(cfg_media_dir: str, session_id: str) -> str:
+    root = _abs(cfg_media_dir).rstrip("/\\")
+    if not USE_SESSION_SUBDIR:
+        return root
+    project_dir = os.path.dirname(root)
+    leaf = os.path.basename(root)
+    return os.path.join(project_dir, session_id, leaf)
+
+
+async def resolve_session_media_paths(
+    request: Request,
+    session_id: str,
+    files: list[dict],
+) -> list[dict]:
+    """按 ``media_id`` **服务端**解析每个素材的落盘路径。
+
+    为什么必须服务端解析
+    --------------------
+    前端的 ``public_media`` 只返回 ``{id, name, kind, thumb_url, file_url}``,
+    **不暴露** ``path``。所以网页端发来的 ``stored_path`` 常常是**空串**
+    (``app.js``:``stored_path: media.path || media.stored_path || ""``)。
+    只信客户端路径 = 「导入视频」直接失败。
+
+    所以以**服务端会话媒体登记表**为准(``media_id -> MediaMeta.path``,
+    该登记表会随会话状态持久化在 PostgreSQL ``chat_sessions.state_json`` 里,重启后仍在),
+    客户端的 ``stored_path`` 只作兜底。两条路拿到的路径后面都要过
+    「必须位于本会话 media 目录内」的校验。
+    """
+    server_paths: dict[str, str] = {}
+    try:
+        store: SessionStore = request.app.state.sessions
+        sess = await store.get_or_404(session_id)
+        for mid, meta in (getattr(sess, "load_media", None) or {}).items():
+            server_paths[str(mid)] = str(getattr(meta, "path", "") or "")
+    except Exception as exc:  # noqa: BLE001
+        # 会话不存在 / 登记表不可用 -> 退回客户端路径,后续校验会兜住
+        logger.warning("解析会话媒体登记表失败(退回客户端 stored_path): %s", exc)
+        server_paths = {}
+
+    out: list[dict] = []
+    for f in files or []:
+        item = dict(f)
+        mid = str(item.get("media_id") or "").strip()
+        client_path = str(item.get("stored_path") or "").strip()
+        resolved = server_paths.get(mid) or client_path
+        item["stored_path"] = resolved
+        item["path_source"] = "session_registry" if server_paths.get(mid) else "client"
+        out.append(item)
+    return out
+
+
+def sanitize_filename(name: str) -> str:
+    name = os.path.basename(name or "")
+    name = name.replace("\x00", "")
+    return name or "unnamed"
+
+
+def detect_media_kind(filename: str) -> str:
+    ext = os.path.splitext(filename)[1].lower()
+    if ext in {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}:
+        return "image"
+    if ext in {".mp4", ".mov", ".avi", ".mkv", ".webm"}:
+        return "video"
+    return "unknown"
+
+
+_SECRET_VALUE_PATTERNS = [
+    re.compile(r"sk-[A-Za-z0-9._-]{16,}"),
+    re.compile(r"Bearer\s+[A-Za-z0-9._\-+/=]{16,}", re.IGNORECASE),
+    re.compile(r"eyJ[A-Za-z0-9_-]{16,}\.[A-Za-z0-9._-]{16,}\.?[A-Za-z0-9._-]*"),
+    re.compile(r"(?i)(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)\s*[:=]\s*[\"']?[A-Za-z0-9._\-+/=]{16,}[\"']?"),
+]
+
+# Inline `key: value` / `key=value` in plain strings: dict recursion masks by field name,
+# but the same secret in a single string only saw _SECRET_VALUE_PATTERNS (often 16+ chars).
+# Match unambiguous credential field names with shorter values (exclude bare "token"/"password"
+# which would false-positive in natural language).
+_SECRET_INLINE_ASSIGNMENT_RE = re.compile(
+    r"(?i)(?:api[_-]?key|api[_-]?token|auth[_-]?token|access[_-]?token|"
+    r"client[_-]?secret|refresh[_-]?token|x-api-key|apikey|access[_-]?key|accesskey|"
+    r"pexels[_-]?api[_-]?key)\s*[:=]\s*[\"']?"
+    r"[A-Za-z0-9._\-+/=]{3,}"
+    r"[\"']?"
+)
+
+
+def _mask_secret_string(text: str) -> str:
+    s = str(text or "")
+    for pat in _SECRET_VALUE_PATTERNS:
+        s = pat.sub(MASKED_SECRET, s)
+    s = _SECRET_INLINE_ASSIGNMENT_RE.sub(MASKED_SECRET, s)
+    return s
+
+
+def _to_json_safe(v: Any) -> Any:
+    if v is None or isinstance(v, (bool, int, float, str)):
+        return v
+    if isinstance(v, list):
+        return [_to_json_safe(x) for x in v]
+    if isinstance(v, tuple):
+        return [_to_json_safe(x) for x in v]
+    if isinstance(v, dict):
+        return {str(k): _to_json_safe(x) for k, x in v.items()}
+    try:
+        json.dumps(v, ensure_ascii=False)
+        return v
+    except Exception:
+        return str(v)
+
+
+def _mask_secrets_recursive(v: Any) -> Any:
+    if isinstance(v, dict):
+        out: Dict[str, Any] = {}
+        for k, val in v.items():
+            key = str(k)
+            if _is_secret_field_name(key):
+                out[key] = MASKED_SECRET
+            else:
+                out[key] = _mask_secrets_recursive(val)
+        return out
+    if isinstance(v, list):
+        return [_mask_secrets_recursive(x) for x in v]
+    if isinstance(v, tuple):
+        return [_mask_secrets_recursive(x) for x in v]
+    if isinstance(v, str):
+        return _mask_secret_string(v)
+    return _to_json_safe(v)
+
+
+def _mask_tool_history_record(rec: Dict[str, Any]) -> Dict[str, Any]:
+    r = dict(rec or {})
+    for key in ("args", "summary", "message"):
+        if key in r:
+            r[key] = _mask_secrets_recursive(r.get(key))
+    return r
+
+
+def _append_assistant_history(
+    sess: "ChatSession",
+    text: str,
+    *,
+    turn_source: str,
+    turn_id: str,
+    ts: Optional[float] = None,
+) -> bool:
+    """往 history 里追加一条 assistant 记录(**同一轮内同文去重**)。
+
+    为什么需要去重(阶段 E / WS-07):
+
+    同一段文本可能被落两次 —— 工具开始前 ``flush_segment`` 落一次「工具前的分段」,
+    turn 收尾时又作为「最终正文」落一次。两份都留着的话,刷新回放时正文会
+    **重复出现一遍**。
+
+    去重范围刻意收得很窄:只比对**同一轮**里最近一条 assistant 记录。
+    不同轮次说同样的话(比如两次都回「好的」)必须都保留。
+    """
+    content = str(text or "").strip()
+    if not content:
+        return False
+
+    last_assistant: Optional[Dict[str, Any]] = None
+    for item in reversed(sess.history or []):
+        if isinstance(item, dict) and item.get("role") == "assistant":
+            last_assistant = item
+            break
+
+    if (
+        last_assistant is not None
+        and str(last_assistant.get("turn_id") or "") == str(turn_id or "")
+        and str(last_assistant.get("content") or "").strip() == content
+    ):
+        return False
+
+    sess.history.append({
+        "id": uuid.uuid4().hex[:12],
+        "role": "assistant",
+        "content": content,
+        "ts": ts if ts is not None else time.time(),
+        # 阶段 E:标来源 —— 前端据此决定这段文本是不是 MCode 的。
+        "source": turn_source,
+        "turn_id": turn_id,
+    })
+    return True
+
+
+def _serialize_lc_message(msg: BaseMessage) -> Dict[str, Any]:
+    if isinstance(msg, SystemMessage):
+        return {"type": "system", "content": _to_json_safe(msg.content)}
+    if isinstance(msg, HumanMessage):
+        return {"type": "human", "content": _to_json_safe(msg.content)}
+    if isinstance(msg, ToolMessage):
+        payload = {
+            "type": "tool",
+            "content": _to_json_safe(msg.content),
+            "tool_call_id": str(getattr(msg, "tool_call_id", "") or ""),
+        }
+        ak = getattr(msg, "additional_kwargs", None)
+        if isinstance(ak, dict) and ak:
+            payload["additional_kwargs"] = _to_json_safe(ak)
+        name = getattr(msg, "name", None)
+        if name not in (None, ""):
+            payload["name"] = str(name)
+        return payload
+    if isinstance(msg, AIMessage):
+        ak = getattr(msg, "additional_kwargs", None) or {}
+        tc = getattr(msg, "tool_calls", None) or []
+        if not isinstance(tc, list):
+            tc = []
+        tc = _to_json_safe(tc)
+        if not isinstance(tc, list):
+            tc = []
+        return {
+            "type": "ai",
+            "content": _to_json_safe(msg.content),
+            "additional_kwargs": _to_json_safe(ak),
+            "tool_calls": tc,
+        }
+    return {
+        "type": "unknown",
+        "content": _to_json_safe(getattr(msg, "content", "")),
+    }
+
+
+def _deserialize_lc_message(data: Dict[str, Any]) -> Optional[BaseMessage]:
+    if not isinstance(data, dict):
+        return None
+    t = str(data.get("type") or "").strip().lower()
+    content = data.get("content", "")
+    if t == "system":
+        return SystemMessage(content=content)
+    if t == "human":
+        return HumanMessage(content=content)
+    if t == "tool":
+        tcid = str(data.get("tool_call_id") or "").strip()
+        if not tcid:
+            logger.warning(
+                "Persisted ToolMessage skipped: empty tool_call_id. "
+                "If the preceding AI turn had tool_calls, load will synthesize cancelled tool results."
+            )
+            return None
+        kwargs: Dict[str, Any] = {}
+        ak = data.get("additional_kwargs")
+        if isinstance(ak, dict):
+            kwargs["additional_kwargs"] = ak
+        name = data.get("name")
+        if name not in (None, ""):
+            kwargs["name"] = str(name)
+        try:
+            return ToolMessage(content=content, tool_call_id=tcid, **kwargs)
+        except TypeError:
+            # Keep backward compatibility with signatures that do not accept `name`.
+            kwargs.pop("name", None)
+            return ToolMessage(content=content, tool_call_id=tcid, **kwargs)
+    if t == "ai":
+        ak = data.get("additional_kwargs")
+        if not isinstance(ak, dict):
+            ak = {}
+        tc_explicit = data.get("tool_calls")
+        if isinstance(tc_explicit, list):
+            tool_calls = tc_explicit
+        else:
+            tool_calls = ak.get("tool_calls")
+        if not isinstance(tool_calls, list):
+            tool_calls = []
+        if tool_calls:
+            ak = dict(ak)
+            ak["tool_calls"] = tool_calls
+        # Some providers (and langchain-core versions) require tool calls to be present
+        # on the AIMessage object (not only inside additional_kwargs) in order to
+        # produce a valid OpenAI-style messages list. Without this, ToolMessage
+        # may become an "orphan" and providers will reject the request.
+        try:
+            return AIMessage(content=content, additional_kwargs=ak, tool_calls=tool_calls)  # type: ignore[arg-type]
+        except TypeError:
+            return AIMessage(content=content, additional_kwargs=ak)
+    return None
+
+
+def _tool_call_ids_from_ai_message_for_state(m: BaseMessage) -> Set[str]:
+    ids: Set[str] = set()
+    if not isinstance(m, AIMessage):
+        return ids
+
+    tc = getattr(m, "tool_calls", None) or []
+    for c in tc:
+        _id = None
+        if isinstance(c, dict):
+            _id = c.get("id") or c.get("tool_call_id")
+        else:
+            _id = getattr(c, "id", None) or getattr(c, "tool_call_id", None)
+        if _id:
+            ids.add(str(_id))
+
+    ak = getattr(m, "additional_kwargs", None) or {}
+    tc2 = ak.get("tool_calls") or []
+    for c in tc2:
+        if isinstance(c, dict):
+            _id = c.get("id") or c.get("tool_call_id")
+            if _id:
+                ids.add(str(_id))
+    return ids
+
+
+def _is_valid_session_id_hex(name: str) -> bool:
+    if len(name) != 32:
+        return False
+    try:
+        val = uuid.UUID(name)
+        return val.hex == name and val.version == 4
+    except Exception:
+        return False
+
+_MEDIA_RE = re.compile(r"^media_(\d+)", re.IGNORECASE)
+
+def make_media_store_filename(seq: int, ext: str) -> str:
+    ext = (ext or "").lower()
+    if ext and not ext.startswith("."):
+        ext = "." + ext
+    return f"{MEDIA_PREFIX}{seq:0{MEDIA_SEQ_WIDTH}d}{ext}"
+
+def parse_media_seq(filename: str) -> Optional[int]:
+    m = _MEDIA_RE.match(os.path.basename(filename or ""))
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except Exception:
+        return None
+
+def safe_save_path_no_overwrite(media_dir: str, filename: str) -> str:
+    filename = sanitize_filename(filename)
+    stem, ext = os.path.splitext(filename)
+    path = os.path.join(media_dir, filename)
+    if not os.path.exists(path):
+        return path
+    i = 2
+    while True:
+        p2 = os.path.join(media_dir, f"{stem} ({i}){ext}")
+        if not os.path.exists(p2):
+            return p2
+        i += 1
+
+
+def ensure_thumbs_dir(media_dir: str) -> str:
+    d = os.path.join(media_dir, ".thumbs")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+def ensure_uploads_dir(media_dir: str) -> str:
+    d = os.path.join(media_dir, ".uploads")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+def guess_media_type(path: str) -> str:
+    mt, _ = mimetypes.guess_type(path)
+    return mt or "application/octet-stream"
+
+
+def _is_under_dir(path: str, root: str) -> bool:
+    try:
+        path = os.path.abspath(path)
+        root = os.path.abspath(root)
+        return os.path.commonpath([path, root]) == root
+    except Exception:
+        return False
+
+
+def video_placeholder_svg_bytes() -> bytes:
+    svg = """<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320" viewBox="0 0 320 320">
+  <defs>
+    <linearGradient id="g" x1="0" x2="1" y1="0" y2="1">
+      <stop stop-color="#f2f2f2" offset="0"/>
+      <stop stop-color="#e6e6e6" offset="1"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="320" height="320" fill="url(#g)"/>
+  <rect x="22" y="22" width="276" height="276" rx="22" fill="rgba(0,0,0,0.06)"/>
+  <polygon points="140,120 140,200 210,160" fill="rgba(0,0,0,0.55)"/>
+</svg>"""
+    return svg.encode("utf-8")
+
+
+def make_image_thumbnail_sync(src_path: str, dst_path: str, max_size: Tuple[int, int] = (320, 320)) -> bool:
+    try:
+        from PIL import Image
+        img = Image.open(src_path).convert("RGB")
+        img.thumbnail(max_size)
+        img.save(dst_path, format="JPEG", quality=85)
+        return True
+    except Exception:
+        return False
+
+async def make_video_thumbnail_async(
+    src_video: str,
+    dst_path: str,
+    *,
+    max_size: Tuple[int, int] = (320, 320),
+    seek_sec: float = 0.5,
+    timeout_sec: float = 20.0,
+) -> bool:
+    ffmpeg = os.environ.get("FFMPEG_BIN") or shutil.which("ffmpeg")
+    if not ffmpeg:
+        logger.warning("ffmpeg not found (PATH/FFMPEG_BIN). skip video thumbnail. src=%s", src_video)
+        return False
+
+    src_video = os.path.abspath(src_video)
+    dst_path = os.path.abspath(dst_path)
+    os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+
+    tmp_path = dst_path + ".tmp.jpg"
+
+    vf = (
+        f"scale={max_size[0]}:{max_size[1]}:force_original_aspect_ratio=decrease"
+        f",pad={max_size[0]}:{max_size[1]}:(ow-iw)/2:(oh-ih)/2"
+    )
+
+    async def _run(args: list[str]) -> tuple[bool, str]:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _, err = await asyncio.wait_for(proc.communicate(), timeout=timeout_sec)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            await proc.wait()
+            return False, f"timeout after {timeout_sec}s"
+        err_text = (err or b"").decode("utf-8", "ignore").strip()
+        return (proc.returncode == 0), err_text
+
+    # 两种策略：1) -ss 在 -i 前（快，但有些文件/关键帧会失败）
+    #          2) -ss 在 -i 后（慢，但更稳定）
+    common_tail = [
+        "-an",
+        "-frames:v", "1",
+        "-vf", vf,
+        "-vcodec", "mjpeg",
+        "-q:v", "3",
+        "-f", "image2",
+        tmp_path,
+    ]
+
+    attempts = [
+        # fast seek
+        [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{seek_sec}", "-i", src_video] + common_tail,
+        # accurate seek
+        [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", src_video, "-ss", f"{seek_sec}"] + common_tail,
+        # fallback：如果 seek 太靠前导致失败，再试试 1s
+        [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-ss", "1.0", "-i", src_video] + common_tail,
+    ]
+
+    last_err: Optional[str] = None
+    try:
+        for args in attempts:
+            ok, err = await _run(args)
+            if ok and os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
+                os.replace(tmp_path, dst_path)
+                return True
+            last_err = err or last_err
+            # 清理无效临时文件，避免下次误判
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+
+        logger.warning("ffmpeg thumbnail failed. src=%s dst=%s err=%s", src_video, dst_path, last_err)
+        return False
+    finally:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except Exception:
+        return default
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except Exception:
+        return float(default)
+
+def _rpm_to_rps(rpm: float) -> float:
+    return float(rpm) / 60.0
+
+
+# 是否信任反向代理头（X-Forwarded-For / X-Real-IP）
+RATE_LIMIT_TRUST_PROXY_HEADERS = os.environ.get("RATE_LIMIT_TRUST_PROXY_HEADERS", "0") == "1"
+
+@dataclass
+class _RateBucket:
+    tokens: float
+    last_ts: float        # monotonic
+    last_seen: float      # monotonic (for TTL cleanup)
+
+class TokenBucketRateLimiter:
+    """
+    内存令牌桶 + 防爆内存：
+    - max_buckets: 限制内部桶表最大条目数（防止海量 IP 导致字典膨胀）
+    - evict_batch: 超过上限后每次驱逐多少条（按插入顺序驱逐最早创建的桶）
+    """
+    def __init__(
+        self,
+        ttl_sec: int = 900,
+        cleanup_interval_sec: int = 60,
+        *,
+        max_buckets: int = 100000,
+        evict_batch: int = 2000,
+    ):
+        self.ttl_sec = int(ttl_sec)
+        self.cleanup_interval_sec = int(cleanup_interval_sec)
+        self.max_buckets = int(max(1, max_buckets))
+        self.evict_batch = int(max(1, evict_batch))
+
+        self._buckets: Dict[str, _RateBucket] = {}
+        self._lock = asyncio.Lock()
+        self._last_cleanup = time.monotonic()
+
+    async def allow(
+        self,
+        key: str,
+        *,
+        capacity: float,
+        refill_rate: float,
+        cost: float = 1.0,
+    ) -> Tuple[bool, float, float]:
+        """
+        返回: (allowed, retry_after_sec, remaining_tokens)
+        """
+        now = time.monotonic()
+        capacity = float(max(0.0, capacity))
+        refill_rate = float(max(0.0, refill_rate))
+        cost = float(max(0.0, cost))
+
+        async with self._lock:
+            b = self._buckets.get(key)
+
+            if b is None:
+                # 先做一次周期清理
+                if now - self._last_cleanup > self.cleanup_interval_sec:
+                    self._cleanup_locked(now)
+                    self._last_cleanup = now
+
+                # 桶表满了：先清 TTL，再做批量驱逐；仍然满 -> 不再创建新桶，直接拒绝
+                if len(self._buckets) >= self.max_buckets:
+                    self._cleanup_locked(now)
+
+                if len(self._buckets) >= self.max_buckets:
+                    self._evict_locked()
+
+                if len(self._buckets) >= self.max_buckets:
+                    # 不存任何新 key，避免内存继续涨
+                    # retry_after 给一个很短的值即可（客户端会重试）
+                    return False, 1.0, 0.0
+
+                b = _RateBucket(tokens=capacity, last_ts=now, last_seen=now)
+                self._buckets[key] = b
+            else:
+                b.last_seen = now
+
+            # refill
+            elapsed = max(0.0, now - b.last_ts)
+            if refill_rate > 0:
+                b.tokens = min(capacity, b.tokens + elapsed * refill_rate)
+            else:
+                b.tokens = min(capacity, b.tokens)
+            b.last_ts = now
+
+            if b.tokens >= cost:
+                b.tokens -= cost
+                return True, 0.0, float(max(0.0, b.tokens))
+
+            # not enough
+            if refill_rate <= 0:
+                retry_after = float(self.ttl_sec)
+            else:
+                need = cost - b.tokens
+                retry_after = need / refill_rate
+            return False, float(retry_after), float(max(0.0, b.tokens))
+
+    def _cleanup_locked(self, now: float) -> None:
+        ttl = float(self.ttl_sec)
+        dead = [k for k, b in self._buckets.items() if (now - b.last_seen) > ttl]
+        for k in dead:
+            self._buckets.pop(k, None)
+
+    def _evict_locked(self) -> None:
+        # 按 dict 插入顺序驱逐最早的一批 bucket（不排序，避免在高压下额外 CPU 开销）
+        n = min(self.evict_batch, len(self._buckets))
+        for _ in range(n):
+            try:
+                k = next(iter(self._buckets))
+            except StopIteration:
+                break
+            self._buckets.pop(k, None)
+
+def _headers_to_dict(scope_headers: List[Tuple[bytes, bytes]]) -> Dict[str, str]:
+    d: Dict[str, str] = {}
+    for k, v in scope_headers or []:
+        try:
+            dk = k.decode("latin1").lower()
+            dv = v.decode("latin1")
+        except Exception:
+            continue
+        d[dk] = dv
+    return d
+
+def _client_ip_from_http_scope(scope: dict, trust_proxy_headers: bool) -> str:
+    headers = _headers_to_dict(scope.get("headers") or [])
+    if trust_proxy_headers:
+        xff = headers.get("x-forwarded-for")
+        if xff:
+            # "client, proxy1, proxy2" -> client
+            return xff.split(",")[0].strip() or "unknown"
+        xri = headers.get("x-real-ip")
+        if xri:
+            return xri.strip() or "unknown"
+
+    client = scope.get("client")
+    if client and isinstance(client, (list, tuple)) and len(client) >= 1:
+        return str(client[0] or "unknown")
+    return "unknown"
+
+def _client_ip_from_ws(ws: WebSocket, trust_proxy_headers: bool) -> str:
+    try:
+        if trust_proxy_headers:
+            xff = ws.headers.get("x-forwarded-for")
+            if xff:
+                return xff.split(",")[0].strip() or "unknown"
+            xri = ws.headers.get("x-real-ip")
+            if xri:
+                return xri.strip() or "unknown"
+    except Exception:
+        pass
+
+    try:
+        if ws.client:
+            return str(ws.client.host or "unknown")
+    except Exception:
+        pass
+
+    return "unknown"
+
+# 分片上传（绕开网关对单次请求体/单文件的限制）
+UPLOAD_RESUMABLE_CHUNK_BYTES = _env_int("UPLOAD_RESUMABLE_CHUNK_BYTES", 8 * 1024 * 1024)
+
+# 未完成的分片上传状态保留多久（超时自动清理临时文件）
+RESUMABLE_UPLOAD_TTL_SEC = _env_int("RESUMABLE_UPLOAD_TTL_SEC", 3600)  # 1 hour
+
+MEDIA_SEQ_WIDTH = 4  # media_0001
+MEDIA_PREFIX = "media_"
+
+
+# -------- 注意：在服务器上，所有用户的ip可能是相同的----
+
+# 每个 IP 的总体请求速率（包括 /static、/api、/ 等）
+HTTP_GLOBAL_RPM   = _env_int("RATE_LIMIT_HTTP_GLOBAL_RPM", 3000)
+HTTP_GLOBAL_BURST = _env_int("RATE_LIMIT_HTTP_GLOBAL_BURST", 600)
+
+# 创建 session：防止刷 session 导致内存爆
+HTTP_CREATE_SESSION_RPM   = _env_int("RATE_LIMIT_CREATE_SESSION_RPM", 3000)
+HTTP_CREATE_SESSION_BURST = _env_int("RATE_LIMIT_CREATE_SESSION_BURST", 50)
+
+# 上传素材：最容易被滥用（大文件 + 频率）
+HTTP_UPLOAD_MEDIA_RPM   = _env_int("RATE_LIMIT_UPLOAD_MEDIA_RPM", 12000)
+HTTP_UPLOAD_MEDIA_BURST = _env_int("RATE_LIMIT_UPLOAD_MEDIA_BURST", 300)
+
+# 上传“成本”换算：content-length 每多少字节算 1 个 token（越大越费 token）
+UPLOAD_COST_BYTES = _env_int("RATE_LIMIT_UPLOAD_COST_BYTES", 10 * 1024 * 1024)  # 默认 10MB = 1 token
+
+# 素材个数控制：会话内上线+上传上限
+MAX_UPLOAD_FILES_PER_REQUEST = _env_int("MAX_UPLOAD_FILES_PER_REQUEST", 30)          # 单次请求最多文件数
+MAX_MEDIA_PER_SESSION = _env_int("MAX_MEDIA_PER_SESSION", 30)                    # 每个 session 总素材上限（pending + 已用）
+MAX_PENDING_MEDIA_PER_SESSION = _env_int("MAX_PENDING_MEDIA_PER_SESSION", 30)     # 每个 session pending 素材上限（UI 友好）
+
+HTTP_UPLOAD_MEDIA_COUNT_RPM   = _env_int("RATE_LIMIT_UPLOAD_MEDIA_COUNT_RPM", 50000)
+HTTP_UPLOAD_MEDIA_COUNT_BURST = _env_int("RATE_LIMIT_UPLOAD_MEDIA_COUNT_BURST", 1000)
+
+# 下载/缩略图：适中限制（防刷资源）
+HTTP_MEDIA_GET_RPM   = _env_int("RATE_LIMIT_MEDIA_GET_RPM", 2400)
+HTTP_MEDIA_GET_BURST = _env_int("RATE_LIMIT_MEDIA_GET_BURST", 60)
+
+# 清空会话：避免频繁清空扰动
+HTTP_CLEAR_RPM   = _env_int("RATE_LIMIT_CLEAR_SESSION_RPM", 3000)
+HTTP_CLEAR_BURST = _env_int("RATE_LIMIT_CLEAR_SESSION_BURST", 50)
+
+# 会话列表(GET /api/sessions,阶段 D 新增)：前端会频繁刷新历史列表，
+# 单独一个桶，别跟普通 /api/ 请求挤同一个 api_general 配额。
+HTTP_LIST_SESSIONS_RPM   = _env_int("RATE_LIMIT_LIST_SESSIONS_RPM", 30)
+HTTP_LIST_SESSIONS_BURST = _env_int("RATE_LIMIT_LIST_SESSIONS_BURST", 10)
+
+# 其它 API 默认：比 global 更细一点（可选）
+HTTP_API_RPM   = _env_int("RATE_LIMIT_API_RPM", 2400)
+HTTP_API_BURST = _env_int("RATE_LIMIT_API_BURST", 120)
+
+# WebSocket：连接创建频率
+WS_CONNECT_RPM   = _env_int("RATE_LIMIT_WS_CONNECT_RPM", 600)
+WS_CONNECT_BURST = _env_int("RATE_LIMIT_WS_CONNECT_BURST", 50)
+
+# WebSocket：chat.send（真正触发 LLM 成本）
+WS_CHAT_SEND_RPM   = _env_int("RATE_LIMIT_WS_CHAT_SEND_RPM", 300)
+WS_CHAT_SEND_BURST = _env_int("RATE_LIMIT_WS_CHAT_SEND_BURST", 20)
+
+# ---- 全局（所有 IP 合并）限流：抵御多 IP 同时访问 ----
+HTTP_ALL_RPM   = _env_int("RATE_LIMIT_HTTP_ALL_RPM", 1200)   # 全站 HTTP 总量：1200/min ~= 20 rps
+HTTP_ALL_BURST = _env_int("RATE_LIMIT_HTTP_ALL_BURST", 200)
+
+CREATE_SESSION_ALL_RPM   = _env_int("RATE_LIMIT_CREATE_SESSION_ALL_RPM", 120)
+CREATE_SESSION_ALL_BURST = _env_int("RATE_LIMIT_CREATE_SESSION_ALL_BURST", 20)
+
+UPLOAD_MEDIA_ALL_RPM   = _env_int("RATE_LIMIT_UPLOAD_MEDIA_ALL_RPM", 6000)
+UPLOAD_MEDIA_ALL_BURST = _env_int("RATE_LIMIT_UPLOAD_MEDIA_ALL_BURST", 2000)
+
+# “素材个数”限流：默认复用 upload_media 的 rpm/burst
+UPLOAD_MEDIA_COUNT_ALL_RPM    = _env_int("RATE_LIMIT_UPLOAD_MEDIA_COUNT_ALL_RPM", UPLOAD_MEDIA_ALL_RPM)
+UPLOAD_MEDIA_COUNT_ALL_BURST  = _env_int("RATE_LIMIT_UPLOAD_MEDIA_COUNT_ALL_BURST", UPLOAD_MEDIA_ALL_BURST)
+
+# 「清理缓存」端点(POST /api/system/clean-cache):破坏性 IO,严格限流防误连点
+CLEAN_CACHE_ALL_RPM   = _env_int("RATE_LIMIT_CLEAN_CACHE_ALL_RPM", 2)
+CLEAN_CACHE_ALL_BURST = _env_int("RATE_LIMIT_CLEAN_CACHE_ALL_BURST", 1)
+CLEAN_CACHE_IP_RPM    = _env_int("RATE_LIMIT_CLEAN_CACHE_IP_RPM", 2)
+CLEAN_CACHE_IP_BURST  = _env_int("RATE_LIMIT_CLEAN_CACHE_IP_BURST", 1)
+
+# 「导入视频」端点(POST /api/system/import-video):图侧 import_video 节点可能
+# 正在等这个结果,限流与 clean_cache 同量级(默认 burst=1 rpm=2,防误连点)。
+IMPORT_VIDEO_ALL_RPM   = _env_int("RATE_LIMIT_IMPORT_VIDEO_ALL_RPM", 2)
+IMPORT_VIDEO_ALL_BURST = _env_int("RATE_LIMIT_IMPORT_VIDEO_ALL_BURST", 1)
+IMPORT_VIDEO_IP_RPM    = _env_int("RATE_LIMIT_IMPORT_VIDEO_IP_RPM", 2)
+IMPORT_VIDEO_IP_BURST  = _env_int("RATE_LIMIT_IMPORT_VIDEO_IP_BURST", 1)
+
+MEDIA_GET_ALL_RPM   = _env_int("RATE_LIMIT_MEDIA_GET_ALL_RPM", 600)
+MEDIA_GET_ALL_BURST = _env_int("RATE_LIMIT_MEDIA_GET_ALL_BURST", 120)
+
+WS_CONNECT_ALL_RPM   = _env_int("RATE_LIMIT_WS_CONNECT_ALL_RPM", 60000)
+WS_CONNECT_ALL_BURST = _env_int("RATE_LIMIT_WS_CONNECT_ALL_BURST", 2000)
+
+WS_CHAT_SEND_ALL_RPM   = _env_int("RATE_LIMIT_WS_CHAT_SEND_ALL_RPM", 500)
+WS_CHAT_SEND_ALL_BURST = _env_int("RATE_LIMIT_WS_CHAT_SEND_ALL_BURST", 30)
+
+# ---- 全局并发上限：抵御“很多 IP 同时连/同时触发 LLM/同时上传” ----
+WS_MAX_CONNECTIONS     = _env_int("RATE_LIMIT_WS_MAX_CONNECTIONS", 500)  # 同时在线 WS 连接数上限
+CHAT_MAX_CONCURRENCY   = _env_int("RATE_LIMIT_CHAT_MAX_CONCURRENCY", 80)  # 同时跑的 LLM turn 上限
+UPLOAD_MAX_CONCURRENCY = _env_int("RATE_LIMIT_UPLOAD_MAX_CONCURRENCY", 100) # 同时处理上传（含缩略图）上限
+
+WS_CONN_SEM   = asyncio.Semaphore(WS_MAX_CONNECTIONS)
+CHAT_TURN_SEM = asyncio.Semaphore(CHAT_MAX_CONCURRENCY)
+UPLOAD_SEM    = asyncio.Semaphore(UPLOAD_MAX_CONCURRENCY)
+
+def _global_http_rule_limit(rule_name: str) -> Optional[Tuple[int, int]]:
+    if rule_name == "create_session":
+        return CREATE_SESSION_ALL_BURST, CREATE_SESSION_ALL_RPM
+    if rule_name == "upload_media":
+        return UPLOAD_MEDIA_ALL_BURST, UPLOAD_MEDIA_ALL_RPM
+    if rule_name == "media_get":
+        return MEDIA_GET_ALL_BURST, MEDIA_GET_ALL_RPM
+    return None
+
+
+def _get_content_length(scope: dict) -> Optional[int]:
+    try:
+        headers = _headers_to_dict(scope.get("headers") or [])
+        v = headers.get("content-length")
+        if v is None:
+            return None
+        n = int(v)
+        if n < 0:
+            return None
+        return n
+    except Exception:
+        return None
+
+def _match_http_rule(method: str, path: str) -> Tuple[str, int, int, float]:
+    """
+    返回 (rule_name, burst, rpm, cost)
+    cost 默认为 1；上传接口会按 content-length 动态计算 cost（在 middleware 内处理）。
+    """
+    method = (method or "").upper()
+    path = path or ""
+
+    # 精确接口优先
+    if method == "POST" and path == "/api/sessions":
+        return ("create_session", HTTP_CREATE_SESSION_BURST, HTTP_CREATE_SESSION_RPM, 1.0)
+
+    # 会话列表(GET /api/sessions,阶段 D)：独立限流桶。
+    # 必须排在下面 ``path.startswith("/api/")`` 的通用兜底**之前**。
+    if method == "GET" and path == "/api/sessions":
+        return ("list_sessions", HTTP_LIST_SESSIONS_BURST, HTTP_LIST_SESSIONS_RPM, 1.0)
+
+    # 上传素材（含分片接口）
+    if method == "POST" and path.startswith("/api/sessions/"):
+        if path.endswith("/media") or path.endswith("/media/init"):
+            return ("upload_media", HTTP_UPLOAD_MEDIA_BURST, HTTP_UPLOAD_MEDIA_RPM, 1.0)
+        if "/media/" in path and (path.endswith("/chunk") or path.endswith("/complete") or path.endswith("/cancel")):
+            return ("upload_media", HTTP_UPLOAD_MEDIA_BURST, HTTP_UPLOAD_MEDIA_RPM, 1.0)
+
+    if method == "GET" and path.startswith("/api/sessions/") and (path.endswith("/thumb") or path.endswith("/file")):
+        return ("media_get", HTTP_MEDIA_GET_BURST, HTTP_MEDIA_GET_RPM, 1.0)
+
+    if method == "POST" and path.startswith("/api/sessions/") and path.endswith("/clear"):
+        return ("clear_session", HTTP_CLEAR_BURST, HTTP_CLEAR_RPM, 1.0)
+
+    # 其它 API
+    if path.startswith("/api/"):
+        return ("api_general", HTTP_API_BURST, HTTP_API_RPM, 1.0)
+
+    # 非 /api 的其他请求：只走 global
+    return ("", 0, 0, 1.0)
+
+class HttpRateLimitMiddleware:
+    """
+    ASGI middleware：对 HTTP 请求做限流（WebSocket 不在这里处理）。
+    """
+    def __init__(self, app: Any, limiter: TokenBucketRateLimiter, trust_proxy_headers: bool = False):
+        self.app = app
+        self.limiter = limiter
+        self.trust_proxy_headers = bool(trust_proxy_headers)
+
+    async def __call__(self, scope: dict, receive: Any, send: Any):
+        if scope.get("type") != "http":
+            return await self.app(scope, receive, send)
+
+        method = scope.get("method", "GET")
+        path = scope.get("path", "/")
+        ip = _client_ip_from_http_scope(scope, self.trust_proxy_headers)
+
+        # 0) 全局总量桶（所有 IP 合并）
+        ok, retry_after, _ = await self.limiter.allow(
+            key="http:all",
+            capacity=float(HTTP_ALL_BURST),
+            refill_rate=_rpm_to_rps(float(HTTP_ALL_RPM)),
+            cost=1.0,
+        )
+        if not ok:
+            return await self._reject(send, retry_after)
+
+        # 1) 单 IP 全局桶（防单点）
+        ok, retry_after, _ = await self.limiter.allow(
+            key=f"http:global:{ip}",
+            capacity=float(HTTP_GLOBAL_BURST),
+            refill_rate=_rpm_to_rps(float(HTTP_GLOBAL_RPM)),
+            cost=1.0,
+        )
+        if not ok:
+            return await self._reject(send, retry_after)
+
+        # 2) 规则桶
+        rule_name, burst, rpm, cost = _match_http_rule(method, path)
+
+        # 上传接口：按 content-length 动态增加 cost（越大越费 token）
+        if rule_name == "upload_media":
+            cl = _get_content_length(scope)
+            if cl and cl > 0 and UPLOAD_COST_BYTES > 0:
+                cost = max(1.0, float(math.ceil(cl / float(UPLOAD_COST_BYTES))))
+
+        if rule_name:
+            # 2.1 规则的“全局桶”（跨 IP）
+            g = _global_http_rule_limit(rule_name)
+            if g:
+                g_burst, g_rpm = g
+                okg, rag, _ = await self.limiter.allow(
+                    key=f"http:{rule_name}:all",
+                    capacity=float(g_burst),
+                    refill_rate=_rpm_to_rps(float(g_rpm)),
+                    cost=float(cost),
+                )
+                if not okg:
+                    return await self._reject(send, rag)
+
+            # 2.2 规则的“单 IP 桶”
+            ok2, retry_after2, _ = await self.limiter.allow(
+                key=f"http:{rule_name}:{ip}",
+                capacity=float(burst),
+                refill_rate=_rpm_to_rps(float(rpm)),
+                cost=float(cost),
+            )
+            if not ok2:
+                return await self._reject(send, retry_after2)
+
+        return await self.app(scope, receive, send)
+
+
+    async def _reject(self, send: Any, retry_after: float):
+        ra = int(math.ceil(float(retry_after or 0.0)))
+        body = json.dumps(
+            {"detail": "Too Many Requests", "retry_after": ra},
+            ensure_ascii=False
+        ).encode("utf-8")
+
+        headers = [
+            (b"content-type", b"application/json; charset=utf-8"),
+            (b"retry-after", str(ra).encode("ascii")),
+        ]
+
+        await send({"type": "http.response.start", "status": 429, "headers": headers})
+        await send({"type": "http.response.body", "body": body, "more_body": False})
+
+RATE_LIMITER = TokenBucketRateLimiter(
+    ttl_sec=_env_int("RATE_LIMIT_TTL_SEC", 900),  # 默认 15 分钟：多 IP 攻击时更快释放桶表
+    cleanup_interval_sec=_env_int("RATE_LIMIT_CLEANUP_INTERVAL_SEC", 60),
+    max_buckets=_env_int("RATE_LIMIT_MAX_BUCKETS", 100000),
+    evict_batch=_env_int("RATE_LIMIT_EVICT_BATCH", 2000),
+)
+
+
+@dataclass
+class MediaMeta:
+    id: str
+    name: str
+    kind: str
+    path: str
+    thumb_path: Optional[str]
+    ts: float
+
+@dataclass
+class ResumableUpload:
+    upload_id: str
+    filename: str              # 素材原名（用于UI展示）
+    store_filename: str        # 落盘名 media_0001.mp4
+    size: int
+    chunk_size: int
+    total_chunks: int
+    tmp_path: str
+    kind: str
+    created_ts: float
+    last_ts: float
+    received: Set[int] = field(default_factory=set)
+    closed: bool = False
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+class MediaStore:
+    """
+    专注文件系统层：
+    - 保存上传文件（async chunk）
+    - 生成缩略图（图片：线程；视频：异步子进程）
+    - 删除文件（只删 media_dir 下的文件）
+    """
+    def __init__(self, media_dir: str):
+        self.media_dir = os.path.abspath(media_dir)
+        os.makedirs(self.media_dir, exist_ok=True)
+        self.thumbs_dir = ensure_thumbs_dir(self.media_dir)
+
+    async def save_upload(self, uf: UploadFile, *, store_filename: str, display_name: str) -> MediaMeta:
+        media_id = uuid.uuid4().hex[:10]
+
+        display_name = sanitize_filename(display_name or uf.filename or "unnamed")
+        store_filename = sanitize_filename(store_filename)
+
+        kind = detect_media_kind(display_name)
+
+        save_path = os.path.join(self.media_dir, store_filename)
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+        if os.path.exists(save_path):
+            raise HTTPException(status_code=409, detail=f"media filename exists: {store_filename}")
+
+        # async chunk 写盘（不一次性读入内存）
+        async with await anyio.open_file(save_path, "wb") as out:
+            while True:
+                chunk = await uf.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                await out.write(chunk)
+
+        try:
+            await uf.close()
+        except Exception:
+            pass
+
+        thumb_path: Optional[str] = None
+        if kind in ("image", "video"):
+            thumb_path = os.path.join(self.thumbs_dir, f"{media_id}.jpg")
+
+            if kind == "image":
+                ok = await anyio.to_thread.run_sync(make_image_thumbnail_sync, save_path, thumb_path)
+            else:
+                ok = await make_video_thumbnail_async(save_path, thumb_path)
+
+            if not ok:
+                # 图片缩略图失败 -> 用原图；视频失败 -> 置空（thumb endpoint 返回占位 SVG）
+                thumb_path = save_path if kind == "image" else None
+
+        return MediaMeta(
+            id=media_id,
+            name=os.path.basename(display_name),
+            kind=kind,
+            path=os.path.abspath(save_path),
+            thumb_path=os.path.abspath(thumb_path) if thumb_path else None,
+            ts=time.time(),
+        )
+    
+    async def save_from_path(
+        self,
+        src_path: str,
+        *,
+        store_filename: str,
+        display_name: str,
+    ) -> MediaMeta:
+        """
+        将分片上传产生的临时文件移动到 media_dir 下的最终文件。
+        - display_name: UI 展示名（原始文件名）
+        - store_filename: 落盘名（media_0001.mp4），用于记录顺序
+        """
+        media_id = uuid.uuid4().hex[:10]
+
+        display_name = sanitize_filename(display_name or "unnamed")
+        store_filename = sanitize_filename(store_filename or "unnamed")
+
+        kind = detect_media_kind(display_name)
+
+        src_path = os.path.abspath(src_path)
+        if not os.path.exists(src_path):
+            raise HTTPException(status_code=400, detail="upload temp file missing")
+
+        save_path = os.path.abspath(os.path.join(self.media_dir, store_filename))
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+        if os.path.exists(save_path):
+            raise HTTPException(status_code=409, detail=f"media already exists: {store_filename}")
+
+        # move tmp -> final
+        try:
+            os.replace(src_path, save_path)
+        except OSError as e:
+            logger.exception("Failed to finalize resumable media file")
+            if e.errno == errno.ENOSPC:
+                detail = "Failed to save media: disk full"
+            elif e.errno in (errno.EACCES, errno.EPERM):
+                detail = "Failed to save media: permission denied"
+            else:
+                detail = f"Failed to save media file"
+            raise HTTPException(status_code=500, detail=detail)
+
+        thumb_path: Optional[str] = None
+        if kind in ("image", "video"):
+            thumb_path = os.path.join(self.thumbs_dir, f"{media_id}.jpg")
+
+            if kind == "image":
+                ok = await anyio.to_thread.run_sync(make_image_thumbnail_sync, save_path, thumb_path)
+            else:
+                ok = await make_video_thumbnail_async(save_path, thumb_path)
+
+            if not ok:
+                thumb_path = save_path if kind == "image" else None
+
+        return MediaMeta(
+            id=media_id,
+            name=os.path.basename(display_name),  # ★ UI 显示原文件名
+            kind=kind,
+            path=os.path.abspath(save_path),      # ★ 磁盘文件名 media_0001.ext
+            thumb_path=os.path.abspath(thumb_path) if thumb_path else None,
+            ts=time.time(),
+        )
+
+    async def delete_files(self, meta: MediaMeta) -> None:
+        root = self.media_dir
+        for p in {meta.path, meta.thumb_path}:
+            if not p:
+                continue
+            ap = os.path.abspath(p)
+            if not _is_under_dir(ap, root):
+                continue
+            if os.path.isdir(ap):
+                continue
+            if os.path.exists(ap):
+                try:
+                    os.remove(ap)
+                except Exception:
+                    pass
+
+
+class SessionStateUnavailableError(Exception):
+    """会话状态不可用(PostgreSQL 读不到 / 写不进,或旧 JSON 文件损坏)。
+
+    Callers should map to 503, not 404。
+    """
+
+
+# ---------------------------------------------------------------------------
+# PostgreSQL 仓储(阶段 D)
+# ---------------------------------------------------------------------------
+# ``db.session_repository`` 需要 psycopg;OpenStoryline 是独立 venv,可能还没装
+# ⇒ **不在 import 期**加载仓储,首次使用时才 import,失败时抛
+# ``SessionStateUnavailableError``(⇒ 503),保证 Web 服务能起来、报错可读。
+_DEFAULT_SESSION_REPOSITORY: Any = None
+_DEFAULT_SESSION_REPOSITORY_ERROR: Optional[BaseException] = None
+
+
+def _default_session_repository() -> Any:
+    """默认的 ``chat_sessions`` 仓储(懒加载 + 进程内缓存)。
+
+    Raises:
+        SessionStateUnavailableError: ``db`` 包 / psycopg 不可用(⇒ 503)。
+    """
+    global _DEFAULT_SESSION_REPOSITORY, _DEFAULT_SESSION_REPOSITORY_ERROR
+    if _DEFAULT_SESSION_REPOSITORY is not None:
+        return _DEFAULT_SESSION_REPOSITORY
+    if _DEFAULT_SESSION_REPOSITORY_ERROR is not None:
+        raise SessionStateUnavailableError("db_unavailable") from _DEFAULT_SESSION_REPOSITORY_ERROR
+    try:
+        from db.session_repository import SessionRepository
+    except Exception as e:  # psycopg 没装 / db 包不可达
+        _DEFAULT_SESSION_REPOSITORY_ERROR = e
+        logger.error("db.session_repository 不可用(psycopg 没装?): %s", e)
+        raise SessionStateUnavailableError("db_unavailable") from e
+    repo = SessionRepository()
+    _DEFAULT_SESSION_REPOSITORY = repo
+    return repo
+
+
+def _is_repo_error(exc: BaseException, name: str) -> bool:
+    """判断异常是不是仓储层的某个异常(按类名匹配)。
+
+    为什么不直接 ``except db.session_repository.SessionNotFound``:
+    本模块 import 期不能依赖 psycopg(见 ``_default_session_repository``),
+    所以这里按类名(含父类)判断,避免在 import 期拉 ``db`` 包。
+    """
+    return any(t.__name__ == name for t in type(exc).__mro__)
+
+
+class ChatSession:
+    """
+    一个 session 的全部状态：
+    - agent / lc_messages（LangChain上下文）
+    - history（给前端回放）
+    - load_media / pending_media（staging）
+    - tool trace 索引（支持 tool 事件“就地更新”）
+    """
+    def __init__(self, session_id: str, cfg: Settings, repo: Any = None):
+        self.session_id = session_id
+        self.cfg = cfg
+        # PostgreSQL 仓储(阶段 D):没注入就用默认的(懒加载)。
+        self._repo = repo
+        self.lang = "zh"
+
+        default_llm = _peek_builtin_model_name("llm", self.cfg)
+        default_vlm = _peek_builtin_model_name("vlm", self.cfg)
+
+        # 内置模型的名字(与「默认档位」区分开:内置模型永远留在下拉里,
+        # 只是可能不是默认选中项)。
+        self.builtin_llm_name = default_llm
+        self.builtin_vlm_name = default_vlm
+
+        # mcode 档位:操作员目录配好了才加进下拉。
+        mcode_tiers = _mcode_tiers_available(self.cfg)
+
+        # GLM API 预设(阶段 C):``[glm]`` 凭证齐了才加进 LLM 下拉;
+        # VLM 侧还要求显式配置 vlm_model —— 图像输入能力未经 C-T2 验证前
+        # 不默认放开(设计 §10.4 C-T2「不满足则只做 LLM 预设」)。
+        glm_llm_ready = _glm_preset_available(self.cfg)
+        glm_vlm_ready = glm_llm_ready and bool(_glm_vlm_model_name(self.cfg))
+        glm_llm_options = [GLM_MODEL_KEY] if glm_llm_ready else []
+        glm_vlm_options = [GLM_MODEL_KEY] if glm_vlm_ready else []
+
+        # ZCode Agent 档位(阶段 E):[zcode].cwd 配好且启动自检通过才可选;
+        # 「配了 cwd 但自检不过」时选项仍进下拉,由 model_notes 标成禁用 + 原因。
+        zcode_available = _zcode_available(self.cfg)
+        zcode_note = "" if zcode_available else _zcode_note(self.cfg)
+        zcode_options = [ZCODE_MODEL_KEY] if (zcode_available or zcode_note) else []
+
+        self.chat_models = _dedup_models(
+            [default_llm] + glm_llm_options + mcode_tiers + zcode_options + [CUSTOM_MODEL_KEY])
+        self.chat_model_key = default_llm
+
+        self.vlm_models = _dedup_models(
+            [default_vlm] + glm_vlm_options + mcode_tiers + zcode_options + [CUSTOM_MODEL_KEY])
+        self.vlm_model_key = default_vlm
+
+        self._zcode_disabled_notes: Dict[str, str] = (
+            {ZCODE_MODEL_KEY: zcode_note} if zcode_note else {}
+        )
+
+        # 默认档位:内置模型没有可用凭证(占位符 / 缺失)而 mcode/zcode 可用时,
+        # 直接默认走 agent 档位 —— 否则用户每次开新会话都要先撞一次 401。
+        if not _builtin_credentials_usable(self.cfg, "llm"):
+            if mcode_tiers:
+                self.chat_model_key = mcode_tiers[0]
+                self.vlm_model_key = mcode_tiers[0]
+            elif zcode_available:
+                self.chat_model_key = ZCODE_MODEL_KEY
+                self.vlm_model_key = ZCODE_MODEL_KEY
+
+        self.developer_mode = is_developer_mode(cfg)
+
+        self.media_dir = resolve_media_dir(cfg.project.media_dir, session_id)
+        self.media_store = MediaStore(self.media_dir)
+        # 分片上传临时目录 + in-flight 状态
+        self.uploads_dir = ensure_uploads_dir(self.media_dir)
+        self.resumable_uploads: Dict[str, ResumableUpload] = {}
+
+        # 直传（multipart 多文件）时的“预占位”，避免并发竞争导致超过上限
+        self._direct_upload_reservations = 0
+
+        self.agent: Any = None
+        self.node_manager = None
+        self.client_context = None
+
+        # 当前 turn 的 MCode 事件 sink(阶段 D)。每轮换 —— agent 按 session 缓存,
+        # 同一个 MCodeChatModel 实例会被多轮复用,每轮的 sink 都不同。
+        # None = 本轮不注册 MCode 事件通道(普通模型链路恒为 None)。
+        self._mcode_event_sink: Optional[Any] = None
+
+        # 当前 turn 的 ZCode 事件 sink(阶段 E,机制与 mcode sink 同款)。
+        self._zcode_event_sink: Optional[Any] = None
+
+        # zcode 会话映射(阶段 E):结果 JSON 的 sessionId 落在这里,
+        # 下轮 ``--resume`` 续接。随 dump_state 落库,重启后仍能续会话。
+        self.zcode_session_id: str = ""
+
+        # 锁分离：避免“流式输出”阻塞上传/删除 pending
+        self.chat_lock = asyncio.Lock()
+        self.media_lock = asyncio.Lock()
+
+        self.sent_media_total: int = 0
+        self._attach_stats_msg_idx = 1
+
+        self.lc_messages: List[BaseMessage] = [
+            SystemMessage(content=get_prompt("instruction.system", lang=self.lang)),
+            SystemMessage(content=UPLOAD_STATUS_SYSTEM_EMPTY),
+        ]
+        self.history: List[Dict[str, Any]] = []
+
+        # 阶段 E:执行过程 trace(**独立于 history**)。
+        # 过程事件(状态 / 工具 / 步骤)写这里,不写 history —— history 是「用户看到的
+        # 对话」,trace 是「这一轮机器干了什么」,两者语义不同、生命周期也不同。
+        # 有界:每轮 ≤ max_trace_events 条,总共只留最近 MCODE_TRACE_MAX_TURNS 轮。
+        self._mcode_trace: List[Dict[str, Any]] = []
+        self._mcode_trace_turn_counts: Dict[str, int] = {}
+
+        self.load_media: Dict[str, MediaMeta] = {}
+        self.pending_media_ids: List[str] = []
+
+        self._tool_history_index: Dict[str, int] = {}  # tool_call_id -> history index
+
+        self.cancel_event = asyncio.Event() # 打断信号
+
+        # 服务相关配置
+        self.custom_llm_config: Optional[Dict[str, Any]] = None
+        self.custom_vlm_config: Optional[Dict[str, Any]] = None
+        self.tts_config: Dict[str, Any] = {}
+        self.ai_transition_config: Dict[str, Any] = {}
+        self._agent_build_key: Optional[Tuple[Any, ...]] = None
+
+        self.pexels_key_mode: str = "default"   # "default" | "custom"
+        self.pexels_custom_key: str = ""
+
+        self._media_seq_inited = False
+        self._media_seq_next = 1
+
+        # Restore diagnostics (not persisted). When recovery detects corrupt tool rows,
+        # we "fail-closed" by truncating lc_messages from the impacted tool-use turn.
+        self.restore_degraded: bool = False
+        self.restore_degraded_reason: str = ""
+
+    @classmethod
+    def state_file_path_for(cls, session_id: str, cfg: Settings) -> str:
+        return os.path.abspath(os.path.join(str(cfg.project.outputs_dir), session_id, SESSION_STATE_FILENAME))
+
+    def state_file_path(self) -> str:
+        return self.state_file_path_for(self.session_id, self.cfg)
+
+    def repository(self) -> Any:
+        """本会话用的 ``chat_sessions`` 仓储(没注入就用默认的)。"""
+        if self._repo is not None:
+            return self._repo
+        return _default_session_repository()
+
+    def _serialize_load_media(self) -> Dict[str, Dict[str, Any]]:
+        out: Dict[str, Dict[str, Any]] = {}
+        for mid, meta in (self.load_media or {}).items():
+            out[str(mid)] = {
+                "id": str(meta.id),
+                "name": str(meta.name),
+                "kind": str(meta.kind),
+                "path": str(meta.path),
+                "thumb_path": str(meta.thumb_path) if meta.thumb_path else None,
+                "ts": float(meta.ts),
+            }
+        return out
+
+    @staticmethod
+    def _deserialize_load_media(data: Any) -> Dict[str, MediaMeta]:
+        out: Dict[str, MediaMeta] = {}
+        if not isinstance(data, dict):
+            return out
+        for _k, v in data.items():
+            if not isinstance(v, dict):
+                continue
+            try:
+                meta = MediaMeta(
+                    id=str(v.get("id") or ""),
+                    name=str(v.get("name") or ""),
+                    kind=str(v.get("kind") or "unknown"),
+                    path=str(v.get("path") or ""),
+                    thumb_path=(str(v.get("thumb_path")) if v.get("thumb_path") else None),
+                    ts=float(v.get("ts") or time.time()),
+                )
+                if meta.id:
+                    out[meta.id] = meta
+            except Exception:
+                continue
+        return out
+
+    @staticmethod
+    def _sanitize_service_cfg_for_state(cfg_obj: Any) -> Any:
+        if cfg_obj is None:
+            return None
+        return _mask_secrets_recursive(_to_json_safe(cfg_obj))
+
+    @staticmethod
+    def _sanitize_custom_model_cfg_for_state(cfg_obj: Any) -> Optional[Dict[str, Any]]:
+        """
+        Primary boundary for persistence: never serialize raw API keys for custom models.
+        Only keep {model, base_url, api_key="***"} and drop everything else.
+        """
+        if not isinstance(cfg_obj, dict) or not cfg_obj:
+            return None
+        model = _s(cfg_obj.get("model"))
+        base_url = _norm_url(cfg_obj.get("base_url"))
+        api_key_present = _s(cfg_obj.get("api_key"))
+        out: Dict[str, Any] = {"model": model, "base_url": base_url}
+        if api_key_present or any(_is_secret_field_name(str(k)) for k in cfg_obj.keys()):
+            out["api_key"] = MASKED_SECRET
+        return out
+
+    @staticmethod
+    def _sanitize_tts_cfg_for_state(tts_cfg: Any) -> Dict[str, Any]:
+        """
+        Primary boundary for persistence: keep TTS structure but redact secret fields by key name.
+        Regex-based masking still applies as a secondary fallback for string payloads.
+        """
+        if not isinstance(tts_cfg, dict) or not tts_cfg:
+            return {}
+        safe = _mask_secrets_recursive(_to_json_safe(tts_cfg))
+        return safe if isinstance(safe, dict) else {}
+
+    def _fail_closed_truncate_lc_messages(self, truncate_at: int, reason: str) -> None:
+        truncate_at = int(max(0, truncate_at))
+        msgs = [m for m in (self.lc_messages or []) if isinstance(m, BaseMessage)]
+        if truncate_at < len(msgs):
+            self.lc_messages = msgs[:truncate_at]
+        self.restore_degraded = True
+        self.restore_degraded_reason = (reason or "degraded_restore").strip()
+
+    def _validate_tool_protocol_and_fail_closed(self) -> None:
+        """
+        Validate tool-call pairing on restored lc_messages and fail-closed on corruption.
+        We do NOT try to invent a ToolMessage for missing tool_call_id; instead we truncate
+        to the last clean boundary to avoid feeding semantically corrupted tool results to the LLM.
+        """
+        msgs: List[BaseMessage] = [m for m in (self.lc_messages or []) if isinstance(m, BaseMessage)]
+        pending_ids: Set[str] = set()
+        responded_ids: Set[str] = set()
+        tool_turn_start_idx: Optional[int] = None
+
+        for idx, m in enumerate(msgs):
+            if isinstance(m, AIMessage):
+                pending_ids = _tool_call_ids_from_ai_message_for_state(m)
+                responded_ids = set()
+                tool_turn_start_idx = idx if pending_ids else None
+                continue
+
+            if isinstance(m, ToolMessage):
+                tcid = str(getattr(m, "tool_call_id", "") or "").strip()
+                if not tcid:
+                    self._fail_closed_truncate_lc_messages(
+                        tool_turn_start_idx if tool_turn_start_idx is not None else idx,
+                        "degraded_restore: empty tool_call_id",
+                    )
+                    return
+                if (not pending_ids) or (tcid not in pending_ids) or (tcid in responded_ids):
+                    self._fail_closed_truncate_lc_messages(
+                        tool_turn_start_idx if tool_turn_start_idx is not None else idx,
+                        "degraded_restore: tool protocol mismatch",
+                    )
+                    return
+                responded_ids.add(tcid)
+                continue
+
+            pending_ids = set()
+            responded_ids = set()
+            tool_turn_start_idx = None
+
+    @staticmethod
+    def _apply_instruction_and_upload_headers(messages: List[BaseMessage], lang: str) -> List[BaseMessage]:
+        """
+        Single source of truth for lc_messages header invariants:
+        index 0 = instruction prompt for `lang`, index 1 = upload-status system message.
+        Strips any prior zh/en instruction prompts and re-hoists the first upload-status row
+        so language switches cannot leave duplicate instruction system messages in history.
+        """
+        instruction_sys = get_prompt("instruction.system", lang=lang)
+        zh_ins = str(get_prompt("instruction.system", lang="zh")).strip()
+        en_ins = str(get_prompt("instruction.system", lang="en")).strip()
+        upload_placeholder = UPLOAD_STATUS_SYSTEM_EMPTY
+
+        body: List[BaseMessage] = []
+        upload_msg: Optional[SystemMessage] = None
+
+        for m in messages or []:
+            if not isinstance(m, BaseMessage):
+                continue
+            if isinstance(m, SystemMessage):
+                c = str(getattr(m, "content", "")).strip()
+                if c == zh_ins or c == en_ins:
+                    continue
+                if c.startswith(UPLOAD_STATUS_SYSTEM_PREFIX):
+                    if upload_msg is None:
+                        upload_msg = m
+                    continue
+            body.append(m)
+
+        if upload_msg is None:
+            upload_msg = SystemMessage(content=upload_placeholder)
+
+        return [SystemMessage(content=instruction_sys), upload_msg, *body]
+
+    @staticmethod
+    def _normalized_lc_messages_for_state(messages: List[BaseMessage], lang: str) -> List[BaseMessage]:
+        msgs = [m for m in (messages or []) if isinstance(m, BaseMessage)]
+        return ChatSession._apply_instruction_and_upload_headers(msgs, lang)
+
+    @staticmethod
+    def _safe_body_suffix_for_state(body: List[BaseMessage], budget: int) -> List[BaseMessage]:
+        """
+        Keep at most `budget` tail messages without starting at an orphan ToolMessage
+        (tool-turn left edge). Prefer preserving a shorter valid suffix over a longer invalid one.
+        """
+        n = len(body)
+        if budget <= 0 or n == 0:
+            return []
+        max_take = min(budget, n)
+        for take in range(max_take, 0, -1):
+            i = n - take
+            if isinstance(body[i], ToolMessage):
+                continue
+            return body[i:]
+        return []
+
+    def _persist_history(self) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for item in (self.history or []):
+            if not isinstance(item, dict):
+                continue
+            rec = _to_json_safe(item)
+            if not isinstance(rec, dict):
+                continue
+            if str(rec.get("role") or "") == "tool":
+                rec = _mask_tool_history_record(rec)
+            out.append(rec)
+        if SESSION_STATE_MAX_HISTORY > 0 and len(out) > SESSION_STATE_MAX_HISTORY:
+            out = out[-SESSION_STATE_MAX_HISTORY:]
+        return out
+
+    def _serialize_lc_messages(self) -> List[Dict[str, Any]]:
+        msgs = self._normalized_lc_messages_for_state(list(self.lc_messages or []), self.lang)
+        cap = SESSION_STATE_MAX_LC_MESSAGES
+        if cap > 0 and len(msgs) > cap:
+            if cap <= 2:
+                msgs = msgs[:cap]
+            else:
+                head2 = msgs[:2]
+                tail = ChatSession._safe_body_suffix_for_state(msgs[2:], cap - 2)
+                msgs = self._normalized_lc_messages_for_state(head2 + tail, self.lang)
+            if len(msgs) > cap:
+                if cap <= 2:
+                    msgs = msgs[:cap]
+                else:
+                    head2 = msgs[:2]
+                    tail = ChatSession._safe_body_suffix_for_state(msgs[2:], cap - 2)
+                    msgs = self._normalized_lc_messages_for_state(head2 + tail, self.lang)
+
+        out: List[Dict[str, Any]] = []
+        for m in msgs:
+            try:
+                out.append(_serialize_lc_message(m))
+            except Exception:
+                continue
+        return out
+
+    def dump_state(self) -> Dict[str, Any]:
+        return {
+            "version": 1,
+            "session_id": self.session_id,
+            "lang": self.lang,
+            "history": self._persist_history(),
+            # 阶段 E:trace 跟着会话状态一起落库(刷新后能重建执行过程面板)。
+            # 记录本身已经截断 + 脱敏过,这里再过一次 JSON 安全化。
+            "mcode_trace": _to_json_safe(self.mcode_trace_snapshot()),
+            "chat_model_key": self.chat_model_key,
+            "vlm_model_key": self.vlm_model_key,
+            # 阶段 E:zcode 会话映射跟着会话走(重启后 --resume 仍能续上)。
+            "zcode_session_id": str(self.zcode_session_id or ""),
+            "load_media": self._serialize_load_media(),
+            "pending_media_ids": [str(x) for x in (self.pending_media_ids or [])],
+            "lc_messages_serialized": self._serialize_lc_messages(),
+            "pexels_key_mode": self.pexels_key_mode,
+            "sent_media_total": int(getattr(self, "sent_media_total", 0) or 0),
+            # Primary boundary: never persist raw API keys for configs.
+            "custom_llm_config": self._sanitize_custom_model_cfg_for_state(self.custom_llm_config),
+            "custom_vlm_config": self._sanitize_custom_model_cfg_for_state(self.custom_vlm_config),
+            "tts_config": self._sanitize_tts_cfg_for_state(self.tts_config),
+        }
+
+    def save_state_atomic(self) -> None:
+        """把会话状态写进 PostgreSQL(``chat_sessions.state_json``)。
+
+        ⚠️ **fail-closed**:写不进去就抛异常,**绝不**回退去写 JSON 文件 ——
+        服务器是唯一事实来源,悄悄写文件等于把数据劈成两半。
+
+        Raises:
+            SessionStateUnavailableError: 数据库不可写(⇒ 503)。
+        """
+        repo = self.repository()
+        data = self.dump_state()
+        try:
+            repo.update_state(self.session_id, data)
+            return
+        except Exception as e:
+            if not _is_repo_error(e, "SessionNotFound"):
+                logger.error("session state write failed sid=%s err=%s", self.session_id, e)
+                raise SessionStateUnavailableError("write_error") from e
+
+        # 行不存在(新会话,或已被软删)⇒ 幂等建一行。
+        # ``create_if_absent`` 不会覆盖已有内容,也不会复活被软删的会话。
+        try:
+            _record, created = repo.create_if_absent(self.session_id, state_json=data)
+        except Exception as e:
+            logger.error("session state create failed sid=%s err=%s", self.session_id, e)
+            raise SessionStateUnavailableError("write_error") from e
+        if not created:
+            logger.warning(
+                "session already exists(deleted?), state not persisted sid=%s", self.session_id
+            )
+
+    def _ensure_lc_messages_invariants(self) -> None:
+        msgs = [m for m in (self.lc_messages or []) if isinstance(m, BaseMessage)]
+        self.lc_messages = self._apply_instruction_and_upload_headers(msgs, self.lang)
+        self._attach_stats_msg_idx = 1
+
+    def _close_unfinished_tool_calls_in_lc_messages(self) -> None:
+        msgs_in: List[BaseMessage] = [m for m in (self.lc_messages or []) if isinstance(m, BaseMessage)]
+        out: List[BaseMessage] = []
+        i = 0
+        n = len(msgs_in)
+        cancelled_content = json.dumps({"cancelled": True, "cancelled_by_restart": True}, ensure_ascii=False)
+
+        while i < n:
+            m = msgs_in[i]
+            if not isinstance(m, AIMessage):
+                out.append(m)
+                i += 1
+                continue
+
+            out.append(m)
+            expected_ids = _tool_call_ids_from_ai_message_for_state(m)
+            responded_ids: Set[str] = set()
+            i += 1
+
+            # Preserve valid contiguous ToolMessages for this AI block.
+            while i < n and isinstance(msgs_in[i], ToolMessage):
+                tm = msgs_in[i]
+                tcid = str(getattr(tm, "tool_call_id", "") or "").strip()
+                if tcid and (tcid in expected_ids) and (tcid not in responded_ids):
+                    responded_ids.add(tcid)
+                    out.append(tm)
+                i += 1
+
+            # Inject cancelled results right after the originating AI block.
+            missing = sorted(expected_ids - responded_ids)
+            for tcid in missing:
+                out.append(ToolMessage(content=cancelled_content, tool_call_id=str(tcid)))
+
+        self.lc_messages = out
+
+    def _sanitize_tool_protocol_in_lc_messages(self) -> None:
+        """
+        Ensure lc_messages won't violate OpenAI tool-calling protocol:
+        ToolMessage must correspond to a preceding AIMessage tool_call_id.
+        When restore/serialization fails to fully reconstruct tool_calls,
+        providers may reject requests with 400. We drop orphan ToolMessages here.
+        """
+        msgs_in: List[BaseMessage] = [m for m in (self.lc_messages or []) if isinstance(m, BaseMessage)]
+        msgs_out: List[BaseMessage] = []
+        pending_ids: Set[str] = set()
+        responded_ids: Set[str] = set()
+
+        for m in msgs_in:
+            if isinstance(m, AIMessage):
+                pending_ids = _tool_call_ids_from_ai_message_for_state(m)
+                responded_ids = set()
+                msgs_out.append(m)
+                continue
+            if isinstance(m, ToolMessage):
+                tcid = str(getattr(m, "tool_call_id", "") or "").strip()
+                if tcid and (tcid in pending_ids) and (tcid not in responded_ids):
+                    responded_ids.add(tcid)
+                    msgs_out.append(m)
+                # else: drop orphan/duplicate tool message
+                continue
+            pending_ids = set()
+            responded_ids = set()
+            msgs_out.append(m)
+
+        self.lc_messages = msgs_out
+
+    def _normalize_running_tool_records(self) -> None:
+        for rec in (self.history or []):
+            if not isinstance(rec, dict):
+                continue
+            if str(rec.get("role") or "") != "tool":
+                continue
+            if str(rec.get("state") or "").lower() == "running":
+                rec["state"] = "error"
+                rec["progress"] = 1.0
+                rec["message"] = "Cancelled by restart"
+                rec["summary"] = {"cancelled": True, "cancelled_by_restart": True}
+
+    def _rebuild_tool_history_index(self) -> None:
+        self._tool_history_index = {}
+        for idx, rec in enumerate(self.history or []):
+            if not isinstance(rec, dict):
+                continue
+            if str(rec.get("role") or "") != "tool":
+                continue
+            tcid = rec.get("tool_call_id")
+            if tcid:
+                self._tool_history_index[str(tcid)] = idx
+
+    @staticmethod
+    def _read_legacy_state_file(session_id: str, cfg: Settings) -> Optional[Dict[str, Any]]:
+        """读**旧**版 ``session_state.json``(阶段 D 迁移兼容用)。
+
+        读不到 / 坏了 / 不是 dict ⇒ ``None``(当作"没有旧数据")。
+        旧文件**只读**:状态一律以库为准,这里只是给迁移期的一次性导入兜底。
+        """
+        try:
+            path = ChatSession.state_file_path_for(session_id, cfg)
+        except Exception:
+            return None
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = f.read()
+            data = json.loads(raw)
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    @classmethod
+    def load_from_state(
+        cls,
+        session_id: str,
+        cfg: Settings,
+        repo: Any = None,
+    ) -> Optional["ChatSession"]:
+        """从 PostgreSQL 恢复会话(``chat_sessions.state_json``)。
+
+        库里没有这条会话时,再看一次**旧** ``session_state.json``(迁移兼容),
+        并把它幂等导入库里(``create_if_absent`` —— 不覆盖库里已有内容)。
+
+        Raises:
+            SessionStateUnavailableError: 数据库读失败 / 状态形状不对(⇒ 503)。
+        """
+        if repo is None:
+            repo = _default_session_repository()
+
+        try:
+            record = repo.get(session_id)
+        except Exception as e:
+            logger.warning("session state read failed sid=%s err=%s", session_id, e)
+            raise SessionStateUnavailableError("read_error") from e
+
+        data: Any = None
+        if record is not None:
+            data = getattr(record, "state_json", None)
+        else:
+            # 旧 JSON 文件(只读一次,导入后以库为准)
+            data = cls._read_legacy_state_file(session_id, cfg)
+            if data is None:
+                return None
+            try:
+                repo.create_if_absent(session_id, state_json=data)
+            except Exception as e:
+                # 导入失败不致命:仍然可以用文件内容恢复本次会话
+                logger.warning("legacy session import failed sid=%s err=%s", session_id, e)
+
+        if not isinstance(data, dict):
+            logger.warning("session state not a dict sid=%s", session_id)
+            raise SessionStateUnavailableError("invalid_shape")
+
+        # Mismatch vs persisted session_id → not this resource (404). Do not use 503 here:
+        # 503 is reserved for read/parse failures (SessionStateUnavailableError).
+        sid_in_state = str(data.get("session_id") or "").strip()
+        if sid_in_state and sid_in_state != session_id:
+            logger.warning(
+                "session state session_id mismatch requested=%s stored=%s (treating as not found)",
+                session_id,
+                sid_in_state,
+            )
+            return None
+
+        sess = cls(session_id=session_id, cfg=cfg, repo=repo)
+        sess.lang = str(data.get("lang") or "zh").strip().lower()
+        if sess.lang not in ("zh", "en"):
+            sess.lang = "zh"
+
+        sess.history = list(data.get("history") or [])
+        # 阶段 E:恢复执行过程 trace(有界 + 脱敏后再用)。
+        sess.restore_mcode_trace(data.get("mcode_trace"))
+        # 恢复出来的模型 key 必须**现在还能用**:
+        #   - 不在可选列表里(配置变了) -> 回落到默认档位
+        #   - 是内置模型但凭证是占位符/缺失 -> 回落到默认档位
+        #     (旧会话记着 "deepseek-v4-pro",但那把 key 从来就没配过,
+        #      留着它只会让每次聊天都撞 401)
+        sess.chat_model_key = _sanitize_model_key(
+            data.get("chat_model_key"),
+            sess.chat_models,
+            sess.chat_model_key,
+            builtin_name=sess.builtin_llm_name,
+            builtin_usable=_builtin_credentials_usable(sess.cfg, "llm"),
+        )
+        sess.vlm_model_key = _sanitize_model_key(
+            data.get("vlm_model_key"),
+            sess.vlm_models,
+            sess.vlm_model_key,
+            builtin_name=sess.builtin_vlm_name,
+            builtin_usable=_builtin_credentials_usable(sess.cfg, "vlm"),
+        )
+        # 阶段 E:恢复 zcode 会话映射(空值安全;旧状态里没有这个键)。
+        sess.zcode_session_id = str(data.get("zcode_session_id") or "").strip()
+        try:
+            sess.sent_media_total = int(data.get("sent_media_total", 0) or 0)
+        except Exception:
+            sess.sent_media_total = 0
+        sess.load_media = cls._deserialize_load_media(data.get("load_media"))
+
+        pending_ids = [str(x) for x in (data.get("pending_media_ids") or [])]
+        sess.pending_media_ids = [x for x in pending_ids if x in sess.load_media]
+
+        lc_msgs_raw = data.get("lc_messages_serialized") or []
+        lc_msgs: List[BaseMessage] = []
+        truncate_at: Optional[int] = None
+        truncate_reason: str = ""
+        last_tool_ai_idx: Optional[int] = None
+        if isinstance(lc_msgs_raw, list):
+            for item in lc_msgs_raw:
+                try:
+                    if isinstance(item, dict) and str(item.get("type") or "").strip().lower() == "tool":
+                        tcid_raw = str(item.get("tool_call_id") or "").strip()
+                        if not tcid_raw:
+                            truncate_at = last_tool_ai_idx if last_tool_ai_idx is not None else len(lc_msgs)
+                            truncate_reason = "degraded_restore: corrupt tool row (missing tool_call_id)"
+                            break
+                    msg = _deserialize_lc_message(item)
+                    if msg is not None:
+                        if isinstance(msg, AIMessage) and _tool_call_ids_from_ai_message_for_state(msg):
+                            last_tool_ai_idx = len(lc_msgs)
+                        lc_msgs.append(msg)
+                except Exception:
+                    continue
+        sess.lc_messages = lc_msgs
+        sess._ensure_lc_messages_invariants()
+        if truncate_at is not None:
+            sess._fail_closed_truncate_lc_messages(truncate_at, truncate_reason)
+            sess._ensure_lc_messages_invariants()
+
+        sess.pexels_key_mode = str(data.get("pexels_key_mode") or "default").strip().lower()
+        if sess.pexels_key_mode not in ("default", "custom"):
+            sess.pexels_key_mode = "default"
+        sess.pexels_custom_key = ""
+
+        llm_cfg = data.get("custom_llm_config")
+        sess.custom_llm_config = llm_cfg if isinstance(llm_cfg, dict) else None
+        vlm_cfg = data.get("custom_vlm_config")
+        sess.custom_vlm_config = vlm_cfg if isinstance(vlm_cfg, dict) else None
+        tts_cfg = data.get("tts_config")
+        sess.tts_config = tts_cfg if isinstance(tts_cfg, dict) else {}
+
+        sess._normalize_running_tool_records()
+        sess._validate_tool_protocol_and_fail_closed()
+        sess._ensure_lc_messages_invariants()
+        sess._close_unfinished_tool_calls_in_lc_messages()
+        sess._sanitize_tool_protocol_in_lc_messages()
+        sess._rebuild_tool_history_index()
+        sess._ensure_lc_messages_invariants()
+        return sess
+
+    def _missing_secret_config_fields(self) -> List[str]:
+        missing: List[str] = []
+
+        def _is_missing(v: Any) -> bool:
+            s = str(v or "").strip()
+            return (not s) or s == MASKED_SECRET
+
+        if self.chat_model_key == CUSTOM_MODEL_KEY:
+            cfg = self.custom_llm_config if isinstance(self.custom_llm_config, dict) else {}
+            if _is_missing(cfg.get("model")) or _is_missing(cfg.get("base_url")) or _is_missing(cfg.get("api_key")):
+                missing.append("custom_llm")
+
+        if self.vlm_model_key == CUSTOM_MODEL_KEY:
+            cfg = self.custom_vlm_config if isinstance(self.custom_vlm_config, dict) else {}
+            if _is_missing(cfg.get("model")) or _is_missing(cfg.get("base_url")) or _is_missing(cfg.get("api_key")):
+                missing.append("custom_vlm")
+
+        if self.chat_model_key == GLM_MODEL_KEY:
+            # GLM 预设的凭证来自服务端 [glm] 段/环境变量,会话恢复后 config
+            # 可能已经变掉(比如 local 文件被清了)→ 这里兜住,给出可读的
+            # requires_reconfig,而不是等第一次请求才撞 401。
+            resolved, err = _resolve_glm_override(self.cfg)
+            if err or not resolved:
+                missing.append("glm_llm")
+
+        if self.vlm_model_key == GLM_MODEL_KEY:
+            resolved, err = _resolve_glm_override(self.cfg)
+            if err or not resolved or not _glm_vlm_model_name(self.cfg):
+                missing.append("glm_vlm")
+
+        if (self.pexels_key_mode or "").lower() == "custom":
+            if _is_missing(self.pexels_custom_key):
+                missing.append("pexels_custom")
+
+        tts_cfg = self.tts_config if isinstance(self.tts_config, dict) else {}
+        provider = str(tts_cfg.get("provider") or "").strip().lower()
+        if provider:
+            block = tts_cfg.get(provider)
+            if not isinstance(block, dict):
+                missing.append(f"tts:{provider}")
+            else:
+                has_secret_key = False
+                miss_secret = False
+                for k, v in block.items():
+                    if _is_secret_field_name(str(k)):
+                        has_secret_key = True
+                        if _is_missing(v):
+                            miss_secret = True
+                if has_secret_key and miss_secret:
+                    missing.append(f"tts:{provider}")
+
+        return sorted(set(missing))
+
+    def _ensure_system_prompt(self) -> None:
+        # Keep the instruction system prompt and upload-status placeholder stable.
+        self._ensure_lc_messages_invariants()
+        sys = (get_prompt("instruction.system", lang=self.lang) or "").strip()
+        if not sys:
+            return
+
+        if self.lc_messages and isinstance(self.lc_messages[0], SystemMessage):
+            current = self.lc_messages[0].content
+            current = current if isinstance(current, str) else str(current)
+            if current.strip() == sys:
+                return
+            self.lc_messages[0] = SystemMessage(content=sys)
+            return
+
+        self.lc_messages.insert(0, SystemMessage(content=sys))
+
+    def _init_media_seq_locked(self) -> None:
+        """
+        初始化 self._media_seq_next：
+        - 允许 clear chat 后继续编号，不覆盖旧文件
+        """
+        if self._media_seq_inited:
+            return
+
+        max_seq = 0
+
+        # 1) 已落盘文件
+        try:
+            for fn in os.listdir(self.media_dir):
+                s = parse_media_seq(fn)
+                if s is not None:
+                    max_seq = max(max_seq, s)
+        except Exception:
+            pass
+
+        # 2) 内存里已有 load_media（保险）
+        for meta in (self.load_media or {}).values():
+            s = parse_media_seq(os.path.basename(meta.path or ""))
+            if s is not None:
+                max_seq = max(max_seq, s)
+
+        # 3) in-flight resumable（保险）
+        for u in (self.resumable_uploads or {}).values():
+            s = parse_media_seq(getattr(u, "store_filename", "") or "")
+            if s is not None:
+                max_seq = max(max_seq, s)
+
+        self._media_seq_next = max_seq + 1
+        self._media_seq_inited = True
+
+
+    def _reserve_store_filenames_locked(self, display_filenames: List[str]) -> List[str]:
+        """
+        按传入顺序生成一组 store 文件名（media_0001.ext ...）
+        注意：这里的“顺序”就是你要固化的上传顺序。
+        """
+        self._init_media_seq_locked()
+
+        out: List[str] = []
+        seq = int(self._media_seq_next)
+
+        for disp in display_filenames:
+            disp = sanitize_filename(disp or "unnamed")
+            ext = os.path.splitext(disp)[1].lower()
+
+            # 不复用旧号；仅在极端情况下跳过已存在文件（防撞）
+            while True:
+                store = make_media_store_filename(seq, ext)
+                if not os.path.exists(os.path.join(self.media_dir, store)):
+                    break
+                seq += 1
+
+            out.append(store)
+            seq += 1
+
+        self._media_seq_next = seq
+        return out
+
+
+    def apply_service_config(self, service_cfg: Any) -> Tuple[bool, Optional[str]]:
+        llm, vlm, tts, ai_transition, pexels, err = _parse_service_config(service_cfg)
+        if err:
+            return False, err
+
+        if llm is not None:
+            self.custom_llm_config = llm
+        if vlm is not None:
+            self.custom_vlm_config = vlm
+
+        # tts 允许为空；非空才覆盖
+        if isinstance(tts, dict) and tts:
+            self.tts_config = tts
+
+        if isinstance(ai_transition, dict) and ai_transition:
+            self.ai_transition_config = ai_transition
+
+        # ---- pexels ----
+        if isinstance(pexels, dict) and pexels:
+            mode = _s(pexels.get("mode")).lower()
+            if mode == "custom":
+                self.pexels_key_mode = "custom"
+                self.pexels_custom_key = _s(pexels.get("api_key"))
+            else:
+                self.pexels_key_mode = "default"
+                self.pexels_custom_key = ""
+
+        return True, None
+
+    async def ensure_agent(self) -> None:
+        missing = self._missing_secret_config_fields()
+        if missing:
+            raise RuntimeError(
+                "requires_reconfig: custom llm/vlm/tts/pexels secrets missing after restart; "
+                f"missing={','.join(missing)}"
+            )
+
+        # 0) agent 档位:网页端选了 ZCode Agent / mcode-operator。
+        #    这些档位不走 OpenAI 兼容网关,所以**不查**内置模型配置、
+        #    **不做** API key 校验 —— 凭据那套在这里完全不适用。
+        #    LLM 与 VLM 用同一个档位(agent runtime 不区分多模态)。
+        zcode_key = _resolve_zcode_key(self.chat_model_key, self.vlm_model_key)
+        mcode_tier = _resolve_mcode_tier(self.chat_model_key, self.vlm_model_key)
+        if zcode_key:
+            llm_override: Dict[str, Any] = {"model": zcode_key}
+            vlm_override: Dict[str, Any] = {"model": zcode_key}
+        elif mcode_tier:
+            llm_override = {"model": mcode_tier}
+            vlm_override = {"model": mcode_tier}
+        else:
+            # 1) resolve LLM override
+            if self.chat_model_key == CUSTOM_MODEL_KEY:
+                if not isinstance(self.custom_llm_config, dict):
+                    raise RuntimeError("please fill in model/base_url/api_key of custom LLM")
+                llm_override = self.custom_llm_config
+            elif self.chat_model_key == GLM_MODEL_KEY:
+                # GLM API 预设(阶段 C):和内置模型同构的 ChatOpenAI 链路,
+                # 只是 model/base_url/api_key 来自 [glm] 段(+环境变量补洞)。
+                llm_override, err = _resolve_glm_override(self.cfg)
+                if err or not llm_override:
+                    raise RuntimeError(f"requires_reconfig: {err}")
+            else:
+                llm_override, err = _resolve_builtin_model_override("llm", self.cfg.llm)
+                if err:
+                    raise RuntimeError(err)
+
+            # 2) resolve VLM override
+            if self.vlm_model_key == CUSTOM_MODEL_KEY:
+                if not isinstance(self.custom_vlm_config, dict):
+                    raise RuntimeError("please fill in model/base_url/api_key of custom VLM")
+                vlm_override = self.custom_vlm_config
+            elif self.vlm_model_key == GLM_MODEL_KEY:
+                # GLM 的 VLM 侧:凭证同 [glm],模型名用 vlm_model(与文本模型分开,
+                # 因为图像理解需要视觉模型,不是所有 GLM 文本模型都支持图像输入)。
+                vlm_override, err = _resolve_glm_override(self.cfg)
+                if err or not vlm_override:
+                    raise RuntimeError(f"requires_reconfig: {err}")
+                vlm_name = _glm_vlm_model_name(self.cfg)
+                if not vlm_name:
+                    raise RuntimeError(
+                        "requires_reconfig: GLM VLM 未配置。请在 [glm].vlm_model 填视觉模型名,"
+                        "或设置环境变量 OPENSTORYLINE_GLM_VLM_MODEL。")
+                vlm_override = {**vlm_override, "model": vlm_name}
+            else:
+                vlm_override, err = _resolve_builtin_model_override("vlm", self.cfg.vlm)
+                if err:
+                    raise RuntimeError(err)
+
+        agent_build_key: Tuple[Any, ...] = (
+            "models",
+            _stable_dict_key(llm_override),
+            _stable_dict_key(vlm_override),
+        )
+
+        if self.agent is None or self._agent_build_key != agent_build_key:
+            artifact_store = ArtifactStore(self.cfg.project.outputs_dir, session_id=self.session_id)
+            self.agent, self.node_manager = await build_agent(
+                cfg=self.cfg,
+                session_id=self.session_id,
+                store=artifact_store,
+                tool_interceptors=[
+                    ToolInterceptor.inject_media_content_before,
+                    ToolInterceptor.save_media_content_after,
+                    ToolInterceptor.inject_tts_config,
+                    ToolInterceptor.inject_ai_transition_config,
+                    ToolInterceptor.inject_pexels_api_key,
+                ],
+                llm_override=llm_override,
+                vlm_override=vlm_override,
+                # 阶段 D:MCode 事件通道的 provider。每轮换 sink,这里传的是
+                # 「取当前 sink」的函数,不是写死的回调。
+                mcode_event_sink_provider=self.mcode_sink_provider(),
+                # 阶段 E:ZCode 事件通道 + --resume sessionId 映射,同款 provider 机制。
+                zcode_event_sink_provider=self.zcode_sink_provider(),
+                zcode_resume_id_provider=self.zcode_resume_id_provider(),
+            )
+            self._agent_build_key = agent_build_key
+
+        if self.client_context is None:
+            self.client_context = ClientContext(
+                cfg=self.cfg,
+                session_id=self.session_id,
+                media_dir=self.media_dir,
+                bgm_dir=self.cfg.project.bgm_dir,
+                outputs_dir=self.cfg.project.outputs_dir,
+                node_manager=self.node_manager,
+                chat_model_key=self.chat_model_key,
+                vlm_model_key=self.vlm_model_key,
+                tts_config=(self.tts_config or None),
+                ai_transition_config=(self.ai_transition_config or None),
+                pexels_api_key=None,
+                lang=self.lang,
+            )
+        else:
+            self.client_context.chat_model_key = self.chat_model_key
+            self.client_context.vlm_model_key = self.vlm_model_key
+            self.client_context.tts_config = (self.tts_config or None)
+            self.client_context.ai_transition_config = (self.ai_transition_config or None)
+            self.client_context.lang = self.lang
+
+        # ---- resolve pexels_api_key for runtime context ----
+        pexels_api_key = ""
+        if (self.pexels_key_mode or "").lower() == "custom":
+            pexels_api_key = _s(self.pexels_custom_key)
+        else:
+            pexels_api_key = _get_default_pexels_api_key(self.cfg)  # from config.toml
+
+        self.client_context.pexels_api_key = (pexels_api_key or None)
+
+    # ---- DTO / public mapping ----
+    def public_media(self, meta: MediaMeta) -> Dict[str, Any]:
+        return {
+            "id": meta.id,
+            "name": meta.name,
+            "kind": meta.kind,
+            "thumb_url": f"/api/sessions/{self.session_id}/media/{meta.id}/thumb",
+            "file_url": f"/api/sessions/{self.session_id}/media/{meta.id}/file",
+        }
+
+    def public_pending_media(self) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for aid in self.pending_media_ids:
+            meta = self.load_media.get(aid)
+            if meta:
+                out.append(self.public_media(meta))
+        return out
+
+    def snapshot(self) -> Dict[str, Any]:
+        return {
+            "session_id": self.session_id,
+            "developer_mode": self.developer_mode,
+            "pending_media": self.public_pending_media(),
+            "history": self.history,
+            # 阶段 E:执行过程 trace 单独一份 —— 前端刷新/重连后据此重建过程面板,
+            # **不会**把它当成普通 assistant 消息插进正文(WS-07)。
+            "mcode_trace": self.mcode_trace_snapshot(),
+            "turn_running": self.chat_lock.locked(),
+            "restore_degraded": bool(getattr(self, "restore_degraded", False)),
+            "restore_degraded_reason": str(getattr(self, "restore_degraded_reason", "") or ""),
+            "limits": {
+                "max_upload_files_per_request": MAX_UPLOAD_FILES_PER_REQUEST,
+                "max_media_per_session": MAX_MEDIA_PER_SESSION,
+                "max_pending_media_per_session": MAX_PENDING_MEDIA_PER_SESSION,
+                "upload_chunk_bytes": UPLOAD_RESUMABLE_CHUNK_BYTES,
+            },
+            "stats": {
+                "media_count": len(self.load_media),
+                "pending_count": len(self.pending_media_ids),
+                "inflight_uploads": len(self.resumable_uploads),
+                "sent_media_total": int(getattr(self, "sent_media_total", 0) or 0),
+            },
+            "chat_model_key": self.chat_model_key,
+            "chat_models": self.chat_models,
+            "llm_model_key": self.chat_model_key,
+            "llm_models": self.chat_models,
+            "vlm_model_key": self.vlm_model_key,
+            "vlm_models": self.vlm_models,
+            # 阶段 E:配了但不可用的档位 -> 禁用原因(前端渲染 disabled + title)。
+            "model_notes": self.model_notes(),
+            "lang": self.lang,
+        }
+
+    # ---- media operations ----
+    def _cleanup_stale_uploads_locked(self, now: Optional[float] = None) -> None:
+        now = float(now or time.time())
+        ttl = float(RESUMABLE_UPLOAD_TTL_SEC)
+        dead = [uid for uid, u in self.resumable_uploads.items() if (now - u.last_ts) > ttl]
+        for uid in dead:
+            u = self.resumable_uploads.pop(uid, None)
+            if not u:
+                continue
+            try:
+                if u.tmp_path and os.path.exists(u.tmp_path):
+                    os.remove(u.tmp_path)
+            except Exception:
+                pass
+
+    def _check_media_caps_locked(self, add: int = 0) -> None:
+        add = int(max(0, add))
+        total = len(self.load_media) + len(self.resumable_uploads) + int(self._direct_upload_reservations)
+        pending = len(self.pending_media_ids) + len(self.resumable_uploads) + int(self._direct_upload_reservations)
+
+        if MAX_MEDIA_PER_SESSION > 0 and (total + add) > MAX_MEDIA_PER_SESSION:
+            raise HTTPException(
+                status_code=400,
+                detail=f"会话素材总数已达上限：{total}/{MAX_MEDIA_PER_SESSION}",
+            )
+
+        if MAX_PENDING_MEDIA_PER_SESSION > 0 and (pending + add) > MAX_PENDING_MEDIA_PER_SESSION:
+            raise HTTPException(
+                status_code=400,
+                detail=f"待发送素材数量已达上限：{pending}/{MAX_PENDING_MEDIA_PER_SESSION}",
+            )
+
+    async def add_uploads(self, files: List[UploadFile], store_filenames: List[str]) -> List[MediaMeta]:
+        if len(store_filenames) != len(files):
+            raise HTTPException(status_code=500, detail="store_filenames mismatch")
+
+        metas: List[MediaMeta] = []
+        for uf, store_fn in zip(files, store_filenames):
+            display_name = sanitize_filename(uf.filename or "unnamed")
+            metas.append(await self.media_store.save_upload(
+                uf,
+                store_filename=store_fn,
+                display_name=display_name,
+            ))
+
+        async with self.media_lock:
+            for m in metas:
+                self.load_media[m.id] = m
+                self.pending_media_ids.append(m.id)
+
+            self.pending_media_ids.sort(
+                key=lambda aid: os.path.basename(self.load_media[aid].path or "")
+                if aid in self.load_media else ""
+            )
+
+        return metas
+
+    async def delete_pending_media(self, media_id: str) -> None:
+        async with self.media_lock:
+            if media_id not in self.pending_media_ids:
+                raise HTTPException(status_code=400, detail="media is not pending (refuse physical delete)")
+            self.pending_media_ids = [x for x in self.pending_media_ids if x != media_id]
+            meta = self.load_media.pop(media_id, None)
+
+        if meta:
+            await self.media_store.delete_files(meta)
+
+    async def take_pending_media_for_message(self, attachment_ids: Optional[List[str]]) -> List[MediaMeta]:
+        async with self.media_lock:
+            if attachment_ids:
+                pick = [aid for aid in attachment_ids if aid in self.pending_media_ids]
+            else:
+                pick = list(self.pending_media_ids)
+
+            pick_set = set(pick)
+            self.pending_media_ids = [aid for aid in self.pending_media_ids if aid not in pick_set]
+            metas = [self.load_media[aid] for aid in pick if aid in self.load_media]
+            return metas
+
+    # ---- tool trace handling ----
+    def _ensure_tool_record(self, tcid: str, server: str, name: str, args: Any) -> Dict[str, Any]:
+        idx = self._tool_history_index.get(tcid)
+        if idx is None:
+            rec = {
+                "id": f"tool_{tcid}",
+                "role": "tool",
+                "tool_call_id": tcid,
+                "server": server,
+                "name": name,
+                "args": args,
+                "state": "running",
+                "progress": 0.0,
+                "message": "",
+                "summary": None,
+                # 阶段 E:标来源 —— 前端据此把 MCode 的工具卡片放进**执行过程面板**,
+                # 普通模型的工具卡片仍然留在聊天正文里(零回归)。
+                "source": "",
+                "turn_id": "",
+                "ts": time.time(),
+            }
+            self.history.append(rec)
+            self._tool_history_index[tcid] = len(self.history) - 1
+            return rec
+        return self.history[idx]
+
+    def mcode_sink_provider(self):
+        """给 ``MCodeChatModel`` 的事件 sink provider(阶段 D)。
+
+        返回的是**取当前 sink** 的函数,不是固定回调:
+        agent 按 session 缓存,每轮 turn 的 sink 都不一样,
+        模型层在每轮流开始时调用一次 provider 拿当轮的 sink。
+        """
+        def _provider():
+            return self._mcode_event_sink
+        return _provider
+
+    def zcode_sink_provider(self):
+        """给 ``ZCodeChatModel`` 的事件 sink provider(阶段 E,与 mcode 同款机制)。"""
+        def _provider():
+            return self._zcode_event_sink
+        return _provider
+
+    def zcode_resume_id_provider(self):
+        """给 ``ZCodeChatModel`` 的 ``--resume`` sessionId provider(阶段 E)。
+
+        zcode 结果里的 sessionId 落在本会话(``zcode_session_id``),下轮建
+        命令时经 provider 取**当前**值 —— agent 按 session 缓存,不能把某个
+        固定 sessionId 写死在模型实例里。
+        """
+        def _provider():
+            return str(self.zcode_session_id or "").strip()
+        return _provider
+
+    def model_notes(self) -> Dict[str, str]:
+        """模型档位的禁用原因(阶段 E)。
+
+        当前只有 ZCode Agent 会出现「配了但不可用」(mcode/GLM 的策略是
+        直接从下拉消失)。选项在列表里但带 note 时,前端把它渲染成
+        disabled + title,让用户知道为什么点不了(§8.3:禁用要有原因)。
+        """
+        return dict(getattr(self, "_zcode_disabled_notes", {}) or {})
+
+    def apply_tool_event(self, raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        et = raw.get("type")
+        tcid = raw.get("tool_call_id")
+        if et not in ("tool_start", "tool_progress", "tool_end") or not tcid:
+            return None
+
+        server = raw.get("server") or ""
+        name = raw.get("name") or ""
+        args = raw.get("args") or {}
+        source = str(raw.get("source") or "")
+        turn_id = str(raw.get("turn_id") or "")
+
+        rec = self._ensure_tool_record(tcid, server, name, args)
+        if source:
+            rec["source"] = source
+        if turn_id:
+            rec["turn_id"] = turn_id
+
+        if et == "tool_start":
+            rec.update({
+                "server": server,
+                "name": name,
+                "args": args,
+                "state": "running",
+                "progress": 0.0,
+                "message": "Starting...",
+                "summary": None,
+            })
+
+        elif et == "tool_progress":
+            progress = float(raw.get("progress", 0.0))
+            total = raw.get("total")
+            if total and float(total) > 0:
+                p = progress / float(total)
+            else:
+                p = progress / 100.0 if progress > 1 else progress
+            p = max(0.0, min(1.0, p))
+            rec.update({
+                "state": "running",
+                "progress": p,
+                "message": raw.get("message") or "",
+            })
+
+        elif et == "tool_end":
+            is_error = bool(raw.get("is_error"))
+
+            summary = raw.get("summary")
+            try:
+                json.dumps(summary, ensure_ascii=False)
+            except Exception:
+                summary = str(summary) if summary is not None else None
+            rec.update({
+                "state": "error" if is_error else "complete",
+                "progress": 1.0,
+                "summary": summary,
+                "message": raw.get("message") or rec.get("message") or "",
+            })
+
+        return rec
+
+    # ---- 阶段 E:有界执行过程 trace ------------------------------------
+    #
+    # 三条硬约束(设计文档 §9 T7):
+    #   1. **不进 history** —— trace 是独立的一份,history 仍然只装「用户看到的对话」。
+    #   2. **有界** —— 每轮 ≤ max_trace_events 条,单条摘要 ≤ max_event_text_chars 字符,
+    #      跨轮只留最近 MCODE_TRACE_MAX_TURNS 轮。
+    #   3. **写失败不能把成功的 turn 变成失败** —— 整个方法吞掉异常,只记日志。
+
+    def _mcode_trace_limits(self) -> tuple[int, int]:
+        """从配置里取 trace 的两个上限(取不到就用模块级默认值)。"""
+        max_events = MCODE_TRACE_MAX_EVENTS
+        max_chars = MCODE_TRACE_MAX_TEXT_CHARS
+        mcode_cfg = getattr(getattr(self, "cfg", None), "mcode", None)
+        if mcode_cfg is not None:
+            try:
+                max_events = int(getattr(mcode_cfg, "max_trace_events", max_events) or max_events)
+            except (TypeError, ValueError):
+                max_events = MCODE_TRACE_MAX_EVENTS
+            try:
+                max_chars = int(getattr(mcode_cfg, "max_event_text_chars", max_chars) or max_chars)
+            except (TypeError, ValueError):
+                max_chars = MCODE_TRACE_MAX_TEXT_CHARS
+        return max(1, max_events), max(1, max_chars)
+
+    @staticmethod
+    def _truncate_trace_text(text: Any, max_chars: int) -> str:
+        s = str(text or "")
+        if len(s) <= max_chars:
+            return s
+        return s[:max_chars] + f"...(截断,共 {len(s)} 字符)"
+
+    def _build_trace_record(self, raw: Dict[str, Any], max_chars: int) -> Dict[str, Any]:
+        """白名单 + 截断 + 脱敏,产出**可安全落盘**的一条 trace。"""
+        rec: Dict[str, Any] = {}
+        for key in MCODE_TRACE_FIELDS:
+            if key not in raw:
+                continue
+            val = raw[key]
+            if val is None:
+                continue
+            if key in ("message", "summary", "title"):
+                val = self._truncate_trace_text(val, max_chars)
+            rec[key] = val
+        # 脱敏放在截断**之后**:先截断再脱敏,免得密钥被切成两半后匹配不上规则。
+        masked = _mask_secrets_recursive(rec)
+        return masked if isinstance(masked, dict) else rec
+
+    def record_mcode_trace(self, raw: Dict[str, Any]) -> bool:
+        """记一条执行过程事件。
+
+        返回是否真的记下来了(超上限 / 写失败都会是 False)。
+        **绝不抛异常** —— trace 是附属品,写不进去不能影响主链路。
+        """
+        try:
+            if not isinstance(raw, dict) or not raw:
+                return False
+            max_events, max_chars = self._mcode_trace_limits()
+            turn_id = str(raw.get("turn_id") or "")
+            used = int(self._mcode_trace_turn_counts.get(turn_id, 0))
+            if used >= max_events:
+                return False
+            rec = self._build_trace_record(raw, max_chars)
+            if not rec:
+                return False
+            self._mcode_trace.append(rec)
+            self._mcode_trace_turn_counts[turn_id] = used + 1
+            self._prune_mcode_trace()
+            return True
+        except Exception as e:  # noqa: BLE001
+            logger.warning("写 mcode trace 失败(忽略,不影响本轮结果): %s", e)
+            return False
+
+    def _prune_mcode_trace(self) -> None:
+        """只保留最近 MCODE_TRACE_MAX_TURNS 轮。"""
+        try:
+            turn_ids: List[str] = []
+            for rec in self._mcode_trace:
+                tid = str(rec.get("turn_id") or "")
+                if tid and tid not in turn_ids:
+                    turn_ids.append(tid)
+            if len(turn_ids) <= MCODE_TRACE_MAX_TURNS:
+                return
+            keep = set(turn_ids[-MCODE_TRACE_MAX_TURNS:])
+            self._mcode_trace = [
+                rec for rec in self._mcode_trace
+                if str(rec.get("turn_id") or "") in keep
+            ]
+            self._mcode_trace_turn_counts = {
+                tid: cnt for tid, cnt in self._mcode_trace_turn_counts.items() if tid in keep
+            }
+        except Exception as e:  # noqa: BLE001
+            logger.warning("裁剪 mcode trace 失败(忽略): %s", e)
+
+    def mcode_trace_snapshot(self) -> List[Dict[str, Any]]:
+        """给前端 / 快照用的一份 trace 副本(前端只读)。"""
+        try:
+            return [dict(rec) for rec in self._mcode_trace]
+        except Exception:  # noqa: BLE001
+            return []
+
+    def restore_mcode_trace(self, records: Any) -> None:
+        """从会话状态里恢复 trace(刷新 / 重连后重建执行过程面板)。"""
+        try:
+            if not isinstance(records, list):
+                return
+            max_events, max_chars = self._mcode_trace_limits()
+            restored: List[Dict[str, Any]] = []
+            counts: Dict[str, int] = {}
+            for raw in records:
+                if not isinstance(raw, dict) or not raw:
+                    continue
+                turn_id = str(raw.get("turn_id") or "")
+                used = int(counts.get(turn_id, 0))
+                if used >= max_events:
+                    continue
+                rec = self._build_trace_record(raw, max_chars)
+                if not rec:
+                    continue
+                restored.append(rec)
+                counts[turn_id] = used + 1
+            self._mcode_trace = restored
+            self._mcode_trace_turn_counts = counts
+            self._prune_mcode_trace()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("恢复 mcode trace 失败(忽略): %s", e)
+
+
+class SessionStore:
+    """会话缓存 + PostgreSQL 仓储(阶段 D:数据库是唯一事实来源)。
+
+    内存里只放"热"会话;冷会话按需从 ``chat_sessions`` 表读回来。
+    """
+
+    def __init__(self, cfg: Settings, repo: Any = None):
+        self.cfg = cfg
+        self._lock = asyncio.Lock()
+        self._sessions: Dict[str, ChatSession] = {}
+        self._repo = repo
+
+    @property
+    def repo(self) -> Any:
+        """本 store 用的仓储(没注入就用默认的;psycopg 缺失 ⇒ 503)。"""
+        if self._repo is None:
+            self._repo = _default_session_repository()
+        return self._repo
+
+    async def create(self) -> ChatSession:
+        sid = uuid.uuid4().hex
+        sess = ChatSession(sid, self.cfg, repo=self._repo)
+        async with self._lock:
+            self._sessions[sid] = sess
+        try:
+            self.repo.create(sid, state_json=sess.dump_state())
+        except Exception as e:
+            async with self._lock:
+                self._sessions.pop(sid, None)
+            if not _is_repo_error(e, "SessionAlreadyExists"):
+                logger.error("create session failed sid=%s err=%s", sid, e)
+                raise SessionStateUnavailableError("write_error") from e
+        return sess
+
+    async def get(self, sid: str) -> Optional[ChatSession]:
+        async with self._lock:
+            sess = self._sessions.get(sid)
+            if sess is not None:
+                return sess
+
+        sid = str(sid or "").strip()
+        if not _is_valid_session_id_hex(sid):
+            return None
+
+        restored: Optional[ChatSession] = None
+        delay = 0.05
+        for attempt in range(3):
+            try:
+                restored = ChatSession.load_from_state(sid, self.cfg, repo=self.repo)
+                break
+            except SessionStateUnavailableError as e:
+                reason = str(e.args[0]) if e.args else ""
+                if attempt < 2 and reason == "read_error":
+                    await asyncio.sleep(delay)
+                    delay *= 2.5
+                    continue
+                raise
+        if restored is None:
+            return None
+
+        # 注意:这里**不再**把归一化后的状态回写数据库 ——
+        # 回写会让 ``updated_at`` 每次加载都刷新,会话列表的排序会被"只是打开
+        # 一下"打乱。归一化(补 tool 结果 / 截断坏行)本身是幂等的,每次加载
+        # 重跑一遍即可,状态以库里那份为准。
+
+        async with self._lock:
+            existing = self._sessions.get(sid)
+            if existing is not None:
+                return existing
+            self._sessions[sid] = restored
+            return restored
+
+    async def forget(self, sid: str) -> None:
+        """把会话从内存缓存里摘掉(软删除后调用)。"""
+        async with self._lock:
+            self._sessions.pop(str(sid or "").strip(), None)
+
+    async def get_or_404(self, sid: str) -> ChatSession:
+        try:
+            sess = await self.get(sid)
+        except SessionStateUnavailableError as e:
+            raise HTTPException(status_code=503, detail="session state unavailable") from e
+        if not sess:
+            raise HTTPException(status_code=404, detail="session not found")
+        return sess
+
+    async def save_session_state(self, sess: ChatSession) -> None:
+        """持久化会话状态。
+
+        ⚠️ **不再吞异常**:写不进去就让调用方知道(⇒ 503 / 5xx)。
+        旧实现只 ``logger.warning(...)`` 就把异常吞了 —— 那是**静默丢数据**。
+        """
+        sess.save_state_atomic()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    cfg = load_settings(default_config_path())
+    app.state.cfg = cfg
+    app.state.developer_mode = is_developer_mode(cfg)
+
+    # ---- PostgreSQL(阶段 D):会话状态的唯一事实来源 ----
+    # 建表 / 升级是幂等的;连不上也不拦服务启动(会话接口会返回 503)。
+    repo: Any = None
+    try:
+        from db.migrations import apply_migrations_to_db
+        apply_migrations_to_db()
+    except Exception as e:
+        logger.warning("apply migrations failed(会话接口可能 503): %s", e)
+    try:
+        repo = _default_session_repository()
+    except SessionStateUnavailableError as e:
+        logger.error("PostgreSQL 仓储不可用(会话接口将返回 503): %s", e)
+    app.state.session_repo = repo
+    app.state.sessions = SessionStore(cfg, repo=repo)
+
+    try:
+        yield
+    finally:
+        # 释放:仓储本身按操作开短连接(``db.session_repository`` 负责),
+        # 这里只需要把引用放掉;若换成了带连接池的实现,``close()`` 会被调用。
+        store = getattr(app.state, "sessions", None)
+        closer = getattr(store, "close", None)
+        if callable(closer):
+            try:
+                await closer()
+            except Exception as e:
+                logger.warning("session store close failed: %s", e)
+        app.state.sessions = None
+        app.state.session_repo = None
+
+
+app = FastAPI(title="OpenStoryline Web", version="1.0.0", lifespan=lifespan)
+
+app.add_middleware(
+    HttpRateLimitMiddleware,
+    limiter=RATE_LIMITER,
+    trust_proxy_headers=RATE_LIMIT_TRUST_PROXY_HEADERS,
+)
+
+
+@app.exception_handler(SessionStateUnavailableError)
+async def _handle_session_state_unavailable(
+    request: Request, exc: SessionStateUnavailableError
+):
+    """会话状态不可用 ⇒ 503(而不是 500 / 404)。"""
+    reason = str(exc.args[0]) if exc.args else ""
+    logger.warning("session state unavailable reason=%s path=%s", reason, request.url.path)
+    return JSONResponse({"detail": "session state unavailable"}, status_code=503)
+
+if os.path.isdir(STATIC_DIR):
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+if os.path.isdir(NODE_MAP_DIR):
+    app.mount("/node_map", StaticFiles(directory=NODE_MAP_DIR), name="node_map")
+
+api = APIRouter(prefix="/api")
+
+def _rate_limit_reject_json(retry_after: float) -> JSONResponse:
+    ra = int(math.ceil(float(retry_after or 0.0)))
+    return JSONResponse(
+        {"detail": "Too Many Requests", "retry_after": ra},
+        status_code=429,
+        headers={"Retry-After": str(ra)},
+    )
+
+async def _enforce_upload_media_count_limit(request: Request, cost: float) -> Optional[JSONResponse]:
+    ip = _client_ip_from_http_scope(request.scope, RATE_LIMIT_TRUST_PROXY_HEADERS)
+    cost = float(max(0.0, cost))
+
+    ok, ra, _ = await RATE_LIMITER.allow(
+        key="http:upload_media_count:all",
+        capacity=float(UPLOAD_MEDIA_COUNT_ALL_BURST),
+        refill_rate=_rpm_to_rps(float(UPLOAD_MEDIA_COUNT_ALL_RPM)),
+        cost=cost,
+    )
+    if not ok:
+        return _rate_limit_reject_json(ra)
+
+    ok2, ra2, _ = await RATE_LIMITER.allow(
+        key=f"http:upload_media_count:{ip}",
+        capacity=float(HTTP_UPLOAD_MEDIA_COUNT_BURST),
+        refill_rate=_rpm_to_rps(float(HTTP_UPLOAD_MEDIA_COUNT_RPM)),
+        cost=cost,
+    )
+    if not ok2:
+        return _rate_limit_reject_json(ra2)
+
+    return None
+
+_TTS_UI_SECRET_KEYS = {
+    "api_key",
+    "api-token",
+    "api_token",
+    "auth_token",
+    "access_token",
+    "authorization",
+    "token",
+    "password",
+    "secret",
+    "client_secret",
+    "refresh_token",
+    "x-api-key",
+    "apikey",
+    "access_key",
+    "accesskey",
+    "pexels_api_key",
+}
+
+_PROVIDER_UI_META_KEYS = {
+    "label",
+    "name",
+    "display_name",
+}
+
+_PROVIDER_UI_LABEL_OVERRIDES = {
+    "302": "302.AI",
+    "bytedance": "字节跳动 ByteDance",
+    "dashscope": "阿里万相 Wan",
+}
+
+_PROVIDER_UI_LABEL_OVERRIDES_BY_SECTION = {
+    "generate_voiceover": {
+        "minimax": "MiniMax",
+    },
+    "generate_ai_transition": {
+        "minimax": "MiniMax 海螺 (Hailuo)",
+    },
+}
+
+def _is_secret_field_name(k: str) -> bool:
+    if str(k or "").strip().lower() in _TTS_UI_SECRET_KEYS:
+        return True
+    return False
+
+def _get_provider_ui_label(section_name: str, provider: str, provider_cfg: Any) -> str:
+    if isinstance(provider_cfg, dict):
+        explicit_label = _s(
+            provider_cfg.get("label")
+            or provider_cfg.get("display_name")
+            or provider_cfg.get("name")
+        )
+        if explicit_label:
+            return explicit_label
+
+    section_key = _s(section_name)
+    provider_key = _s(provider).lower()
+    section_overrides = _PROVIDER_UI_LABEL_OVERRIDES_BY_SECTION.get(section_key, {})
+    if provider_key in section_overrides:
+        return section_overrides[provider_key]
+
+    return _PROVIDER_UI_LABEL_OVERRIDES.get(provider_key, _s(provider))
+
+def _read_config_toml(path: str) -> dict:
+    if tomllib is None:
+        return {}
+    try:
+        p = Path(path)
+        with p.open("rb") as f:
+            return tomllib.load(f) or {}
+    except Exception:
+        return {}
+
+def _get_default_pexels_api_key(cfg: Settings) -> str:
+    # 1) try Settings.search_media.pexels_api_key
+    try:
+        search_media = getattr(cfg, "search_media", None)
+        pexels_api_key = _s(getattr(search_media, "pexels_api_key", None) if search_media else None)
+        if pexels_api_key:
+            return pexels_api_key
+        else: 
+            return ""
+    except Exception:
+        return ""
+
+def _normalize_field_item(item) -> dict | None:
+    """
+    item 支持：
+    - "uid"
+    - { key="uid", label="UID", secret=false, placeholder="..." }
+    """
+    if isinstance(item, str):
+        key = item.strip()
+        if not key:
+            return None
+        return {
+            "key": key,
+            "secret": _is_secret_field_name(key),
+        }
+    return None
+
+def _build_provider_ui_schema_from_config(config_path: str, section_name: str) -> dict:
+    """
+    返回：
+    {
+      "providers": [
+        {"provider":"bytedance","label":"字节跳动","fields":[{"key":"uid",...}, ...]},
+        ...
+      ]
+    }
+    """
+    cfg = _read_config_toml(config_path)
+    tts = cfg.get(section_name, {})
+
+    providers_out: list[dict] = []
+
+    # 格式：[<node>.providers.<provider>]
+    providers = tts.get("providers")
+    if isinstance(providers, dict):
+        for provider, provider_cfg in providers.items():
+            fields: list[dict] = []  
+            label = _get_provider_ui_label(section_name, provider, provider_cfg)
+            for key in provider_cfg.keys():
+                key = str(key).strip()
+                if not key or key.lower() in _PROVIDER_UI_META_KEYS:
+                    continue
+                f = _normalize_field_item(key)
+                if f:
+                    fields.append(f)
+
+            seen = set()
+            normalized_fields = []
+            for f in fields:
+                k = str(f.get("key") or "").strip()
+                if not k or k in seen:
+                    continue
+                seen.add(k)
+                normalized_fields.append({
+                    "key": k,
+                    "label": f.get("label") or k,
+                    "placeholder": f.get("placeholder") or f.get("label") or k,
+                    "secret": bool(f.get("secret", False)),
+                })
+
+            providers_out.append({
+                "provider": provider,
+                "label": label or provider,
+                "fields": normalized_fields,
+            })
+
+    return {"providers": providers_out}
+
+@app.get("/")
+async def index():
+    if not os.path.exists(INDEX_HTML):
+        return Response("index.html not found. Put it under ./web/index.html", media_type="text/plain", status_code=404)
+    return FileResponse(INDEX_HTML, media_type="text/html")
+
+@app.get("/node-map")
+async def node_map():
+    if not os.path.exists(NODE_MAP_HTML):
+        return Response(
+            "node_map.html not found. Put it under ./web/node_map/node_map.html",
+            media_type="text/plain",
+            status_code=404,
+        )
+    return FileResponse(NODE_MAP_HTML, media_type="text/html")
+
+@api.get("/meta/tts")
+async def get_tts_ui_schema():
+    schema = _build_provider_ui_schema_from_config(default_config_path(), "generate_voiceover")
+    return JSONResponse(schema)
+
+@api.get("/meta/ai_transition")
+async def get_ai_transition_ui_schema():
+    schema = _build_provider_ui_schema_from_config(default_config_path(), "generate_ai_transition")
+    return JSONResponse(schema)
+
+# -------------------------
+# Sessions (REST)
+# -------------------------
+@api.post("/sessions")
+async def create_session():
+    store: SessionStore = app.state.sessions
+    sess = await store.create()
+    return JSONResponse(sess.snapshot())
+
+
+# ---- 阶段 D:会话列表 / 改名 / 软删除(PostgreSQL)----
+
+#: 会话列表分页上限
+SESSION_LIST_LIMIT_MIN = 1
+SESSION_LIST_LIMIT_MAX = 200
+SESSION_LIST_LIMIT_DEFAULT = 50
+
+#: 标题最大长度
+SESSION_TITLE_MAX_LEN = 200
+
+
+def _session_repository_or_503() -> Any:
+    """拿会话仓储;拿不到(psycopg 缺失)⇒ 503。"""
+    repo = getattr(app.state, "session_repo", None)
+    if repo is not None:
+        return repo
+    try:
+        return _default_session_repository()
+    except SessionStateUnavailableError as e:
+        raise HTTPException(status_code=503, detail="session store unavailable") from e
+
+
+def _iso_datetime(value: Any) -> str:
+    """datetime → ISO-8601 字符串(响应里就长这样,游标也用这个格式)。"""
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+def _encode_session_cursor(updated_at_iso: str, session_id: str) -> Optional[str]:
+    """游标 = ``<updated_at ISO>|<session_id>``(与响应里的 updated_at 完全一致)。"""
+    iso = str(updated_at_iso or "").strip()
+    sid = str(session_id or "").strip()
+    if not iso or not sid:
+        return None
+    return f"{iso}|{sid}"
+
+
+def _decode_session_cursor(raw: Optional[str]) -> Optional[Tuple[datetime, str]]:
+    """解析游标(``<updated_at ISO>|<session_id>``)。格式不对 ⇒ ValueError。"""
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    iso, sep, sid = text.rpartition("|")
+    if not sep or not iso.strip() or not sid.strip():
+        raise ValueError(f"bad cursor: {raw!r}")
+    iso = iso.strip()
+    # 容错:客户端没对 "+00:00" 做 URL 编码时,query 里的 "+" 会被解成空格。
+    # 本游标的 ISO 串里只有时区偏移那一处可能出现空格 ⇒ 换回 "+" 再解析。
+    if " " in iso and "+" not in iso:
+        iso = iso.replace(" ", "+", 1)
+    try:
+        parsed = datetime.fromisoformat(iso)
+    except ValueError as e:
+        raise ValueError(f"bad cursor timestamp: {raw!r}") from e
+    return (parsed, sid.strip())
+
+
+def _session_summary_payload(summary: Any) -> Dict[str, Any]:
+    """会话列表项(**不含** ``state_json``)。"""
+    return {
+        "session_id": str(getattr(summary, "session_id", "") or ""),
+        "title": str(getattr(summary, "title", "") or ""),
+        "title_source": str(getattr(summary, "title_source", "") or "auto"),
+        "created_at": _iso_datetime(getattr(summary, "created_at", None)),
+        "updated_at": _iso_datetime(getattr(summary, "updated_at", None)),
+        "message_count": int(getattr(summary, "message_count", 0) or 0),
+        "last_message_preview": str(getattr(summary, "last_message_preview", "") or ""),
+    }
+
+
+@api.get("/sessions")
+async def list_sessions(
+    limit: int = SESSION_LIST_LIMIT_DEFAULT,
+    cursor: Optional[str] = None,
+    title_prefix: Optional[str] = None,
+    include_deleted: bool = False,
+):
+    """会话列表(游标分页,按 ``updated_at DESC, session_id DESC``)。
+
+    - ``limit``:1..200(默认 50,超范围会被夹紧)
+    - ``cursor``:上一页 ``next_cursor`` 原样回传
+    - ``include_deleted``:默认 false(不含已软删除的会话)
+    """
+    try:
+        limit = int(limit)
+    except Exception:
+        limit = SESSION_LIST_LIMIT_DEFAULT
+    limit = max(SESSION_LIST_LIMIT_MIN, min(limit, SESSION_LIST_LIMIT_MAX))
+    # 注:``limit`` 声明成 ``int`` ⇒ FastAPI 已经挡掉非整数(422);
+    # 这里的 try 只是防御直接调用本函数的情况。
+
+    cur: Optional[Tuple[datetime, str]] = None
+    if cursor:
+        try:
+            cur = _decode_session_cursor(cursor)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail="invalid cursor") from e
+
+    repo = _session_repository_or_503()
+    try:
+        # 多取一条用来判断"还有没有下一页"
+        rows = repo.list(
+            limit=limit + 1,
+            cursor=cur,
+            title_prefix=(title_prefix or None),
+            include_deleted=bool(include_deleted),
+        )
+    except Exception as e:
+        logger.error("list sessions failed err=%s", e)
+        raise HTTPException(status_code=503, detail="session store unavailable") from e
+
+    has_more = len(rows) > limit
+    items = [_session_summary_payload(s) for s in rows[:limit]]
+    next_cursor: Optional[str] = None
+    if has_more and items:
+        next_cursor = _encode_session_cursor(items[-1]["updated_at"], items[-1]["session_id"])
+    return JSONResponse({"items": items, "next_cursor": next_cursor})
+
+
+@api.patch("/sessions/{session_id}")
+async def rename_session(session_id: str, request: Request):
+    """改会话标题(``{"title": "新标题"}``)。
+
+    标题可选;给了就必须是**非空字符串**(去空白后 ≤ 200 字),否则 422。
+
+    ``title_source`` 也可选(方案 §4.6):
+    - ``"manual"``(默认):用户手动改的标题 ⇒ 之后的自动标题**不会**覆盖它;
+    - ``"auto"``:前端**自动推导**出来的标题回写 ⇒ 之后还能被新的自动标题更新。
+
+    ⚠️ 不传时按 ``"manual"`` 处理 —— 手动标题优先是安全默认。
+    """
+    try:
+        body = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=422, detail="invalid json body") from e
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=422, detail="invalid body")
+
+    raw_title = body.get("title")
+    title: Optional[str] = None
+    if raw_title is not None:
+        if not isinstance(raw_title, str):
+            raise HTTPException(status_code=422, detail="title must be a string")
+        title = raw_title.strip()
+        if not title:
+            raise HTTPException(status_code=422, detail="title must not be empty")
+        if len(title) > SESSION_TITLE_MAX_LEN:
+            raise HTTPException(
+                status_code=422,
+                detail=f"title too long (max {SESSION_TITLE_MAX_LEN})",
+            )
+
+    raw_source = body.get("title_source")
+    title_source = "manual"
+    if raw_source is not None:
+        if not isinstance(raw_source, str) or raw_source not in ("auto", "manual"):
+            raise HTTPException(
+                status_code=422, detail="title_source must be 'auto' or 'manual'"
+            )
+        title_source = raw_source
+
+    repo = _session_repository_or_503()
+
+    if title is None:
+        # 没给 title ⇒ 只回显当前标题
+        try:
+            record = repo.get(session_id)
+        except Exception as e:
+            logger.error("get session failed sid=%s err=%s", session_id, e)
+            raise HTTPException(status_code=503, detail="session store unavailable") from e
+        if record is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        return JSONResponse({
+            "ok": True,
+            "session_id": str(record.session_id),
+            "title": str(record.title or ""),
+            "title_source": str(record.title_source or "auto"),
+        })
+
+    try:
+        record = repo.rename(session_id, title, title_source=title_source)
+    except Exception as e:
+        if _is_repo_error(e, "SessionNotFound"):
+            raise HTTPException(status_code=404, detail="session not found") from e
+        logger.error("rename session failed sid=%s err=%s", session_id, e)
+        raise HTTPException(status_code=503, detail="session store unavailable") from e
+
+    return JSONResponse({
+        "ok": True,
+        "session_id": str(record.session_id),
+        "title": str(record.title or ""),
+        "title_source": str(record.title_source or title_source),
+    })
+
+
+@api.delete("/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """软删除会话(打 ``deleted_at``);可用 ``repo.restore()`` 恢复。"""
+    repo = _session_repository_or_503()
+    try:
+        deleted = repo.soft_delete(session_id)
+    except Exception as e:
+        logger.error("soft delete session failed sid=%s err=%s", session_id, e)
+        raise HTTPException(status_code=503, detail="session store unavailable") from e
+    if not deleted:
+        # 不存在,或者已经删过了
+        raise HTTPException(status_code=404, detail="session not found")
+
+    store = getattr(app.state, "sessions", None)
+    if store is not None:
+        await store.forget(session_id)
+    return JSONResponse({"ok": True, "session_id": session_id})
+
+
+@api.get("/sessions/{session_id}")
+async def get_session(session_id: str):
+    store: SessionStore = app.state.sessions
+    sess = await store.get_or_404(session_id)
+    return JSONResponse(sess.snapshot())
+
+
+@api.post("/sessions/{session_id}/clear")
+async def clear_session_chat(session_id: str):
+    store: SessionStore = app.state.sessions
+    sess = await store.get_or_404(session_id)
+    async with sess.chat_lock:
+        sess.sent_media_total = 0
+        sess._attach_stats_msg_idx = 1
+        sess.lc_messages = [
+            SystemMessage(content=get_prompt("instruction.system", lang=sess.lang)),
+            SystemMessage(content=UPLOAD_STATUS_SYSTEM_EMPTY),
+        ]
+        sess._attach_stats_msg_idx = 1
+
+        sess.history = []
+        sess._tool_history_index = {}
+        clear_ai_transition_cancelled(_ai_transition_cancel_cache_root(app.state.cfg), session_id)
+        await store.save_session_state(sess)
+    return JSONResponse({"ok": True})
+
+
+# -------------------------
+# System (cross-session utilities)
+# -------------------------
+@api.post("/system/clean-cache")
+async def clean_cache_endpoint(request: Request):
+    """OpenStoryline Web UI「清理缓存」按钮对应端点。
+
+    行为:
+    - 调用 ``auto-video-editor/nodes/node_01_clean_cache.py`` 的 ``clean_cache`` 函数,
+      清理 ``config.CACHE_PATHS_TO_CLEAN`` 里的剪映 / OpenStoryline / jianying_workflow_tmp
+      三类路径,并清空 ``config.CACHE_TRASH_CHILDREN_ROOTS``(outputs/ inputs/ out/)
+      三根的直接子项(2026-11-01 新增)。
+    - **所有删除项一律移入 Windows 回收站**(可恢复),不再彻底删除;
+      回收失败的项保留原处并写入返回的 errors。
+    - 不在 LangGraph ``graph.invoke`` 时自动跑(2026-09 计划改造后)。
+    - 速率限制:全局 + 每 IP 双重桶,默认 burst=1 rpm=2(防误连点)。
+    - 路径定位:``AUTO_VIDEO_EDITOR_DIR`` 环境变量优先,默认 ``E:\\Documents\\kuaishou\\auto-video-editor``。
+    """
+    # ---- 速率限制(双桶:全局 + 每 IP)----
+    ip = _client_ip_from_http_scope(request.scope, RATE_LIMIT_TRUST_PROXY_HEADERS)
+    ok, ra, _ = await RATE_LIMITER.allow(
+        key="http:clean_cache:all",
+        capacity=float(CLEAN_CACHE_ALL_BURST),
+        refill_rate=_rpm_to_rps(float(CLEAN_CACHE_ALL_RPM)),
+        cost=1.0,
+    )
+    if not ok:
+        return _rate_limit_reject_json(ra)
+    ok2, ra2, _ = await RATE_LIMITER.allow(
+        key=f"http:clean_cache:{ip}",
+        capacity=float(CLEAN_CACHE_IP_BURST),
+        refill_rate=_rpm_to_rps(float(CLEAN_CACHE_IP_RPM)),
+        cost=1.0,
+    )
+    if not ok2:
+        return _rate_limit_reject_json(ra2)
+
+    # ---- 路径解析 ----
+    auto_editor_dir = Path(os.environ.get(
+        "AUTO_VIDEO_EDITOR_DIR",
+        r"E:\Documents\kuaishou\auto-video-editor",
+    ))
+    node_path = auto_editor_dir / "nodes" / "node_01_clean_cache.py"
+    if not node_path.exists():
+        raise HTTPException(
+            status_code=500,
+            detail=f"auto-video-editor 路径无效: {auto_editor_dir}",
+        )
+
+    # ---- 加载 clean_cache 函数(幂等:首次 sys.path.insert 之后无副作用)----
+    av_root = str(auto_editor_dir)
+    if av_root not in sys.path:
+        sys.path.insert(0, av_root)
+    try:
+        from nodes.node_01_clean_cache import clean_cache
+    except ImportError as e:
+        raise HTTPException(status_code=500, detail=f"导入 clean_cache 失败: {e}")
+
+    # ---- 同步执行清理(本质是本地文件系统 IO,放线程池会阻塞事件循环)----
+    result_state = clean_cache({"session_id": "manual_clean_cache", "error_log": []})
+    return JSONResponse({
+        "ok": True,
+        "cleaned_paths": result_state.get("cache_cleaned_paths", []),
+        "errors": result_state.get("error_log", []),
+    })
+
+
+@api.post("/system/import-video")
+async def import_video_endpoint(request: Request):
+    """OpenStoryline Web UI「📥 导入视频」按钮对应端点(2026-10 拆分 node_04)。
+
+    行为:
+    - 前端先用**既有**上传链路(``uploadMediaChunked``)把视频传到当前会话,
+      再 POST 到这里;本端点**不碰文件**,只负责把"导入完成"这个信号
+      回写到 ``auto-video-editor`` 侧的握手结果文件。
+    - 图侧 ``nodes/node_04a_import_video.py::import_video`` 节点正在轮询等这个
+      结果文件;命中即自动继续(人只点一下按钮,不用再敲 resume)。
+    - 图**自己**绝不导入视频 —— 见
+      ``tests/integration/test_no_auto_import_video.py``。
+
+    安全设计:**不接受任意 ``job_id`` 入参**。只认"扫出来的最新未应答请求",
+    网页侧无法指定往哪个任务目录写结果,防止被诱导污染别的 job。
+
+    - 速率限制:全局 + 每 IP 双重桶,默认 burst=1 rpm=2(防误连点)。
+    - 路径定位:``AUTO_VIDEO_EDITOR_DIR`` 环境变量优先,默认
+      ``E:\\Documents\\kuaishou\\auto-video-editor``。
+    """
+    # ---- 速率限制(双桶:全局 + 每 IP)----
+    ip = _client_ip_from_http_scope(request.scope, RATE_LIMIT_TRUST_PROXY_HEADERS)
+    ok, ra, _ = await RATE_LIMITER.allow(
+        key="http:import_video:all",
+        capacity=float(IMPORT_VIDEO_ALL_BURST),
+        refill_rate=_rpm_to_rps(float(IMPORT_VIDEO_ALL_RPM)),
+        cost=1.0,
+    )
+    if not ok:
+        return _rate_limit_reject_json(ra)
+    ok2, ra2, _ = await RATE_LIMITER.allow(
+        key=f"http:import_video:{ip}",
+        capacity=float(IMPORT_VIDEO_IP_BURST),
+        refill_rate=_rpm_to_rps(float(IMPORT_VIDEO_IP_RPM)),
+        cost=1.0,
+    )
+    if not ok2:
+        return _rate_limit_reject_json(ra2)
+
+    # ---- 解析请求体(多文件 / 单文件都收)----
+    try:
+        data = await request.json()
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        data = {}
+
+    web_session_id = str(data.get("session_id") or "").strip()
+    if not web_session_id:
+        raise HTTPException(
+            status_code=400,
+            detail="session_id is required",
+        )
+
+    # ---- 路径解析 ----
+    auto_editor_dir = Path(os.environ.get(
+        "AUTO_VIDEO_EDITOR_DIR",
+        r"E:\Documents\kuaishou\auto-video-editor",
+    ))
+    node_path = auto_editor_dir / "nodes" / "node_04a_import_video.py"
+    if not node_path.exists():
+        raise HTTPException(
+            status_code=500,
+            detail=f"auto-video-editor 路径无效: {auto_editor_dir}",
+        )
+
+    # ---- 跨 venv 加载握手函数(幂等:首次 sys.path.insert 之后无副作用)----
+    # ``node_04a_import_video`` 顶层只依赖 stdlib + config + storyline.output_isolation,
+    # 本文件跑在 openstoryline/.venv 里也能安全 import(见该模块 docstring)。
+    # 载荷解析/结果构造都下沉到该模块的纯函数(``parse_import_payload`` /
+    # ``build_result_payload``),本端点只做**薄转发** —— 这样主仓 pytest
+    # (主 venv)就能覆盖协议逻辑,不必起 openstoryline venv。
+    av_root = str(auto_editor_dir)
+    if av_root not in sys.path:
+        sys.path.insert(0, av_root)
+    try:
+        from nodes.node_04a_import_video import (
+            build_result_payload,
+            find_pending_request,
+            parse_import_payload,
+            write_import_result,
+        )
+    except ImportError as e:
+        raise HTTPException(status_code=500, detail=f"导入 import_video 握手函数失败: {e}")
+
+    files = parse_import_payload(data)
+    if not files:
+        raise HTTPException(
+            status_code=400,
+            detail="at least one media file is required",
+        )
+    # 文件名做一次净化(防目录穿越);净化后为空则回退到原名
+    for f in files:
+        safe_name = sanitize_filename(str(f.get("filename") or "").strip())
+        f["filename"] = safe_name or str(f.get("filename") or "").strip()
+
+    # ---- 找最新未应答请求 ----
+    # None = 图没在等(还没跑到 import_video 节点,或已超时退出)。
+    try:
+        pending = find_pending_request()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"扫描待导入请求失败: {e}")
+
+    if pending is None:
+        return JSONResponse(
+            {
+                "ok": False,
+                "detail": "no_pending_import_request",
+            },
+            status_code=409,
+        )
+
+    job_id, _req = pending
+
+    # ---- 素材准备:复制到 agent_gate 素材白名单目录 ----
+    # 网页端上传的视频落在 ``openstoryline/outputs/<sid>/media/``,**不在**白名单里。
+    # mcode / agent_gate 只能用白名单内的绝对路径,所以这里做一份**副本**:
+    # 副本落在 ``<auto-video-editor>/inputs/<session_id>/``。
+    # 源文件不动(不移动、不删除、不覆盖)。
+    #
+    # 顺序很关键:**先复制成功,再写导入结果** —— 复制失败就不能让图侧拿到
+    # 「已就绪」的信号,否则图会拿着没准备好的素材继续跑。
+    try:
+        app_cfg = getattr(request.app.state, "cfg", None)
+        project_media_dir = str(
+            getattr(getattr(app_cfg, "project", None), "media_dir", "") or ""
+        )
+        if not project_media_dir:
+            raise MCodeMediaError(
+                "拿不到 project.media_dir 配置(服务未完成初始化?)"
+            )
+        session_media_dir = resolve_media_dir(project_media_dir, web_session_id)
+        # 源路径按 media_id **服务端**解析(前端不暴露 path,客户端 stored_path 常为空)。
+        # 注意:这里用解析后的副本去复制,``files`` 本身不动 ——
+        # 导入结果载荷必须保持原样(图侧契约不变)。
+        copy_files = await resolve_session_media_paths(request, web_session_id, files)
+        # 只有带 media_id 的文件才复制 —— 目标名是 <media_id>_<净化stem><ext>,
+        # 没有 media_id 就没有安全的命名依据。旧版单文件载荷可能缺这个字段,
+        # 这种情况下**跳过复制**(记日志),但导入本身照旧成功(载荷不变)。
+        copyable = [f for f in copy_files if str(f.get("media_id") or "").strip()]
+        if len(copyable) != len(copy_files):
+            logger.warning(
+                "有 %d 个素材缺少 media_id,已跳过副本(导入本身不受影响): session_id=%s",
+                len(copy_files) - len(copyable), web_session_id,
+            )
+        prepared_media = prepare_media_copies(
+            web_session_id,
+            copyable,
+            media_root=resolve_media_root(getattr(app_cfg, "mcode", None)),
+            allowed_roots=allowed_media_roots(),
+            session_media_dir=Path(session_media_dir),
+        )
+    except MCodeMediaError as e:
+        raise HTTPException(status_code=500, detail=f"素材准备失败:{e}")
+
+    # ---- 回写结果文件(节点下一轮轮询即命中)----
+    try:
+        write_import_result(
+            job_id,
+            build_result_payload(web_session_id, files),
+        )
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"写回导入结果失败: {e}")
+
+    # 首个文件的标识(修掉原先引用未定义变量 media_id / filename 的缺陷)
+    first = files[0] if files else {}
+
+    return JSONResponse({
+        "ok": True,
+        "job_id": job_id,
+        "web_session_id": web_session_id,
+        "media_id": str(first.get("media_id") or ""),
+        "filename": str(first.get("filename") or ""),
+        "prepared_media": prepared_media,
+    })
+
+
+@api.post("/sessions/{session_id}/cancel")
+async def cancel_session_turn(session_id: str):
+    """
+    打断当前正在进行的 LLM turn（流式回复/工具调用）。
+    - 不清空 history / lc_messages
+    - 仅设置 cancel_event，由 WS 侧在流式循环中感知并安全收尾
+    """
+    store: SessionStore = app.state.sessions
+    sess = await store.get_or_404(session_id)
+    sess.cancel_event.set()
+    set_ai_transition_cancelled(_ai_transition_cancel_cache_root(app.state.cfg), session_id)
+    return JSONResponse({"ok": True})
+
+# -------------------------
+# media (REST, session-scoped)
+# -------------------------
+@api.post("/sessions/{session_id}/media")
+async def upload_media(session_id: str, request: Request, files: List[UploadFile] = File(...)):
+    if not isinstance(files, list) or not files:
+        raise HTTPException(status_code=400, detail="no files")
+
+    if MAX_UPLOAD_FILES_PER_REQUEST > 0 and len(files) > MAX_UPLOAD_FILES_PER_REQUEST:
+        raise HTTPException(status_code=400, detail=f"单次上传最多 {MAX_UPLOAD_FILES_PER_REQUEST} 个文件")
+
+    # 按素材个数限流（cost = 文件数）
+    rej = await _enforce_upload_media_count_limit(request, cost=float(len(files)))
+    if rej:
+        return rej
+
+    if UPLOAD_SEM.locked():
+        raise HTTPException(status_code=429, detail="上传并发过高，请稍后重试")
+    await UPLOAD_SEM.acquire()
+
+    n = len(files)
+    try:
+        store: SessionStore = app.state.sessions
+        sess = await store.get_or_404(session_id)
+
+        # session cap 检查 + 预占位（避免并发竞争）
+        async with sess.media_lock:
+            sess._cleanup_stale_uploads_locked()
+            sess._check_media_caps_locked(add=n)
+            sess._direct_upload_reservations += n
+
+            display_names = [sanitize_filename(uf.filename or "unnamed") for uf in files]
+            store_filenames = sess._reserve_store_filenames_locked(display_names)
+
+        try:
+            metas = await sess.add_uploads(files, store_filenames=store_filenames)
+
+        finally:
+            async with sess.media_lock:
+                sess._direct_upload_reservations = max(0, sess._direct_upload_reservations - n)
+
+        await store.save_session_state(sess)
+
+        return JSONResponse({
+            "media": [sess.public_media(m) for m in metas],
+            "pending_media": sess.public_pending_media(),
+        })
+    finally:
+        try:
+            UPLOAD_SEM.release()
+        except Exception:
+            pass
+
+@api.post("/sessions/{session_id}/media/init")
+async def init_resumable_media_upload(session_id: str, request: Request):
+    try:
+        data = await request.json()
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        data = {}
+
+    filename = sanitize_filename((data.get("filename") or data.get("name") or "unnamed"))
+    size = int(data.get("size") or 0)
+    if size <= 0:
+        raise HTTPException(status_code=400, detail="invalid size")
+
+    # 按素材个数限流：init 视为“新增 1 个素材”
+    rej = await _enforce_upload_media_count_limit(request, cost=1.0)
+    if rej:
+        return rej
+
+    store: SessionStore = app.state.sessions
+    sess = await store.get_or_404(session_id)
+
+    async with sess.media_lock:
+        sess._cleanup_stale_uploads_locked()
+        sess._check_media_caps_locked(add=1)
+
+        store_filename = sess._reserve_store_filenames_locked([filename])[0]
+
+        upload_id = uuid.uuid4().hex
+        chunk_size = int(max(1, UPLOAD_RESUMABLE_CHUNK_BYTES))
+        total_chunks = int(math.ceil(size / float(chunk_size)))
+
+        tmp_path = os.path.join(sess.uploads_dir, f"{upload_id}.part")
+        os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
+        try:
+            with open(tmp_path, "wb"):
+                pass
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"cannot create temp file: {e}")
+
+        u = ResumableUpload(
+            upload_id=upload_id,
+            filename=filename,
+            store_filename=store_filename,
+            size=size,
+            chunk_size=chunk_size,
+            total_chunks=total_chunks,
+            tmp_path=os.path.abspath(tmp_path),
+            kind=detect_media_kind(filename),
+            created_ts=time.time(),
+            last_ts=time.time(),
+        )
+        sess.resumable_uploads[upload_id] = u
+
+    return JSONResponse({
+        "upload_id": upload_id,
+        "chunk_size": chunk_size,
+        "total_chunks": total_chunks,
+        "filename": filename,
+    })
+
+
+@api.post("/sessions/{session_id}/media/{upload_id}/chunk")
+async def upload_resumable_media_chunk(
+    session_id: str,
+    upload_id: str,
+    index: int = Form(...),
+    chunk: UploadFile = File(...),
+):
+    if UPLOAD_SEM.locked():
+        raise HTTPException(status_code=429, detail="上传并发过高，请稍后重试")
+    await UPLOAD_SEM.acquire()
+    try:
+        store: SessionStore = app.state.sessions
+        sess = await store.get_or_404(session_id)
+
+        async with sess.media_lock:
+            sess._cleanup_stale_uploads_locked()
+            u = sess.resumable_uploads.get(upload_id)
+
+        if not u:
+            raise HTTPException(status_code=404, detail="upload_id not found or expired")
+
+        idx = int(index)
+        if idx < 0 or idx >= u.total_chunks:
+            raise HTTPException(status_code=400, detail="invalid chunk index")
+
+        # 期望长度（最后一片可能小于 chunk_size）
+        expected_len = u.size - idx * u.chunk_size
+        if expected_len <= 0:
+            raise HTTPException(status_code=400, detail="invalid chunk index")
+        expected_len = min(u.chunk_size, expected_len)
+
+        written = 0
+        async with u.lock:
+            if u.closed:
+                raise HTTPException(status_code=400, detail="upload already closed")
+
+            async with await anyio.open_file(u.tmp_path, "r+b") as out:
+                await out.seek(idx * u.chunk_size)
+                while True:
+                    buf = await chunk.read(CHUNK_SIZE)
+                    if not buf:
+                        break
+                    written += len(buf)
+                    if written > expected_len:
+                        raise HTTPException(status_code=400, detail="chunk too large")
+                    await out.write(buf)
+
+            try:
+                await chunk.close()
+            except Exception:
+                pass
+
+            if written != expected_len:
+                raise HTTPException(status_code=400, detail=f"chunk size mismatch: {written} != {expected_len}")
+
+            u.received.add(idx)
+            u.last_ts = time.time()
+
+        return JSONResponse({
+            "ok": True,
+            "received_chunks": len(u.received),
+            "total_chunks": u.total_chunks,
+        })
+    finally:
+        try:
+            UPLOAD_SEM.release()
+        except Exception:
+            pass
+
+
+@api.post("/sessions/{session_id}/media/{upload_id}/complete")
+async def complete_resumable_media_upload(session_id: str, upload_id: str):
+    if UPLOAD_SEM.locked():
+        raise HTTPException(status_code=429, detail="上传并发过高，请稍后重试")
+    await UPLOAD_SEM.acquire()
+    try:
+        store: SessionStore = app.state.sessions
+        sess = await store.get_or_404(session_id)
+
+        async with sess.media_lock:
+            sess._cleanup_stale_uploads_locked()
+            u = sess.resumable_uploads.get(upload_id)
+
+        if not u:
+            raise HTTPException(status_code=404, detail="upload_id not found or expired")
+
+        # 锁住此 upload，防止 chunk 并发写
+        async with u.lock:
+            u.closed = True
+            if len(u.received) != u.total_chunks:
+                missing = u.total_chunks - len(u.received)
+                raise HTTPException(status_code=400, detail=f"chunks missing: {missing}")
+
+        # 从索引移除（释放会话额度）
+        async with sess.media_lock:
+            u2 = sess.resumable_uploads.pop(upload_id, None)
+
+        if not u2:
+            raise HTTPException(status_code=404, detail="upload_id not found")
+
+        meta = await sess.media_store.save_from_path(
+            u2.tmp_path,
+            store_filename=u2.store_filename,
+            display_name=u2.filename,
+        )
+
+        async with sess.media_lock:
+            sess.load_media[meta.id] = meta
+            sess.pending_media_ids.append(meta.id)
+
+        await store.save_session_state(sess)
+
+        return JSONResponse({
+            "media": sess.public_media(meta),
+            "pending_media": sess.public_pending_media(),
+        })
+    finally:
+        try:
+            UPLOAD_SEM.release()
+        except Exception:
+            pass
+
+
+@api.post("/sessions/{session_id}/media/{upload_id}/cancel")
+async def cancel_resumable_media_upload(session_id: str, upload_id: str):
+    store: SessionStore = app.state.sessions
+    sess = await store.get_or_404(session_id)
+
+    async with sess.media_lock:
+        u = sess.resumable_uploads.pop(upload_id, None)
+
+    if not u:
+        return JSONResponse({"ok": True})
+
+    async with u.lock:
+        u.closed = True
+        try:
+            if u.tmp_path and os.path.exists(u.tmp_path):
+                os.remove(u.tmp_path)
+        except Exception:
+            pass
+
+    return JSONResponse({"ok": True})
+
+@api.get("/sessions/{session_id}/media/pending")
+async def get_pending_media(session_id: str):
+    store: SessionStore = app.state.sessions
+    sess = await store.get_or_404(session_id)
+    return JSONResponse({"pending_media": sess.public_pending_media()})
+
+
+@api.delete("/sessions/{session_id}/media/pending/{media_id}")
+async def delete_pending_media(session_id: str, media_id: str):
+    store: SessionStore = app.state.sessions
+    sess = await store.get_or_404(session_id)
+    await sess.delete_pending_media(media_id)
+    await store.save_session_state(sess)
+    return JSONResponse({"ok": True, "pending_media": sess.public_pending_media()})
+
+
+@api.get("/sessions/{session_id}/media/{media_id}/thumb")
+async def get_media_thumb(session_id: str, media_id: str):
+    store: SessionStore = app.state.sessions
+    sess = await store.get_or_404(session_id)
+
+    meta = sess.load_media.get(media_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="media not found")
+
+    # thumb 存在优先
+    if meta.thumb_path and os.path.exists(meta.thumb_path):
+        return FileResponse(meta.thumb_path, media_type="image/jpeg")
+
+    # video 无 thumb => placeholder
+    if meta.kind == "video":
+        return Response(content=video_placeholder_svg_bytes(), media_type="image/svg+xml")
+
+    # image thumb 失败 => 用原图
+    if meta.path and os.path.exists(meta.path):
+        return FileResponse(meta.path, media_type=guess_media_type(meta.path))
+
+    raise HTTPException(status_code=404, detail="thumb not available")
+
+
+@api.get("/sessions/{session_id}/media/{media_id}/file")
+async def get_media_file(session_id: str, media_id: str):
+    store: SessionStore = app.state.sessions
+    sess = await store.get_or_404(session_id)
+
+    meta = sess.load_media.get(media_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="media not found")
+    if not meta.path or (not os.path.exists(meta.path)):
+        raise HTTPException(status_code=404, detail="file not found")
+
+    # 安全：只允许 media_dir 下
+    if not _is_under_dir(meta.path, sess.media_store.media_dir):
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    return FileResponse(
+        meta.path,
+        media_type=guess_media_type(meta.path),
+        filename=meta.name,
+    )
+
+@api.get("/sessions/{session_id}/preview")
+async def preview_local_file(session_id: str, path: str):
+    """
+    把 summary.preview_urls 里的“服务器本地路径”安全地转成可访问 URL。
+    只允许访问：media_dir / outputs_dir / outputs_dir / bgm_dir / .server_cache 这些根目录下的文件。
+    """
+    store: SessionStore = app.state.sessions
+    sess = await store.get_or_404(session_id)
+
+    p = (path or "").strip()
+    if not p:
+        raise HTTPException(status_code=400, detail="empty path")
+    if "\x00" in p:
+        raise HTTPException(status_code=400, detail="bad path")
+
+    # 兼容 file:// 前缀（如果未来有）
+    if p.startswith("file://"):
+        p = p[len("file://"):]
+
+    # 相对路径：默认相对 ROOT_DIR
+    if os.path.isabs(p):
+        ap = os.path.abspath(p)
+    else:
+        ap = os.path.abspath(os.path.join(ROOT_DIR, p))
+
+    allowed_roots = [
+        os.path.abspath(sess.media_dir),
+        os.path.abspath(app.state.cfg.project.outputs_dir),
+        os.path.abspath(app.state.cfg.project.outputs_dir),
+        os.path.abspath(app.state.cfg.project.bgm_dir),
+        os.path.abspath(SERVER_CACHE_DIR),
+    ]
+
+    if not any(_is_under_dir(ap, r) for r in allowed_roots):
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    if (not os.path.exists(ap)) or os.path.isdir(ap):
+        raise HTTPException(status_code=404, detail="file not found")
+
+    # 对 cache 文件强缓存
+    headers = {"Cache-Control": "public, max-age=31536000, immutable"} if _is_under_dir(ap, SERVER_CACHE_DIR) else None
+
+    return FileResponse(
+        ap,
+        media_type=guess_media_type(ap),
+        filename=os.path.basename(ap),
+        headers=headers,
+    )
+
+app.include_router(api)
+
+# ---- 工作流监控 API(/api/workflow/*,阶段4,设计 §6.2-E)----
+# 独立 router 模块挂载,避免继续膨胀主文件(设计 §11.8b);端点实现见
+# web/api_workflow.py(重依赖全部延迟 import,跨 venv 安全;启动/订阅分离,
+# events 只读事件表,绝不触发图执行)。
+from web.api_workflow import router as workflow_api_router  # noqa: E402
+
+app.include_router(workflow_api_router)
+
+
+# -------------------------
+# WebSocket: session-scoped chat stream
+# -------------------------
+def extract_text_delta(msg_chunk: Any) -> str:
+    # 兼容 content_blocks (qwen3 常见)
+    blocks = getattr(msg_chunk, "content_blocks", None) or []
+    if blocks:
+        out = ""
+        for b in blocks:
+            if isinstance(b, dict) and b.get("type") == "text":
+                out += b.get("text", "")
+        return out
+    c = getattr(msg_chunk, "content", "")
+    return c if isinstance(c, str) else ""
+
+
+async def ws_send(ws: WebSocket, type_: str, data: Any = None):
+    if getattr(ws, "client_state", None) != WebSocketState.CONNECTED:
+        return False
+    try:
+        await ws.send_json({"type": type_, "data": data})
+        return True
+    except WebSocketDisconnect:
+        return False
+    except RuntimeError:
+        return False
+    except Exception as e:
+        if ClientDisconnected is not None and isinstance(e, ClientDisconnected):
+            return False
+        logger.exception("ws_send failed: type=%s err=%r", type_, e)
+        return False
+
+@asynccontextmanager
+async def mcp_sink_context(sink_func):
+    token = set_mcp_log_sink(sink_func)
+    try:
+        yield
+    finally:
+        reset_mcp_log_sink(token)
+
+
+@app.websocket("/ws/sessions/{session_id}/chat")
+async def ws_chat(ws: WebSocket, session_id: str):
+    client_ip = _client_ip_from_ws(ws, RATE_LIMIT_TRUST_PROXY_HEADERS)
+
+    ok, retry_after, _ = await RATE_LIMITER.allow(
+        key=f"ws:connect:{client_ip}",
+        capacity=float(WS_CONNECT_BURST),
+        refill_rate=_rpm_to_rps(float(WS_CONNECT_RPM)),
+        cost=1.0,
+    )
+    if not ok:
+        try: 
+            await ws.close(code=1013, reason=f"rate_limited, retry after {int(math.ceil(retry_after))}s")
+        except Exception:
+            debug_traceback_print(app.state.cfg)
+            pass
+        return
+    
+    if WS_CONN_SEM.locked():
+        try:
+            await ws.close(code=1013, reason="Server busy (websocket connections limit)")
+        except Exception:
+            debug_traceback_print(app.state.cfg)
+            pass
+        return
+    
+    await WS_CONN_SEM.acquire()
+
+    try:
+        await ws.accept()
+
+        store: SessionStore = app.state.sessions
+        try:
+            sess = await store.get(session_id)
+        except SessionStateUnavailableError:
+            try:
+                await ws.close(code=1013, reason="session state unavailable")
+            except Exception:
+                pass
+            return
+        if not sess:
+            await ws.close(code=4404, reason="session not found")
+            return
+
+        await ws_send(ws, "session.snapshot", sess.snapshot())
+
+        try:
+            while True:
+                req = await ws.receive_json()
+                if not isinstance(req, dict):
+                    continue
+
+                t = req.get("type")
+                if t == "ping":
+                    await ws_send(ws, "pong", {"ts": time.time()})
+                    continue
+
+                if t == "session.set_lang":
+                    data = (req.get("data") or {})
+                    lang = (data.get("lang") or "").strip().lower()
+                    if lang not in ("zh", "en"):
+                        lang = "zh"
+
+                    sess.lang = lang
+                    if sess.client_context:
+                        sess.client_context.lang = lang
+
+                    await store.save_session_state(sess)
+                    await ws_send(ws, "session.lang", {"lang": lang})
+                    continue
+
+                if t == "chat.clear":
+                    async with sess.chat_lock:
+                        sess.sent_media_total = 0
+                        sess._attach_stats_msg_idx = 1
+                        sess.lc_messages = [
+                            SystemMessage(content=get_prompt("instruction.system", lang=sess.lang)),
+                            SystemMessage(content=UPLOAD_STATUS_SYSTEM_EMPTY),
+                        ]
+                        sess._attach_stats_msg_idx = 1
+                        sess.history = []
+                        sess._tool_history_index = {}
+                        await store.save_session_state(sess)
+                    await ws_send(ws, "chat.cleared", {"ok": True})
+                    continue
+
+                if t != "chat.send":
+                    await ws_send(ws, "error", {"message": f"unknown type: {t}"})
+                    continue
+
+                # ---- WebSocket message rate limit: only limit expensive "chat.send" ----
+                if sess.chat_lock.locked():
+                    await ws_send(ws, "error", {"message": "上一条消息尚未完成，请稍后再发送"})
+                    continue
+                
+                ok, retry_after, _ = await RATE_LIMITER.allow(
+                    key="ws:chat_send:all",
+                    capacity=float(WS_CHAT_SEND_ALL_BURST),
+                    refill_rate=_rpm_to_rps(float(WS_CHAT_SEND_ALL_RPM)),
+                    cost=1.0,
+                )
+                if not ok:
+                    await ws_send(ws, "error", {
+                        "message": f"触发全局限流：请 {int(math.ceil(retry_after))} 秒后再试",
+                        "retry_after": int(math.ceil(retry_after)),
+                    })
+                    continue
+
+                ok, retry_after, _ = await RATE_LIMITER.allow(
+                    key=f"ws:chat_send:{client_ip}",
+                    capacity=float(WS_CHAT_SEND_BURST),
+                    refill_rate=_rpm_to_rps(float(WS_CHAT_SEND_RPM)),
+                    cost=1.0,
+                )
+                if not ok:
+                    await ws_send(ws, "error", {
+                        "message": f"触发限流：请 {int(math.ceil(retry_after))} 秒后再试",
+                        "retry_after": int(math.ceil(retry_after)),
+                    })
+                    continue
+
+                if CHAT_TURN_SEM.locked():
+                    await ws_send(ws, "error", {"message": "服务器繁忙（模型并发已满），请稍后再试"})
+                    continue
+
+                await CHAT_TURN_SEM.acquire()
+                try:
+                    # 再次确认（期间有 await，锁状态可能变化）
+                    if sess.chat_lock.locked():
+                        await ws_send(ws, "error", {"message": "上一条消息尚未完成，请稍后再发送"})
+                        continue
+
+                    data = (req.get("data", {}) or {})
+
+                    prompt = data.get("text", "")
+                    prompt = (prompt or "").strip()
+                    if not prompt:
+                        continue
+
+                    requested_llm = data.get("llm_model")
+                    requested_vlm = data.get("vlm_model")
+
+                    attachment_ids = data.get("attachment_ids")
+                    if not isinstance(attachment_ids, list):
+                        attachment_ids = None
+
+                    async with sess.chat_lock:
+                        # 新 turn 开始：清掉上一次残留的 cancel 信号
+                        sess.cancel_event.clear()
+                        clear_ai_transition_cancelled(_ai_transition_cancel_cache_root(app.state.cfg), session_id)
+                        # 0.0) 应用 service_config（自定义模型 / TTS / ai_transition）
+                        ok_cfg, err_cfg = sess.apply_service_config(data.get("service_config"))
+                        if not ok_cfg:
+                            await ws_send(ws, "error", {"message": err_cfg or "service_config invalid"})
+                            continue
+
+                        # 0) 如果前端传了 model，则更新会话当前对话模型
+                        if isinstance(requested_llm, str):
+                            m = requested_llm.strip()
+                            if m:
+                                sess.chat_model_key = m
+                                if sess.client_context:
+                                    sess.client_context.chat_model_key = m
+
+                        if isinstance(requested_vlm, str):
+                            m2 = requested_vlm.strip()
+                            if m2:
+                                sess.vlm_model_key = m2
+                                if sess.client_context:
+                                    sess.client_context.vlm_model_key = m2
+
+                        requested_lang = data.get("lang")
+                        if isinstance(requested_lang, str):
+                            lang = requested_lang.strip().lower()
+                            if lang in ("zh", "en"):
+                                sess.lang = lang
+                        # 0.1) 可能需要重建 agent（比如切换到 __custom__ 或者自定义配置变化）
+                        try:
+                            await sess.ensure_agent()
+                        except Exception as e:
+                            await ws_send(ws, "error", {"message": f"{type(e).__name__}: {e}"})
+                            logger.error(_format_exc(e))
+                            continue
+
+                        sess._ensure_system_prompt()
+
+                        # 阶段 D:服务端判定本轮来源。
+                        # 只看会话**已生效**的模型配置(ensure_agent 建的 agent 也是
+                        # 按这份配置来的),不信任浏览器单独传来的模型名。
+                        turn_source = _resolve_turn_source(sess.chat_model_key, sess.vlm_model_key)
+                        turn_id = uuid.uuid4().hex
+                        # 执行过程事件(状态 / 工具卡片)是否推给前端。
+                        # 文本增量**不受**这个开关影响 —— 那是答复本体,不是过程。
+                        trace_enabled = bool(
+                            getattr(app.state.cfg.mcode, "show_execution_trace", True)
+                        )
+                        if turn_source == TURN_SOURCE_ZCODE:
+                            # zcode 只有状态事件(没有工具卡片、没有文本增量),
+                            # 关掉它前端面板就永远停在 Running —— 所以 zcode
+                            # 不受 [mcode] show_execution_trace 开关约束(阶段 E)。
+                            trace_enabled = True
+
+                        if sess.client_context:
+                            sess.client_context.lang = sess.lang
+
+                        # 1) 从 pending 里拿本次要发送的附件
+                        attachments = await sess.take_pending_media_for_message(attachment_ids)
+                        attachments_public = [sess.public_media(m) for m in attachments]
+
+                        # 统计本轮和累计发送了几个素材
+                        turn_attached_count = len(attachments)
+                        sess.sent_media_total = int(getattr(sess, "sent_media_total", 0)) + turn_attached_count
+
+                        stats = {
+                            "Number of media carried in this message sent by the user": turn_attached_count,
+                            "Total number of media sent by the user in all conversations": sess.sent_media_total,
+                            "Total number of media in user's media library": scan_media_dir(resolve_media_dir(app.state.cfg.project.media_dir, session_id=session_id)),
+                        }
+
+                        idx = int(getattr(sess, "_attach_stats_msg_idx", 1))
+                        if len(sess.lc_messages) <= idx:
+                            while len(sess.lc_messages) <= idx:
+                                sess.lc_messages.append(SystemMessage(content=""))
+
+                        sess.lc_messages[idx] = SystemMessage(
+                            content="【User media upload status】The following fields are used to determine the nature of the media provided by the user: \n"
+                                    + json.dumps(stats, ensure_ascii=False)
+                        )
+
+
+                        # 2.1 写入 history + lc context
+                        user_msg = {
+                            "id": uuid.uuid4().hex[:12],
+                            "role": "user",
+                            "content": prompt,
+                            "attachments": attachments_public,
+                            "ts": time.time(),
+                        }
+                        sess.history.append(user_msg)
+                        sess.lc_messages.append(HumanMessage(content=prompt))
+                        await store.save_session_state(sess)
+
+                        if app.state.cfg.developer.print_context:
+                            print("[LLM_CTX]", session_id, sess.lc_messages, flush=True)
+
+                        client_attached = True
+
+                        # 2.2 ack：让前端更新 pending + 插入 user 消息（前端也可本地先插入）
+                        if not await ws_send(ws, "chat.user", {
+                            "text": prompt,
+                            "attachments": attachments_public,
+                            "pending_media": sess.public_pending_media(),
+                            "llm_model_key": sess.chat_model_key,
+                            "vlm_model_key": sess.vlm_model_key,
+                        }):
+                            client_attached = False
+
+                        # 2.3 建立“单通道事件队列”，确保 ws.send_json 不会并发冲突
+                        loop = asyncio.get_running_loop()
+                        out_q: asyncio.Queue[Tuple[str, Any]] = asyncio.Queue()
+
+                        def sink(ev: Any):
+                            # MCP interceptor 可能 emit 非 dict；这里只收 dict
+                            if isinstance(ev, dict):
+                                loop.call_soon_threadsafe(out_q.put_nowait, ("mcp", ev))
+
+                        # 阶段 D:MCode 事件通道。
+                        # 只有 mcode turn 才注册 —— 普通模型链路**不写** mcode.event。
+                        mcode_adapter: Optional[MCodeEventAdapter] = _make_mcode_adapter(
+                            turn_source,
+                            app.state.cfg,
+                            session_id=session_id,
+                            turn_id=turn_id,
+                        )
+                        mcode_final_text = ""
+
+                        # 阶段 E:ZCode 事件通道。只有 zcode turn 才注册 ——
+                        # 普通模型链路**不写** zcode.event(SRC-03 同款)。
+                        zcode_adapter: Optional[ZCodeEventAdapter] = _make_zcode_adapter(
+                            turn_source,
+                            app.state.cfg,
+                            session_id=session_id,
+                            turn_id=turn_id,
+                        )
+                        zcode_final_text = ""
+
+                        async def _mcode_event_sink(event: Any) -> None:
+                            """把**本轮真实** MCode CLI 事件推进 out_q。
+
+                            单一发送协程不变:这里只入队,真正 send 的还是主循环。
+                            """
+                            await out_q.put(("mcode.event", event))
+
+                        new_messages: List[BaseMessage] = []
+
+                        # Guard first: sanitize protocol on sess.lc_messages before we build
+                        # the merged request list for astream.
+                        # This ensures astream always receives the sanitized structure.
+                        sess._sanitize_tool_protocol_in_lc_messages()
+
+                        # Merge multiple SystemMessages into one to support LLMs
+                        # that do not allow more than one system message.
+                        _system_parts: List[str] = []
+                        _non_system: List[BaseMessage] = []
+                        for _m in sess.lc_messages:
+                            if isinstance(_m, SystemMessage):
+                                _system_parts.append(
+                                    _m.content if isinstance(_m.content, str) else str(_m.content)
+                                )
+                            else:
+                                _non_system.append(_m)
+                        _merged_messages: List[BaseMessage] = (
+                            [SystemMessage(content="\n\n".join(_system_parts))] if _system_parts else []
+                        ) + _non_system
+
+                        async def pump_agent():
+                            nonlocal new_messages
+                            try:
+                                stream = sess.agent.astream(
+                                    {"messages": _merged_messages},
+                                    context=sess.client_context,
+                                    stream_mode=["messages", "updates"],
+                                )
+                                async for mode, chunk in stream:
+                                    if mode == "messages":
+                                        if not _should_forward_langgraph_text(turn_source):
+                                            # MCode 的文本已经由 CLI 事件通道(mcode.event)
+                                            # 送出。这里再发一遍就是**同一份文本双发**。
+                                            # LangGraph 的 chunk 仍然留给内部机制用,
+                                            # 但 WebSocket 层不转发它。
+                                            continue
+                                        msg_chunk, meta = chunk
+                                        if meta.get("langgraph_node") == "model":
+                                            delta = extract_text_delta(msg_chunk)
+                                            if delta:
+                                                await out_q.put(("assistant.delta", delta))
+
+                                    elif mode == "updates":
+                                        if isinstance(chunk, dict):
+                                            for _step, data in chunk.items():
+                                                msgs = (data or {}).get("messages") or []
+                                                new_messages.extend(msgs)
+
+                                await out_q.put(("agent.done", None))
+                            except asyncio.CancelledError:
+                                # 被用户打断 / 连接关闭导致的取消，不属于“真正异常”
+                                # 不要发 agent.error；给主循环一个 cancelled 信号即可
+                                try:
+                                    out_q.put_nowait(("agent.cancelled", None))
+                                except Exception:
+                                    debug_traceback_print(app.state.cfg)
+                                    pass
+                                raise  # 让任务保持 cancelled 状态，finally 里 await 时会抛 CancelledError
+
+                            except Exception as e:
+                                # 关键：异常也要让主循环“可结束”，否则 UI 卡死
+                                await out_q.put(("agent.error", f"{type(e).__name__}: {e}"))
+                                logger.error(_format_exc(e))
+
+
+                        async def emit_turn_event(type_: str, data: Any = None) -> bool:
+                            nonlocal client_attached
+                            if not client_attached:
+                                return False
+
+                            # 前端断开后只停止推送，不中断当前 turn 的执行与状态提交。
+                            ok = await ws_send(ws, type_, data)
+                            if not ok:
+                                client_attached = False
+                            return ok
+
+                        # turn 开始（前端可禁用发送按钮/显示占位）
+                        await emit_turn_event("assistant.start", {
+                            "turn_id": turn_id,
+                            "source": turn_source,
+                        })
+
+                        # 当前 assistant 分段缓冲：用于在 tool_start 到来前“封口”
+                        seg_text = ""
+                        seg_ts: Optional[float] = None
+
+                        async def flush_segment(send_flush_event: bool):
+                            """
+                            - send_flush_event=True：告诉前端立刻结束当前 assistant 气泡（不结束整个 turn）
+                            - 若 seg_text 有内容：写入 history（用于刷新/回放）
+                            """
+                            nonlocal seg_text, seg_ts
+
+                            if send_flush_event:
+                                await emit_turn_event("assistant.flush", {
+                                    "source": turn_source,
+                                    "turn_id": turn_id,
+                                })
+
+                            text = (seg_text or "").strip()
+                            if text:
+                                _append_assistant_history(
+                                    sess,
+                                    text,
+                                    turn_source=turn_source,
+                                    turn_id=turn_id,
+                                    ts=seg_ts or time.time(),
+                                )
+
+                            seg_text = ""
+                            seg_ts = None
+
+                        async def _handle_mcode_internal(internal: Any) -> None:
+                            """把一条内部 MCode 事件翻成 WebSocket 事件。
+
+                            工具事件走 ``sess.apply_tool_event`` —— 与普通模型链路
+                            共用同一套工具卡片记账,前端不用为 mcode 写第二套。
+
+                            映射规则在模块级 ``_dispatch_mcode_internal`` 里
+                            (阶段 E 抽出来的,便于直接测出 WebSocket 事件时间线)。
+                            """
+                            nonlocal seg_text, seg_ts, mcode_final_text
+
+                            def _append_text(delta: str) -> None:
+                                # nonlocal 必须把 seg_text 也带上 ——
+                                # ``seg_text += delta`` 是**赋值**,只声明 seg_ts 的话
+                                # Python 会把 seg_text 当成本函数的局部变量 → UnboundLocalError。
+                                nonlocal seg_text, seg_ts
+                                if seg_ts is None:
+                                    seg_ts = time.time()
+                                seg_text += delta
+
+                            final = await _dispatch_mcode_internal(
+                                internal,
+                                sess=sess,
+                                turn_id=turn_id,
+                                trace_enabled=trace_enabled,
+                                emit=emit_turn_event,
+                                flush_segment=flush_segment,
+                                append_text=_append_text,
+                            )
+                            if final is not None:
+                                mcode_final_text = final
+
+                        async def _handle_zcode_internal(internal: Any) -> None:
+                            """把一条内部 ZCode 事件翻成 WebSocket 事件(阶段 E)。
+
+                            zcode **没有**工具事件(无头形态不外发,设计附录 A.5);
+                            状态与最终正文走同一条 ``_dispatch_mcode_internal``
+                            映射 —— 词表与来源无关,zcode 不需要第二套翻译。
+                            """
+                            nonlocal seg_text, seg_ts, zcode_final_text
+
+                            def _append_text(delta: str) -> None:
+                                nonlocal seg_text, seg_ts
+                                if seg_ts is None:
+                                    seg_ts = time.time()
+                                seg_text += delta
+
+                            final = await _dispatch_mcode_internal(
+                                internal,
+                                sess=sess,
+                                turn_id=turn_id,
+                                trace_enabled=trace_enabled,
+                                emit=emit_turn_event,
+                                flush_segment=flush_segment,
+                                append_text=_append_text,
+                            )
+                            if final is not None:
+                                zcode_final_text = final
+
+                        pump_task: Optional[asyncio.Task] = None
+
+                        # helper: 从 AIMessage 提取 tool_call_id（兼容不同 provider 的结构）
+                        def _tool_call_ids_from_ai_message(m: BaseMessage) -> set[str]:
+                            ids: set[str] = set()
+
+                            tc = getattr(m, "tool_calls", None) or []
+                            for c in tc:
+                                _id = None
+                                if isinstance(c, dict):
+                                    _id = c.get("id") or c.get("tool_call_id")
+                                else:
+                                    _id = getattr(c, "id", None) or getattr(c, "tool_call_id", None)
+                                if _id:
+                                    ids.add(str(_id))
+
+                            ak = getattr(m, "additional_kwargs", None) or {}
+                            tc2 = ak.get("tool_calls") or []
+                            for c in tc2:
+                                if isinstance(c, dict):
+                                    _id = c.get("id") or c.get("tool_call_id")
+                                    if _id:
+                                        ids.add(str(_id))
+
+                            return ids
+
+                        # helper: new_messages 里有哪些 tool_call_id
+                        def _tool_call_ids_in_msgs(msgs: List[BaseMessage]) -> set[str]:
+                            ids: set[str] = set()
+                            for m in msgs:
+                                if isinstance(m, AIMessage):
+                                    ids |= _tool_call_ids_from_ai_message(m)
+                            return ids
+
+                        # helper: new_messages 里哪些 tool_call_id 已经有 ToolMessage 结果了
+                        def _tool_result_ids_in_msgs(msgs: List[BaseMessage]) -> set[str]:
+                            ids: set[str] = set()
+                            for m in msgs:
+                                if isinstance(m, ToolMessage):
+                                    tcid = getattr(m, "tool_call_id", None)
+                                    if tcid:
+                                        ids.add(str(tcid))
+                            return ids
+
+                        # helper: 把“已存在的 ToolMessage”强制替换成 cancelled（避免工具其实返回了但用户打断没看到，导致上下文和 UI 不一致）
+                        def _force_cancelled_tool_results(msgs: List[BaseMessage], cancel_ids: set[str]) -> List[BaseMessage]:
+                            if not cancel_ids:
+                                return msgs
+                            cancelled_content = json.dumps({"cancelled": True}, ensure_ascii=False)
+                            out: List[BaseMessage] = []
+                            for m in msgs:
+                                if isinstance(m, ToolMessage):
+                                    tcid = getattr(m, "tool_call_id", None)
+                                    if tcid and str(tcid) in cancel_ids:
+                                        out.append(ToolMessage(content=cancelled_content, tool_call_id=str(tcid)))
+                                        continue
+                                out.append(m)
+                            return out
+
+                        def _inject_cancelled_tool_messages(msgs: List[BaseMessage], tool_call_ids: List[str]) -> List[BaseMessage]:
+                            if not tool_call_ids:
+                                return msgs
+
+                            out = list(msgs)
+
+                            existing = set()
+                            for m in out:
+                                if isinstance(m, ToolMessage):
+                                    tcid = getattr(m, "tool_call_id", None)
+                                    if tcid:
+                                        existing.add(str(tcid))
+
+                            cancelled_content = json.dumps({"cancelled": True}, ensure_ascii=False)
+
+                            for tcid in tool_call_ids:
+                                tcid = str(tcid)
+                                if tcid in existing:
+                                    continue
+
+                                insert_at = None
+                                for i in range(len(out) - 1, -1, -1):
+                                    m = out[i]
+                                    if isinstance(m, AIMessage) and (tcid in _tool_call_ids_from_ai_message(m)):
+                                        insert_at = i + 1
+                                        break
+
+                                if insert_at is None:
+                                    continue
+
+                                out.insert(insert_at, ToolMessage(content=cancelled_content, tool_call_id=tcid))
+                                existing.add(tcid)
+
+                            return out
+
+                        def _sanitize_new_messages_on_cancel(
+                            new_messages: List[BaseMessage],
+                            *,
+                            interrupted_text: str,
+                            cancelled_tool_ids_from_ui: List[str],
+                        ) -> List[BaseMessage]:
+                            """
+                            返回：应该写回 sess.lc_messages 的消息序列（只包含“用户可见/认可”的那部分）
+                            - 工具：对未返回的 tool_call 补 ToolMessage({"cancelled": true})
+                            - 回复：用 interrupted_text 替换末尾 final AIMessage，避免把完整回复泄漏进上下文
+                            """
+                            msgs = list(new_messages or [])
+                            interrupted_text = (interrupted_text or "").strip()
+
+                            # 1) 工具：找出“AI 发起了 tool_call 但没有 ToolMessage 结果”的那些 id
+                            ai_tool_ids = _tool_call_ids_in_msgs(msgs)
+                            tool_result_ids = _tool_result_ids_in_msgs(msgs)
+                            pending_tool_ids = ai_tool_ids - tool_result_ids
+
+                            # UI 认为被取消的 tool（running -> cancelled）
+                            ui_cancel_ids = {str(x) for x in (cancelled_tool_ids_from_ui or [])}
+
+                            # 统一要取消的集合：
+                            # - UI 侧 running 的（用户按下打断时看见的）
+                            # - 以及 messages 里缺结果的（防止漏标）
+                            cancel_ids = set(ui_cancel_ids) | set(pending_tool_ids)
+
+                            # 2) 如果 new_messages 里已经有 ToolMessage(真实结果) 但用户打断了，
+                            #    为了“UI/上下文一致”，强制替换成 cancelled
+                            msgs = _force_cancelled_tool_results(msgs, cancel_ids)
+
+                            # 3) 注入缺失的 ToolMessage(cancelled)
+                            msgs = _inject_cancelled_tool_messages(msgs, list(cancel_ids))
+
+                            # 4) 处理 assistant 最终文本（避免把完整 answer 写回）
+                            #    - 如果 interrupted_text 非空：用它替换最后一个“非 tool_call 的 AIMessage”
+                            #    - 如果 interrupted_text 为空：只在“末尾存在一个 non-toolcall AIMessage（且它后面没有 tool_call）”时移除它
+                            def _is_toolcall_ai(m: BaseMessage) -> bool:
+                                return isinstance(m, AIMessage) and bool(_tool_call_ids_from_ai_message(m))
+
+                            def _is_text_ai(m: BaseMessage) -> bool:
+                                if not isinstance(m, AIMessage):
+                                    return False
+                                if _tool_call_ids_from_ai_message(m):
+                                    return False
+                                c = getattr(m, "content", None)
+                                return isinstance(c, str) and bool(c.strip())
+
+                            # 找最后一个“文本 AIMessage（非 tool_call）”
+                            last_text_ai_idx = None
+                            for i in range(len(msgs) - 1, -1, -1):
+                                if _is_text_ai(msgs[i]):
+                                    last_text_ai_idx = i
+                                    break
+
+                            if interrupted_text:
+                                if last_text_ai_idx is None:
+                                    msgs.append(AIMessage(content=interrupted_text))
+                                else:
+                                    # 用用户看见的部分替换，且丢弃后面所有消息（防止泄漏）
+                                    msgs = msgs[:last_text_ai_idx] + [AIMessage(content=interrupted_text)]
+                                return msgs
+
+                            # interrupted_text 为空：用户没看见任何本段 token
+                            # 只移除“末尾的 final answer AIMessage”，避免把 unseen answer 写进上下文；
+                            # 但如果该 AIMessage 后面还有 tool_call（说明它是 pre-tool 文本），就不要删
+                            if last_text_ai_idx is not None:
+                                has_toolcall_after = any(_is_toolcall_ai(m) for m in msgs[last_text_ai_idx + 1 :])
+                                if not has_toolcall_after:
+                                    msgs = msgs[:last_text_ai_idx]
+
+                            return msgs
+
+                        pump_task: Optional[asyncio.Task] = None
+                        cancel_wait_task: Optional[asyncio.Task] = None
+
+                        was_interrupted = False  # 本 turn 是否已经走了“打断收尾”
+
+                        # 阶段 D:注册本轮的 MCode 事件通道。
+                        # 放在 try 之前一刻 —— 这样上面任何一步抛异常,下面的 finally
+                        # 都还管得到(否则这一轮的 sink 会漏给下一轮)。
+                        sess._mcode_event_sink = (
+                            _mcode_event_sink if mcode_adapter is not None else None
+                        )
+
+                        # 阶段 E:注册本轮的 ZCode 事件通道(原始事件在 sink 里补戳
+                        # 成内部事件再入队;与 mcode 的"适配器在队列外"不同,
+                        # zcode 的 stamp 是纯函数,放 sink 里做省一次闭包)。
+                        sess._zcode_event_sink = (
+                            make_zcode_sink(zcode_adapter, _handle_zcode_internal)
+                            if zcode_adapter is not None else None
+                        )
+
+                        try:
+                            async with mcp_sink_context(sink):
+                                pump_task = asyncio.create_task(pump_agent())
+                                cancel_wait_task = asyncio.create_task(sess.cancel_event.wait())
+
+                                while True:
+                                    # 同时等：queue 出事件 或 cancel_event
+                                    get_task = asyncio.create_task(out_q.get())
+                                    done, _ = await asyncio.wait(
+                                        {get_task, cancel_wait_task},
+                                        return_when=asyncio.FIRST_COMPLETED,
+                                    )
+
+                                    # 优先处理队列事件（避免 done/flush 已经在队列里时被 cancel 抢占）
+                                    if get_task in done:
+                                        kind, payload = get_task.result()
+                                    else:
+                                        # cancel_event 触发：不再等 queue
+                                        try:
+                                            get_task.cancel()
+                                            await get_task
+                                        except asyncio.CancelledError:
+                                            debug_traceback_print(app.state.cfg)
+                                            pass
+                                        except Exception:
+                                            debug_traceback_print(app.state.cfg)
+                                            pass
+
+                                        kind, payload = ("agent.cancelled", None)
+
+                                    # ------------------------
+                                    # 1) 处理打断
+                                    # ------------------------
+                                    if kind == "agent.cancelled":
+                                        # 防止重复触发（cancel_event + pump_agent cancelled 都可能来一次）
+                                        if was_interrupted:
+                                            break
+                                        was_interrupted = True
+                                        # 1.1 cancel agent 流（停止继续产出 token/工具）
+                                        if pump_task and (not pump_task.done()):
+                                            pump_task.cancel()
+
+                                        # 1.2 将所有 running 的工具卡片标记为 error
+                                        cancelled_tool_recs: List[Dict[str, Any]] = []
+                                        for tcid, idx in list(sess._tool_history_index.items()):
+                                            rec = sess.history[idx]
+                                            if rec.get("role") == "tool" and rec.get("state") == "running":
+                                                rec.update({
+                                                    "state": "error",
+                                                    "progress": 1.0,
+                                                    "message": "Cancelled by user",
+                                                    "summary": {"cancelled": True},
+                                                })
+                                                cancelled_tool_recs.append(rec)
+
+                                        # 推送 tool.end，确保前端停止 spinner
+                                        for rec in cancelled_tool_recs:
+                                            await emit_turn_event("tool.end", {
+                                                "tool_call_id": rec["tool_call_id"],
+                                                "server": rec["server"],
+                                                "name": rec["name"],
+                                                "is_error": True,
+                                                "summary": rec.get("summary"),
+                                                "source": turn_source,
+                                                "turn_id": turn_id,
+                                            })
+                                        # 1.3 把已输出的 seg_text 写入 history（UI 看到的内容）
+                                        interrupted_text = (seg_text or "").strip()
+                                        if interrupted_text:
+                                            _append_assistant_history(
+                                                sess,
+                                                interrupted_text,
+                                                turn_source=turn_source,
+                                                turn_id=turn_id,
+                                                ts=seg_ts or time.time(),
+                                            )
+
+                                        # 1.4 上下文：只写回“用户真实看到/认可”的消息序列
+                                        cancelled_tool_ids = [rec["tool_call_id"] for rec in cancelled_tool_recs]
+
+                                        commit_msgs = _sanitize_new_messages_on_cancel(
+                                            new_messages,
+                                            interrupted_text=interrupted_text,
+                                            cancelled_tool_ids_from_ui=cancelled_tool_ids,
+                                        )
+
+                                        if commit_msgs:
+                                            sess.lc_messages.extend(commit_msgs)
+                                        elif interrupted_text:
+                                            # 极端情况：updates 没来得及给任何消息，但用户已看到 token
+                                            sess.lc_messages.append(AIMessage(content=interrupted_text))
+
+
+                                        # ★打断：只发 assistant.end，带 interrupted=true
+                                        await emit_turn_event("assistant.end", {
+                                            "text": interrupted_text,
+                                            "interrupted": True,
+                                            "source": turn_source,
+                                            "turn_id": turn_id,
+                                        })
+
+                                        await store.save_session_state(sess)
+                                        sess.cancel_event.clear()
+                                        break
+
+                                    # ------------------------
+                                    # 2) 事件处理
+                                    # ------------------------
+                                    if kind == "mcode.event":
+                                        # 本轮真实 MCode CLI 事件(阶段 D)。
+                                        # 普通模型链路永远不会进这里 —— 它压根不注册事件通道。
+                                        event = payload
+                                        if mcode_adapter is None:
+                                            continue
+                                        try:
+                                            for internal in mcode_adapter.adapt(event):
+                                                await _handle_mcode_internal(internal)
+                                        except Exception as e:  # noqa: BLE001
+                                            logger.warning(
+                                                "处理 mcode 事件失败(忽略): %s", e
+                                            )
+                                        continue
+
+                                    if kind == "zcode.event":
+                                        # 本轮真实 ZCode 事件(阶段 E)。
+                                        # payload 已是补戳后的内部事件(make_zcode_sink)。
+                                        if zcode_adapter is None:
+                                            continue
+                                        try:
+                                            await _handle_zcode_internal(payload)
+                                        except Exception as e:  # noqa: BLE001
+                                            logger.warning(
+                                                "处理 zcode 事件失败(忽略): %s", e
+                                            )
+                                        continue
+
+                                    if kind == "assistant.delta":
+                                        delta = payload or ""
+                                        if delta:
+                                            if seg_ts is None:
+                                                seg_ts = time.time()
+                                            seg_text += delta
+                                            # 阶段 E:带上 source —— 前端据此校验
+                                            # 「这条增量是不是本轮来源的」。
+                                            await emit_turn_event("assistant.delta", {
+                                                "delta": delta,
+                                                "source": turn_source,
+                                                "turn_id": turn_id,
+                                            })
+                                        continue
+
+                                    if kind == "mcp":
+                                        raw = payload
+
+                                        if raw.get("type") == "tool_start":
+                                            await flush_segment(send_flush_event=True)
+
+                                        rec = sess.apply_tool_event(raw)
+                                        if rec:
+                                            if raw["type"] == "tool_start":
+                                                await emit_turn_event("tool.start", {
+                                                    "tool_call_id": rec["tool_call_id"],
+                                                    "server": rec["server"],
+                                                    "name": rec["name"],
+                                                    "args": rec["args"],
+                                                    "source": turn_source,
+                                                    "turn_id": turn_id,
+                                                })
+                                            elif raw["type"] == "tool_progress":
+                                                await emit_turn_event("tool.progress", {
+                                                    "tool_call_id": rec["tool_call_id"],
+                                                    "server": rec["server"],
+                                                    "name": rec["name"],
+                                                    "progress": rec["progress"],
+                                                    "message": rec["message"],
+                                                    "source": turn_source,
+                                                    "turn_id": turn_id,
+                                                })
+                                            elif raw["type"] == "tool_end":
+                                                await emit_turn_event("tool.end", {
+                                                    "tool_call_id": rec["tool_call_id"],
+                                                    "server": rec["server"],
+                                                    "name": rec["name"],
+                                                    "is_error": rec["state"] == "error",
+                                                    "summary": rec["summary"],
+                                                    "source": turn_source,
+                                                    "turn_id": turn_id,
+                                                })
+                                        continue
+
+                                    if kind == "agent.done":
+                                        if turn_source == TURN_SOURCE_MCODE:
+                                            # MCode 的最终正文以 exec.completed.result.output
+                                            # 为权威(设计文档 D-5);增量拼接只作兜底。
+                                            final_text = (mcode_final_text or seg_text or "").strip()
+                                        elif turn_source == TURN_SOURCE_ZCODE:
+                                            # ZCode 的最终正文以结果 JSON response 为权威
+                                            # (阶段 E,附录 A.5);增量拼接只作兜底。
+                                            final_text = (zcode_final_text or seg_text or "").strip()
+                                        else:
+                                            final_text = (seg_text or "").strip()
+
+                                        if final_text:
+                                            _append_assistant_history(
+                                                sess,
+                                                final_text,
+                                                turn_source=turn_source,
+                                                turn_id=turn_id,
+                                                ts=seg_ts or time.time(),
+                                            )
+
+                                        if new_messages:
+                                            sess.lc_messages.extend(new_messages)
+
+                                        if turn_source == TURN_SOURCE_ZCODE:
+                                            # 阶段 E:落 zcode sessionId 映射(下轮 --resume)。
+                                            if _capture_zcode_session_id(sess, new_messages):
+                                                logger.info(
+                                                    "zcode sessionId 映射更新: sid=%s zsess=%s",
+                                                    session_id, sess.zcode_session_id,
+                                                )
+
+                                        await emit_turn_event("assistant.end", {
+                                            "text": final_text,
+                                            "source": turn_source,
+                                            "turn_id": turn_id,
+                                        })
+                                        await store.save_session_state(sess)
+                                        break
+
+                                    if kind == "agent.error":
+                                        err_text = str(payload or "unknown error")
+                                        partial = (seg_text or "").strip()
+
+                                        # 把已输出部分落盘/落上下文（避免丢上下文）
+                                        if partial:
+                                            _append_assistant_history(
+                                                sess,
+                                                partial,
+                                                turn_source=turn_source,
+                                                turn_id=turn_id,
+                                                ts=seg_ts or time.time(),
+                                            )
+                                            sess.lc_messages.append(AIMessage(content=partial))
+
+                                        if new_messages:
+                                            sess.lc_messages.extend(new_messages)
+
+                                        # ★ 真异常：只发 error（并带 partial_text 让前端结束当前气泡）
+                                        await emit_turn_event("error", {
+                                            "message": err_text,
+                                            "partial_text": partial,
+                                            "source": turn_source,
+                                            "turn_id": turn_id,
+                                        })
+                                        await store.save_session_state(sess)
+                                        break
+                        
+                        except WebSocketDisconnect:
+                            return
+                        except asyncio.CancelledError:
+                            # 连接关闭/任务取消：不当作 error
+                            return
+                        except Exception as e:
+                            # 如果已经走了打断收尾，别再发 error（避免“打断=报错”）
+                            if was_interrupted:
+                                return
+                            await emit_turn_event("error", {
+                                "message": f"{type(e).__name__}: {e}",
+                                "partial_text": (seg_text or "").strip(),
+                                "source": turn_source,
+                                "turn_id": turn_id,
+                            })
+                            logger.error(_format_exc(e))
+                            return
+                        finally:
+                            # 阶段 D:本轮结束 —— 注销 MCode 事件通道。
+                            # 不注销的话,下一轮会拿到上一轮的 sink(串台)。
+                            sess._mcode_event_sink = None
+
+                            # 阶段 E:注销 ZCode 事件通道(同款串台防护)。
+                            sess._zcode_event_sink = None
+
+                            # 结束 cancel_wait_task
+                            if cancel_wait_task and (not cancel_wait_task.done()):
+                                cancel_wait_task.cancel()
+
+                            # pump_task 取消/收尾：避免 await 卡死，加一个短超时保护
+                            if pump_task and (not pump_task.done()):
+                                pump_task.cancel()
+                            if pump_task:
+                                try:
+                                    await asyncio.wait_for(pump_task, timeout=2.0)
+                                except asyncio.TimeoutError:
+                                    debug_traceback_print(app.state.cfg)
+                                    pass
+                                except asyncio.CancelledError:
+                                    pass
+                                except Exception:
+                                    debug_traceback_print(app.state.cfg)
+                                    pass
+
+                        # 当前 ws 已断开：turn 已经完整收尾，结束旧 handler，等待前端重连。
+                        if not client_attached:
+                            return
+                finally:
+                    try:
+                        CHAT_TURN_SEM.release()
+                    except Exception:
+                        debug_traceback_print(app.state.cfg)
+                        pass
+
+        except WebSocketDisconnect:
+            return
+    finally:
+        try:
+            WS_CONN_SEM.release()
+        except:
+            pass
