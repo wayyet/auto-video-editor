@@ -20,6 +20,11 @@
    try/except:防 config↔db 循环导入,兼容纯 kit 场景仓库不在 sys.path 上)
 4. ``DEFAULT_POSTGRES_URI``    —— 最后兜底,保证**永远不会返回空 DSN**
 
+选出的 URI 在返回前还要过 :func:`_validate_uri` 形状校验(阶段 E-T1,§10.1 D6):
+scheme / host / database / port 非法时**启动前**报明确配置错误,而不是等
+psycopg 连接时才报含混的失败。错误信息**不回显 URI 原文**(无效 URI 里也可能
+夹着凭据,原样进异常就是泄漏)。
+
 循环导入约束(重要)
 --------------------
 根 ``config.py`` 会在导入时调用 :func:`resolve_postgres_target`(B-T3),因此
@@ -73,6 +78,40 @@ def _non_empty_env(name: str) -> Optional[str]:
     return value or None
 
 
+def _validate_uri(uri: str, source: str) -> None:
+    """形状校验(阶段 E-T1,§10.1 D6):scheme / host / database / port 非法就报错。
+
+    在**返回解析结果之前**调用 —— 主图与 worker 拿到的 DSN 必然已过校验,
+    配置错误在启动时暴露,而不是拖到 psycopg 连接时才报含混的失败。
+
+    错误信息**不回显 URI 原文**:无效 URI 里也可能夹着凭据,原样进异常/日志
+    就是泄漏;只报来源标签和缺了什么。
+    """
+    parts = urlsplit(uri)
+    if parts.scheme.lower() not in ("postgres", "postgresql"):
+        raise ValueError(
+            f"Postgres DSN 无效(来源 {source}):scheme 必须是 postgres/postgresql,"
+            f"实际是 {parts.scheme!r}。请检查 DSN 环境变量(诊断不回显原文,防凭据泄漏)。"
+        )
+    if not parts.hostname:
+        raise ValueError(
+            f"Postgres DSN 无效(来源 {source}):缺少 host。"
+            "请检查 DSN 环境变量(诊断不回显原文,防凭据泄漏)。"
+        )
+    if not (parts.path or "").lstrip("/"):
+        raise ValueError(
+            f"Postgres DSN 无效(来源 {source}):缺少 database。"
+            "请检查 DSN 环境变量(诊断不回显原文,防凭据泄漏)。"
+        )
+    try:
+        parts.port  # noqa: B018 — 属性访问即校验;非法端口在此抛 ValueError
+    except ValueError:
+        raise ValueError(
+            f"Postgres DSN 无效(来源 {source}):port 不是合法数字。"
+            "请检查 DSN 环境变量(诊断不回显原文,防凭据泄漏)。"
+        ) from None
+
+
 def resolve_postgres_target() -> PostgresTarget:
     """解析实际使用的 Postgres DSN 与来源(主图与 worker 共用,阶段 B-T1)。
 
@@ -85,6 +124,8 @@ def resolve_postgres_target() -> PostgresTarget:
     Raises:
         RuntimeError: ``APP_ENV=production`` 且设置了 ``AGENT_GATE_POSTGRES_URI``
             (B-T4:生产环境禁止测试隔离变量,直接报配置错误而不是静默连错库)。
+        ValueError: 选出的 DSN 形状非法(缺 scheme / host / database,或 port
+            非法;阶段 E-T1,§10.1 D6 —— 启动前报配置错误)。
     """
     agent_gate_uri = _non_empty_env("AGENT_GATE_POSTGRES_URI")
     app_env = (_non_empty_env("APP_ENV") or "").lower()
@@ -98,21 +139,26 @@ def resolve_postgres_target() -> PostgresTarget:
         )
 
     if agent_gate_uri:
-        return PostgresTarget(uri=agent_gate_uri, source="env:AGENT_GATE_POSTGRES_URI")
+        uri, source = agent_gate_uri, "env:AGENT_GATE_POSTGRES_URI"
+    else:
+        prod_uri = _non_empty_env("POSTGRES_URI")
+        if prod_uri:
+            uri, source = prod_uri, "env:POSTGRES_URI"
+        else:
+            uri, source = "", "runner.DEFAULT_POSTGRES_URI"
+            try:
+                from config import POSTGRES_URI as _cfg_uri
 
-    prod_uri = _non_empty_env("POSTGRES_URI")
-    if prod_uri:
-        return PostgresTarget(uri=prod_uri, source="env:POSTGRES_URI")
+                value = str(_cfg_uri or "").strip()
+                if value:
+                    uri, source = value, "config.POSTGRES_URI"
+            except Exception:  # noqa: BLE001 — 纯 kit 场景 + config 半初始化(防循环导入)
+                pass
+            if not uri:
+                uri, source = DEFAULT_POSTGRES_URI, "runner.DEFAULT_POSTGRES_URI"
 
-    try:
-        from config import POSTGRES_URI as _cfg_uri
-
-        value = str(_cfg_uri or "").strip()
-        if value:
-            return PostgresTarget(uri=value, source="config.POSTGRES_URI")
-    except Exception:  # noqa: BLE001 — 纯 kit 场景 + config 半初始化(防循环导入)
-        pass
-    return PostgresTarget(uri=DEFAULT_POSTGRES_URI, source="runner.DEFAULT_POSTGRES_URI")
+    _validate_uri(uri, source)
+    return PostgresTarget(uri=uri, source=source)
 
 
 def describe_postgres_target(target: Optional[PostgresTarget] = None) -> dict[str, Any]:

@@ -10,6 +10,9 @@
          任何 ``Start-Process`` 之前,且 ``AGENT_GATE_POSTGRES_URI`` 被备份并清除
 
 T8–T10 依赖真实部署,在执行设计阶段 E 回填,不在本文件覆盖。
+阶段 E 补齐(§10.3):G4 数据库不可达快速失败(有限超时 + 明确诊断)、
+G8 生产环境测试库变量泄漏在**连接前**拒绝;DSN 形状与 APP_ENV 防护的
+解析器级矩阵(D1–D8)在 ``tests/unit/test_postgres_config.py``。
 """
 
 from __future__ import annotations
@@ -346,3 +349,48 @@ def test_production_script_parses_cleanly_under_pwsh():
          "if($err.Count){$err|ForEach-Object{$_.Message};exit 1}else{exit 0}"],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     assert r.returncode == 0, (r.stdout or "") + (r.stderr or "")
+
+
+# ---------------------------------------------------------------------------
+# 阶段 E 补齐(§10.3):G8 生产泄漏拒绝 / G4 数据库不可达快速失败
+# ---------------------------------------------------------------------------
+
+def test_g8_production_leak_refused_before_connect(monkeypatch):
+    """G8:``APP_ENV=production`` 下测试库变量泄漏 → worker 在**连接前**拒绝启动。"""
+    monkeypatch.delenv(ENV_AGENT, raising=False)
+    monkeypatch.delenv("POSTGRES_URI", raising=False)
+    monkeypatch.delenv("AGENT_GATE_CKPT_BACKEND", raising=False)
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv(ENV_AGENT, GOOD_URI)
+
+    from agent_gate.runner import make_checkpointer
+
+    # 解析器的生产防护(RuntimeError)直接穿透 make_checkpointer ——
+    # 不发起到任何数据库的连接。
+    with pytest.raises(RuntimeError) as ei:
+        make_checkpointer("g8-probe")
+    assert "AGENT_GATE_POSTGRES_URI" in str(ei.value)
+    assert "s3cret" not in str(ei.value)  # 错误信息不回显 DSN
+
+
+def test_g4_unreachable_postgres_fails_fast_with_diagnosis(monkeypatch):
+    """G4:数据库不可达 → 有限时间内失败,错误可定位,状态不会停在 starting。"""
+    monkeypatch.delenv(ENV_AGENT, raising=False)
+    monkeypatch.delenv("AGENT_GATE_CKPT_BACKEND", raising=False)
+    monkeypatch.setenv("APP_ENV", "development")
+    # 关闭端口(127.0.0.1:9 discard 无监听)→ 连接被立刻拒绝,失败≤连接超时
+    monkeypatch.setenv("POSTGRES_URI", "postgresql://postgres:devpass@127.0.0.1:9/g4probe")
+    monkeypatch.setenv("POSTGRES_CONNECT_TIMEOUT", "2")
+
+    from agent_gate.runner import make_checkpointer
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeError) as ei:
+        make_checkpointer("g4-probe")
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 30, f"不可达数据库应快速失败,实际耗时 {elapsed:.1f}s"
+    msg = str(ei.value)
+    assert "Postgres checkpointer 连接失败" in msg
+    assert "g4-probe" in msg            # thread_id 进了错误信息(定位线索)
+    assert "s3cret" not in msg and "devpass" not in msg  # 不回显密码
