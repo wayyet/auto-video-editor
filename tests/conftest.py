@@ -96,3 +96,16 @@ def _no_wait_for_manual_import_button(monkeypatch):
 
     monkeypatch.setattr(_config, "IMPORT_VIDEO_WAIT_TIMEOUT_S", 0)
     monkeypatch.setattr(_config, "IMPORT_VIDEO_POLL_INTERVAL_S", 0.0)
+
+
+# ---------------------------------------------------------------------------
+# 2026-10 human 模式融合:默认关,且不受开发者本机 STORYLINE_HUMAN_FUSION /
+# STORYLINE_FUSION_DISABLE 环境变量影响。需要开启的用例在用例内再 monkeypatch
+# 一次即可(后执行的 setattr 生效)。
+# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _fusion_off_by_default(monkeypatch):
+    import config as _config
+
+    monkeypatch.setattr(_config, "STORYLINE_HUMAN_FUSION", False)
+    monkeypatch.setattr(_config, "STORYLINE_FUSION_DISABLE", frozenset())

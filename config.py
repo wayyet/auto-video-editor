@@ -308,6 +308,23 @@ if STORYLINE_MODE not in ("human", "auto"):
         f"STORYLINE_MODE 必须是 'human' 或 'auto',当前 {STORYLINE_MODE!r}"
     )
 
+# ---------------------------------------------------------------------------
+# human 模式融合:auto 的 21 个 storyline 节点以"侧支"并入 human 主图
+# ---------------------------------------------------------------------------
+# - ``STORYLINE_HUMAN_FUSION``:默认关闭。只在 ``STORYLINE_MODE=human`` 时生效;
+#   **构图时**读取(与 ``ASSEMBLY_QC_GATE_ENABLED`` 同一惯例,改完需重新 build_graph)。
+#   关闭时图拓扑与改动前逐边一致。
+# - ``STORYLINE_FUSION_DISABLE``:逗号分隔的节点名,运行时跳过(例如
+#   ``storyline_local_asr,storyline_render_video``),用来单独关掉某个慢节点。
+STORYLINE_HUMAN_FUSION: bool = (
+    os.environ.get("STORYLINE_HUMAN_FUSION", "0").lower().strip() in ("1", "true", "yes")
+)
+STORYLINE_FUSION_DISABLE: frozenset = frozenset(
+    s.strip()
+    for s in os.environ.get("STORYLINE_FUSION_DISABLE", "").split(",")
+    if s.strip()
+)
+
 
 # ---------------------------------------------------------------------------
 # Phase 4 render_video 冒烟测试旁支(对应 plan_v4 §5 阶段 6 / ADR-006)

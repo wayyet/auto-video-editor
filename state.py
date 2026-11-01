@@ -251,6 +251,10 @@ class WorkflowState(TypedDict, total=False):
     storyline_ai_transition_artifact: Annotated[Optional[str], _last_wins]    # generate_ai_transition(ADR-005 默认关闭)
     storyline_web_topic_artifact: Annotated[Optional[str], _last_wins]        # search_web_topic(条件)
     storyline_render_smoke_test_path: Annotated[Optional[str], _last_wins]    # render_video(旁支)
+    # human 模式融合专用键(只写新键,不覆盖 human 主图已有字段):
+    storyline_search_media_artifact: Annotated[Optional[str], _last_wins]     # search_media(不覆盖 storyline_media_artifact)
+    storyline_timeline_plan_ai: Annotated[Optional[str], _last_wins]          # plan_timeline_ai_transition(不覆盖 storyline_timeline_plan)
+    storyline_auto_plan: Annotated[Optional[dict], _last_wins]                # storyline_join(不覆盖 storyline_plan)
     storyline_qa_retry_count: NotRequired[int]            # qa_gate 唯一写入者(无需 reducer)
     # storyline_targets:{ target_duration_ms, ratio, ... },qa_gate 用
     storyline_targets: NotRequired[Optional[dict]]
