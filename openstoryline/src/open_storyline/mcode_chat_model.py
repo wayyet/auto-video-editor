@@ -18,6 +18,10 @@ OpenStoryline 的 agent loop 需要一个 ChatModel。本模块让「本机已�
   绝不偷偷换成别的模型。
 * **素材路径不由模型拼**。素材绝对路径只来自服务端生成并校验过的清单。
 * **取消 mcode ≠ 取消 LangGraph worker**。worker 侧的任务可能还在信箱里跑着。
+* **子进程环境是构造时快照**(阶段 D,执行设计 §6.7)。同步 / 异步 / 能力探测 /
+  流式四个子进程创建点全部显式传 ``env``,值是 :class:`MCodeChatModel`
+  **构造瞬间**定格的受控快照 —— 之后全局环境再怎么变,子进程拿到的都是同一份。
+  mcode 再往下拉起的 MCP / worker 因此继承同一套配置(含 ``POSTGRES_URI``)。
 * **lightweight 模式会忽略追加的系统提示**。本机实测:``--mode lightweight`` 下
   ``--append-system-prompt-file`` 里的内容**不生效**(standard 才生效)。
   所以 lightweight 下桥接说明会**同时**拼进 user prompt,保证规则真送到模型眼前。
@@ -42,7 +46,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Mapping,
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
-from pydantic import ConfigDict, Field, PrivateAttr
+from pydantic import ConfigDict, Field, PrivateAttr, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -448,6 +452,36 @@ def _agent_bin_module():
 
 
 # --------------------------------------------------------------------------
+# 子进程受控环境快照(阶段 D-T1,执行设计 §6.7)
+# --------------------------------------------------------------------------
+
+#: Windows 下 mcode 子进程(Node 运行时 / ``.cmd`` shim)必需的基础环境变量。
+#: 缺 ``SYSTEMROOT`` / ``TEMP`` 会出现「子进程起不来」或临时文件、DLL 解析类的
+#: 隐性故障;缺 ``PATH`` 连 shim 里的解释器都解析不到。
+BASE_ENV_KEYS: tuple = ("PATH", "SYSTEMROOT", "TEMP", "TMP", "USERPROFILE")
+
+
+def build_process_env(base: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
+    """构造 mcode 子进程的**受控环境快照**(阶段 D-T1)。
+
+    * ``base`` 缺省 = 对当前进程环境 ``dict(os.environ)`` 拍快照;
+    * 显式传入(测试 / 容器注入)时,缺失的基础变量从当前进程环境补齐;
+    * 返回**新字典**,改动它不影响全局环境。
+
+    运行期全局环境再怎么变,这份快照都不再跟着变 —— 每一轮 turn 的子进程
+    拿到的都是同一份环境(2026-10-31 worker ``no password supplied`` 故障的
+    链路级修复:环境契约从「隐式继承 + 逐 turn 重读」改成「构造时定格 + 显式传递」)。
+    """
+    env = dict(base) if base is not None else dict(os.environ)
+    for key in BASE_ENV_KEYS:
+        if not env.get(key):
+            inherited = os.environ.get(key)
+            if inherited:
+                env[key] = inherited
+    return env
+
+
+# --------------------------------------------------------------------------
 # 进程树清理
 # --------------------------------------------------------------------------
 
@@ -624,6 +658,12 @@ class MCodeChatModel(BaseChatModel):
     media_manifest: List[Dict[str, Any]] = Field(default_factory=list)
     extra_args: List[str] = Field(default_factory=list)
 
+    #: 显式指定的子进程环境(阶段 D-T1)。``None`` = 构造时对当前进程环境拍快照;
+    #: 给了就以此为基础,缺失的 Windows 基础变量自动补齐(见 :func:`build_process_env`)。
+    #: 一般**不需要**设置 —— 留 None 让模型自己在构造时定格,保证「构造后全局
+    #: 环境再怎么变,子进程拿到的都是同一份」。测试 / 容器注入才显式传。
+    process_env: Optional[Dict[str, str]] = None
+
     #: 流式传输方式:``auto`` / ``stream_json`` / ``final_json``。
     streaming_transport: str = TRANSPORT_AUTO
 
@@ -634,6 +674,21 @@ class MCodeChatModel(BaseChatModel):
 
     #: CLI 是否支持 ``stream-json``(探测结果,按实例缓存)。
     _stream_json_supported: Optional[bool] = PrivateAttr(default=None)
+
+    #: 解析后的子进程环境快照(:func:`build_process_env` 的产物)。
+    #: 在**构造时**定格(见 :meth:`_resolve_process_env`),四个子进程创建点共用。
+    _env_snapshot: Dict[str, str] = PrivateAttr(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _resolve_process_env(self) -> "MCodeChatModel":
+        """阶段 D-T1:构造时把子进程环境定格成快照。
+
+        之所以在构造时而不是每轮 turn 时取环境:agent 按 session 缓存模型实例,
+        构造点靠近 Web 进程启动(Phase C 已保证此时 ``POSTGRES_URI`` 等生产配置
+        已注入);逐 turn 重读全局环境会把「运行中途的环境漂移」漏给子进程。
+        """
+        self._env_snapshot = build_process_env(self.process_env)
+        return self
 
     #: 本轮是不是因为 CLI 不支持而降级了(前端据此提示「非实时流」)。
     _transport_degraded: bool = PrivateAttr(default=False)
@@ -809,6 +864,7 @@ class MCodeChatModel(BaseChatModel):
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     cwd=self.cwd or None,
+                    env=self._env_snapshot,  # 阶段 D-T2:显式传受控快照
                     **_spawn_kwargs(),
                 )
             except FileNotFoundError as exc:
@@ -921,6 +977,7 @@ class MCodeChatModel(BaseChatModel):
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=self.cwd or None,
+                    env=self._env_snapshot,  # 阶段 D-T2:显式传受控快照
                     **_spawn_kwargs(),
                 )
             except FileNotFoundError as exc:
@@ -1070,6 +1127,7 @@ class MCodeChatModel(BaseChatModel):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
                 cwd=self.cwd or None,
+                env=self._env_snapshot,  # 阶段 D-T2:探测也用同一份快照
                 **_spawn_kwargs(),
             )
         except (OSError, ValueError) as exc:
@@ -1216,6 +1274,7 @@ class MCodeChatModel(BaseChatModel):
             runner = MCodeRunner(
                 cmd,
                 cwd=self.cwd or None,
+                env=self._env_snapshot,  # 阶段 D-T2:流式路径同一份快照
                 stdin_text=prompt,
                 timeout_s=float(self.timeout_s),
             )
