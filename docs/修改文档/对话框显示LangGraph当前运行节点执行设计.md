@@ -747,9 +747,9 @@ Assistant 正文
 | 阶段 1 | 关联数据层 | State 字段 + `workflow_chat_links` 迁移 + Store | P0 | 已完成(2026-11-03) |
 | 阶段 2 | runner 关联写入 | 统一入口维护关联（Web + CLI 透传） | P0 | 已完成(2026-11-03) |
 | 阶段 3 | 关联查询接口 | `GET /api/workflow/chat-sessions/{id}/run` | P0 | 已完成(2026-11-03) |
-| 阶段 4 | 前端节点追踪模块 | `workflow_chat_indicator.mjs` | P0 | 未开始 |
-| 阶段 5 | 对话区 UI | 组件挂接 + 大字号样式 | P0 | 未开始 |
-| 阶段 6 | 回归与验收 | TC-01～TC-17 全过 | P0 | 未开始 |
+| 阶段 4 | 前端节点追踪模块 | `workflow_chat_indicator.mjs` | P0 | 已完成(2026-11-03) |
+| 阶段 5 | 对话区 UI | 组件挂接 + 大字号样式 | P0 | 已完成(2026-11-03) |
+| 阶段 6 | 回归与验收 | TC-01～TC-17 全过 | P0 | 已完成(2026-11-03) |
 
 ### 10.3 全局约束与红线
 
@@ -825,39 +825,39 @@ Assistant 正文
 
 前置条件：阶段 3 通过。
 
-- [ ] 4.1 新增 `web/static/workflow_chat_indicator.mjs`（§6.3 职责清单）。
-- [ ] 4.2 复用 `workflow_monitor.mjs` 既有导出：`createMonitorState`（:85）、`applyEvent`（:121）、`activeNodeIds`（:250）、`deriveRunState`（:315）、`API_PATHS`（:56）；不重建状态机。
-- [ ] 4.3 读取 `GET /api/workflow/graph` 建立 `node_id -> name` 映射；Schema 缓存 key 含 `workflow_id / mode / schema_version`（对齐 `mainLayoutKey` :71 口径）。
-- [ ] 4.4 SSE 订阅 `API_PATHS.runEvents(threadId)`；事件类型清单见 §6.4；`applied=false` 不更新 UI；`lastEventId` 组装参照 node_map.html:1664。
-- [ ] 4.5 显示数据生成：单节点 / 并行多节点 / 重试 / 等待输入 / 终态 / 暂不可用（§6.5 规则表）。
-- [ ] 4.6 生命周期实现（§6.6）：页面加载回放、`assistant.start` 刷新关联、有限间隔重试、thread 切换先关旧 EventSource、会话切换清空。
-- [ ] 4.7 前端逻辑测试：node→name 映射、归约、并行渲染数据、`Last-Event-ID` 去重、断线重连、503、会话切换、新旧工作流替换。
+- [x] 4.1 新增 `web/static/workflow_chat_indicator.mjs`（§6.3 职责清单）。
+- [x] 4.2 复用 `workflow_monitor.mjs` 既有导出：`createMonitorState`（:85）、`applyEvent`（:121）、`activeNodeIds`（:250）、`deriveRunState`（:315）、`API_PATHS`（:56）；不重建状态机。（静态 import 相对路径,与 node_map 共享同一模块实例）
+- [x] 4.3 读取 `GET /api/workflow/graph` 建立 `node_id -> name` 映射；Schema 缓存 key 含 `workflow_id / mode / schema_version`（对齐 `mainLayoutKey` :71 口径）。（`graphSchemaKey` + 代际守卫作废在途拉取）
+- [x] 4.4 SSE 订阅 `API_PATHS.runEvents(threadId)`；事件类型清单见 §6.4；`applied=false` 不更新 UI；`lastEventId` 组装参照 node_map.html:1664。
+- [x] 4.5 显示数据生成：单节点 / 并行多节点 / 重试 / 等待输入 / 终态 / 暂不可用（§6.5 规则表）。（纯函数 `deriveIndicatorView`;零事件时用关联表 status 兜底）
+- [x] 4.6 生命周期实现（§6.6）：页面加载回放、`assistant.start` 刷新关联、有限间隔重试、thread 切换先关旧 EventSource、会话切换清空。
+- [x] 4.7 前端逻辑测试：node→name 映射、归约、并行渲染数据、`Last-Event-ID` 去重、断线重连、503、会话切换、新旧工作流替换。（`web/tests/workflow_chat_indicator.test.mjs` 23 用例 + pytest 包装 `tests_openstoryline/test_workflow_chat_indicator_frontend.py`）
 
-**阶段门：** 浏览器能持续接收当前会话关联工作流的节点变化；事件不重复消费、状态不倒退。
+**阶段门：** 浏览器能持续接收当前会话关联工作流的节点变化；事件不重复消费、状态不倒退。（2026-11-03 通过：Node 单测 23 用例全绿;真机 7861 实例 SSE 连续消费验证）
 
 #### 阶段 5：对话区 UI
 
 前置条件：阶段 4 通过。
 
-- [ ] 5.1 `web/static/app.js`：组件挂接稳定的 Assistant turn 容器（`startAssistantMessage` :1345 生命周期内），一轮只建一个组件；`flushAssistantSegment`（:1434）与 Markdown 重渲染不得清除或重复插入。
-- [ ] 5.2 `web/static/style.css`：落地 §6.2 样式（26px / 900 字重 / 黑体族 / 并行逐行 / 长名换行 / 响应式）。
-- [ ] 5.3 位置验收点：MCode 面板后、Assistant 正文前；与正文、MCode 面板容器互不嵌套。
-- [ ] 5.4 会话切换：关闭旧 SSE、清空旧节点状态、取消旧查询任务。
-- [ ] 5.5 终态与异常显示：完成 / 失败 / 等待 / 暂不可用（§6.5）。
-- [ ] 5.6 无关联会话隐藏组件，普通聊天零影响。
+- [x] 5.1 `web/static/app.js`：组件挂接稳定的 Assistant turn 容器（`startAssistantMessage` :1345 生命周期内），一轮只建一个组件；`flushAssistantSegment`（:1434）与 Markdown 重渲染不得清除或重复插入。（组件行由模块自管,turn 开始时 force 定位到锚点前;轮内仅脱离 DOM 时重挂,不随分段跳动）
+- [x] 5.2 `web/static/style.css`：落地 §6.2 样式（26px / 900 字重 / 黑体族 / 并行逐行 / 长名换行 / 响应式）。（颜色全走 `--text`/`--muted`/`--warning-accent` 主题变量,深浅色自适应）
+- [x] 5.3 位置验收点：MCode 面板后、Assistant 正文前；与正文、MCode 面板容器互不嵌套。（组件行为独立 `.msg.assistant.workflow-node-msg`,插入 `currentAssistant.wrapEl` 之前）
+- [x] 5.4 会话切换：关闭旧 SSE、清空旧节点状态、取消旧查询任务。（`_applySnapshotMeta` 挂 `onSessionChanged`,teardown 先行）
+- [x] 5.5 终态与异常显示：完成 / 失败 / 等待 / 暂不可用（§6.5）。
+- [x] 5.6 无关联会话隐藏组件，普通聊天零影响。（挂接点共 6 处：构造、`_applySnapshotMeta`、`_syncStreamingStateFromSnapshot`、`assistant.start/end`、`chat.cleared`、`_applySnapshotToCurrentSession`）
 
-**阶段门：** §11.2 视觉验收逐项通过；普通聊天与 MCode / ZCode 面板回归不受影响。
+**阶段门：** §11.2 视觉验收逐项通过；普通聊天与 MCode / ZCode 面板回归不受影响。（2026-11-03 通过:截图核验大字/逐行/重试点线/近黑;wiring 29 用例回归全绿）
 
 #### 阶段 6：回归与验收
 
 前置条件：阶段 5 通过。
 
-- [ ] 6.1 功能验收 TC-01～TC-17 全部通过（§11.1）。
-- [ ] 6.2 兼容性验收（§11.3）：老 checkpoint、CLI 不传参、旧 `POST /runs` 调用、Node Map 页面不受影响。
-- [ ] 6.3 全量回归：`tests/unit` + `tests/integration` 相关套件无新增失败。
-- [ ] 6.4 文档收尾：勾选本节任务，补 §10.7 执行记录。
+- [x] 6.1 功能验收 TC-01～TC-17 全部通过（§11.1）。（真机 7861 验收实例 + 合成事件走 TC-01～11/13/17 及 §5.3 降级;TC-12/15/16 由 Node 单测覆盖;TC-14 定位由单测钉死,面板容器独立于组件行）
+- [x] 6.2 兼容性验收（§11.3）：老 checkpoint、CLI 不传参、旧 `POST /runs` 调用、Node Map 页面不受影响。（本阶段零后端改动,阶段 0-3 兼容用例回归全绿;`workflow_monitor.mjs`/`node_map.html` 未动）
+- [x] 6.3 全量回归：`tests/unit` + `tests/integration` 相关套件无新增失败。（tests/unit 全量 21 个失败经 stash 基线对照确认为存量问题,与本特性无关;特性相关 53 + 集成 10 + wiring 29 + 前端 Node 77 全绿）
+- [x] 6.4 文档收尾：勾选本节任务，补 §10.7 执行记录。
 
-**阶段门：** 全部通过才视为交付（§14）；未全过不合入主线。
+**阶段门：** 全部通过才视为交付（§14）；未全过不合入主线。（2026-11-03 通过）
 
 ### 10.5 提交拆分建议
 
@@ -882,6 +882,9 @@ Assistant 正文
 | 2026-11-03 | 阶段 1 | 通过 | 迁移 005 已应用开发库并经 psql 核对（PK/CHECK/FK/索引）；`test_workflow_chat_link_store.py` 25 passed |
 | 2026-11-03 | 阶段 2 | 通过 | runner 关联维护 + Web/CLI 双入口透传；`test_workflow_runner_chat_link.py`（5）+ `test_workflow_chat_link.py`（9，六场景）全绿 |
 | 2026-11-03 | 阶段 3 | 通过 | `GET /chat-sessions/{id}/run` 上线（只读）；`test_api_workflow_chat_link.py`（6，四类+跨源）全绿；合计新增 48 用例全绿 |
+| 2026-11-03 | 阶段 4 | 通过 | `workflow_chat_indicator.mjs` 上线（纯逻辑 deriveIndicatorView + 副作用层可注入）；Node 单测 23 用例全绿（`web/tests/workflow_chat_indicator.test.mjs` + pytest 包装） |
+| 2026-11-03 | 阶段 5 | 通过 | app.js 六处挂接（构造/快照元/turn 活动/turn 起止/清空重挂）+ style.css 主题变量化大字样式 + index.html 版本号穿透；wiring 29 用例回归全绿 |
+| 2026-11-03 | 阶段 6 | 通过 | 真机 7861 验收实例 + 合成事件（tc-node-indicator-* 线程,验后清理）：TC-01～11/13/17 及 node_id 降级逐项通过,截图核验 §11.2;tests/unit 全量无新增失败（21 个失败经 stash 基线确认为存量）;集成 10 + 特性相关 53 + 前端 Node 77 全绿 |
 
 ---
 
