@@ -191,7 +191,7 @@ if ($null -ne $latestPidFile) {
             # 外部复用:两条路径都不执行
             $skipWebCmdFallback = $true
             $ownershipState = 'reused'
-            Write-Phase "  读 PID 文件:{0}" -f $latestPidFile.Name
+            Write-Phase ("  读 PID 文件:{0}" -f $latestPidFile.Name)
             Write-Phase "  PID 文件标记为 reused(端口复用)—— 复用的 Web 保留不动,需要手动停止" 'Yellow'
         } elseif ($null -ne $prev) {
             $ownershipState = 'owned'

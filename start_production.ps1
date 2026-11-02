@@ -673,10 +673,17 @@ try {
 
             Write-Phase "  启动 Web 服务(uvicorn agent_fastapi:app --host 127.0.0.1 --port $OsWebPort)..."
             $webBatPath = Join-Path $env:TEMP "openstoryline_web_${Timestamp}.bat"
+            # bat 以纯 ASCII 落盘(规避 cmd 代码页差异),因此内容里不能出现任何非
+            # ASCII 字符:仓库路径含中文(如 "…\开发代码\…")时,绝对路径会被编码成
+            # "???",cmd 解析不了 → python 起不来、重定向目标非法 → 连日志文件都
+            # 建不出来(2026-11-03 启动失败根因)。bat 由下方 -WorkingDirectory
+            # $RepoRoot 启动,故 python 与日志一律写相对路径(随常量自动推导)。
+            $osVenvPyRel = $OsVenvPy.Substring($RepoRoot.Length).TrimStart('\')
+            $osWebLogRel = $OsWebLog.Substring($RepoRoot.Length).TrimStart('\')
             $webBatContent = @"
 @echo off
 set PYTHONUNBUFFERED=1
-"$OsVenvPy" -m uvicorn agent_fastapi:app --host 127.0.0.1 --port $OsWebPort 1> "$OsWebLog" 2>&1
+"$osVenvPyRel" -m uvicorn agent_fastapi:app --host 127.0.0.1 --port $OsWebPort 1> "$osWebLogRel" 2>&1
 "@
             [System.IO.File]::WriteAllText($webBatPath, $webBatContent, [System.Text.Encoding]::ASCII)
             $webProc = Start-Process `
@@ -697,7 +704,7 @@ set PYTHONUNBUFFERED=1
                 } catch { }
             }
             if ($null -eq $webPyPid) {
-                Write-PhaseWarn "未在 8s 内抓到 python.exe 子进程,先用 cmd.exe PID={0} 兜底" -f $webProc.Id
+                Write-PhaseWarn ("未在 8s 内抓到 python.exe 子进程,先用 cmd.exe PID={0} 兜底" -f $webProc.Id)
                 $webPyPid = $webProc.Id
             }
             Write-Phase ("  Web cmd PID={0} -> python PID={1}" -f $webProc.Id, $webPyPid)
@@ -730,7 +737,7 @@ set PYTHONUNBUFFERED=1
             if (-not $osPidReused) {
                 $webAlive = ($null -ne (Get-Process -Id $webPyPid -ErrorAction SilentlyContinue))
                 if (-not $webAlive) {
-                    Write-PhaseErr "Web 进程 (PID={0}) 已退出,日志尾:" -f $webPyPid
+                    Write-PhaseErr ("Web 进程 (PID={0}) 已退出,日志尾:" -f $webPyPid)
                     if (Test-Path $OsWebLog) {
                         Get-Content $OsWebLog -Tail 80 -ErrorAction SilentlyContinue |
                             ForEach-Object { Write-Phase ("    $_") }
