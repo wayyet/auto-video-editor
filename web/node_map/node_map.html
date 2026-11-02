@@ -25,6 +25,71 @@
       --st-retry:#f97316;    /* 重试中:橙 */
       --st-fail:#ef4444;     /* 失败:红 */
       --st-skip:#525252;     /* 跳过/未参与:灰 */
+      /* 硬编码深色收敛(主题切换用) */
+      --topbar-bg: linear-gradient(to bottom, #121212, #0f0f0f);
+      --runbar-bg:#131313;
+      --input-bg:#0f0f0f;
+      --chip-bg:#141414;
+      --hover-border:#3a3a3a;
+      --hover-bg:#141414;
+      --kv-bg:#121212;
+      --table-row-border:#242424;
+      --dot-bg:#242424;
+      --skip-bg:#2a2a2a;
+      --skip-border:#3f3f3f;
+      --section-dash:#2e2e2e;
+      --node-drag-border:#4a4a4a;
+      --offline-border:#333;
+      --err-text:#fca5a5;
+      --err-border:#7f1d1d;
+      --err-bg:#1c1212;
+      --wait-text:#fcd34d;
+      --wait-border:#78350f;
+      --wait-bg:#1b1408;
+      --chip-run-text:#93c5fd;
+      --chip-wait-text:#fcd34d;
+      --chip-done-text:#86efac;
+      --chip-fail-text:#fca5a5;
+      --edge-traversed:#4ade80;
+      --edge-active:#38bdf8;
+    }
+    /* 浅色主题:html[data-theme="light"] 时整体覆盖(默认深色保持现状) */
+    html[data-theme="light"]{
+      --bg:#ffffff;
+      --panel:#ffffff;
+      --panel2:#f5f5f5;
+      --text:#1a1a1a;
+      --muted:#525252;
+      --border:#d4d4d4;
+      --edge:#6b7280;
+      --edge-muted:#d4d4d4;
+      --shadow: 0 10px 30px rgba(0,0,0,.12);
+      --topbar-bg: linear-gradient(to bottom, #ffffff, #fafafa);
+      --runbar-bg:#f5f5f5;
+      --input-bg:#ffffff;
+      --chip-bg:#f5f5f5;
+      --hover-border:#a3a3a3;
+      --hover-bg:#f0f0f0;
+      --kv-bg:#f5f5f5;
+      --table-row-border:#e5e5e5;
+      --dot-bg:#e5e5e5;
+      --skip-bg:#e5e5e5;
+      --skip-border:#a3a3a3;
+      --section-dash:#d4d4d4;
+      --node-drag-border:#8a8a8a;
+      --offline-border:#b3b3b3;
+      --err-text:#b91c1c;
+      --err-border:#fecaca;
+      --err-bg:#fef2f2;
+      --wait-text:#92400e;
+      --wait-border:#fde68a;
+      --wait-bg:#fffbeb;
+      --chip-run-text:#1d4ed8;
+      --chip-wait-text:#92400e;
+      --chip-done-text:#15803d;
+      --chip-fail-text:#b91c1c;
+      --edge-traversed:#16a34a;
+      --edge-active:#0284c7;
     }
     *{ box-sizing:border-box; }
     html,body{ height:100%; }
@@ -44,7 +109,7 @@
       justify-content:space-between;
       padding:0 14px;
       border-bottom:1px solid var(--border);
-      background:linear-gradient(to bottom, #121212, #0f0f0f);
+      background:var(--topbar-bg);
     }
     #titleBlock{
       display:flex;
@@ -86,7 +151,7 @@
       transition:transform .05s ease, border-color .2s ease, background .2s ease;
       user-select:none;
     }
-    .btn:hover{ border-color:#3a3a3a; background:#141414; }
+    .btn:hover{ border-color:var(--hover-border); background:var(--hover-bg); }
     .btn:active{ transform: translateY(1px); }
     select.btn{ padding:7px 8px; }
     .sep{ width:1px; height:20px; background:var(--border); margin:0 2px; }
@@ -106,14 +171,14 @@
       gap:10px;
       padding:0 14px;
       border-bottom:1px solid var(--border);
-      background:#131313;
+      background:var(--runbar-bg);
       font-size:12px;
       overflow:hidden;
       white-space:nowrap;
     }
     #runbar .rlabel{ color:var(--muted); }
     #threadInput{
-      background:#0f0f0f;
+      background:var(--input-bg);
       border:1px solid var(--border);
       color:var(--text);
       border-radius:8px;
@@ -122,24 +187,24 @@
       font-family:var(--mono);
       width:200px;
     }
-    #threadInput:focus{ outline:none; border-color:#3a3a3a; }
+    #threadInput:focus{ outline:none; border-color:var(--hover-border); }
     #runStateChip{
       display:inline-block;
       padding:3px 9px;
       border-radius:999px;
       border:1px solid var(--border);
-      background:#141414;
+      background:var(--chip-bg);
       font-family:var(--mono);
       font-size:11px;
       color:var(--muted);
     }
-    #runStateChip.s-running{ color:#93c5fd; border-color:var(--st-run); }
-    #runStateChip.s-waiting_human{ color:#fcd34d; border-color:var(--st-wait); }
-    #runStateChip.s-completed{ color:#86efac; border-color:var(--st-done); }
-    #runStateChip.s-failed{ color:#fca5a5; border-color:var(--st-fail); }
+    #runStateChip.s-running{ color:var(--chip-run-text); border-color:var(--st-run); }
+    #runStateChip.s-waiting_human{ color:var(--chip-wait-text); border-color:var(--st-wait); }
+    #runStateChip.s-completed{ color:var(--chip-done-text); border-color:var(--st-done); }
+    #runStateChip.s-failed{ color:var(--chip-fail-text); border-color:var(--st-fail); }
     #runCounts{ font-family:var(--mono); color:var(--muted); }
     #runMeta{ font-family:var(--mono); color:var(--muted); overflow:hidden; text-overflow:ellipsis; }
-    #runMeta.err{ color:#fca5a5; }
+    #runMeta.err{ color:var(--err-text); }
     #followWrap{ display:flex; align-items:center; gap:4px; color:var(--muted); user-select:none; cursor:pointer; }
     #followWrap input{ accent-color:#3b82f6; }
 
@@ -162,7 +227,7 @@
     .lg.wait i{ background:var(--st-wait); border-color:var(--st-wait); }
     .lg.retry i{ background:var(--st-retry); border-color:var(--st-retry); }
     .lg.fail i{ background:var(--st-fail); border-color:var(--st-fail); }
-    .lg.skip i{ background:#2a2a2a; border-color:#3f3f3f; }
+    .lg.skip i{ background:var(--skip-bg); border-color:var(--skip-border); }
 
     /* Viewport + canvas */
     #viewport{
@@ -202,9 +267,9 @@
     .edge.dim{ opacity:.18; }
     .edge.highlight{ opacity:1; stroke-width:2.2; }
     /* 已走过的路径 / 当前活动路径(§4.1 连线三种信息) */
-    .edge.traversed{ stroke: #4ade80; opacity:.9; }
+    .edge.traversed{ stroke: var(--edge-traversed); opacity:.9; }
     .edge.active{
-      stroke: #38bdf8;
+      stroke: var(--edge-active);
       opacity: 1;
       stroke-width: 2.6;
       stroke-dasharray: 7 5;
@@ -227,7 +292,7 @@
       touch-action: none;
       transition: border-color .25s ease, box-shadow .25s ease;
     }
-    .node:focus{ outline:none; box-shadow: 0 0 0 2px #3a3a3a, var(--shadow); }
+    .node:focus{ outline:none; box-shadow: 0 0 0 2px var(--hover-border), var(--shadow); }
 
     /* 运行状态(§4.1) */
     .node.st-running{ border-color: var(--st-run); box-shadow: 0 0 0 1px var(--st-run), var(--shadow); animation: pulse 1.6s ease-in-out infinite; }
@@ -236,7 +301,7 @@
     .node.st-retrying{ border-color: var(--st-retry); box-shadow: 0 0 0 1px var(--st-retry), var(--shadow); }
     .node.st-failed{ border-color: var(--st-fail); box-shadow: 0 0 0 1.5px var(--st-fail), var(--shadow); }
     .node.st-skipped{ opacity:.45; border-style: dashed; }
-    .node.st-offline{ opacity:.5; border-style: dashed; border-color:#333; }
+    .node.st-offline{ opacity:.5; border-style: dashed; border-color:var(--offline-border); }
     @keyframes pulse{
       0%,100% { box-shadow: 0 0 0 1px var(--st-run), var(--shadow); }
       50%     { box-shadow: 0 0 0 4px color-mix(in srgb, var(--st-run) 35%, transparent), var(--shadow); }
@@ -246,7 +311,7 @@
     .statusdot{
       width:10px; height:10px; border-radius:50%;
       border:1px solid var(--border);
-      background:#242424;
+      background:var(--dot-bg);
       flex: 0 0 auto;
       margin-top:3px;
     }
@@ -255,7 +320,7 @@
     .statusdot.waiting{ background: var(--st-wait); border-color: var(--st-wait); }
     .statusdot.retrying{ background: var(--st-retry); border-color: var(--st-retry); }
     .statusdot.failed{ background: var(--st-fail); border-color: var(--st-fail); }
-    .statusdot.skipped{ background:#2a2a2a; border-color:#3f3f3f; }
+    .statusdot.skipped{ background:var(--skip-bg); border-color:var(--skip-border); }
     @keyframes dotpulse{ 0%,100%{ opacity:1; } 50%{ opacity:.35; } }
     .statusAttempt{
       font-family: var(--mono);
@@ -332,7 +397,7 @@
       border-radius: 999px;
       border:1px solid var(--border);
       color: var(--muted);
-      background: #141414;
+      background: var(--chip-bg);
       max-width: 120px;
       overflow:hidden;
       text-overflow:ellipsis;
@@ -365,12 +430,12 @@
       border:1px solid var(--border);
       padding: 3px 6px;
       border-radius: 8px;
-      background:#121212;
+      background:var(--kv-bg);
     }
 
     .section{
       margin-top: 10px;
-      border-top: 1px dashed #2e2e2e;
+      border-top: 1px dashed var(--section-dash);
       padding-top: 10px;
     }
     .section h4{
@@ -395,7 +460,7 @@
       font-size: 11px;
       color: var(--muted);
       border:1px solid var(--border);
-      background:#121212;
+      background:var(--kv-bg);
       border-radius: 999px;
       padding: 3px 8px;
       font-family: var(--mono);
@@ -410,22 +475,22 @@
     .runline{ display:flex; flex-wrap:wrap; gap:6px; margin-bottom:6px; }
     .runline .kv b{ font-weight:600; }
     .runErr{
-      color:#fca5a5;
+      color:var(--err-text);
       font-family:var(--mono);
       font-size:11px;
       white-space:pre-wrap;
       word-break:break-word;
-      border:1px solid #7f1d1d;
-      background:#1c1212;
+      border:1px solid var(--err-border);
+      background:var(--err-bg);
       border-radius:8px;
       padding:6px 8px;
     }
     .runWait{
-      color:#fcd34d;
+      color:var(--wait-text);
       font-family:var(--mono);
       font-size:11px;
-      border:1px solid #78350f;
-      background:#1b1408;
+      border:1px solid var(--wait-border);
+      background:var(--wait-bg);
       border-radius:8px;
       padding:6px 8px;
     }
@@ -439,7 +504,7 @@
       overflow:hidden;
     }
     table.schema thead th{
-      background:#121212;
+      background:var(--kv-bg);
       color: var(--muted);
       font-size: 10px;
       letter-spacing: .2px;
@@ -450,7 +515,7 @@
     }
     table.schema td{
       padding: 8px 8px;
-      border-bottom: 1px solid #242424;
+      border-bottom: 1px solid var(--table-row-border);
       vertical-align: top;
       word-break: break-word;
     }
@@ -460,8 +525,8 @@
     .small{ font-size: 11px; color: var(--muted); }
 
     /* Hover highlighting */
-    .node:hover{ border-color:#3a3a3a; }
-    .node.dragging{ opacity: .95; border-color:#4a4a4a; }
+    .node:hover{ border-color:var(--hover-border); }
+    .node.dragging{ opacity: .95; border-color:var(--node-drag-border); }
 
     /* Loading / error */
     #overlay{
@@ -497,6 +562,14 @@
       white-space: pre-wrap;
     }
   </style>
+  <script>
+    /* 主题预置:首帧前应用上次选择的背景主题,避免闪烁 */
+    try{
+      if(localStorage.getItem("wf_node_map_theme") === "light"){
+        document.documentElement.dataset.theme = "light";
+      }
+    }catch(e){}
+  </script>
 </head>
 <body>
   <div id="topbar">
@@ -515,6 +588,8 @@
       <button class="btn" id="btnCollapse">Collapse All</button>
       <div class="sep"></div>
       <button class="btn" id="btnReset">Reset Layout</button>
+      <div class="sep"></div>
+      <button class="btn" id="btnTheme" title="切换背景颜色(白/黑)">背景:白色</button>
     </div>
   </div>
 
@@ -548,10 +623,10 @@
             <path d="M0,0 L9,3 L0,6 Z" fill="var(--edge)"></path>
           </marker>
           <marker id="arrowHeadActive" markerWidth="10" markerHeight="10" refX="8.7" refY="3" orient="auto" markerUnits="strokeWidth">
-            <path d="M0,0 L9,3 L0,6 Z" fill="#38bdf8"></path>
+            <path d="M0,0 L9,3 L0,6 Z" fill="var(--edge-active)"></path>
           </marker>
           <marker id="arrowHeadTraversed" markerWidth="10" markerHeight="10" refX="8.7" refY="3" orient="auto" markerUnits="strokeWidth">
-            <path d="M0,0 L9,3 L0,6 Z" fill="#4ade80"></path>
+            <path d="M0,0 L9,3 L0,6 Z" fill="var(--edge-traversed)"></path>
           </marker>
         </defs>
       </svg>
@@ -588,6 +663,7 @@
       const btnExpand = document.getElementById("btnExpand");
       const btnCollapse = document.getElementById("btnCollapse");
       const btnReset = document.getElementById("btnReset");
+      const btnTheme = document.getElementById("btnTheme");
 
       const params = new URLSearchParams(location.search);
       // 视图:main=完整 LangGraph 工作流(/api/workflow/graph);
@@ -1215,6 +1291,19 @@
       btnCollapse.addEventListener("click", collapseAll);
       btnExpand.addEventListener("click", expandAll);
       btnReset.addEventListener("click", resetLayout);
+
+      // 背景主题切换:黑色(默认) <-> 白色,经 localStorage 记忆;按钮文案显示点击后切到的目标主题
+      function applyThemeButton(){
+        btnTheme.textContent = document.documentElement.dataset.theme === "light" ? "背景:黑色" : "背景:白色";
+      }
+      applyThemeButton();
+      btnTheme.addEventListener("click", () => {
+        const toLight = document.documentElement.dataset.theme !== "light";
+        if(toLight){ document.documentElement.dataset.theme = "light"; }
+        else{ delete document.documentElement.dataset.theme; }
+        try{ localStorage.setItem("wf_node_map_theme", toLight ? "light" : "dark"); }catch(e){}
+        applyThemeButton();
+      });
 
       // ---------------------------------------------------------------------------
       // 实时层钩子(module 脚本经 window.__wfHooks 调用;渲染层不订阅任何网络)
