@@ -31,6 +31,9 @@ import {
   limitUploadBatch,
   planUploadBatch,
 } from "./media_upload.mjs?v=20261101-upload-merge";
+// 「对话框显示 LangGraph 当前运行节点」阶段 4/5(执行设计 §6.3/§6.6):
+// 会话关联查询 + SSE 订阅 + 独立节点状态行;不碰 MCode 面板与聊天正文。
+import { WorkflowChatIndicator } from "./workflow_chat_indicator.mjs?v=20261103-node-indicator";
 
 const $ = (sel) => document.querySelector(sel);
 const SIDEBAR_COLLAPSED_KEY = "openstoryline_sidebar_collapsed";
@@ -2695,6 +2698,14 @@ class App {
     this.ui = new ChatUI();
     this.ws = null;
 
+    // 「对话框显示 LangGraph 当前运行节点」阶段 5(§6.3/§6.6):节点状态组件实例。
+    // 职责仅限:会话关联查询、SSE 订阅、独立消息行渲染 —— MCode 面板与
+    // 聊天正文不受影响;行内不写 Markdown,不进 currentAssistant.bubbleEl。
+    this._wfIndicator = new WorkflowChatIndicator({
+      chatEl: this.ui.chatEl,
+      getTurnAnchor: () => (this.ui.currentAssistant ? this.ui.currentAssistant.wrapEl : null),
+    });
+
     // 阶段 E:本轮的来源与去重闸门。
     //   _turnSource  —— "mcode" / "llm",由 assistant.start 决定;
     //   _mcodeGate   —— 按 run_id + seq 去重 / 排序;
@@ -3503,6 +3514,9 @@ class App {
 
     this.setDeveloperMode(!!snapshot?.developer_mode);
     this.ui.setSessionId(sid);
+
+    // 阶段 5:会话归属变化 -> 节点状态组件切换关联(同会话幂等;§6.6 生命周期)
+    if (this._wfIndicator) this._wfIndicator.onSessionChanged(sid);
   }
 
   _syncStreamingStateFromSnapshot(snapshot) {
@@ -3510,6 +3524,8 @@ class App {
     this.streaming = turnRunning;
     if (!turnRunning) this.canceling = false;
     this._updateComposerDisabledState();
+    // 阶段 5:turn 在跑而关联尚未建立时,组件侧本轮期间有限重试(§6.6)
+    if (this._wfIndicator) this._wfIndicator.onTurnActivity(turnRunning);
   }
 
   // 阶段 E:快照里的执行过程 trace(独立于 history)。
@@ -3648,6 +3664,8 @@ class App {
     if (replayHistory) this._replaySnapshotHistory(snapshot);
     this.setPending(snapshot.pending_media || []);
     this._syncStreamingStateFromSnapshot(snapshot);
+    // 阶段 5:历史重放/快照应用可能清掉了组件行(clearAll),按当前关联重挂(§6.6)
+    if (this._wfIndicator) this._wfIndicator.onSnapshotApplied();
   }
 
   _stopRecoveryPoll() {
@@ -4852,6 +4870,10 @@ class App {
       }
 
       this.ui.startAssistantMessage({placeholder: true});
+
+      // 阶段 5:本轮 turn 开始 -> 组件行就位(MCode 面板后、正文气泡前)
+      // 并以当前会话刷新工作流关联(§6.6/§6.7)
+      this._wfIndicator.onAssistantTurnStart();
       return;
     }
 
@@ -4897,6 +4919,8 @@ class App {
       this.canceling = false;
       this._updateComposerDisabledState();
       if (toBubble) this.ui.endAssistantTurn(d.text || "");
+      // 阶段 5:turn 结束 -> 停止本轮关联重试;组件行保持实时状态显示
+      this._wfIndicator.onAssistantTurnEnd();
       return;
     }
 
@@ -4959,6 +4983,8 @@ class App {
       this.canceling = false;
       this._updateComposerDisabledState();
       this.ui.clearAll();
+      // 阶段 5:clearAll 清掉了组件行,按当前关联状态决定是否重挂(§6.6)
+      this._wfIndicator.onChatCleared();
       return;
     }
 

@@ -765,6 +765,73 @@ body.sidebar-collapsed .sidebar-scroll{
   box-shadow: none;
 }
 
+/* ---- LangGraph 当前运行节点指示(执行设计 §6.2) ----
+   独立消息行(.msg.assistant.workflow-node-msg),不在 MCode 面板内、
+   不在正文气泡内;颜色全部走主题变量,深浅色自动适配。 */
+.workflow-node-msg{
+  justify-content: flex-start;
+  padding-top: 8px;
+  padding-bottom: 4px;
+}
+
+.workflow-node-indicator{
+  width: 100%;
+  min-width: 0;
+}
+
+.workflow-node-indicator__label{
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.workflow-node-indicator__label[hidden]{
+  display: none;
+}
+
+/* 并行节点逐行展示,不把多个长名称挤在一行(§6.2) */
+.workflow-node-indicator__names{
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* 节点名称为主要信息:26px / 900 字重黑体;长名换行不撑破聊天区 */
+.workflow-node-indicator__name{
+  color: var(--text, #111);
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  font-size: 26px;
+  font-weight: 900;
+  line-height: 1.35;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+
+.workflow-node-indicator[data-state="retrying"] .workflow-node-indicator__name{
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 4px;
+}
+
+.workflow-node-indicator[data-state="waiting"] .workflow-node-indicator__name{
+  opacity: 0.9;
+}
+
+/* 暂不可用(503 / store_error):不是节点名,弱一号并以警示色提示 */
+.workflow-node-indicator[data-state="unavailable"] .workflow-node-indicator__name{
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--warning-accent, #a15d00);
+}
+
+@media (max-width: 700px){
+  .workflow-node-indicator__name{
+    font-size: 22px;
+  }
+}
+
 .msg.user .bubble{
   padding: 8px 12px;
   background: var(--surface-2);
