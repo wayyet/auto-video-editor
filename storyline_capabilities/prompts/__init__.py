@@ -1,18 +1,11 @@
-"""Prompt 加载器 — 阶段 2/3 用。
+"""Prompt 加载器 — Storyline 能力层统一资源入口。
 
-vendored copy(仓库根 ``prompts/tasks/<kind>/zh/{system,user}.md``,2026-11-01
-扁平化后位置)是一份,本模块读 ``storyline_capabilities/prompts/<kind>/<lang>/<part>.md``。
-
-阶段 2 起所有 B/C 类能力都从这里读 prompt,不再使用 vendored 路径。
-
-占位符语法(D6 修复,2026-10-19):
-模板正文用的是 **双花括号** ``{{name}}``(Jinja2 风格,与 vendored
-``open_storyline.utils.prompts.get_prompt`` 的 ``re.sub(r"{{(.*?)}}")`` 一致)。
-旧版加载器只认单花括号 ``{name}``,导致 ``{{user_request}}`` 这类占位符
-**原样残留**进 prompt,下游模型拿到的是空素材信息(见集成文档 D6)。
-现在两种语法都支持,且**未提供的变量保持原样**——宁可让调用方看到残留占位符,
-也不要静默把空数据喂给模型。
+仓库提示词 Markdown 的唯一物理目录为 ``prompts/tasks/<kind>/<lang>/<part>.md``。
+本模块保留 Storyline 能力层的公开 API 和渲染策略；OpenStoryline vendored
+调用方继续使用 ``open_storyline.utils.prompts``，两套 Loader 不合并，避免改变
+缺失文件、占位符和缓存等既有语义。
 """
+
 from __future__ import annotations
 
 import re
@@ -20,7 +13,10 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 
-PROMPTS_ROOT: Path = Path(__file__).resolve().parent
+# 统一使用仓库根 prompts/tasks；资源不再在两个目录各保存一份。
+# 本文件位于 <repo>/storyline_capabilities/prompts/__init__.py，parents[2] 即仓库根。
+REPO_ROOT = Path(__file__).resolve().parents[2]
+PROMPTS_ROOT: Path = REPO_ROOT / "prompts" / "tasks"
 
 
 # ``{{name}}``(主)与 ``{name}`` / ``{name:?}``(旧写法)一次正则走完,

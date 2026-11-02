@@ -1,0 +1,71 @@
+{
+  "category_totals": {
+    "mixed": 3
+  },
+  "scanned_files": 772,
+  "duplicate_groups": 3,
+  "duplicate_paths": 14,
+  "skipped_large_files": [],
+  "skipped_unreadable_files": [],
+  "excluded_dirs": [
+    "__pycache__",
+    "drafts",
+    "inputs",
+    "logs",
+    "node_modules",
+    "out",
+    "outputs",
+    "vendor"
+  ],
+  "base_commit": "54be813e4c2c0d85f13395bcccd8cf7f99f6df6e",
+  "generated_at": "2026-11-03T07:54:52",
+  "groups": [
+    {
+      "sha256": "362099d402e2eaf0b9c85486816d758a0ce754f962484edbc2d572576eb7d12b",
+      "size": 8316,
+      "paths": [
+        "agent_gate/fixtures/storyline_capabilities/vlm_client.py",
+        "storyline_capabilities/vlm_client.py"
+      ],
+      "categories": [
+        "production_source",
+        "test_fixture"
+      ],
+      "category": "mixed"
+    },
+    {
+      "sha256": "b4b1b0753d72551ddc9abf20cb73153590fab54fef543e2a1991325aad9c5dea",
+      "size": 11893,
+      "paths": [
+        "docs/修改文档/refactor_dedupe_openstoryline_mcp.py",
+        "scripts/refactor_dedupe_openstoryline_mcp.py"
+      ],
+      "categories": [
+        "docs_snapshot",
+        "production_source"
+      ],
+      "category": "mixed"
+    },
+    {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0,
+      "paths": [
+        "jy_common/__init__.py",
+        "runtime/__init__.py",
+        "src/open_storyline/mcp/__init__.py",
+        "src/open_storyline/storage/__init__.py",
+        "subtitle_en.srt",
+        "tests/__init__.py",
+        "tests/integration/__init__.py",
+        "tests/unit/__init__.py",
+        "tests/unit/monitoring/__init__.py",
+        "tests/unit/video_edit_capabilities/__init__.py"
+      ],
+      "categories": [
+        "empty_init_marker",
+        "production_source"
+      ],
+      "category": "mixed"
+    }
+  ]
+}
