@@ -102,6 +102,19 @@ STATE_SUMMARY_KEYS = frozenset({
     "video_input_paths",
 })
 
+#: run.* 事件 → ``workflow_chat_links`` 状态(执行设计 §10.4 任务 2.3)。
+#: **只挂钩 run 级事件** —— interrupt 挂起必然伴随 ``run.interrupted``,由它
+#: 负责 waiting_human;``node.waiting_input`` 不挂钩,因为 import_video 式
+#: custom 握手等待(web_file_handshake)是运行中的等待,工作流并未挂起,
+#: 稍后会正常 node.succeeded / run.completed。
+_CHAT_LINK_STATUS_BY_RUN_EVENT = {
+    EVENT_RUN_STARTED: "running",
+    EVENT_RUN_RESUMED: "running",
+    EVENT_RUN_INTERRUPTED: "waiting_human",
+    EVENT_RUN_COMPLETED: "completed",
+    EVENT_RUN_FAILED: "failed",
+}
+
 
 def run_id_new() -> str:
     """一次业务运行的标识(恢复运行沿用同一 thread_id,但每次 runner 调用新 run_id)。"""
@@ -430,6 +443,52 @@ def _default_store() -> Any:
     return _store
 
 
+def _default_link_store() -> Any:
+    """默认关联存储 = ``monitoring.workflow_chat_link_store`` 模块级函数
+    (延迟 import:未启用会话关联的调用方不承担 db/psycopg 导入成本)。"""
+    from monitoring import workflow_chat_link_store as _links
+
+    return _links
+
+
+def _chat_link_upsert_running(
+    link_store: Any, chat_session_id: str, thread_id: str, run_id: str
+) -> None:
+    """会话关联 upsert(执行设计 §4.4 第 3/5 条):产生首个运行事件前建立关联。
+
+    任何失败只记明确 ERROR 日志(含 chat_session_id / thread_id / 目标状态),
+    绝不阻塞工作流主流程(§10.4 任务 2.6 降级)。
+    """
+    try:
+        link_store.upsert_running(chat_session_id, thread_id, run_id)
+    except Exception as e:  # noqa: BLE001 — store 自身已降级,这里兜自定义 store
+        logger.error(
+            "[workflow_runner] 会话关联 upsert 失败"
+            "(chat_session=%s thread=%s status=running): %s: %s",
+            chat_session_id, thread_id, type(e).__name__, e,
+        )
+
+
+def _chat_link_update(
+    link_store: Any,
+    chat_session_id: str,
+    status: str,
+    thread_id: str,
+    run_id: str,
+) -> None:
+    """关联状态流转(§4.4 第 4 条);失败降级同上,不阻塞运行。"""
+    try:
+        link_store.update_status(
+            chat_session_id, status, thread_id=thread_id, run_id=run_id
+        )
+    except Exception as e:  # noqa: BLE001 — 同上
+        logger.error(
+            "[workflow_runner] 会话关联状态更新失败"
+            "(chat_session=%s thread=%s status=%s): %s: %s",
+            chat_session_id, thread_id, status, type(e).__name__, e,
+        )
+
+
 async def run_with_events(
     graph: Any,
     initial_state: Any,
@@ -438,6 +497,7 @@ async def run_with_events(
     run_id: Optional[str] = None,
     on_event: Optional[Callable[[dict[str, Any]], None]] = None,
     store: Any = None,
+    link_store: Optional[Any] = None,
     stream_mode: tuple[str, ...] = DEFAULT_STREAM_MODE,
 ) -> dict[str, Any]:
     """统一执行入口:astream 消费 + 标准事件发布;返回最终 state values。
@@ -453,6 +513,10 @@ async def run_with_events(
             回调抛异常只记 warning,不影响运行。
         store: 事件存储对象(需有 ``append_event(event) -> int|None``);
             None 用默认 PG 事件表。注入假存储可让单测脱离 Postgres。
+        link_store: 会话—工作流关联存储(需有 ``upsert_running(csid, tid, rid)``
+            与 ``update_status(csid, status, *, thread_id, run_id)``);
+            None 用默认 ``monitoring.workflow_chat_link_store``(执行设计 §4.4)。
+            注入假存储可让单测脱离 Postgres;关联写失败一律降级不阻塞运行。
         stream_mode: 流模式;默认含 custom(§7.3 规则 7 依赖)。
 
     Returns:
@@ -472,6 +536,8 @@ async def run_with_events(
     run_id = run_id or run_id_new()
     if store is None:
         store = _default_store()
+    if link_store is None:
+        link_store = _default_link_store()
 
     def emit(
         event_type: str,
@@ -504,11 +570,25 @@ async def run_with_events(
                 logger.warning(
                     "事件订阅者回调失败(%s: %s)", type(e).__name__, e
                 )
+        # 会话关联状态流转(执行设计 §4.4 第 4 条;只挂钩 run 级事件,
+        # node.waiting_input 不挂钩 —— 见 _CHAT_LINK_STATUS_BY_RUN_EVENT 注释)
+        link_status = _CHAT_LINK_STATUS_BY_RUN_EVENT.get(event_type)
+        if link_status and chat_session_id:
+            _chat_link_update(link_store, chat_session_id, link_status, thread_id, run_id)
 
     # run.started / run.resumed(§7.1:恢复运行 = Command(resume=...) 或 None 输入)
     from langgraph.types import Command  # 延迟 import:模块顶层保持无 langgraph 依赖
 
     is_resume = initial_state is None or isinstance(initial_state, Command)
+
+    # 会话—工作流关联(执行设计 §4.4):首次执行从 initial_state 读;恢复执行
+    # 从 checkpoint State 读。旧 checkpoint / 旧调用无该键 → None → 不建关联,
+    # 行为与迁移前完全一致(§10.3 红线:统一 .get() 访问)。
+    chat_session_id: Optional[str] = None
+    if not is_resume and isinstance(initial_state, dict):
+        chat_session_id = (
+            str(initial_state.get("chat_session_id") or "").strip() or None
+        )
 
     resumed_nodes: set[str] = set()
     previous_attempts: dict[str, int] = {}
@@ -523,6 +603,16 @@ async def run_with_events(
                 for t in (getattr(pre_snapshot, "tasks", None) or ())
                 if getattr(t, "interrupts", None)
             }
+            # §4.4 第 2 条:恢复执行从 checkpoint State 读取 chat_session_id
+            chat_session_id = (
+                str(
+                    (getattr(pre_snapshot, "values", None) or {}).get(
+                        "chat_session_id"
+                    )
+                    or ""
+                ).strip()
+                or None
+            )
         except Exception as e:  # noqa: BLE001 — 判定降级,只影响 resumed 归因
             logger.warning("resume 前置快照获取失败(%s: %s)", type(e).__name__, e)
         snapshot_getter = getattr(store, "latest_snapshot", None)
@@ -533,6 +623,10 @@ async def run_with_events(
                 )
             except Exception as e:  # noqa: BLE001
                 logger.warning("resume attempt 历史读取失败(%s: %s)", type(e).__name__, e)
+
+    if chat_session_id:
+        # §4.4 第 3 条:产生首个运行事件前建立 / 刷新关联(running + run_id)
+        _chat_link_upsert_running(link_store, chat_session_id, thread_id, run_id)
 
     adapter = WorkflowStreamAdapter(
         emit,

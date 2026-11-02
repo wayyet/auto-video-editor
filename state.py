@@ -292,3 +292,13 @@ class WorkflowState(TypedDict, total=False):
     import_video_media_paths: NotRequired[list[str]]           # 网页端落盘后的全部绝对路径
     import_video_web_session_id: NotRequired[Optional[str]]  # OpenStoryline 会话 id(非 job_id)
     import_video_filename: NotRequired[Optional[str]]
+
+    # ===== 对话框节点指示(《对话框显示LangGraph当前运行节点执行设计》§4.1,2026-11) =====
+    # 实际发起本工作流的**聊天会话 ID**(32 位十六进制),用于建立
+    # ``workflow_chat_links`` 会话—线程关联。与三个既有 ID 严格分离
+    # (执行设计 §2.4 / §10.3 红线 1-2):
+    # - ``session_id`` 仍是工作流业务会话(CLI 默认 = thread_id,语义不动);
+    # - ``thread_id`` 仍只作 LangGraph checkpoint / 事件查询键;
+    # - ``turn_id`` 仍只代表一次聊天请求。
+    # 可选字段:老 checkpoint 无该键,读取一律 ``state.get("chat_session_id")``。
+    chat_session_id: NotRequired[Optional[str]]

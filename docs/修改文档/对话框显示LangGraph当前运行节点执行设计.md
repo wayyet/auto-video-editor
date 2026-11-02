@@ -743,10 +743,10 @@ Assistant 正文
 
 | 阶段 | 名称 | 主要产出 | 优先级 | 状态 |
 |---|---|---|---|---|
-| 阶段 0 | 前置整备 | 干净工作区 + 特性分支 | P0 | 未开始 |
-| 阶段 1 | 关联数据层 | State 字段 + `workflow_chat_links` 迁移 + Store | P0 | 未开始 |
-| 阶段 2 | runner 关联写入 | 统一入口维护关联（Web + CLI 透传） | P0 | 未开始 |
-| 阶段 3 | 关联查询接口 | `GET /api/workflow/chat-sessions/{id}/run` | P0 | 未开始 |
+| 阶段 0 | 前置整备 | 干净工作区 + 特性分支 | P0 | 已完成(2026-11-03) |
+| 阶段 1 | 关联数据层 | State 字段 + `workflow_chat_links` 迁移 + Store | P0 | 已完成(2026-11-03) |
+| 阶段 2 | runner 关联写入 | 统一入口维护关联（Web + CLI 透传） | P0 | 已完成(2026-11-03) |
+| 阶段 3 | 关联查询接口 | `GET /api/workflow/chat-sessions/{id}/run` | P0 | 已完成(2026-11-03) |
 | 阶段 4 | 前端节点追踪模块 | `workflow_chat_indicator.mjs` | P0 | 未开始 |
 | 阶段 5 | 对话区 UI | 组件挂接 + 大字号样式 | P0 | 未开始 |
 | 阶段 6 | 回归与验收 | TC-01～TC-17 全过 | P0 | 未开始 |
@@ -770,56 +770,56 @@ Assistant 正文
 
 前置条件：无。
 
-- [ ] 0.1 处理当前工作区未提交改动（`start_production.ps1`、`stop_production.ps1`、`web/node_map/node_map.html`），先单独提交或与本特性解耦，避免与本开发纠缠。
-- [ ] 0.2 从当前基线创建特性分支（建议 `feat/chat-workflow-node-indicator`）。
-- [ ] 0.3 确认 PostgreSQL（edb-postgres16 容器）存活，现有 `db/migrations.py` 迁移可正常执行（对照 `scripts/setup_postgres.ps1` / `start_postgres.ps1`）。
+- [x] 0.1 处理当前工作区未提交改动（`start_production.ps1`、`stop_production.ps1`、`web/node_map/node_map.html`），先单独提交或与本特性解耦，避免与本开发纠缠。（实测工作区已干净，三个文件已在此前提交中处理）
+- [x] 0.2 从当前基线创建特性分支（建议 `feat/chat-workflow-node-indicator`）。（已从 `refactor/flatten-openstoryline`@1164714 创建）
+- [x] 0.3 确认 PostgreSQL（edb-postgres16 容器）存活，现有 `db/migrations.py` 迁移可正常执行（对照 `scripts/setup_postgres.ps1` / `start_postgres.ps1`）。（容器 healthy；迁移 005 已在开发库应用成功）
 
-**阶段门：** 工作区干净、分支就绪、DB 可用。
+**阶段门：** 工作区干净、分支就绪、DB 可用。（2026-11-03 通过）
 
 #### 阶段 1：关联数据层（State 字段 + 迁移 + Store）
 
 前置条件：阶段 0 通过。
 
-- [ ] 1.1 `state.py`：在 `WorkflowState`（state.py:116）新增可选字段 `chat_session_id: str`，附注释说明与 `session_id` / `thread_id` / `turn_id` 的区别（§4.1）。
-- [ ] 1.2 `db/migrations.py`：新增 `workflow_chat_links` 迁移（§4.3 表结构；沿用现有 `CREATE TABLE IF NOT EXISTS` + `DO` 块补列模式）。
-- [ ] 1.3 新增 `monitoring/workflow_chat_link_store.py`：`upsert_running()`、`update_status()`、`get_by_chat_session()`；连接管理复用 `db/connection.py`。
-- [ ] 1.4 新增会话 ID 格式校验函数（32 位十六进制），供 API 与 Store 共用。
-- [ ] 1.5 单元测试 `tests/unit/test_workflow_chat_link_store.py`：upsert 覆盖、四态流转、无记录查询、非法 ID 拒绝。
-- [ ] 1.6 旧 checkpoint 兼容测试：State 不含 `chat_session_id` 时 `.get()` 返回 None，工作流逻辑不受影响。
+- [x] 1.1 `state.py`：在 `WorkflowState`（state.py:116）新增可选字段 `chat_session_id: str`，附注释说明与 `session_id` / `thread_id` / `turn_id` 的区别（§4.1）。
+- [x] 1.2 `db/migrations.py`：新增 `workflow_chat_links` 迁移（§4.3 表结构；沿用现有 `CREATE TABLE IF NOT EXISTS` + `DO` 块补列模式）。（迁移 005，含 thread_id CHECK 与 FK→chat_sessions）
+- [x] 1.3 新增 `monitoring/workflow_chat_link_store.py`：`upsert_running()`、`update_status()`、`get_by_chat_session()`；连接管理复用 `db/connection.py`。（`WorkflowChatLinkStore` 类 + 模块级便捷入口；写降级、读抛错）
+- [x] 1.4 新增会话 ID 格式校验函数（32 位十六进制），供 API 与 Store 共用。（`validate_chat_session_id()` / `validate_thread_id()`）
+- [x] 1.5 单元测试 `tests/unit/test_workflow_chat_link_store.py`：upsert 覆盖、四态流转、无记录查询、非法 ID 拒绝。（25 用例全绿，DB 用例打隔离测试库）
+- [x] 1.6 旧 checkpoint 兼容测试：State 不含 `chat_session_id` 时 `.get()` 返回 None，工作流逻辑不受影响。（含 runner 桩测试"零调用"断言）
 
 **阶段门：**
-- `python -m pytest tests/unit/test_workflow_chat_link_store.py` 全绿；
-- 迁移后用 psql 验证表与索引就位；
-- 凭聊天会话 ID 能查到最近一次关联 `thread_id`，无关联返回空。
+- `python -m pytest tests/unit/test_workflow_chat_link_store.py` 全绿；（25 passed）
+- 迁移后用 psql 验证表与索引就位；（`\d workflow_chat_links` 核对 PK/CHECK/FK/索引 + `app_schema_migrations` 5 行）
+- 凭聊天会话 ID 能查到最近一次关联 `thread_id`，无关联返回空。（2026-11-03 通过）
 
 #### 阶段 2：runner 关联写入（统一入口）
 
 前置条件：阶段 1 通过。
 
-- [ ] 2.1 `monitoring/workflow_runner.py` `run_with_events()`（:433）：首次执行从 `initial_state.get("chat_session_id")` 读取；恢复执行从 `graph.aget_state(config).values.get("chat_session_id")` 读取。
-- [ ] 2.2 在产生首个运行事件前 upsert 关联（`running`），并保存 `run_id`。
-- [ ] 2.3 事件生命周期挂钩：`run.started` / `run.resumed` → `running`；`run.interrupted`（含 `node.waiting_input` 场景）→ `waiting_human`；`run.completed` → `completed`；`run.failed` → `failed`。
-- [ ] 2.4 `web/api_workflow.py` `POST /runs`（:427）：请求体新增可选 `chat_session_id`，格式校验后写入 `state["chat_session_id"]`（对齐现有 `session_id` 写入位置，:463-465）。
-- [ ] 2.5 `scripts/run_workflow.py`：新增可选参数 `--chat-session-id`，传入时写入 `_default_initial_state()`（:140）产物；未传时行为不变。
-- [ ] 2.6 关联写库失败降级：记录明确日志（含 chat_session_id / thread_id / 目标状态），不阻塞工作流主流程。
-- [ ] 2.7 集成测试 `tests/integration/test_workflow_chat_link.py`：Web 启动、CLI 启动、interrupt 挂起、resume、completed、failed 六场景断言关联表状态。
+- [x] 2.1 `monitoring/workflow_runner.py` `run_with_events()`（:433）：首次执行从 `initial_state.get("chat_session_id")` 读取；恢复执行从 `graph.aget_state(config).values.get("chat_session_id")` 读取。
+- [x] 2.2 在产生首个运行事件前 upsert 关联（`running`），并保存 `run_id`。（时序由桩测试 timeline 断言钉死）
+- [x] 2.3 事件生命周期挂钩：`run.started` / `run.resumed` → `running`；`run.interrupted`（含 `node.waiting_input` 场景）→ `waiting_human`；`run.completed` → `completed`；`run.failed` → `failed`。（实现口径：只挂钩 run 级事件——interrupt 必然伴随 `run.interrupted`，由它负责 waiting_human；import_video 式 custom 握手等待（`node.waiting_input`）是运行中的等待、工作流未挂起，若挂钩会把进行中的运行错标为挂起，已有桩测试钉死该决策）
+- [x] 2.4 `web/api_workflow.py` `POST /runs`（:427）：请求体新增可选 `chat_session_id`，格式校验后写入 `state["chat_session_id"]`（对齐现有 `session_id` 写入位置，:463-465）。（非法 → 400）
+- [x] 2.5 `scripts/run_workflow.py`：新增可选参数 `--chat-session-id`，传入时写入 `_default_initial_state()`（:140）产物；未传时行为不变。（argparse type 校验；注入放 `_load_initial_state` 出口 `_apply_chat_session_id`，三条分支统一生效）
+- [x] 2.6 关联写库失败降级：记录明确日志（含 chat_session_id / thread_id / 目标状态），不阻塞工作流主流程。（Store 层记 ERROR + 降级计数；runner 层兜自定义 store 异常）
+- [x] 2.7 集成测试 `tests/integration/test_workflow_chat_link.py`：Web 启动、CLI 启动、interrupt 挂起、resume、completed、failed 六场景断言关联表状态。（另含"二次运行覆盖关联"与"GET 端到端"用例）
 
 **阶段门：**
-- Web 与 CLI 双入口传入 `chat_session_id` 均建立同一条关联；
-- 不传该字段的旧调用（`POST /runs`、CLI）行为不变；
-- 六场景集成测试全绿。
+- Web 与 CLI 双入口传入 `chat_session_id` 均建立同一条关联；（集成测试 1/2 + API 单测）
+- 不传该字段的旧调用（`POST /runs`、CLI）行为不变；（场景 6 + 桩测试零调用断言）
+- 六场景集成测试全绿。（2026-11-03 通过，14 用例）
 
 #### 阶段 3：关联查询接口
 
 前置条件：阶段 2 通过。
 
-- [ ] 3.1 `web/api_workflow.py` 新增 `GET /api/workflow/chat-sessions/{chat_session_id}/run`（§5.1 返回结构）。
-- [ ] 3.2 沿用现有 `/api/workflow/*` 同源校验；会话 ID 非法返回 400。
-- [ ] 3.3 PostgreSQL / 关联表不可用返回 503，不伪造数据。
-- [ ] 3.4 确认接口严格只读：不触发 start / resume / 状态写。
-- [ ] 3.5 接口测试：有记录、无记录、非法 ID、DB 不可用四类。
+- [x] 3.1 `web/api_workflow.py` 新增 `GET /api/workflow/chat-sessions/{chat_session_id}/run`（§5.1 返回结构）。（找到=200 扁平；无关联=200 `run: null`）
+- [x] 3.2 沿用现有 `/api/workflow/*` 同源校验；会话 ID 非法返回 400。
+- [x] 3.3 PostgreSQL / 关联表不可用返回 503，不伪造数据。（`ChatLinkStoreUnavailable` 及其它查询异常 → 503）
+- [x] 3.4 确认接口严格只读：不触发 start / resume / 状态写。（实现仅 `get_by_chat_session` SELECT）
+- [x] 3.5 接口测试：有记录、无记录、非法 ID、DB 不可用四类。（`tests/unit/test_api_workflow_chat_link.py` 假 store 注入 + 集成侧真库端到端，另含跨源 403）
 
-**阶段门：** 对话页仅凭当前会话 ID 取得正确 `thread_id`；四类测试全绿。
+**阶段门：** 对话页仅凭当前会话 ID 取得正确 `thread_id`；四类测试全绿。（2026-11-03 通过）
 
 #### 阶段 4：前端节点追踪模块
 
@@ -878,7 +878,10 @@ Assistant 正文
 
 | 日期 | 阶段 | 结果 | 备注 |
 |---|---|---|---|
-| | | | |
+| 2026-11-03 | 阶段 0 | 通过 | 工作区干净；分支 `feat/chat-workflow-node-indicator`（基线 `refactor/flatten-openstoryline`@1164714）；edb-postgres16 healthy |
+| 2026-11-03 | 阶段 1 | 通过 | 迁移 005 已应用开发库并经 psql 核对（PK/CHECK/FK/索引）；`test_workflow_chat_link_store.py` 25 passed |
+| 2026-11-03 | 阶段 2 | 通过 | runner 关联维护 + Web/CLI 双入口透传；`test_workflow_runner_chat_link.py`（5）+ `test_workflow_chat_link.py`（9，六场景）全绿 |
+| 2026-11-03 | 阶段 3 | 通过 | `GET /chat-sessions/{id}/run` 上线（只读）；`test_api_workflow_chat_link.py`（6，四类+跨源）全绿；合计新增 48 用例全绿 |
 
 ---
 

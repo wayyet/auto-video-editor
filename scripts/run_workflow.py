@@ -61,6 +61,19 @@ from runtime.preflight import (  # noqa: E402  — sys.path 调整后才能 impo
 )
 
 
+def _chat_session_id_arg(value: str) -> str:
+    """argparse type:校验 ``--chat-session-id``(32 位十六进制,执行设计 §4.2)。"""
+    from monitoring.workflow_chat_link_store import (
+        ChatLinkValidationError,
+        validate_chat_session_id,
+    )
+
+    try:
+        return validate_chat_session_id(value)
+    except ChatLinkValidationError as e:
+        raise argparse.ArgumentTypeError(f"--chat-session-id 非法: {e}")
+
+
 def _parse_args() -> argparse.Namespace:
     """解析命令行参数。"""
     p = argparse.ArgumentParser(
@@ -68,6 +81,16 @@ def _parse_args() -> argparse.Namespace:
         description="auto-video-editor 主程序入口",
     )
     p.add_argument("--thread-id", default="video-001", help="LangGraph thread_id(默认 video-001)")
+    p.add_argument(
+        "--chat-session-id",
+        default=None,
+        type=_chat_session_id_arg,
+        help=(
+            "可选:关联的聊天会话 ID(32 位十六进制)。写入初始 State 的 "
+            "chat_session_id,由统一 runner 建立 workflow_chat_links 关联,"
+            "供对话页解析当前工作流(执行设计 §4.2)。未传时行为不变。"
+        ),
+    )
     p.add_argument(
         "--skip-preflight",
         action="store_true",
@@ -179,7 +202,8 @@ def _load_initial_state(args: argparse.Namespace) -> dict:
     """
     extra_paths = str(getattr(args, "video_input_paths", "") or "")
     if not args.initial_state_json:
-        return _default_initial_state(args.thread_id, extra_paths)
+        state = _default_initial_state(args.thread_id, extra_paths)
+        return _apply_chat_session_id(state, args)
 
     path = args.initial_state_json
     if not path.exists():
@@ -201,7 +225,7 @@ def _load_initial_state(args: argparse.Namespace) -> dict:
                 f"[state]   ✗ 写入失败({e});继续用内存中的默认 state 运行",
                 file=sys.stderr,
             )
-        return state
+        return _apply_chat_session_id(state, args)
 
     state = json.loads(path.read_text(encoding="utf-8"))
     # 命令行显式给了多路径 → 覆盖文件里的同名字段
@@ -209,6 +233,19 @@ def _load_initial_state(args: argparse.Namespace) -> dict:
         paths = [p.strip() for p in extra_paths.split(",") if p.strip()]
         state["video_input_paths"] = paths
         state["video_input_path"] = paths[0]
+    return _apply_chat_session_id(state, args)
+
+
+def _apply_chat_session_id(state: dict, args: argparse.Namespace) -> dict:
+    """``--chat-session-id`` 显式传入时覆盖写入初始 State(执行设计 §4.2)。
+
+    放在 ``_load_initial_state`` 出口:默认 state、文件缺失回退、JSON 文件
+    三条分支统一生效(命令行显式参数优先于文件内容)。未传入时不写该键,
+    行为与迁移前完全一致。
+    """
+    chat_session_id = getattr(args, "chat_session_id", None)
+    if chat_session_id:
+        state["chat_session_id"] = chat_session_id
     return state
 
 

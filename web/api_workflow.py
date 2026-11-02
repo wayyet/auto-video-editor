@@ -9,15 +9,16 @@
 - 导入方式:``from web.api_workflow import router``(仓库根在 sys.path 上,
   ``web`` 为命名空间包;2026-11-01 扁平化后本文件随 web/ 上移仓库根)。
 
-五个端点(设计 §6.2-E 表)
+六个端点(设计 §6.2-E 表 + 执行设计《对话框显示 LangGraph 当前运行节点》§5.1)
 ------------------------
-=========================== =================================================
-``GET  /graph``             §4.3 图 JSON(拓扑服务缓存;只构图不执行,§11.5)
-``POST /runs``              显式启动运行(主 venv CLI 子进程;见下"关键决策")
-``GET  /runs/{thread_id}``  运行快照:事件计数/游标/最近事件/派生状态
-``GET  /runs/{thread_id}/events``  SSE 事件流;``Last-Event-ID`` 补发
-``POST /runs/{thread_id}/resume``   挂起探测 + 外部恢复指引(见下"关键决策")
-=========================== =================================================
+=========================================== =================================================
+``GET  /graph``                             §4.3 图 JSON(拓扑服务缓存;只构图不执行,§11.5)
+``POST /runs``                              显式启动运行(主 venv CLI 子进程;见下"关键决策")
+``GET  /runs/{thread_id}``                  运行快照:事件计数/游标/最近事件/派生状态
+``GET  /runs/{thread_id}/events``           SSE 事件流;``Last-Event-ID`` 补发
+``POST /runs/{thread_id}/resume``           挂起探测 + 外部恢复指引(见下"关键决策")
+``GET  /chat-sessions/{chat_session_id}/run`` 会话关联查询(只读;执行设计 §5.1,严格 GET)
+=========================================== =================================================
 
 关键决策(为什么这样落)
 ----------------------
@@ -431,6 +432,7 @@ async def start_run(request: Request):
     Body(全部可选)::
 
         {"thread_id": "...", "session_id": "...",
+         "chat_session_id": "...",   # 聊天会话 ID(执行设计 §4.2,可选)
          "video_input_path": "...", "video_input_paths": ["...", ...],
          "preflight": false}
 
@@ -463,6 +465,19 @@ async def start_run(request: Request):
     session_id = str(body.get("session_id") or "").strip()
     if session_id:
         state["session_id"] = session_id
+    # 聊天会话 ID(执行设计 §4.2):与业务 session_id 分开保存;格式非法 → 400,
+    # 合法时写入初始 State,由统一 runner 建立 workflow_chat_links 关联。
+    chat_session_id_raw = str(body.get("chat_session_id") or "").strip()
+    if chat_session_id_raw:
+        from monitoring.workflow_chat_link_store import (  # 延迟:轻 import
+            ChatLinkValidationError,
+            validate_chat_session_id,
+        )
+
+        try:
+            state["chat_session_id"] = validate_chat_session_id(chat_session_id_raw)
+        except ChatLinkValidationError as e:
+            raise HTTPException(status_code=400, detail=f"chat_session_id 非法: {e}")
     paths = body.get("video_input_paths")
     single = str(body.get("video_input_path") or "").strip()
     if isinstance(paths, list) and paths:
@@ -542,3 +557,54 @@ async def resume_probe(request: Request, thread_id: str):
             ),
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /chat-sessions/{chat_session_id}/run —— 会话关联查询(只读;执行设计 §5.1)
+# ---------------------------------------------------------------------------
+@router.get("/chat-sessions/{chat_session_id}/run")
+async def chat_session_run(request: Request, chat_session_id: str):
+    """按聊天会话 ID 查询最近一次关联的工作流线程(执行设计 §5.1)。
+
+    **严格只读**:不触发 start / resume / 任何状态写(§10.3 红线 5)。
+
+    - 有关联 → 200 ``{"available": true, "chat_session_id", "thread_id",
+      "run_id", "status", "updated_at"}``;
+    - 尚无关联 → 200 ``{"available": true, "run": null}``(隐藏组件,不是错误);
+    - 会话 ID 格式非法 → 400;
+    - 关联存储(PostgreSQL)不可用 → 503 —— **不得**冒充"无关联",否则对话页
+      会把"查不了"当成"没在跑"(§5.1)。
+    """
+    _verify_same_origin(request)
+    from monitoring.workflow_chat_link_store import (  # 延迟:轻 import
+        ChatLinkStoreUnavailable,
+        ChatLinkValidationError,
+        WorkflowChatLinkStore,
+        validate_chat_session_id,
+    )
+
+    try:
+        csid = validate_chat_session_id(chat_session_id)
+    except ChatLinkValidationError as e:
+        raise HTTPException(status_code=400, detail=f"chat_session_id 非法: {e}")
+
+    try:
+        link = await run_in_threadpool(
+            WorkflowChatLinkStore().get_by_chat_session, csid
+        )
+    except ChatLinkStoreUnavailable as e:
+        logger.error("chat link query unavailable: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail="workflow chat link unavailable — 关联存储不可用,请检查 Postgres",
+        )
+    except Exception as e:  # noqa: BLE001 — 其它查询异常同样按 503 显式暴露
+        logger.error("chat link query failed: %s: %s", type(e).__name__, e)
+        raise HTTPException(
+            status_code=503,
+            detail="workflow chat link unavailable — 关联存储不可用,请检查 Postgres",
+        )
+
+    if link is None:
+        return JSONResponse({"available": True, "run": None})
+    return JSONResponse({"available": True, **link})

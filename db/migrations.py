@@ -267,6 +267,37 @@ CREATE INDEX IF NOT EXISTS idx_wre_run ON workflow_run_events (run_id);
 
 
 # ---------------------------------------------------------------------------
+# 005 — workflow_chat_links(聊天会话 ↔ 工作流线程关联,对话框节点指示设计 §4.3)
+# ---------------------------------------------------------------------------
+# 每个**聊天会话**保存最近一次关联的工作流线程:新运行启动时按
+# ``chat_session_id`` upsert 覆盖;完成 / 失败后保留最后一行(刷新页面仍能
+# 显示终态),新工作流启动再覆盖。对话页凭会话 ID 经本表解析 thread_id。
+#
+# 约束与既有表对齐(三个 ID 严格分离,执行设计 §10.3 红线 1):
+# - ``chat_session_id`` FK → ``chat_sessions``(会话删除级联清理关联);
+# - ``thread_id`` CHECK 与 ``workflow_runs`` 同规则(禁 bytes 字面量 / 路径注入)。
+_WORKFLOW_CHAT_LINKS_SQL = """
+CREATE TABLE IF NOT EXISTS workflow_chat_links (
+    chat_session_id TEXT PRIMARY KEY
+        REFERENCES chat_sessions(session_id) ON DELETE CASCADE,
+    thread_id   TEXT NOT NULL
+        CONSTRAINT workflow_chat_links_thread_id_check
+        CHECK (thread_id ~ '^[A-Za-z0-9_.:-]+$'),
+    run_id      TEXT,
+    status      TEXT NOT NULL
+        CONSTRAINT workflow_chat_links_status_check
+        CHECK (status IN ('running','waiting_human','completed','failed')),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+"""
+
+_WORKFLOW_CHAT_LINKS_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_workflow_chat_links_thread
+    ON workflow_chat_links (thread_id);
+"""
+
+
+# ---------------------------------------------------------------------------
 # 迁移清单
 # ---------------------------------------------------------------------------
 MIGRATIONS: tuple[Migration, ...] = (
@@ -303,6 +334,14 @@ MIGRATIONS: tuple[Migration, ...] = (
         statements=(
             _WORKFLOW_RUN_EVENTS_SQL,
             _WORKFLOW_RUN_EVENTS_INDEX_SQL,
+        ),
+    ),
+    Migration(
+        version=5,
+        name="create_workflow_chat_links",
+        statements=(
+            _WORKFLOW_CHAT_LINKS_SQL,
+            _WORKFLOW_CHAT_LINKS_INDEX_SQL,
         ),
     ),
 )
