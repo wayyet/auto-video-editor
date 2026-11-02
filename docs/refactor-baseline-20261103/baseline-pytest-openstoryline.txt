@@ -1,0 +1,78 @@
+.............ssss..........................FF...FFF.FF.FF............... [ 22%]
+.......................FFFFFFFFFFFFFFFFFF.FFF........FFF..F............. [ 45%]
+....sss...............................FFFFFFFFFFFFFFFFFFF..............F [ 67%]
+FFFFFFFFFF..FF.......................................................... [ 90%]
+..................ss...........                                          [100%]
+============================== warnings summary ===============================
+.venv\Lib\site-packages\fastapi\testclient.py:1
+  C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\auto-video-editor\.venv\Lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests_openstoryline/test_mcode_chat_model.py::test_model_raises_on_non_succeeded_status
+FAILED tests_openstoryline/test_mcode_chat_model.py::test_model_raises_on_nonzero_exit_code
+FAILED tests_openstoryline/test_mcode_chat_model.py::test_command_uses_stdin_and_mode_flag
+FAILED tests_openstoryline/test_mcode_chat_model.py::test_sync_generate_returns_ai_message
+FAILED tests_openstoryline/test_mcode_chat_model.py::test_async_generate_returns_ai_message
+FAILED tests_openstoryline/test_mcode_chat_model.py::test_lightweight_mode_embeds_bridge_instructions_in_prompt
+FAILED tests_openstoryline/test_mcode_chat_model.py::test_standard_mode_does_not_duplicate_bridge_instructions
+FAILED tests_openstoryline/test_mcode_chat_model.py::test_timeout_kills_process_tree
+FAILED tests_openstoryline/test_mcode_chat_model.py::test_cancel_kills_process_tree
+FAILED tests_openstoryline/test_mcode_process_env.py::test_sync_generate_receives_snapshot
+FAILED tests_openstoryline/test_mcode_process_env.py::test_async_generate_receives_snapshot
+FAILED tests_openstoryline/test_mcode_process_env.py::test_probe_receives_same_snapshot
+FAILED tests_openstoryline/test_mcode_process_env.py::test_stream_receives_same_snapshot
+FAILED tests_openstoryline/test_mcode_process_env.py::test_all_four_paths_share_one_snapshot
+FAILED tests_openstoryline/test_mcode_process_env.py::test_env_change_after_construction_does_not_leak
+FAILED tests_openstoryline/test_mcode_process_env.py::test_explicit_process_env_is_respected
+FAILED tests_openstoryline/test_mcode_process_env.py::test_stream_snapshot_survives_runtime_env_change
+FAILED tests_openstoryline/test_mcode_runner.py::test_yields_events_and_reports_exit_code
+FAILED tests_openstoryline/test_mcode_runner.py::test_first_event_arrives_before_process_exit
+FAILED tests_openstoryline/test_mcode_runner.py::test_writes_prompt_to_stdin
+FAILED tests_openstoryline/test_mcode_runner.py::test_text_deltas_concatenate_to_final_output
+FAILED tests_openstoryline/test_mcode_runner.py::test_large_stderr_is_drained_and_bounded
+FAILED tests_openstoryline/test_mcode_runner.py::test_timeout_kills_process_tree
+FAILED tests_openstoryline/test_mcode_runner.py::test_cancel_kills_process_tree
+FAILED tests_openstoryline/test_mcode_runner.py::test_schema_error_is_raised
+FAILED tests_openstoryline/test_mcode_runner.py::test_nonzero_exit_without_result_raises
+FAILED tests_openstoryline/test_mcode_runner.py::test_nonzero_exit_with_result_is_not_fatal
+FAILED tests_openstoryline/test_mcode_runner.py::test_consumer_break_terminates_child
+FAILED tests_openstoryline/test_mcode_runner.py::test_explicit_aclose_terminates_child
+FAILED tests_openstoryline/test_mcode_runner.py::test_runner_cannot_be_reused
+FAILED tests_openstoryline/test_mcode_source_isolation.py::test_langgraph_chunk_and_mcode_event_carry_the_same_text
+FAILED tests_openstoryline/test_mcode_source_isolation.py::test_mcode_failure_does_not_fall_back_to_other_model[final_json]
+FAILED tests_openstoryline/test_mcode_source_isolation.py::test_mcode_failure_does_not_fall_back_to_other_model[stream_json]
+FAILED tests_openstoryline/test_mcode_source_isolation.py::test_two_concurrent_turns_do_not_share_sink
+FAILED tests_openstoryline/test_mcode_streaming.py::test_astream_yields_deltas_in_order
+FAILED tests_openstoryline/test_mcode_streaming.py::test_first_delta_arrives_before_process_exit
+FAILED tests_openstoryline/test_mcode_streaming.py::test_streaming_command_uses_stream_json_format
+FAILED tests_openstoryline/test_mcode_streaming.py::test_final_output_equal_to_deltas_is_not_duplicated
+FAILED tests_openstoryline/test_mcode_streaming.py::test_missing_tail_is_appended_once
+FAILED tests_openstoryline/test_mcode_streaming.py::test_extra_process_text_is_not_duplicated
+FAILED tests_openstoryline/test_mcode_streaming.py::test_reasoning_never_becomes_a_chunk
+FAILED tests_openstoryline/test_mcode_streaming.py::test_reasoning_is_not_forwarded_to_event_sink
+FAILED tests_openstoryline/test_mcode_streaming.py::test_event_sink_receives_cli_events
+FAILED tests_openstoryline/test_mcode_streaming.py::test_event_sink_provider_is_called_per_stream
+FAILED tests_openstoryline/test_mcode_streaming.py::test_broken_event_sink_does_not_break_the_call
+FAILED tests_openstoryline/test_mcode_streaming.py::test_auto_transport_degrades_when_cli_lacks_stream_json
+FAILED tests_openstoryline/test_mcode_streaming.py::test_auto_transport_uses_stream_json_when_supported
+FAILED tests_openstoryline/test_mcode_streaming.py::test_final_json_transport_skips_probe
+FAILED tests_openstoryline/test_mcode_streaming.py::test_legacy_ainvoke_still_uses_json_format
+FAILED tests_openstoryline/test_mcode_streaming.py::test_legacy_invoke_still_uses_json_format
+FAILED tests_openstoryline/test_mcode_streaming.py::test_prompt_still_goes_through_stdin[auto]
+FAILED tests_openstoryline/test_mcode_streaming.py::test_prompt_still_goes_through_stdin[stream_json]
+FAILED tests_openstoryline/test_mcode_streaming.py::test_prompt_still_goes_through_stdin[final_json]
+FAILED tests_openstoryline/test_mcode_ws_e2e.py::test_ws_e2e_mcode_turn_streams_text_and_process_events
+FAILED tests_openstoryline/test_mcode_ws_e2e.py::test_ws_e2e_process_events_do_not_leak_into_body
+FAILED tests_openstoryline/test_mcode_ws_e2e.py::test_ws_e2e_llm_turn_has_no_mcode_panel_events
+FAILED tests_openstoryline/test_mcode_ws_e2e.py::test_ws_e2e_trace_is_recorded_not_in_history
+FAILED tests_openstoryline/test_mcode_ws_events.py::test_ws01_first_delta_arrives_before_cli_exit
+FAILED tests_openstoryline/test_mcode_ws_events.py::test_ws02_status_and_text_are_separate_streams
+FAILED tests_openstoryline/test_mcode_ws_events.py::test_ws02_status_events_carry_run_id_and_seq
+FAILED tests_openstoryline/test_mcode_ws_events.py::test_ws03_tool_lifecycle_order
+FAILED tests_openstoryline/test_mcode_ws_events.py::test_ws03_failed_tool_is_marked_error
+FAILED tests_openstoryline/test_mcode_ws_events.py::test_ws04_cancel_keeps_partial_text_and_stops_loading
+FAILED tests_openstoryline/test_mcode_ws_events.py::test_ws05_error_keeps_previous_text
+FAILED tests_openstoryline/test_mcode_ws_events.py::test_ws07_trace_restore_does_not_duplicate_answer
+FAILED tests_openstoryline/test_mcode_ws_events.py::test_ws_timeline_fixture_matches_real_run

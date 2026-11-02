@@ -1,0 +1,10 @@
+agent_fastapi.py:70:from open_storyline.mcp.hooks.node_interceptors import ToolInterceptor
+agent_fastapi.py:71:from open_storyline.mcp.hooks.chat_middleware import set_mcp_log_sink, reset_mcp_log_sink
+src\open_storyline\register_tools.py:12:from open_storyline.mcp.sampling_requester import make_llm
+src\open_storyline\nodes\node_state.py:3:from open_storyline.mcp.sampling_requester import SamplingLLMClient
+src\open_storyline\agent.py:18:from open_storyline.mcp.hooks.chat_middleware import handle_tool_errors, on_progress, log_tool_request
+src\open_storyline\agent.py:19:from open_storyline.mcp.sampling_handler import make_sampling_callback
+src\open_storyline\nodes\core_nodes\filter_clips.py:6:from open_storyline.mcp.sampling_requester import LLMClient, LLMOutputTruncatedError
+src\open_storyline\nodes\core_nodes\base_node.py:16:from open_storyline.mcp.sampling_requester import LLMClient
+src\open_storyline\nodes\core_nodes\base_node.py:17:from open_storyline.mcp.hooks.node_interceptors import should_inline_media_as_base64
+src\open_storyline\mcp\register_tools.py:12:from open_storyline.mcp.sampling_requester import make_llm

@@ -1,0 +1,60 @@
+........................................................................ [  5%]
+........................................................................ [ 11%]
+........................................................................ [ 17%]
+........................................................................ [ 23%]
+........................................................................ [ 29%]
+........................................................................ [ 35%]
+........................................................................ [ 40%]
+........................................................................ [ 46%]
+........................................................................ [ 52%]
+.............................s.......................................... [ 58%]
+........................................................................ [ 64%]
+..............................................................FFFFFFFFFF [ 70%]
+FFFFFFFF................................................................ [ 76%]
+........................................................................ [ 81%]
+........................................................................ [ 87%]
+........................................................................ [ 93%]
+.....sss..s.......ss............................s.s.sss.s.ss...sss.s.... [ 99%]
+ss.sss.                                                                  [100%]
+============================== warnings summary ===============================
+tests/unit/test_two_level_timeout.py::test_node_timeout_error_can_be_raised_manually
+  C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\auto-video-editor\.venv\Lib\site-packages\_pytest\threadexception.py:58: PytestUnhandledThreadExceptionWarning: Exception in thread timeout-watchdog
+  
+  Traceback (most recent call last):
+    File "C:\Program Files\Python313\Lib\threading.py", line 1044, in _bootstrap_inner
+      self.run()
+      ~~~~~~~~^^
+    File "C:\Program Files\Python313\Lib\threading.py", line 995, in run
+      self._target(*self._args, **self._kwargs)
+      ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\auto-video-editor\monitoring\timeout_watchdog.py", line 133, in _loop
+      on_timeout()
+      ~~~~~~~~~~^^
+    File "E:\Documents\kuaishou\auto-video-editor\tests\unit\test_two_level_timeout.py", line 149, in raise_it
+  monitoring.timeout_watchdog.NodeTimeoutError: forced
+  
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+    warnings.warn(pytest.PytestUnhandledThreadExceptionWarning(msg))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/unit/test_session_store_repository.py::test_save_state_atomic_writes_to_repository
+FAILED tests/unit/test_session_store_repository.py::test_save_state_atomic_raises_on_db_failure
+FAILED tests/unit/test_session_store_repository.py::test_save_state_atomic_creates_row_when_missing
+FAILED tests/unit/test_session_store_repository.py::test_save_state_atomic_does_not_resurrect_deleted_session
+FAILED tests/unit/test_session_store_repository.py::test_load_from_state_restores_from_repository
+FAILED tests/unit/test_session_store_repository.py::test_load_from_state_keeps_restore_chain
+FAILED tests/unit/test_session_store_repository.py::test_load_from_state_session_id_mismatch_returns_none
+FAILED tests/unit/test_session_store_repository.py::test_load_from_state_missing_session_returns_none
+FAILED tests/unit/test_session_store_repository.py::test_load_from_state_read_error_raises_unavailable
+FAILED tests/unit/test_session_store_repository.py::test_store_create_inserts_repository_row
+FAILED tests/unit/test_session_store_repository.py::test_store_get_loads_from_repository_on_cache_miss
+FAILED tests/unit/test_session_store_repository.py::test_store_get_returns_none_for_unknown_session
+FAILED tests/unit/test_session_store_repository.py::test_store_save_session_state_raises_on_db_failure
+FAILED tests/unit/test_session_store_repository.py::test_store_get_or_404_maps_db_error_to_503
+FAILED tests/unit/test_session_store_repository.py::test_store_forget_drops_cached_session
+FAILED tests/unit/test_session_store_repository.py::test_rate_limit_rule_list_sessions_has_own_bucket
+FAILED tests/unit/test_session_store_repository.py::test_rate_limit_rule_create_session_unchanged
+FAILED tests/unit/test_session_store_repository.py::test_rate_limit_rule_session_by_id_stays_general
+18 failed, 1189 passed, 24 skipped, 1 warning in 80.78s (0:01:20)

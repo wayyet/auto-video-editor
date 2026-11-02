@@ -1,0 +1,34 @@
+...................XXXXxx............................................... [ 31%]
+......ss...........sss.........x................EEEEEEEEEEEEEEEEEEEEEEE. [ 62%]
+........................................................................ [ 93%]
+..............                                                           [100%]
+============================== warnings summary ===============================
+tests/integration/test_human_fusion_graph.py: 216 warnings
+  C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\auto-video-editor\video_edit_capabilities\subtitle_scout.py:304: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+    pixels = list(grey.getdata())
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+ERROR tests/integration/test_sessions_api_postgres.py::test_new_session_visible_from_another_connection
+ERROR tests/integration/test_sessions_api_postgres.py::test_list_shows_session_after_conversation_round
+ERROR tests/integration/test_sessions_api_postgres.py::test_second_client_sees_the_same_list
+ERROR tests/integration/test_sessions_api_postgres.py::test_rename_survives_fresh_session_store
+ERROR tests/integration/test_sessions_api_postgres.py::test_rename_via_api_and_list_shows_new_title
+ERROR tests/integration/test_sessions_api_postgres.py::test_patch_title_source_auto_is_accepted
+ERROR tests/integration/test_sessions_api_postgres.py::test_patch_title_source_invalid_is_422
+ERROR tests/integration/test_sessions_api_postgres.py::test_soft_delete_hides_from_list_and_can_be_restored
+ERROR tests/integration/test_sessions_api_postgres.py::test_soft_delete_twice_returns_404
+ERROR tests/integration/test_sessions_api_postgres.py::test_delete_unknown_session_returns_404
+ERROR tests/integration/test_sessions_api_postgres.py::test_list_response_shape_exact
+ERROR tests/integration/test_sessions_api_postgres.py::test_list_never_returns_state_json
+ERROR tests/integration/test_sessions_api_postgres.py::test_list_limit_is_clamped
+ERROR tests/integration/test_sessions_api_postgres.py::test_list_cursor_pagination
+ERROR tests/integration/test_sessions_api_postgres.py::test_list_invalid_cursor_returns_422
+ERROR tests/integration/test_sessions_api_postgres.py::test_list_title_prefix_filter
+ERROR tests/integration/test_sessions_api_postgres.py::test_list_include_deleted_flag
+ERROR tests/integration/test_sessions_api_postgres.py::test_patch_rejects_bad_titles
+ERROR tests/integration/test_sessions_api_postgres.py::test_patch_unknown_session_returns_404
+ERROR tests/integration/test_sessions_api_postgres.py::test_list_returns_503_when_db_down
+ERROR tests/integration/test_sessions_api_postgres.py::test_save_session_state_raises_on_db_failure
+ERROR tests/integration/test_sessions_api_postgres.py::test_create_session_returns_503_when_db_down
+ERROR tests/integration/test_sessions_api_postgres.py::test_cursor_tolerates_unencoded_plus

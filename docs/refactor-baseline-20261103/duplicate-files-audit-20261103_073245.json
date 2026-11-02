@@ -1,0 +1,720 @@
+{
+  "category_totals": {
+    "mixed": 3,
+    "production_source": 54
+  },
+  "scanned_files": 803,
+  "duplicate_groups": 57,
+  "duplicate_paths": 122,
+  "skipped_large_files": [],
+  "skipped_unreadable_files": [],
+  "excluded_dirs": [
+    "__pycache__",
+    "drafts",
+    "inputs",
+    "logs",
+    "node_modules",
+    "out",
+    "outputs",
+    "vendor"
+  ],
+  "base_commit": "f2e94654b62378f901524554162a6f8008979a28",
+  "generated_at": "2026-11-03T07:32:45",
+  "groups": [
+    {
+      "sha256": "362099d402e2eaf0b9c85486816d758a0ce754f962484edbc2d572576eb7d12b",
+      "size": 8316,
+      "paths": [
+        "agent_gate/fixtures/storyline_capabilities/vlm_client.py",
+        "storyline_capabilities/vlm_client.py"
+      ],
+      "categories": [
+        "production_source",
+        "test_fixture"
+      ],
+      "category": "mixed"
+    },
+    {
+      "sha256": "b4b1b0753d72551ddc9abf20cb73153590fab54fef543e2a1991325aad9c5dea",
+      "size": 11893,
+      "paths": [
+        "docs/修改文档/refactor_dedupe_openstoryline_mcp.py",
+        "scripts/refactor_dedupe_openstoryline_mcp.py"
+      ],
+      "categories": [
+        "docs_snapshot",
+        "production_source"
+      ],
+      "category": "mixed"
+    },
+    {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0,
+      "paths": [
+        "jy_common/__init__.py",
+        "runtime/__init__.py",
+        "src/open_storyline/mcp/__init__.py",
+        "src/open_storyline/storage/__init__.py",
+        "subtitle_en.srt",
+        "tests/__init__.py",
+        "tests/integration/__init__.py",
+        "tests/unit/__init__.py",
+        "tests/unit/monitoring/__init__.py",
+        "tests/unit/video_edit_capabilities/__init__.py"
+      ],
+      "categories": [
+        "empty_init_marker",
+        "production_source"
+      ],
+      "category": "mixed"
+    },
+    {
+      "sha256": "b7d8d6f4b199ac528ae04a6cbb4d4af6a2f4d9465377d5cb88a70d44a4ec5037",
+      "size": 182,
+      "paths": [
+        "prompts/tasks/elementrec_text/en/system.md",
+        "storyline_capabilities/prompts/elementrec_text/en/system.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "efe75a56387f7d9fa589cb9647e9eac00fe02d21953d579cd192db1a4cc1881e",
+      "size": 103,
+      "paths": [
+        "prompts/tasks/elementrec_text/en/user.md",
+        "storyline_capabilities/prompts/elementrec_text/en/user.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "4be2d16735ccf012764cbc878c04e1ecfb787c4659dbd7511b22e4eb3f03a03e",
+      "size": 156,
+      "paths": [
+        "prompts/tasks/elementrec_text/zh/system.md",
+        "storyline_capabilities/prompts/elementrec_text/zh/system.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "d04094c95da48ce95b3420d2b8a0a9c48866328ec661ab2771569b58ed4fe369",
+      "size": 93,
+      "paths": [
+        "prompts/tasks/elementrec_text/zh/user.md",
+        "storyline_capabilities/prompts/elementrec_text/zh/user.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "ada23b853edb60ed1085c8458dc01fc9abdbf388c87ee8fb97bcabecaa0369a8",
+      "size": 2481,
+      "paths": [
+        "prompts/tasks/filter_clips/en/system.md",
+        "storyline_capabilities/prompts/filter_clips/en/system.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "6c3dd6167a40a1b86e09421e5b94bfb3f04593a5fa5dd8a3ce1a8b3f320907a7",
+      "size": 427,
+      "paths": [
+        "prompts/tasks/filter_clips/en/user.md",
+        "storyline_capabilities/prompts/filter_clips/en/user.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "3d1a71f88466a621b8ade38a7b11a5eeb77281da079053f4e1ca1e9a1d6657db",
+      "size": 2198,
+      "paths": [
+        "prompts/tasks/filter_clips/zh/system.md",
+        "storyline_capabilities/prompts/filter_clips/zh/system.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "b385b3710d2ca26a710baa4e74db65914a28e786824567fa35d4b1c8c752a6cc",
+      "size": 352,
+      "paths": [
+        "prompts/tasks/filter_clips/zh/user.md",
+        "storyline_capabilities/prompts/filter_clips/zh/user.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "d026fcccde88d07ecce3418e4d08112a47d28e2fc7da93ce74441117c1cc70d4",
+      "size": 2201,
+      "paths": [
+        "prompts/tasks/generate_ai_transition/en/system.md",
+        "storyline_capabilities/prompts/generate_ai_transition/en/system.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "303e363c7154c8c2b68b058d0d00f67a38ba5a5fa9b41d6aa264bb367bac6c52",
+      "size": 184,
+      "paths": [
+        "prompts/tasks/generate_ai_transition/en/user.md",
+        "storyline_capabilities/prompts/generate_ai_transition/en/user.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "d625cb438b354d737a3211f868aaeb83b6fc9448929bc1ca7f1bec945683c6a5",
+      "size": 1737,
+      "paths": [
+        "prompts/tasks/generate_ai_transition/zh/system.md",
+        "storyline_capabilities/prompts/generate_ai_transition/zh/system.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "8a62bf2c0a923f449f422d6f1df48095393306ea3498416d14075c2deacc18b0",
+      "size": 140,
+      "paths": [
+        "prompts/tasks/generate_ai_transition/zh/user.md",
+        "storyline_capabilities/prompts/generate_ai_transition/zh/user.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "5cbb7eb74e65811e89e05bfa0b61d62e37bcd8c22666f81cb18317dfd6a811ac",
+      "size": 5072,
+      "paths": [
+        "prompts/tasks/generate_script/en/system.md",
+        "storyline_capabilities/prompts/generate_script/en/system.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "62438285ccf12968999ee5d8fcd57d7aca244c4268edb76245adf38fa9226a06",
+      "size": 179,
+      "paths": [
+        "prompts/tasks/generate_script/en/user.md",
+        "storyline_capabilities/prompts/generate_script/en/user.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "9f5ced72d448fc474a18e64e06ed10c1ed86f3046a1d17f421a2af6a4233b894",
+      "size": 4840,
+      "paths": [
+        "prompts/tasks/generate_script/zh/system.md",
+        "storyline_capabilities/prompts/generate_script/zh/system.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "1a20b62abc59d52c06d898db95d63d91393a7329d8e3871c3f7815f37c738435",
+      "size": 148,
+      "paths": [
+        "prompts/tasks/generate_script/zh/user.md",
+        "storyline_capabilities/prompts/generate_script/zh/user.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "cea9175433dd4c6162b3dc9ce2a062295f3a8a39c94bdf2339ca0e23f41c5cc6",
+      "size": 249,
+      "paths": [
+        "prompts/tasks/generate_title/en/system.md",
+        "storyline_capabilities/prompts/generate_title/en/system.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "75a1a297faed568d0d57835e71afd432925f6891aeaf4bb8ade113c4a00f36bf",
+      "size": 241,
+      "paths": [
+        "prompts/tasks/generate_title/en/user.md",
+        "storyline_capabilities/prompts/generate_title/en/user.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "98dc78b9af7e763303f3d574bec2ba0b4d4b64de93e354b454e6311eb6a476fa",
+      "size": 3011,
+      "paths": [
+        "prompts/tasks/generate_title/zh/system.md",
+        "storyline_capabilities/prompts/generate_title/zh/system.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "49286c86fcbcf709c66ff2ef6bd0bbb9f4d5724b8b2079336cdf9d2a8b0b2663",
+      "size": 256,
+      "paths": [
+        "prompts/tasks/generate_title/zh/user.md",
+        "storyline_capabilities/prompts/generate_title/zh/user.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "f1a16c480abc83c17f30306f30a9a326c59d8a82b5a6526acaf849be9fb3e3fe",
+      "size": 355,
+      "paths": [
+        "prompts/tasks/generate_voiceover/en/system.md",
+        "storyline_capabilities/prompts/generate_voiceover/en/system.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "c1007bc437b51af34a361128ed4d5a7181bfd4ecc2350fa5463639c810da0038",
+      "size": 974,
+      "paths": [
+        "prompts/tasks/generate_voiceover/en/user.md",
+        "storyline_capabilities/prompts/generate_voiceover/en/user.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "f9b00d5c512e724c653039edbe1f3ddc3b88ea6aebc28fced9a42b288a327efd",
+      "size": 791,
+      "paths": [
+        "prompts/tasks/generate_voiceover/zh/system.md",
+        "storyline_capabilities/prompts/generate_voiceover/zh/system.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "ae0031415fe6ada4243bd61ca35289e7e6458d004dbca05821e057d28eb7e87f",
+      "size": 803,
+      "paths": [
+        "prompts/tasks/generate_voiceover/zh/user.md",
+        "storyline_capabilities/prompts/generate_voiceover/zh/user.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "d62fcc2fcf2fd5e2d58c7fac3f12df618dbb4b6e262d29ff13d8fd0fab26aa7d",
+      "size": 7143,
+      "paths": [
+        "prompts/tasks/group_clips/en/system.md",
+        "storyline_capabilities/prompts/group_clips/en/system.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "e522579cd1883aee9ae0e9d6b5b65496d64457bc1fe40c9c72e3282b4bbd037a",
+      "size": 261,
+      "paths": [
+        "prompts/tasks/group_clips/en/user.md",
+        "storyline_capabilities/prompts/group_clips/en/user.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "1b673f7919a626d436e46fcc8137e6e3e1ca9cbf41cd7c54221ed5743c7fa7eb",
+      "size": 6716,
+      "paths": [
+        "prompts/tasks/group_clips/zh/system.md",
+        "storyline_capabilities/prompts/group_clips/zh/system.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "671e41bbbf88aca27941683cc225e590a74f1064e9a58296d08b6e483e7b5535",
+      "size": 135,
+      "paths": [
+        "prompts/tasks/group_clips/zh/user.md",
+        "storyline_capabilities/prompts/group_clips/zh/user.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "a4cd766386ae1bfa2df97c3022545c84cf12eeb7f0f9d9e7e9a63738987d5e68",
+      "size": 5883,
+      "paths": [
+        "prompts/tasks/instruction/en/system.md",
+        "storyline_capabilities/prompts/instruction/en/system.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "661f5778bfbfbe5163b5d50b7dd65c75d690eb04ecfd56523b053d93addb9469",
+      "size": 5048,
+      "paths": [
+        "prompts/tasks/instruction/zh/system.md",
+        "storyline_capabilities/prompts/instruction/zh/system.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "ce3d994425ff72d48f8b4a02f9906c9d8084c83ed1398cfb6e82bbde957251d8",
+      "size": 1428,
+      "paths": [
+        "prompts/tasks/scripts/en/omni_bgm_label.md",
+        "storyline_capabilities/prompts/scripts/en/omni_bgm_label.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "67b2c992778d32bb3365f7046d2d6b34cfff1ab0476fc37dee42ced4af7264b2",
+      "size": 527,
+      "paths": [
+        "prompts/tasks/scripts/en/script_template_label.md",
+        "storyline_capabilities/prompts/scripts/en/script_template_label.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "997a2145111a52891afdf754f1831829abd0f2f10a1e1b597fec4dd624d4ac87",
+      "size": 1307,
+      "paths": [
+        "prompts/tasks/scripts/zh/omni_bgm_label.md",
+        "storyline_capabilities/prompts/scripts/zh/omni_bgm_label.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "85c8089501001124989b30d8d61114209bd9789f7b38a5bc68ffc8150b2c1554",
+      "size": 432,
+      "paths": [
+        "prompts/tasks/scripts/zh/script_template_label.md",
+        "storyline_capabilities/prompts/scripts/zh/script_template_label.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "a2bfc5e03eeb2dbd6e662f41039d31af6e8c10b3545205710594a6e0c60ea060",
+      "size": 177,
+      "paths": [
+        "prompts/tasks/select_bgm/en/system.md",
+        "storyline_capabilities/prompts/select_bgm/en/system.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "04c007f165a614113f4736c00cceda999f45e5a570dc8d3f5f40417831693cc5",
+      "size": 72,
+      "paths": [
+        "prompts/tasks/select_bgm/en/user.md",
+        "storyline_capabilities/prompts/select_bgm/en/user.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "db7f41a6ec0774075ab4ba2a3f54e02a846bc51e1c79782d0f15a0baf02d6f43",
+      "size": 144,
+      "paths": [
+        "prompts/tasks/select_bgm/zh/system.md",
+        "storyline_capabilities/prompts/select_bgm/zh/system.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "c9dc67da8ba5a48d452e1d8c3f689acc595952c760e2802d1eaafbeb4a3bb65f",
+      "size": 70,
+      "paths": [
+        "prompts/tasks/select_bgm/zh/user.md",
+        "storyline_capabilities/prompts/select_bgm/zh/user.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "c37a7b6b6b2eb5d36f4b63c2ee95857851fe55be1d8c8bba34d78eac4ff8de5a",
+      "size": 3515,
+      "paths": [
+        "prompts/tasks/speech_rough_cut/zh/system.md",
+        "storyline_capabilities/prompts/speech_rough_cut/zh/system.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "5fde3be577c7b0e7e4ad574ce640409f3364db1b273b9b865bac292c1801f747",
+      "size": 204,
+      "paths": [
+        "prompts/tasks/speech_rough_cut/zh/user.md",
+        "storyline_capabilities/prompts/speech_rough_cut/zh/user.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "8fcf8e20f7a51a784a8242b63f410bee98c81388da3ce90b847c7de47444fbdd",
+      "size": 3242,
+      "paths": [
+        "prompts/tasks/understand_clips/en/system_detail.md",
+        "storyline_capabilities/prompts/understand_clips/en/system_detail.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "d9a5199a96589a0c116dffbbc7d2ef9761fbd19ac1169c298bd4963d03b3b5dd",
+      "size": 671,
+      "paths": [
+        "prompts/tasks/understand_clips/en/system_overall.md",
+        "storyline_capabilities/prompts/understand_clips/en/system_overall.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "6396ca036b720783f18fae573597f54dffdee58690d973e9571b4c68618c9011",
+      "size": 53,
+      "paths": [
+        "prompts/tasks/understand_clips/en/user_detail.md",
+        "storyline_capabilities/prompts/understand_clips/en/user_detail.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "da346dc8f4486b2098a15bd52d1e2da54031738e31f7c0d3ef545513e755857c",
+      "size": 233,
+      "paths": [
+        "prompts/tasks/understand_clips/en/user_overall.md",
+        "storyline_capabilities/prompts/understand_clips/en/user_overall.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "841958cb2b7d2771d3e204deff767581c55b65bdacaa262b22d2ca0342b697ab",
+      "size": 2907,
+      "paths": [
+        "prompts/tasks/understand_clips/zh/system_detail.md",
+        "storyline_capabilities/prompts/understand_clips/zh/system_detail.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "6962be4fcb39490d179f3ffbc4ede914356f623f19b1301cedbaad43da4afa7a",
+      "size": 295,
+      "paths": [
+        "prompts/tasks/understand_clips/zh/system_overall.md",
+        "storyline_capabilities/prompts/understand_clips/zh/system_overall.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "08ba93731be1221ad33d1ca5bb4e3540a4c71b084c94c04cdd32911b27aa0eb2",
+      "size": 109,
+      "paths": [
+        "prompts/tasks/understand_clips/zh/user_detail.md",
+        "storyline_capabilities/prompts/understand_clips/zh/user_detail.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "50641b2fdac6cee2ee4a43376abd2e994c9e03bfa1fbe33b97696d9673baad50",
+      "size": 185,
+      "paths": [
+        "prompts/tasks/understand_clips/zh/user_overall.md",
+        "storyline_capabilities/prompts/understand_clips/zh/user_overall.md"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "9a3f4a8e99ee1b570758fb12d6ef4958acc2c6f737f86b0e7e826bb62832bb4c",
+      "size": 8939,
+      "paths": [
+        "src/open_storyline/hooks/chat_middleware.py",
+        "src/open_storyline/mcp/hooks/chat_middleware.py"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "90335d0245bf56c8cdcba93bc6183ee0c89d05e9c7c6341d5867e4c17d786233",
+      "size": 21828,
+      "paths": [
+        "src/open_storyline/hooks/node_interceptors.py",
+        "src/open_storyline/mcp/hooks/node_interceptors.py"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "d4b3275a54b5902d72ed394da8eb5473bdd7130493ae0a363bdcc361d7c0113e",
+      "size": 7693,
+      "paths": [
+        "src/open_storyline/mcp/register_tools.py",
+        "src/open_storyline/register_tools.py"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "433d100427b7f1ac549d4b5fcb659a06e5fbe93e6213b883b55e991935a205f9",
+      "size": 20048,
+      "paths": [
+        "src/open_storyline/mcp/sampling_handler.py",
+        "src/open_storyline/sampling_handler.py"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "f25e00307043e32dd6264dd5c1d60aaac7af88b2c080fcf19fd3d528fae16b02",
+      "size": 7004,
+      "paths": [
+        "src/open_storyline/mcp/sampling_requester.py",
+        "src/open_storyline/sampling_requester.py"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    },
+    {
+      "sha256": "09130c05337d3a883e364de1c8459ddae178100485956bf8a07c2ac75a11eea1",
+      "size": 1875,
+      "paths": [
+        "src/open_storyline/mcp/server.py",
+        "src/open_storyline/server.py"
+      ],
+      "categories": [
+        "production_source"
+      ],
+      "category": "production_source"
+    }
+  ]
+}
