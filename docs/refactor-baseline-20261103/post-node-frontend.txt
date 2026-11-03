@@ -1,0 +1,45 @@
+✔ graphSchemaKey:workflow_id + mode + schema_version 隔离(TC-16 前提) (1.9409ms)
+✔ graphNodeNameMap:name 缺失回退 node_id;非 task 节点也进映射 (0.3514ms)
+✔ deriveIndicatorView:单 running 节点 -> 中文大字(TC-02) (1.8808ms)
+✔ deriveIndicatorView:并行多节点 -> 全部展示、标记(并行),不互相覆盖(TC-04) (0.3466ms)
+✔ deriveIndicatorView:retrying 保留名称并切状态(TC-05) (0.4291ms)
+✔ deriveIndicatorView:node.waiting_input -> 等待人工操作区(TC-06) (0.3413ms)
+✔ deriveIndicatorView:run.interrupted 无 waiting 节点 -> 仅等待文本;resumed 回到运行中(TC-07) (1.4342ms)
+✔ deriveIndicatorView:node.succeeded 移除已完成,其余活动节点保留 (0.3077ms)
+✔ deriveIndicatorView:run.completed / run.failed 终态(TC-08/TC-09) (0.401ms)
+✔ deriveIndicatorView:store_error -> 暂不可用,不冒充节点(TC-15) (0.4478ms)
+✔ deriveIndicatorView:Schema 缺失节点 -> 降级 node_id 并记录 unmapped(§5.3) (0.2718ms)
+✔ deriveIndicatorView:零事件时用关联状态兜底;running 关联显示空运行视图 (0.3289ms)
+✔ 会话关联建立:订阅 runEvents、DOM 结构、中文节点渲染(TC-01/TC-02) (153.1347ms)
+✔ Last-Event-ID 补发重叠:同 id/旧 id 重复投递不重复更新、不倒退(TC-12) (243.759ms)
+✔ store_error 帧 -> 暂不可用;后续事件恢复(TC-15) (363.5948ms)
+✔ 关联查询 503 -> 暂不可用 + 有限重试,恢复后正常订阅(TC-15/§6.6) (346.4905ms)
+✔ 无关联(run:null) -> 隐藏组件、不订阅(TC-13) (76.3835ms)
+✔ 会话切换:旧 EventSource 关闭、状态清空,新会话独立订阅(TC-10) (363.8944ms)
+✔ 新工作流替换旧 thread:关旧流、重置 reducer(§6.6) (258.7703ms)
+✔ run.completed -> 显示工作流已完成(TC-08) (180.99ms)
+✔ turn 开始定位:组件行插到当前轮气泡前;新 turn 移动(阶段 5 §6.1) (182.0508ms)
+✔ clearAll 清掉组件行后 onChatCleared 重新挂载(TC-11 前提) (74.82ms)
+✔ 同会话幂等:onSessionChanged 重复调用不重复订阅 (182.0297ms)
+✔ started/succeeded/failed/waiting 状态机与耗时历史 (3.4439ms)
+✔ retrying 保留历史不覆盖(§11.1) (0.2889ms)
+✔ resumed 从等待转回执行中 (0.1659ms)
+✔ 并行超步:两个节点同时活动 (0.363ms)
+✔ 重放去重:id <= cursor 不重复应用;null id 照常应用不推进游标 (0.1991ms)
+✔ run 状态机 + branch.selected 记录 (0.2178ms)
+✔ finalizeSkipped 仅终态生效,且不动禁用/不可达节点 (0.2439ms)
+✔ finalizeSkipped 终态后标记未执行节点 (0.1984ms)
+✔ edgeStates:双端执行过才点亮;END 边单侧判定;running 目标边 active (0.4427ms)
+✔ edgeStates:END 门边未命中不点亮;单出边源完成后点亮 (0.3506ms)
+✔ edgeStates:挂起(等待人工)时 END 边不点亮 (0.1549ms)
+✔ 布局 key:主图带 mode+schema_version;旧子流程 key 不变 (0.1377ms)
+✔ deriveRunState 与后端快照同规则 (0.1707ms)
+✔ normalizeMainGraph 推导依赖与后继,保留元数据 (0.4011ms)
+ℹ tests 37
+ℹ suites 0
+ℹ pass 37
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2546.6635

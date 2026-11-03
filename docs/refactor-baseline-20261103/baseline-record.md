@@ -79,3 +79,27 @@ pytest 计数来自 junit XML（`baseline-pytest-*.xml`），通过/失败/跳�
 - `scripts/refactor_dedupe_openstoryline_mcp.py`（交付脚本）、`scripts/audit_duplicate_files.py`、`scripts/capture_graph_schema_snapshots.py`、`scripts/capture_prompt_golden.py`
 - `docs/refactor-baseline-20261103/`：本文件 + 4 份 Schema JSON + 审计 JSON/MD + 4 份 junit XML 与测试输出 + 引用扫描记录
 - `tests/unit/golden/prompt_render_golden.json` + `tests/unit/test_dual_prompt_loader_semantics.py`（重构前预跑通过）
+
+---
+
+## 重构后复核（阶段 1 / 2A / 2B 完成后，2026-11-03 08:08）
+
+各阶段提交：阶段 1 `refactor(mcp)`、阶段 2A `refactor(prompts)` 资源统一、阶段 2B `refactor(prompts)` 共享 Loader（见 `git log refactor/dedupe-openstoryline-mcp-20261103`）。
+
+### 全量回归对照（junit XML：`post-pytest-*.xml` vs `baseline-pytest-*.xml`）
+
+| 套件 | 基线 通过/总数(败/错/跳) | 重构后 通过/总数(败/错/跳) | 新增失败 |
+|---|---|---|---|
+| `tests/unit` | 1189/1231 (18/0/24) | 1228/1270 (18/0/24) | **0**（+39 为本次新增的语义/策略/golden 测试，全过） |
+| `tests/integration` | 199/230 (0/23/8) | 199/230 (0/23/8) | **0**（23 个 Postgres 存量 ERROR 不变） |
+| `tests_openstoryline` | 244/319 (66/0/9) | 250/325 (66/0/9) | **0**（+6 为 MCP 兼容身份测试，全过；66 个存量失败集合逐项一致） |
+| `node --test` 前端 | 37/37 | 37/37 | 0 |
+
+### 静态验收
+
+- Schema 快照：四种配置组合重构后重采（`schema-snapshots-post/`），schema 与基线**逐字节一致**。
+- `graph.py` / `db/` / `pyproject.toml` 零改动；节点统计 53/44/10 不变。
+- 删除清单仅含 `storyline_capabilities/prompts/` 的 48 份 `.md` 副本；docs 快照、fixture、`__init__.py` 无一删除。
+- 重复文件审计：57 组 → 3 组（-48 提示词、-6 MCP），`duplicate-files-audit-20261103_075452.json`。
+- 旧路径引用扫描：生产代码 0 处引用旧 MCP 路径（仅兼容测试字符串）。
+- openstoryline 独立环境（`.venv-openstoryline`，cwd=仓库根）：`open_storyline.mcp.server` 导入 + 节点注册表扫描通过；`open_storyline.server`/`open_storyline.hooks.*` 旧路径与规范模块对象身份一致；重构后 Facade 经 `jy_common.prompt_core` 加载模板正常（`instruction.system` 2174 字符）。`create_server()` 完整冒烟仍受既有环境缺口限制（`resource/script_templates/meta.json` 缺失，与本次重构无关）。
