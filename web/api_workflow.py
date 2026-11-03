@@ -1,46 +1,38 @@
-"""工作流监控 API:``/api/workflow/*``(设计《工作流流程图与实时节点追踪》§6.2-E,阶段4)。
+"""工作流监控 API:``/api/workflow/*``(**只读**;单流水线架构 2026-11-04 阶段1)。
 
 宿主与代码组织
 --------------
-- 宿主是 ``agent_fastapi.py`` 的 FastAPI 应用(uvicorn 绑定 ``127.0.0.1:7860``,
-  start_production.ps1:678)。本模块是**独立 router**,由主文件
-  ``app.include_router(...)`` 挂载 —— 与 ``/api/system/import-video`` 同层,
-  不进 FastMCP 的 ``server.py``,也不再膨胀主文件(设计 §11.8)。
-- 导入方式:``from web.api_workflow import router``(仓库根在 sys.path 上,
-  ``web`` 为命名空间包;2026-11-01 扁平化后本文件随 web/ 上移仓库根)。
+- 宿主是仓库根 ``monitor_fastapi.py`` 的独立 FastAPI 应用(uvicorn 绑定
+  ``127.0.0.1:7860``;主 `.venv`):``python -m uvicorn monitor_fastapi:app``。
+- 本模块是**独立只读 router**:`from web.api_workflow import router`。
+- 2026-11-04 起,监控不再承担工作流启动职责:工作流触发只有两条路径 ——
+  A. 直接 CLI ``scripts/run_workflow.py``;B. ``agent_gate``(MCP / drive)。
+  原 ``POST /runs``(CLI 子进程拉起)与 ``GET /chat-sessions/{id}/run``
+  (聊天会话关联查询)已随旧聊天运行时下线一并移除。
 
-六个端点(设计 §6.2-E 表 + 执行设计《对话框显示 LangGraph 当前运行节点》§5.1)
-------------------------
+四个端点
+--------
 =========================================== =================================================
-``GET  /graph``                             §4.3 图 JSON(拓扑服务缓存;只构图不执行,§11.5)
-``POST /runs``                              显式启动运行(主 venv CLI 子进程;见下"关键决策")
+``GET  /graph``                             图 JSON(拓扑服务缓存;只构图不执行,§11.5)
 ``GET  /runs/{thread_id}``                  运行快照:事件计数/游标/最近事件/派生状态
 ``GET  /runs/{thread_id}/events``           SSE 事件流;``Last-Event-ID`` 补发
-``POST /runs/{thread_id}/resume``           挂起探测 + 外部恢复指引(见下"关键决策")
-``GET  /chat-sessions/{chat_session_id}/run`` 会话关联查询(只读;执行设计 §5.1,严格 GET)
+``GET  /runs/{thread_id}/resume-status``    挂起探测 + 外部恢复指引(见下"关键决策")
 =========================================== =================================================
 
 关键决策(为什么这样落)
 ----------------------
-1. **启动与订阅分离**(§6.2-E 要点 1):``GET .../events`` 只读事件表,
-   绝不触发图执行;页面刷新 = 重复 GET = 只重放,不产生第二次 run。
+1. **监控只读**(评审修订版计划 §4.4):本 router 只查询、不启动、不恢复、
+   不修改运行状态。页面刷新 = 重复 GET = 只重放,不产生第二次 run。
 2. **先持久化,后推送 / 不依赖内存队列**(§11.4):本模块不自产事件 ——
-   事件由统一 runner 写入共享 PG 事件表(CLI 子进程 / ``agent_gate`` worker
-   分属不同进程、不同 venv);SSE = 从事件表补发 + 短轮询跟进。
-3. **POST /runs 用主 venv CLI 子进程**:Web 进程(openstoryline venv)的
-   langgraph 是 1.1.10,与生产运行时(主 venv 1.2.9 + editable
-   langgraph-checkpoint 4.1.1)**不同版本** —— 在 Web 进程内跑图会踩
-   checkpoint 格式兼容风险。子进程跑 ``scripts/run_workflow.py``:它经统一
-   runner(阶段3),产出事件与 CLI 完全一致(§9.7 任务 5),且不把 Web 服务
-   变成图运行时(§3.2"不另造任务调度系统")。
-4. **resume 端点取"仅查询"形态**:设计 §6.2-E 明确允许
-   ("或仅查询外部恢复后的事件")。理由同 3 —— Web 进程对生产 checkpoint 执行
-   ``Command(resume=...)`` 有跨版本写坏 checkpoint 的风险。本端点做挂起探测 +
-   返回外部恢复通道指引;外部恢复(agent_gate MCP ``human_resume`` / 人工脚本)
-   完成后,事件按游标自然补发。
-5. **访问控制**(§6.2-E 要点 4):uvicorn 已绑定 127.0.0.1;本模块再校验
+   事件由统一 runner 写入共享 PG 事件表(直接 CLI / ``agent_gate`` worker
+   分属不同进程);SSE = 从事件表补发 + 短轮询跟进。
+3. **resume 端点取"仅查询"形态,并以 GET 命名为 ``resume-status``**
+   (R-22:避免接口名让人误以为会执行恢复):本端点做挂起探测 +
+   返回外部恢复通道指引;实际恢复只通过对应执行控制器(agent_gate
+   ``resume`` / 直接 CLI 的恢复入口),完成后事件按游标自然补发。
+4. **访问控制**(§6.2-E 要点 4):uvicorn 已绑定 127.0.0.1;本模块再校验
    ``Origin``,只接受本机来源,默认拒绝跨源。
-6. **事件存储不可用必须显式报错**(§6.2-D):连接时
+5. **事件存储不可用必须显式报错**(§6.2-D):连接时
    ``latest_snapshot().available=False`` → 503;流中断连 → ``store_error``
    帧后关流。不得静默把已开始的任务显示为成功。
 
@@ -60,8 +52,6 @@ import asyncio
 import json
 import logging
 import re
-import subprocess
-import sys
 import threading
 import time
 from pathlib import Path
@@ -77,14 +67,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/workflow")
 
 # ---------------------------------------------------------------------------
-# 常量(本模块本地,不依赖主仓 config —— 跨 venv 轻量化)
+# 常量(本模块本地,不依赖主仓 config —— 跨进程轻量化)
 # ---------------------------------------------------------------------------
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-#: Web 进程拉起运行用的主 venv 解释器(统一 runner 在那边)
-_MAIN_VENV_PYTHON = _REPO_ROOT / ".venv" / "Scripts" / "python.exe"
-_MAIN_CLI = _REPO_ROOT / "scripts" / "run_workflow.py"
-#: POST /runs 子进程日志(工作区 gitignore 范围内)
-_WEB_RUNS_DIR = _REPO_ROOT / "outputs" / "web_runs"
+def repo_root() -> Path:
+    """仓库根(= ``web/`` 的父目录)。
+
+    R-05 修正:旧实现 ``parents[2]`` 解析到仓库**父**目录(历史包袱:
+    本文件 2026-11-01 前位于 ``web/`` 之外)。所有派生路径必须从本函数取。
+    """
+    return Path(__file__).resolve().parents[1]
+
+
+_REPO_ROOT = repo_root()
 
 #: thread_id 白名单(与 workflow_runs 表 CHECK 同规则;同时防路径注入)
 _THREAD_ID_RE = re.compile(r"^[A-Za-z0-9_.:\-]{1,128}$")
@@ -144,14 +138,6 @@ def _verify_same_origin(request: Request) -> None:
     host = (urlsplit(origin).hostname or "").lower()
     if host not in ("127.0.0.1", "localhost", "::1"):
         raise HTTPException(status_code=403, detail=f"cross-origin rejected: {origin}")
-
-
-async def _json_body(request: Request) -> dict:
-    try:
-        data = await request.json()
-    except Exception:
-        return {}
-    return data if isinstance(data, dict) else {}
 
 
 # ---------------------------------------------------------------------------
@@ -364,165 +350,16 @@ async def run_events(request: Request, thread_id: str):
 
 
 # ---------------------------------------------------------------------------
-# POST /runs —— 显式启动运行(主 venv CLI 子进程)
+# GET /runs/{thread_id}/resume-status —— 挂起探测 + 外部恢复指引(关键决策 3)
 # ---------------------------------------------------------------------------
-def _spawn_cli_run(thread_id: str, initial_state: Optional[dict], *, preflight: bool) -> dict[str, Any]:
-    """子进程拉起主 venv CLI(统一 runner;关键决策 3)。
-
-    返回 spawn 信息 dict;失败抛 ``RuntimeError``(端点转 500)。
-    输出重定向到 ``outputs/web_runs/<thread_id>.log``(thread_id 已过白名单,
-    无路径注入面)。
-    """
-    python = str(_MAIN_VENV_PYTHON) if _MAIN_VENV_PYTHON.exists() else sys.executable
-    if not _MAIN_CLI.exists():
-        raise RuntimeError(f"主 CLI 不存在: {_MAIN_CLI}")
-
-    args = [python, str(_MAIN_CLI), "--thread-id", thread_id]
-    if not preflight:
-        # Web 拉起默认跳过 pre-flight:它需要管理员权限(Start-Service),
-        # uvicorn 进程通常没有;环境就绪由"Web 服务本身在跑"背书。
-        args.append("--skip-preflight")
-    state_file: Optional[Path] = None
-    if initial_state:
-        _WEB_RUNS_DIR.mkdir(parents=True, exist_ok=True)
-        state_file = _WEB_RUNS_DIR / f"initial_state_{thread_id}.json"
-        state_file.write_text(
-            json.dumps(initial_state, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        args += ["--initial-state-json", str(state_file)]
-
-    _WEB_RUNS_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = _WEB_RUNS_DIR / f"{thread_id}.log"
-    kw: dict[str, Any] = {}
-    if sys.platform == "nt":
-        kw["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-    else:
-        kw["start_new_session"] = True
-    try:
-        with open(log_path, "ab") as logf:
-            proc = subprocess.Popen(
-                args,
-                stdin=subprocess.DEVNULL,
-                stdout=logf,
-                stderr=logf,
-                cwd=str(_REPO_ROOT),
-                close_fds=True,
-                **kw,
-            )
-    except OSError as e:
-        raise RuntimeError(f"子进程拉起失败: {e}") from e
-    return {
-        "pid": proc.pid,
-        "log": str(log_path),
-        "python": python,
-        "preflight": bool(preflight),
-    }
-
-
-def _new_thread_id() -> str:
-    import uuid
-
-    return f"video-web-{uuid.uuid4().hex[:8]}"
-
-
-@router.post("/runs")
-async def start_run(request: Request):
-    """显式启动运行(§6.2-E:启动与订阅分离;重复启动防护见 409)。
-
-    Body(全部可选)::
-
-        {"thread_id": "...", "session_id": "...",
-         "chat_session_id": "...",   # 聊天会话 ID(执行设计 §4.2,可选)
-         "video_input_path": "...", "video_input_paths": ["...", ...],
-         "preflight": false}
-
-    返回 202 + spawn 信息;运行事件由统一 runner 落 PG 事件表,
-    用 ``GET /runs/{thread_id}/events`` 订阅。
-    """
-    _verify_same_origin(request)
-    body = await _json_body(request)
-
-    thread_id = str(body.get("thread_id") or "").strip() or _new_thread_id()
-    tid = _validate_thread_id(thread_id)
-
-    # 防重复启动:事件表里已有未结束的运行 → 409(§11.5:刷新/重连不得触发运行)
-    snap = await run_in_threadpool(_snapshot, tid)
-    if snap.get("available") and int(snap.get("event_count") or 0) > 0:
-        state = snap.get("state")
-        if state in ("running", "waiting_human"):
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"thread {tid} 已有进行中的运行(state={state});"
-                    "请订阅 GET /api/workflow/runs/"
-                    + tid
-                    + "/events 观察,不要重复启动"
-                ),
-            )
-
-    # initial state:白名单字段(§3.1 第 9 条:不透传任意 state)
-    state: dict[str, Any] = {}
-    session_id = str(body.get("session_id") or "").strip()
-    if session_id:
-        state["session_id"] = session_id
-    # 聊天会话 ID(执行设计 §4.2):与业务 session_id 分开保存;格式非法 → 400,
-    # 合法时写入初始 State,由统一 runner 建立 workflow_chat_links 关联。
-    chat_session_id_raw = str(body.get("chat_session_id") or "").strip()
-    if chat_session_id_raw:
-        from monitoring.workflow_chat_link_store import (  # 延迟:轻 import
-            ChatLinkValidationError,
-            validate_chat_session_id,
-        )
-
-        try:
-            state["chat_session_id"] = validate_chat_session_id(chat_session_id_raw)
-        except ChatLinkValidationError as e:
-            raise HTTPException(status_code=400, detail=f"chat_session_id 非法: {e}")
-    paths = body.get("video_input_paths")
-    single = str(body.get("video_input_path") or "").strip()
-    if isinstance(paths, list) and paths:
-        cleaned = [str(p).strip() for p in paths if str(p or "").strip()]
-        if cleaned:
-            state["video_input_paths"] = cleaned
-            state["video_input_path"] = cleaned[0]
-    elif single:
-        state["video_input_path"] = single
-
-    preflight = bool(body.get("preflight"))
-    try:
-        info = await run_in_threadpool(
-            _spawn_cli_run, tid, state or None, preflight=preflight
-        )
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-    logger.info("workflow run spawned via API: thread=%s pid=%s", tid, info["pid"])
-    return JSONResponse(
-        {
-            "ok": True,
-            "thread_id": tid,
-            "spawned": True,
-            "pid": info["pid"],
-            "log": info["log"],
-            "preflight": info["preflight"],
-            "events_url": f"/api/workflow/runs/{tid}/events",
-            "note": "事件由统一 runner 落 PG 事件表;订阅 events_url 观察",
-        },
-        status_code=202,
-    )
-
-
-# ---------------------------------------------------------------------------
-# POST /runs/{thread_id}/resume —— 挂起探测 + 外部恢复指引(关键决策 4)
-# ---------------------------------------------------------------------------
-@router.post("/runs/{thread_id}/resume")
+@router.get("/runs/{thread_id}/resume-status")
 async def resume_probe(request: Request, thread_id: str):
-    """挂起探测 + 外部恢复指引(设计 §6.2-E 允许的"仅查询"形态)。
+    """挂起探测 + 外部恢复指引(只读;**不执行恢复**)。
 
-    Web 进程对生产 checkpoint 执行 ``Command(resume=...)`` 有跨 langgraph
-    版本写坏 checkpoint 的风险(关键决策 4),不在本端点做。真实恢复走
-    既有外部通道(agent_gate MCP ``human_resume`` / 人工脚本),完成后
-    事件按游标自然补发到订阅端。
+    命名与动词(R-22):恢复是写操作,监控不做 —— 本端点只报告"是否挂在
+    人工关卡、该由谁恢复"。实际恢复走对应执行控制器(``agent_gate resume``
+    / 直接 CLI 的恢复入口),对同一 ``thread_id`` 执行 ``Command(resume=...)``;
+    完成后事件由统一 runner 落库,本 SSE 流按游标继续补发。
     """
     _verify_same_origin(request)
     tid = _validate_thread_id(thread_id)
@@ -551,60 +388,9 @@ async def resume_probe(request: Request, thread_id: str):
                 "occurred_at": last_event.get("occurred_at"),
             },
             "resume_via": (
-                "外部通道(agent_gate MCP human_resume / 人工脚本)对同一 "
+                "外部执行控制器(agent_gate resume / 直接 CLI 恢复入口)对同一 "
                 "thread_id 执行 Command(resume=...) 后,事件将由统一 runner "
                 "落库,本 SSE 流按游标继续补发"
             ),
         }
     )
-
-
-# ---------------------------------------------------------------------------
-# GET /chat-sessions/{chat_session_id}/run —— 会话关联查询(只读;执行设计 §5.1)
-# ---------------------------------------------------------------------------
-@router.get("/chat-sessions/{chat_session_id}/run")
-async def chat_session_run(request: Request, chat_session_id: str):
-    """按聊天会话 ID 查询最近一次关联的工作流线程(执行设计 §5.1)。
-
-    **严格只读**:不触发 start / resume / 任何状态写(§10.3 红线 5)。
-
-    - 有关联 → 200 ``{"available": true, "chat_session_id", "thread_id",
-      "run_id", "status", "updated_at"}``;
-    - 尚无关联 → 200 ``{"available": true, "run": null}``(隐藏组件,不是错误);
-    - 会话 ID 格式非法 → 400;
-    - 关联存储(PostgreSQL)不可用 → 503 —— **不得**冒充"无关联",否则对话页
-      会把"查不了"当成"没在跑"(§5.1)。
-    """
-    _verify_same_origin(request)
-    from monitoring.workflow_chat_link_store import (  # 延迟:轻 import
-        ChatLinkStoreUnavailable,
-        ChatLinkValidationError,
-        WorkflowChatLinkStore,
-        validate_chat_session_id,
-    )
-
-    try:
-        csid = validate_chat_session_id(chat_session_id)
-    except ChatLinkValidationError as e:
-        raise HTTPException(status_code=400, detail=f"chat_session_id 非法: {e}")
-
-    try:
-        link = await run_in_threadpool(
-            WorkflowChatLinkStore().get_by_chat_session, csid
-        )
-    except ChatLinkStoreUnavailable as e:
-        logger.error("chat link query unavailable: %s", e)
-        raise HTTPException(
-            status_code=503,
-            detail="workflow chat link unavailable — 关联存储不可用,请检查 Postgres",
-        )
-    except Exception as e:  # noqa: BLE001 — 其它查询异常同样按 503 显式暴露
-        logger.error("chat link query failed: %s: %s", type(e).__name__, e)
-        raise HTTPException(
-            status_code=503,
-            detail="workflow chat link unavailable — 关联存储不可用,请检查 Postgres",
-        )
-
-    if link is None:
-        return JSONResponse({"available": True, "run": None})
-    return JSONResponse({"available": True, **link})

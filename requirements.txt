@@ -73,3 +73,8 @@ uuid_utils==0.17.0
 websockets==16.1.1
 xxhash==4.0.1
 zstandard==0.25.0
+
+# 独立监控服务 monitor_fastapi.py(单流水线架构 2026-11-04 阶段1):
+# 只读监控(快照 / SSE / node-map)宿主进主 .venv;版本为当前环境实测锁定。
+fastapi==0.162.0
+uvicorn[standard]==0.54.0

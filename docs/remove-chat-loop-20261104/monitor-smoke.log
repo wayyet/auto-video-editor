@@ -1,0 +1,11 @@
+INFO:     Started server process [21048]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:7871 (Press CTRL+C to quit)
+INFO:     127.0.0.1:61056 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61057 - "GET /node-map HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61058 - "GET /static/workflow_monitor.mjs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61060 - "GET /node_map/workflow.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61062 - "GET /api/workflow/runs/smoke-unknown/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51353 - "GET /api/workflow/graph HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62033 - "POST /api/workflow/runs HTTP/1.1" 404 Not Found

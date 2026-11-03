@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Workflow Monitor</title>
+  <style>
+    /* 独立只读监控页(单流水线架构 2026-11-04,阶段1)。
+       数据只来自 /api/workflow/* 只读端点;刷新/重连绝不触发工作流。 */
+    :root{
+      --bg:#0f0f0f; --panel:#171717; --text:#eaeaea; --muted:#b5b5b5;
+      --border:#2c2c2c; --st-run:#3b82f6; --st-done:#22c55e; --st-wait:#d97706;
+      --st-retry:#f97316; --st-fail:#ef4444;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    *{ box-sizing:border-box; }
+    body{ margin:0; background:var(--bg); color:var(--text); font-family:var(--sans); font-size:13px; }
+    #topbar{
+      height:52px; display:flex; align-items:center; gap:10px; padding:0 14px;
+      border-bottom:1px solid var(--border); background:linear-gradient(to bottom,#121212,#0f0f0f);
+    }
+    #topbar h1{ font-size:14px; margin:0 10px 0 0; font-weight:650; white-space:nowrap; }
+    #topbar a{ color:#93c5fd; font-size:12px; text-decoration:none; border:1px solid var(--border); border-radius:8px; padding:5px 8px; }
+    .btn{
+      appearance:none; background:transparent; color:var(--text); border:1px solid var(--border);
+      border-radius:8px; padding:6px 10px; font-size:12px; cursor:pointer;
+    }
+    .btn:hover{ border-color:#3a3a3a; background:#141414; }
+    #threadInput{
+      background:#0f0f0f; border:1px solid var(--border); color:var(--text);
+      border-radius:8px; padding:6px 8px; font-size:12px; font-family:var(--mono); width:240px;
+    }
+    #chip{
+      display:inline-block; padding:3px 9px; border-radius:999px; border:1px solid var(--border);
+      background:#141414; font-family:var(--mono); font-size:11px; color:var(--muted);
+    }
+    #chip.s-running{ color:#93c5fd; border-color:var(--st-run); }
+    #chip.s-waiting_human{ color:#fcd34d; border-color:var(--st-wait); }
+    #chip.s-completed{ color:#86efac; border-color:var(--st-done); }
+    #chip.s-failed{ color:#fca5a5; border-color:var(--st-fail); }
+    #counts,#meta{ font-family:var(--mono); font-size:11px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    #meta.err{ color:#fca5a5; }
+    #layout{ display:flex; height:calc(100vh - 53px); }
+    #events{ flex:1.4; overflow:auto; border-right:1px solid var(--border); }
+    #nodes{ flex:1; overflow:auto; padding:10px; }
+    h2{ font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); margin:10px 10px 6px; font-weight:650; }
+    table{ width:calc(100% - 20px); margin:0 10px 10px; border-collapse:collapse; font-family:var(--mono); font-size:11px; }
+    th{ text-align:left; color:var(--muted); border-bottom:1px solid var(--border); padding:5px 8px; position:sticky; top:0; background:var(--bg); }
+    td{ border-bottom:1px solid #242424; padding:5px 8px; vertical-align:top; word-break:break-all; }
+    td.ev-type{ white-space:nowrap; font-weight:600; }
+    .t-run\.started,.t-node\.succeeded,.t-run\.completed{ color:#86efac; }
+    .t-run\.failed,.t-node\.failed{ color:#fca5a5; }
+    .t-node\.started,.t-node\.resumed,.t-node\.retrying,.t-node\.progress,.t-run\.resumed{ color:#93c5fd; }
+    .t-run\.interrupted,.t-node\.waiting_input{ color:#fcd34d; }
+    .st{ display:inline-block; padding:1px 7px; border-radius:999px; border:1px solid var(--border); font-size:10px; }
+    .st.running{ color:#93c5fd; border-color:var(--st-run); }
+    .st.done{ color:#86efac; border-color:var(--st-done); }
+    .st.waiting{ color:#fcd34d; border-color:var(--st-wait); }
+    .st.retrying{ color:#fdba74; border-color:var(--st-retry); }
+    .st.failed{ color:#fca5a5; border-color:var(--st-fail); }
+    .hint{ color:var(--muted); font-size:11px; margin:8px 10px; }
+    #nodeEmpty{ color:var(--muted); font-style:italic; font-size:11px; margin:8px 10px; }
+  </style>
+</head>
+<body>
+  <div id="topbar">
+    <h1>Workflow Monitor</h1>
+    <input id="threadInput" spellcheck="false" placeholder="thread_id,如 video-wiring-001" />
+    <button class="btn" id="btnSub">订阅</button>
+    <button class="btn" id="btnUnsub">断开</button>
+    <span id="chip">未连接</span>
+    <span id="counts"></span>
+    <span id="meta"></span>
+    <a href="/node-map" style="margin-left:auto">节点图视图 →</a>
+  </div>
+  <div id="layout">
+    <div id="events">
+      <h2>事件流(SSE · Last-Event-ID 断线补发)</h2>
+      <div class="hint">只读:订阅/断开/刷新均为 GET,绝不触发或恢复工作流。</div>
+      <table id="evTable">
+        <thead><tr><th style="width:64px">id</th><th style="width:130px">时间</th><th style="width:150px">事件</th><th>节点 / 详情</th></tr></thead>
+        <tbody id="evBody"></tbody>
+      </table>
+    </div>
+    <div id="nodes">
+      <h2>节点状态</h2>
+      <div id="nodeEmpty">—(订阅后显示)</div>
+      <table id="ndTable" style="display:none">
+        <thead><tr><th>node</th><th style="width:90px">状态</th><th style="width:56px">attempt</th></tr></thead>
+        <tbody id="ndBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script type="module">
+    import {
+      API_PATHS, applyEvent, createMonitorState, computeCounts,
+    } from "/static/workflow_monitor.mjs";
+
+    const EVENT_TYPES = [
+      "snapshot", "store_error",
+      "run.started", "run.resumed", "run.interrupted", "run.completed", "run.failed",
+      "node.started", "node.succeeded", "node.failed", "node.waiting_input",
+      "node.resumed", "node.retrying", "node.progress", "branch.selected",
+    ];
+    const STATE_LABEL = {
+      no_events: "无事件", idle: "空闲", running: "运行中",
+      waiting_human: "等待人工操作", completed: "已完成", failed: "失败",
+    };
+    const NODE_ST_LABEL = {
+      running: "执行中", done: "已完成", waiting: "等待人工",
+      retrying: "重试中", failed: "失败",
+    };
+    const MAX_ROWS = 500;
+
+    const $ = (id) => document.getElementById(id);
+    const chip = $("chip"), counts = $("counts"), meta = $("meta");
+    const evBody = $("evBody"), ndBody = $("ndBody"), ndTable = $("ndTable"), nodeEmpty = $("nodeEmpty");
+    const threadInput = $("threadInput");
+
+    let monitor = createMonitorState();
+    let source = null;
+
+    try { threadInput.value = localStorage.getItem("wf_monitor_thread") || ""; } catch (e) {}
+
+    function setChip(stateKey, extra) {
+      chip.className = "s-" + (stateKey || "");
+      chip.textContent = (STATE_LABEL[stateKey] || stateKey || "未连接") + (extra ? ` · ${extra}` : "");
+    }
+    function renderMeta(text, isErr) {
+      meta.textContent = text || "";
+      meta.classList.toggle("err", !!isErr);
+    }
+    function renderCounts() {
+      const c = computeCounts(monitor);
+      counts.textContent = Object.keys(monitor.nodes).length
+        ? `完成 ${c.done} · 执行中 ${c.running} · 等待 ${c.waiting} · 失败 ${c.failed}` : "";
+    }
+    function fmtTime(ev) {
+      const t = ev.occurred_at || ev.timestamp || "";
+      return typeof t === "string" ? t.replace("T", " ").slice(0, 19) : "";
+    }
+    function detailOf(ev) {
+      const keys = ["node_id", "run_id", "status", "error", "detail", "branch", "message"];
+      const parts = [];
+      if (ev.node_id) parts.push(ev.node_id);
+      for (const k of keys.slice(1)) {
+        if (ev[k] !== undefined && ev[k] !== null && ev[k] !== "") {
+          parts.push(`${k}=${typeof ev[k] === "object" ? JSON.stringify(ev[k]) : ev[k]}`);
+        }
+      }
+      return parts.join("  ");
+    }
+    function appendEventRow(ev) {
+      const tr = document.createElement("tr");
+      const type = String(ev.event_type || "");
+      tr.innerHTML =
+        `<td>${ev.id ?? "-"}</td>` +
+        `<td>${fmtTime(ev)}</td>` +
+        `<td class="ev-type t-${type.replaceAll(".", "\\.")}">${type}</td>` +
+        `<td>${detailOf(ev)}</td>`;
+      evBody.appendChild(tr);
+      while (evBody.rows.length > MAX_ROWS) evBody.deleteRow(0);
+    }
+    function renderNodes() {
+      const ids = Object.keys(monitor.nodes);
+      if (!ids.length) { ndTable.style.display = "none"; nodeEmpty.style.display = ""; return; }
+      ndTable.style.display = ""; nodeEmpty.style.display = "none";
+      ndBody.innerHTML = "";
+      for (const id of ids.sort()) {
+        const n = monitor.nodes[id];
+        const label = NODE_ST_LABEL[n.status] || n.status || "—";
+        ndBody.insertAdjacentHTML("beforeend",
+          `<tr><td>${id}</td><td><span class="st ${n.status || ""}">${label}</span></td><td>${n.attempt || 1}</td></tr>`);
+      }
+    }
+    function handleEvent(esEvent) {
+      let data = {};
+      try { data = JSON.parse(esEvent.data); } catch (e) { return; }
+      const event = {
+        id: esEvent.lastEventId ? Number(esEvent.lastEventId) : null,
+        event_type: esEvent.type,
+        ...data,
+      };
+      if (esEvent.type === "snapshot") {
+        setChip(data.state || "idle", `count=${data.event_count ?? "?"}`);
+        renderMeta(`thread=${data.thread_id || "-"} · cursor=${data.last_id ?? "-"}`);
+        return;
+      }
+      if (esEvent.type === "store_error") {
+        setChip("failed", "事件存储不可用");
+        renderMeta(String(data.detail || "event store unavailable"), true);
+        return;
+      }
+      appendEventRow(event);
+      const { applied } = applyEvent(monitor, event);
+      if (!applied) return;
+      setChip(monitor.run.state, monitor.cursor ? `#${monitor.cursor}` : "");
+      renderCounts();
+      renderNodes();
+    }
+    function subscribe() {
+      const tid = (threadInput.value || "").trim();
+      if (!tid) { renderMeta("请输入 thread_id", true); return; }
+      if (source) source.close();
+      try { localStorage.setItem("wf_monitor_thread", tid); } catch (e) {}
+      monitor = createMonitorState();
+      evBody.innerHTML = "";
+      renderNodes(); renderCounts();
+      setChip("running", "连接中…");
+      renderMeta(`thread=${tid}`);
+      source = new EventSource(API_PATHS.runEvents(tid));
+      for (const t of EVENT_TYPES) source.addEventListener(t, handleEvent);
+      source.onopen = () => setChip(monitor.run.state || "running", "已连接");
+      source.onerror = () => setChip(monitor.run.state || "idle", "重连中…");
+    }
+    $("btnSub").addEventListener("click", subscribe);
+    $("btnUnsub").addEventListener("click", () => {
+      if (source) { source.close(); source = null; }
+      setChip("idle", "已断开");
+    });
+    threadInput.addEventListener("keydown", (e) => { if (e.key === "Enter") subscribe(); });
+  </script>
+</body>
+</html>

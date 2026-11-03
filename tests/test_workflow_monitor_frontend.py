@@ -8,11 +8,14 @@
 为什么要包一层 pytest
 --------------------
 
-与 ``test_media_upload_frontend.py`` 同一套路:验收命令是
-``pytest tests_openstoryline``,把 Node 用例纳入同一条命令,前端和后端
+验收命令是 ``pytest tests``,把 Node 用例纳入同一条命令,前端和后端
 一次跑完 —— 少一个「忘了跑前端测试」的缺口。
 
 Node 不在环境里时**跳过**(不判失败):前端测试只是补充证据,不是主链路。
+
+迁移说明(单流水线架构 2026-11-04 阶段1):自 ``tests_openstoryline/`` 迁入
+—— 监控前端属保留流水线;路径改为按仓库根推导(原文件以 tests_openstoryline
+所在目录为基准)。
 """
 from __future__ import annotations
 
@@ -22,9 +25,8 @@ from pathlib import Path
 
 import pytest
 
-TESTS_DIR = Path(__file__).resolve().parent
-OPENSTORYLINE_DIR = TESTS_DIR.parent
-NODE_TEST = OPENSTORYLINE_DIR / "web" / "tests" / "workflow_monitor.test.mjs"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+NODE_TEST = REPO_ROOT / "web" / "tests" / "workflow_monitor.test.mjs"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="本机没有 node,跳过前端单测")
@@ -34,7 +36,7 @@ def test_workflow_monitor_frontend_unit_tests_pass():
 
     proc = subprocess.run(
         ["node", "--test", str(NODE_TEST)],
-        cwd=str(OPENSTORYLINE_DIR),
+        cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
         encoding="utf-8",

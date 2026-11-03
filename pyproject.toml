@@ -22,6 +22,9 @@ dependencies = [
     "psycopg[binary,pool]>=3.2",            # Postgres 驱动 + 连接池
     "Pillow>=10.0",                         # Week 4:封面 PNG 本地渲染(16:9 / 4:3)
     "pydantic>=2.0",                        # storyline/contract.py 用
+    # 独立监控服务 monitor_fastapi.py(单流水线架构 2026-11-04 阶段1;只读监控)
+    "fastapi>=0.110,<1",
+    "uvicorn[standard]>=0.27,<1",
     # 禁止引入:torch / torchaudio / moviepy(ADR-001 进程隔离,不入主环境)
     # 注:`mcp` 仍由 `langgraph-sdk==0.4.4` 间接传递,主环境不再主动声明。
 ]
