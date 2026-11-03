@@ -140,23 +140,9 @@ def test_unresolved_ignores_single_braces_and_empty() -> None:
 
 # ---------------------------------------------------------------------------
 # Facade == core 等价性抽查（策略与 Facade 现行用法一一对应）
+# 注:open_storyline 侧 Facade 等价性抽查(raw_double/raise)已随旧运行时
+# 删除(单流水线架构 2026-11-04 阶段2),见 git 历史。
 # ---------------------------------------------------------------------------
-
-
-def test_openstoryline_facade_equals_raw_double_raise(tmp_path: Path) -> None:
-    from open_storyline.utils import prompts as osl_prompts
-
-    part_dir = tmp_path / "tasks" / "t" / "zh"
-    part_dir.mkdir(parents=True)
-    (part_dir / "user.md").write_text("A {{v1}} B {{ v2 }}", encoding="utf-8")
-
-    builder = osl_prompts.PromptBuilder(prompts_dir=tmp_path / "tasks")
-    variables = {"v1": "1", " v2 ": "2"}  # 严格语义：空白组名也必须命中
-    facade_out = builder.render("t", "user", lang="zh", **variables)
-    core_out = prompt_core.substitute(
-        "A {{v1}} B {{ v2 }}", variables, syntax="raw_double", missing="raise"
-    )
-    assert facade_out == core_out == "A 1 B 2"
 
 
 def test_storyline_facade_equals_dual_keep(tmp_path: Path) -> None:

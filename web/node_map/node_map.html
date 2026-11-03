@@ -1459,7 +1459,7 @@
           setOverlay("Load failed", [
             isMain ? "无法加载主工作流图(/api/workflow/graph)。"
                    : "Unable to load the JSON file.",
-            isMain ? "请确认 agent_fastapi 服务在跑(uvicorn 127.0.0.1:7860);"
+            isMain ? "请确认监控服务在跑(uvicorn monitor_fastapi:app,127.0.0.1:7860);"
                     + "首次调用需在后端构图,可能需要十几秒。"
                    : "If you opened index.html directly (file://), your browser may block fetch().",
             "",

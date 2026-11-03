@@ -27,7 +27,6 @@
 from __future__ import annotations
 
 import time
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -44,13 +43,10 @@ from state import WorkflowState
 # ---------------------------------------------------------------------------
 # 路径常量
 # ---------------------------------------------------------------------------
-# 2026-11-01 目录扁平化:OpenStoryline 代码上移仓库根,OPENSTORYLINE_DIR == 仓库根;
-# 独立 venv 为根目录 .venv-openstoryline(仅作诊断/测试引用,节点本身只探测不启动)。
-OPENSTORYLINE_DIR: Path = Path(__file__).resolve().parent.parent
-OPENSTORYLINE_AGENT: Path = OPENSTORYLINE_DIR / "agent_fastapi.py"
-OPENSTORYLINE_VENV_PY: Path = (
-    OPENSTORYLINE_DIR / ".venv-openstoryline" / "Scripts" / "python.exe"
-)
+# 2026-11-04 单流水线阶段2:原 OPENSTORYLINE_DIR / OPENSTORYLINE_AGENT(指向
+# 已删除的 agent_fastapi.py)/ OPENSTORYLINE_VENV_PY 三个死常量已移除
+# (定义后零使用)。本节点现仅消费 config 的 OPENSTORYLINE_* 常量与
+# openstoryline_web_url();阶段3 图收敛时随 human 模式一并删除本节点。
 
 
 # ---------------------------------------------------------------------------

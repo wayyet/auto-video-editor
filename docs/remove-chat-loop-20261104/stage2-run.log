@@ -1,0 +1,728 @@
+=== tests/unit ===
+........................................................................ [  5%]
+........................................................................ [ 11%]
+........................................................................ [ 16%]
+........................................................................ [ 22%]
+........................................................................ [ 27%]
+........................................................................ [ 33%]
+........................................................................ [ 39%]
+........................................................................ [ 44%]
+........................................................................ [ 50%]
+...........................s............................................ [ 55%]
+........................................................................ [ 61%]
+........................................................................ [ 67%]
+...........................EEEEEEEEEEEEEEEFFF........................... [ 72%]
+........................................................................ [ 78%]
+........................................................................ [ 83%]
+........................................................................ [ 89%]
+............................................................sss..s...... [ 95%]
+.ss............................s.s.sss.s.ss...sss.s....ss.sss.           [100%]
+=================================== ERRORS ====================================
+________ ERROR at setup of test_save_state_atomic_writes_to_repository ________
+
+tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-365/test_save_state_atomic_writes_0')
+
+    @pytest.fixture()
+    def cfg(tmp_path):
+        """一份 Settings:所有目录都落在 ``tmp_path``。"""
+>       from open_storyline.config import MCodeConfig, ProjectConfig, load_settings
+E       ModuleNotFoundError: No module named 'open_storyline'
+
+tests\unit\test_session_store_repository.py:59: ModuleNotFoundError
+________ ERROR at setup of test_save_state_atomic_raises_on_db_failure ________
+
+tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-365/test_save_state_atomic_raises_0')
+
+    @pytest.fixture()
+    def cfg(tmp_path):
+        """一份 Settings:所有目录都落在 ``tmp_path``。"""
+>       from open_storyline.config import MCodeConfig, ProjectConfig, load_settings
+E       ModuleNotFoundError: No module named 'open_storyline'
+
+tests\unit\test_session_store_repository.py:59: ModuleNotFoundError
+______ ERROR at setup of test_save_state_atomic_creates_row_when_missing ______
+
+tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-365/test_save_state_atomic_creates0')
+
+    @pytest.fixture()
+    def cfg(tmp_path):
+        """一份 Settings:所有目录都落在 ``tmp_path``。"""
+>       from open_storyline.config import MCodeConfig, ProjectConfig, load_settings
+E       ModuleNotFoundError: No module named 'open_storyline'
+
+tests\unit\test_session_store_repository.py:59: ModuleNotFoundError
+_ ERROR at setup of test_save_state_atomic_does_not_resurrect_deleted_session _
+
+tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-365/test_save_state_atomic_does_no0')
+
+    @pytest.fixture()
+    def cfg(tmp_path):
+        """一份 Settings:所有目录都落在 ``tmp_path``。"""
+>       from open_storyline.config import MCodeConfig, ProjectConfig, load_settings
+E       ModuleNotFoundError: No module named 'open_storyline'
+
+tests\unit\test_session_store_repository.py:59: ModuleNotFoundError
+_______ ERROR at setup of test_load_from_state_restores_from_repository _______
+
+tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-365/test_load_from_state_restores_0')
+
+    @pytest.fixture()
+    def cfg(tmp_path):
+        """一份 Settings:所有目录都落在 ``tmp_path``。"""
+>       from open_storyline.config import MCodeConfig, ProjectConfig, load_settings
+E       ModuleNotFoundError: No module named 'open_storyline'
+
+tests\unit\test_session_store_repository.py:59: ModuleNotFoundError
+_________ ERROR at setup of test_load_from_state_keeps_restore_chain __________
+
+tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-365/test_load_from_state_keeps_res0')
+
+    @pytest.fixture()
+    def cfg(tmp_path):
+        """一份 Settings:所有目录都落在 ``tmp_path``。"""
+>       from open_storyline.config import MCodeConfig, ProjectConfig, load_settings
+E       ModuleNotFoundError: No module named 'open_storyline'
+
+tests\unit\test_session_store_repository.py:59: ModuleNotFoundError
+___ ERROR at setup of test_load_from_state_session_id_mismatch_returns_none ___
+
+tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-365/test_load_from_state_session_i0')
+
+    @pytest.fixture()
+    def cfg(tmp_path):
+        """一份 Settings:所有目录都落在 ``tmp_path``。"""
+>       from open_storyline.config import MCodeConfig, ProjectConfig, load_settings
+E       ModuleNotFoundError: No module named 'open_storyline'
+
+tests\unit\test_session_store_repository.py:59: ModuleNotFoundError
+_____ ERROR at setup of test_load_from_state_missing_session_returns_none _____
+
+tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-365/test_load_from_state_missing_s0')
+
+    @pytest.fixture()
+    def cfg(tmp_path):
+        """一份 Settings:所有目录都落在 ``tmp_path``。"""
+>       from open_storyline.config import MCodeConfig, ProjectConfig, load_settings
+E       ModuleNotFoundError: No module named 'open_storyline'
+
+tests\unit\test_session_store_repository.py:59: ModuleNotFoundError
+____ ERROR at setup of test_load_from_state_read_error_raises_unavailable _____
+
+tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-365/test_load_from_state_read_erro0')
+
+    @pytest.fixture()
+    def cfg(tmp_path):
+        """一份 Settings:所有目录都落在 ``tmp_path``。"""
+>       from open_storyline.config import MCodeConfig, ProjectConfig, load_settings
+E       ModuleNotFoundError: No module named 'open_storyline'
+
+tests\unit\test_session_store_repository.py:59: ModuleNotFoundError
+_________ ERROR at setup of test_store_create_inserts_repository_row __________
+
+tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-365/test_store_create_inserts_repo0')
+
+    @pytest.fixture()
+    def cfg(tmp_path):
+        """一份 Settings:所有目录都落在 ``tmp_path``。"""
+>       from open_storyline.config import MCodeConfig, ProjectConfig, load_settings
+E       ModuleNotFoundError: No module named 'open_storyline'
+
+tests\unit\test_session_store_repository.py:59: ModuleNotFoundError
+____ ERROR at setup of test_store_get_loads_from_repository_on_cache_miss _____
+
+tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-365/test_store_get_loads_from_repo0')
+
+    @pytest.fixture()
+    def cfg(tmp_path):
+        """一份 Settings:所有目录都落在 ``tmp_path``。"""
+>       from open_storyline.config import MCodeConfig, ProjectConfig, load_settings
+E       ModuleNotFoundError: No module named 'open_storyline'
+
+tests\unit\test_session_store_repository.py:59: ModuleNotFoundError
+______ ERROR at setup of test_store_get_returns_none_for_unknown_session ______
+
+tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-365/test_store_get_returns_none_fo0')
+
+    @pytest.fixture()
+    def cfg(tmp_path):
+        """一份 Settings:所有目录都落在 ``tmp_path``。"""
+>       from open_storyline.config import MCodeConfig, ProjectConfig, load_settings
+E       ModuleNotFoundError: No module named 'open_storyline'
+
+tests\unit\test_session_store_repository.py:59: ModuleNotFoundError
+____ ERROR at setup of test_store_save_session_state_raises_on_db_failure _____
+
+tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-365/test_store_save_session_state_0')
+
+    @pytest.fixture()
+    def cfg(tmp_path):
+        """一份 Settings:所有目录都落在 ``tmp_path``。"""
+>       from open_storyline.config import MCodeConfig, ProjectConfig, load_settings
+E       ModuleNotFoundError: No module named 'open_storyline'
+
+tests\unit\test_session_store_repository.py:59: ModuleNotFoundError
+________ ERROR at setup of test_store_get_or_404_maps_db_error_to_503 _________
+
+tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-365/test_store_get_or_404_maps_db_0')
+
+    @pytest.fixture()
+    def cfg(tmp_path):
+        """一份 Settings:所有目录都落在 ``tmp_path``。"""
+>       from open_storyline.config import MCodeConfig, ProjectConfig, load_settings
+E       ModuleNotFoundError: No module named 'open_storyline'
+
+tests\unit\test_session_store_repository.py:59: ModuleNotFoundError
+__________ ERROR at setup of test_store_forget_drops_cached_session ___________
+
+tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-365/test_store_forget_drops_cached0')
+
+    @pytest.fixture()
+    def cfg(tmp_path):
+        """一份 Settings:所有目录都落在 ``tmp_path``。"""
+>       from open_storyline.config import MCodeConfig, ProjectConfig, load_settings
+E       ModuleNotFoundError: No module named 'open_storyline'
+
+tests\unit\test_session_store_repository.py:59: ModuleNotFoundError
+================================== FAILURES ===================================
+______________ test_rate_limit_rule_list_sessions_has_own_bucket ______________
+
+    def test_rate_limit_rule_list_sessions_has_own_bucket():
+        """``GET /api/sessions`` ⇒ 独立桶 ``list_sessions``。"""
+>       from openstoryline.agent_fastapi import _match_http_rule
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\unit\test_session_store_repository.py:477: ModuleNotFoundError
+________________ test_rate_limit_rule_create_session_unchanged ________________
+
+    def test_rate_limit_rule_create_session_unchanged():
+        """``POST /api/sessions`` 仍然是 ``create_session``(没被 GET 规则抢走)。"""
+>       from openstoryline.agent_fastapi import _match_http_rule
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\unit\test_session_store_repository.py:486: ModuleNotFoundError
+______________ test_rate_limit_rule_session_by_id_stays_general _______________
+
+    def test_rate_limit_rule_session_by_id_stays_general():
+        """``GET /api/sessions/{id}`` 仍走通用桶(行为不变)。"""
+>       from openstoryline.agent_fastapi import _match_http_rule
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\unit\test_session_store_repository.py:493: ModuleNotFoundError
+============================== warnings summary ===============================
+tests/unit/test_two_level_timeout.py::test_node_timeout_error_can_be_raised_manually
+  C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\auto-video-editor\.venv\Lib\site-packages\_pytest\threadexception.py:58: PytestUnhandledThreadExceptionWarning: Exception in thread timeout-watchdog
+  
+  Traceback (most recent call last):
+    File "C:\Program Files\Python313\Lib\threading.py", line 1044, in _bootstrap_inner
+      self.run()
+      ~~~~~~~~^^
+    File "C:\Program Files\Python313\Lib\threading.py", line 995, in run
+      self._target(*self._args, **self._kwargs)
+      ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\auto-video-editor\monitoring\timeout_watchdog.py", line 133, in _loop
+      on_timeout()
+      ~~~~~~~~~~^^
+    File "E:\Documents\kuaishou\auto-video-editor\tests\unit\test_two_level_timeout.py", line 149, in raise_it
+  monitoring.timeout_watchdog.NodeTimeoutError: forced
+  
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+    warnings.warn(pytest.PytestUnhandledThreadExceptionWarning(msg))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/unit/test_session_store_repository.py::test_rate_limit_rule_list_sessions_has_own_bucket
+FAILED tests/unit/test_session_store_repository.py::test_rate_limit_rule_create_session_unchanged
+FAILED tests/unit/test_session_store_repository.py::test_rate_limit_rule_session_by_id_stays_general
+ERROR tests/unit/test_session_store_repository.py::test_save_state_atomic_writes_to_repository
+ERROR tests/unit/test_session_store_repository.py::test_save_state_atomic_raises_on_db_failure
+ERROR tests/unit/test_session_store_repository.py::test_save_state_atomic_creates_row_when_missing
+ERROR tests/unit/test_session_store_repository.py::test_save_state_atomic_does_not_resurrect_deleted_session
+ERROR tests/unit/test_session_store_repository.py::test_load_from_state_restores_from_repository
+ERROR tests/unit/test_session_store_repository.py::test_load_from_state_keeps_restore_chain
+ERROR tests/unit/test_session_store_repository.py::test_load_from_state_session_id_mismatch_returns_none
+ERROR tests/unit/test_session_store_repository.py::test_load_from_state_missing_session_returns_none
+ERROR tests/unit/test_session_store_repository.py::test_load_from_state_read_error_raises_unavailable
+ERROR tests/unit/test_session_store_repository.py::test_store_create_inserts_repository_row
+ERROR tests/unit/test_session_store_repository.py::test_store_get_loads_from_repository_on_cache_miss
+ERROR tests/unit/test_session_store_repository.py::test_store_get_returns_none_for_unknown_session
+ERROR tests/unit/test_session_store_repository.py::test_store_save_session_state_raises_on_db_failure
+ERROR tests/unit/test_session_store_repository.py::test_store_get_or_404_maps_db_error_to_503
+ERROR tests/unit/test_session_store_repository.py::test_store_forget_drops_cached_session
+UNIT_EXIT=1
+=== tests/integration ===
+....F..............xxxxxx..........................F.................... [ 31%]
+......ss...........sss.....F...x................EEEEEEEEEEEEEEEEEEEEEEE. [ 62%]
+........................................................................ [ 94%]
+.............                                                            [100%]
+=================================== ERRORS ====================================
+_____ ERROR at setup of test_new_session_visible_from_another_connection ______
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282BF06A2E0>
+
+    @pytest.fixture(autouse=True)
+    def _relax_list_sessions_rate_limit(monkeypatch):
+        """把 ``GET /api/sessions`` 的限流桶放宽。
+    
+        限流规则本身由单测覆盖(``tests/unit/test_session_store_repository.py``);
+        这里只是别让一串集成用例把 ``list_sessions`` 桶(默认 burst=10)打爆。
+        """
+>       import openstoryline.agent_fastapi as web
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\integration\test_sessions_api_postgres.py:172: ModuleNotFoundError
+_____ ERROR at setup of test_list_shows_session_after_conversation_round ______
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282BE8C7B60>
+
+    @pytest.fixture(autouse=True)
+    def _relax_list_sessions_rate_limit(monkeypatch):
+        """把 ``GET /api/sessions`` 的限流桶放宽。
+    
+        限流规则本身由单测覆盖(``tests/unit/test_session_store_repository.py``);
+        这里只是别让一串集成用例把 ``list_sessions`` 桶(默认 burst=10)打爆。
+        """
+>       import openstoryline.agent_fastapi as web
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\integration\test_sessions_api_postgres.py:172: ModuleNotFoundError
+___________ ERROR at setup of test_second_client_sees_the_same_list ___________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282BE8C7AF0>
+
+    @pytest.fixture(autouse=True)
+    def _relax_list_sessions_rate_limit(monkeypatch):
+        """把 ``GET /api/sessions`` 的限流桶放宽。
+    
+        限流规则本身由单测覆盖(``tests/unit/test_session_store_repository.py``);
+        这里只是别让一串集成用例把 ``list_sessions`` 桶(默认 burst=10)打爆。
+        """
+>       import openstoryline.agent_fastapi as web
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\integration\test_sessions_api_postgres.py:172: ModuleNotFoundError
+_________ ERROR at setup of test_rename_survives_fresh_session_store __________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282BE4F0050>
+
+    @pytest.fixture(autouse=True)
+    def _relax_list_sessions_rate_limit(monkeypatch):
+        """把 ``GET /api/sessions`` 的限流桶放宽。
+    
+        限流规则本身由单测覆盖(``tests/unit/test_session_store_repository.py``);
+        这里只是别让一串集成用例把 ``list_sessions`` 桶(默认 burst=10)打爆。
+        """
+>       import openstoryline.agent_fastapi as web
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\integration\test_sessions_api_postgres.py:172: ModuleNotFoundError
+_______ ERROR at setup of test_rename_via_api_and_list_shows_new_title ________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282BE4F2040>
+
+    @pytest.fixture(autouse=True)
+    def _relax_list_sessions_rate_limit(monkeypatch):
+        """把 ``GET /api/sessions`` 的限流桶放宽。
+    
+        限流规则本身由单测覆盖(``tests/unit/test_session_store_repository.py``);
+        这里只是别让一串集成用例把 ``list_sessions`` 桶(默认 burst=10)打爆。
+        """
+>       import openstoryline.agent_fastapi as web
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\integration\test_sessions_api_postgres.py:172: ModuleNotFoundError
+_________ ERROR at setup of test_patch_title_source_auto_is_accepted __________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282BE4F1EF0>
+
+    @pytest.fixture(autouse=True)
+    def _relax_list_sessions_rate_limit(monkeypatch):
+        """把 ``GET /api/sessions`` 的限流桶放宽。
+    
+        限流规则本身由单测覆盖(``tests/unit/test_session_store_repository.py``);
+        这里只是别让一串集成用例把 ``list_sessions`` 桶(默认 burst=10)打爆。
+        """
+>       import openstoryline.agent_fastapi as web
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\integration\test_sessions_api_postgres.py:172: ModuleNotFoundError
+__________ ERROR at setup of test_patch_title_source_invalid_is_422 ___________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282BE4F1D30>
+
+    @pytest.fixture(autouse=True)
+    def _relax_list_sessions_rate_limit(monkeypatch):
+        """把 ``GET /api/sessions`` 的限流桶放宽。
+    
+        限流规则本身由单测覆盖(``tests/unit/test_session_store_repository.py``);
+        这里只是别让一串集成用例把 ``list_sessions`` 桶(默认 burst=10)打爆。
+        """
+>       import openstoryline.agent_fastapi as web
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\integration\test_sessions_api_postgres.py:172: ModuleNotFoundError
+___ ERROR at setup of test_soft_delete_hides_from_list_and_can_be_restored ____
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282BE4F1A20>
+
+    @pytest.fixture(autouse=True)
+    def _relax_list_sessions_rate_limit(monkeypatch):
+        """把 ``GET /api/sessions`` 的限流桶放宽。
+    
+        限流规则本身由单测覆盖(``tests/unit/test_session_store_repository.py``);
+        这里只是别让一串集成用例把 ``list_sessions`` 桶(默认 burst=10)打爆。
+        """
+>       import openstoryline.agent_fastapi as web
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\integration\test_sessions_api_postgres.py:172: ModuleNotFoundError
+____________ ERROR at setup of test_soft_delete_twice_returns_404 _____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282BF06A2E0>
+
+    @pytest.fixture(autouse=True)
+    def _relax_list_sessions_rate_limit(monkeypatch):
+        """把 ``GET /api/sessions`` 的限流桶放宽。
+    
+        限流规则本身由单测覆盖(``tests/unit/test_session_store_repository.py``);
+        这里只是别让一串集成用例把 ``list_sessions`` 桶(默认 burst=10)打爆。
+        """
+>       import openstoryline.agent_fastapi as web
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\integration\test_sessions_api_postgres.py:172: ModuleNotFoundError
+__________ ERROR at setup of test_delete_unknown_session_returns_404 __________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282BE4F0C90>
+
+    @pytest.fixture(autouse=True)
+    def _relax_list_sessions_rate_limit(monkeypatch):
+        """把 ``GET /api/sessions`` 的限流桶放宽。
+    
+        限流规则本身由单测覆盖(``tests/unit/test_session_store_repository.py``);
+        这里只是别让一串集成用例把 ``list_sessions`` 桶(默认 burst=10)打爆。
+        """
+>       import openstoryline.agent_fastapi as web
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\integration\test_sessions_api_postgres.py:172: ModuleNotFoundError
+______________ ERROR at setup of test_list_response_shape_exact _______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282BE4F0C20>
+
+    @pytest.fixture(autouse=True)
+    def _relax_list_sessions_rate_limit(monkeypatch):
+        """把 ``GET /api/sessions`` 的限流桶放宽。
+    
+        限流规则本身由单测覆盖(``tests/unit/test_session_store_repository.py``);
+        这里只是别让一串集成用例把 ``list_sessions`` 桶(默认 burst=10)打爆。
+        """
+>       import openstoryline.agent_fastapi as web
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\integration\test_sessions_api_postgres.py:172: ModuleNotFoundError
+____________ ERROR at setup of test_list_never_returns_state_json _____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282BE4F0A60>
+
+    @pytest.fixture(autouse=True)
+    def _relax_list_sessions_rate_limit(monkeypatch):
+        """把 ``GET /api/sessions`` 的限流桶放宽。
+    
+        限流规则本身由单测覆盖(``tests/unit/test_session_store_repository.py``);
+        这里只是别让一串集成用例把 ``list_sessions`` 桶(默认 burst=10)打爆。
+        """
+>       import openstoryline.agent_fastapi as web
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\integration\test_sessions_api_postgres.py:172: ModuleNotFoundError
+________________ ERROR at setup of test_list_limit_is_clamped _________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282BE4F0750>
+
+    @pytest.fixture(autouse=True)
+    def _relax_list_sessions_rate_limit(monkeypatch):
+        """把 ``GET /api/sessions`` 的限流桶放宽。
+    
+        限流规则本身由单测覆盖(``tests/unit/test_session_store_repository.py``);
+        这里只是别让一串集成用例把 ``list_sessions`` 桶(默认 burst=10)打爆。
+        """
+>       import openstoryline.agent_fastapi as web
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\integration\test_sessions_api_postgres.py:172: ModuleNotFoundError
+________________ ERROR at setup of test_list_cursor_pagination ________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282BE4F0440>
+
+    @pytest.fixture(autouse=True)
+    def _relax_list_sessions_rate_limit(monkeypatch):
+        """把 ``GET /api/sessions`` 的限流桶放宽。
+    
+        限流规则本身由单测覆盖(``tests/unit/test_session_store_repository.py``);
+        这里只是别让一串集成用例把 ``list_sessions`` 桶(默认 burst=10)打爆。
+        """
+>       import openstoryline.agent_fastapi as web
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\integration\test_sessions_api_postgres.py:172: ModuleNotFoundError
+___________ ERROR at setup of test_list_invalid_cursor_returns_422 ____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282BE4F00C0>
+
+    @pytest.fixture(autouse=True)
+    def _relax_list_sessions_rate_limit(monkeypatch):
+        """把 ``GET /api/sessions`` 的限流桶放宽。
+    
+        限流规则本身由单测覆盖(``tests/unit/test_session_store_repository.py``);
+        这里只是别让一串集成用例把 ``list_sessions`` 桶(默认 burst=10)打爆。
+        """
+>       import openstoryline.agent_fastapi as web
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\integration\test_sessions_api_postgres.py:172: ModuleNotFoundError
+_______________ ERROR at setup of test_list_title_prefix_filter _______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282BE4F1F60>
+
+    @pytest.fixture(autouse=True)
+    def _relax_list_sessions_rate_limit(monkeypatch):
+        """把 ``GET /api/sessions`` 的限流桶放宽。
+    
+        限流规则本身由单测覆盖(``tests/unit/test_session_store_repository.py``);
+        这里只是别让一串集成用例把 ``list_sessions`` 桶(默认 burst=10)打爆。
+        """
+>       import openstoryline.agent_fastapi as web
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\integration\test_sessions_api_postgres.py:172: ModuleNotFoundError
+______________ ERROR at setup of test_list_include_deleted_flag _______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282BE4F0EC0>
+
+    @pytest.fixture(autouse=True)
+    def _relax_list_sessions_rate_limit(monkeypatch):
+        """把 ``GET /api/sessions`` 的限流桶放宽。
+    
+        限流规则本身由单测覆盖(``tests/unit/test_session_store_repository.py``);
+        这里只是别让一串集成用例把 ``list_sessions`` 桶(默认 burst=10)打爆。
+        """
+>       import openstoryline.agent_fastapi as web
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\integration\test_sessions_api_postgres.py:172: ModuleNotFoundError
+_______________ ERROR at setup of test_patch_rejects_bad_titles _______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282BE4F3150>
+
+    @pytest.fixture(autouse=True)
+    def _relax_list_sessions_rate_limit(monkeypatch):
+        """把 ``GET /api/sessions`` 的限流桶放宽。
+    
+        限流规则本身由单测覆盖(``tests/unit/test_session_store_repository.py``);
+        这里只是别让一串集成用例把 ``list_sessions`` 桶(默认 burst=10)打爆。
+        """
+>       import openstoryline.agent_fastapi as web
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\integration\test_sessions_api_postgres.py:172: ModuleNotFoundError
+__________ ERROR at setup of test_patch_unknown_session_returns_404 ___________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282BE4F2DD0>
+
+    @pytest.fixture(autouse=True)
+    def _relax_list_sessions_rate_limit(monkeypatch):
+        """把 ``GET /api/sessions`` 的限流桶放宽。
+    
+        限流规则本身由单测覆盖(``tests/unit/test_session_store_repository.py``);
+        这里只是别让一串集成用例把 ``list_sessions`` 桶(默认 burst=10)打爆。
+        """
+>       import openstoryline.agent_fastapi as web
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\integration\test_sessions_api_postgres.py:172: ModuleNotFoundError
+____________ ERROR at setup of test_list_returns_503_when_db_down _____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282BE4F1CC0>
+
+    @pytest.fixture(autouse=True)
+    def _relax_list_sessions_rate_limit(monkeypatch):
+        """把 ``GET /api/sessions`` 的限流桶放宽。
+    
+        限流规则本身由单测覆盖(``tests/unit/test_session_store_repository.py``);
+        这里只是别让一串集成用例把 ``list_sessions`` 桶(默认 burst=10)打爆。
+        """
+>       import openstoryline.agent_fastapi as web
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\integration\test_sessions_api_postgres.py:172: ModuleNotFoundError
+_______ ERROR at setup of test_save_session_state_raises_on_db_failure ________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282A70A4050>
+
+    @pytest.fixture(autouse=True)
+    def _relax_list_sessions_rate_limit(monkeypatch):
+        """把 ``GET /api/sessions`` 的限流桶放宽。
+    
+        限流规则本身由单测覆盖(``tests/unit/test_session_store_repository.py``);
+        这里只是别让一串集成用例把 ``list_sessions`` 桶(默认 burst=10)打爆。
+        """
+>       import openstoryline.agent_fastapi as web
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\integration\test_sessions_api_postgres.py:172: ModuleNotFoundError
+_______ ERROR at setup of test_create_session_returns_503_when_db_down ________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282BE4F1860>
+
+    @pytest.fixture(autouse=True)
+    def _relax_list_sessions_rate_limit(monkeypatch):
+        """把 ``GET /api/sessions`` 的限流桶放宽。
+    
+        限流规则本身由单测覆盖(``tests/unit/test_session_store_repository.py``);
+        这里只是别让一串集成用例把 ``list_sessions`` 桶(默认 burst=10)打爆。
+        """
+>       import openstoryline.agent_fastapi as web
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\integration\test_sessions_api_postgres.py:172: ModuleNotFoundError
+___________ ERROR at setup of test_cursor_tolerates_unencoded_plus ____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282BE4F01A0>
+
+    @pytest.fixture(autouse=True)
+    def _relax_list_sessions_rate_limit(monkeypatch):
+        """把 ``GET /api/sessions`` 的限流桶放宽。
+    
+        限流规则本身由单测覆盖(``tests/unit/test_session_store_repository.py``);
+        这里只是别让一串集成用例把 ``list_sessions`` 桶(默认 burst=10)打爆。
+        """
+>       import openstoryline.agent_fastapi as web
+E       ModuleNotFoundError: No module named 'openstoryline'
+
+tests\integration\test_sessions_api_postgres.py:172: ModuleNotFoundError
+================================== FAILURES ===================================
+____________ test_assembly_chain_end_to_end_produces_all_artifacts ____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282A7063BD0>
+patched_assembly_tools = None
+base_state = {'session_id': 'assembly-qc-int', 'video_input_path': 'C:\\Users\\wayyet\\AppData\\Local\\Temp\\pytest-of-wayyet\\pyte...\Local\\Temp\\pytest-of-wayyet\\pytest-366\\test_assembly_chain_end_to_end0\\drafts\\default\\draft_content.json', ...}
+
+>   ???
+E   AssertionError: 缺失产物文件:['media.json', 'transcript.json', 'video_ingest.json', 'timeline.json', 'timeline_validation.json', 'preview.mp4', 'preview_qc_report.json', 'report.md'],assembly_dir=C:\Users\wayyet\AppData\Local\Temp\pytest-of-wayyet\pytest-366\test_assembly_chain_end_to_end0\outputs\assembly-qc-int\assembly,exists=False
+E   assert not ['media.json', 'transcript.json', 'video_ingest.json', 'timeline.json', 'timeline_validation.json', 'preview.mp4', ...]
+
+E:\Documents\kuaishou\auto-video-editor\tests\integration\test_assembly_qc_graph.py:423: AssertionError
+__________ test_artifacts_are_isolated_and_published_under_new_keys ___________
+
+pair = (Run(tag='fusion-off', work=WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-366/test_artifacts...ayyet\\pytest-366\\fusion_media0\\src.mp4'], 'import_video_web_session_id': None, 'import_video_filename': 'src.mp4'}))
+
+>   ???
+E   AssertionError: assert {'schema_vers...0, ...}], ...} == {'schema_vers...0, ...}], ...}
+E     
+E     Omitting 10 identical items, use -vv to show
+E     Differing items:
+E     {'job_id': 'fusion-on'} != {'job_id': 'fusion-off'}
+E     Use -v to get more diff
+
+E:\Documents\kuaishou\auto-video-editor\tests\integration\test_human_fusion_graph.py:425: AssertionError
+---------------------------- Captured stdout setup ----------------------------
+[notify] checkpoint1 thread=fusion-off draft=C:\Users\wayyet\AppData\Local\Temp\pytest-of-wayyet\pytest-366\test_artifacts_are_isolated_an0\fusion-off\drafts\demo\draft_content.json assembly_report=C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\auto-video-editor\outputs\openstoryline\aca89f64666542ea9bc8a998c2d394b2\assembly\report.md
+[notify] checkpoint2 thread=fusion-off draft=C:\Users\wayyet\AppData\Local\Temp\pytest-of-wayyet\pytest-366\test_artifacts_are_isolated_an0\fusion-off\drafts\demo\draft_content.json
+[notify] checkpoint1 thread=fusion-on draft=C:\Users\wayyet\AppData\Local\Temp\pytest-of-wayyet\pytest-366\test_artifacts_are_isolated_an0\fusion-on\drafts\demo\draft_content.json assembly_report=C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\auto-video-editor\outputs\openstoryline\aca89f64666542ea9bc8a998c2d394b2\assembly\report.md
+[notify] checkpoint2 thread=fusion-on draft=C:\Users\wayyet\AppData\Local\Temp\pytest-of-wayyet\pytest-366\test_artifacts_are_isolated_an0\fusion-on\drafts\demo\draft_content.json
+___________________ test_tail_chain_applies_to_both_drafts ____________________
+
+tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-366/test_tail_chain_applies_to_bot0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000282BD2B17F0>
+
+>   ???
+E   AssertionError: 英文草稿 transitions 为空:尾链未对英文草稿生效
+E   assert 0 > 0
+E    +  where 0 = len([])
+
+E:\Documents\kuaishou\auto-video-editor\tests\integration\test_reorder_topology.py:180: AssertionError
+---------------------------- Captured stdout call -----------------------------
+[notify] checkpoint1 thread=reorder draft=C:\Users\wayyet\AppData\Local\Temp\pytest-of-wayyet\pytest-366\test_tail_chain_applies_to_bot0\drafts\demo\draft_content.json assembly_report=C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\auto-video-editor\outputs\openstoryline\aca89f64666542ea9bc8a998c2d394b2\assembly\report.md
+[notify] checkpoint2 thread=reorder draft=C:\Users\wayyet\AppData\Local\Temp\pytest-of-wayyet\pytest-366\test_tail_chain_applies_to_bot0\drafts\demo\draft_content.json
+============================== warnings summary ===============================
+tests/integration/test_human_fusion_graph.py: 216 warnings
+  C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\auto-video-editor\video_edit_capabilities\subtitle_scout.py:304: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+    pixels = list(grey.getdata())
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/integration/test_assembly_qc_graph.py::test_assembly_chain_end_to_end_produces_all_artifacts
+FAILED tests/integration/test_human_fusion_graph.py::test_artifacts_are_isolated_and_published_under_new_keys
+FAILED tests/integration/test_reorder_topology.py::test_tail_chain_applies_to_both_drafts
+ERROR tests/integration/test_sessions_api_postgres.py::test_new_session_visible_from_another_connection
+ERROR tests/integration/test_sessions_api_postgres.py::test_list_shows_session_after_conversation_round
+ERROR tests/integration/test_sessions_api_postgres.py::test_second_client_sees_the_same_list
+ERROR tests/integration/test_sessions_api_postgres.py::test_rename_survives_fresh_session_store
+ERROR tests/integration/test_sessions_api_postgres.py::test_rename_via_api_and_list_shows_new_title
+ERROR tests/integration/test_sessions_api_postgres.py::test_patch_title_source_auto_is_accepted
+ERROR tests/integration/test_sessions_api_postgres.py::test_patch_title_source_invalid_is_422
+ERROR tests/integration/test_sessions_api_postgres.py::test_soft_delete_hides_from_list_and_can_be_restored
+ERROR tests/integration/test_sessions_api_postgres.py::test_soft_delete_twice_returns_404
+ERROR tests/integration/test_sessions_api_postgres.py::test_delete_unknown_session_returns_404
+ERROR tests/integration/test_sessions_api_postgres.py::test_list_response_shape_exact
+ERROR tests/integration/test_sessions_api_postgres.py::test_list_never_returns_state_json
+ERROR tests/integration/test_sessions_api_postgres.py::test_list_limit_is_clamped
+ERROR tests/integration/test_sessions_api_postgres.py::test_list_cursor_pagination
+ERROR tests/integration/test_sessions_api_postgres.py::test_list_invalid_cursor_returns_422
+ERROR tests/integration/test_sessions_api_postgres.py::test_list_title_prefix_filter
+ERROR tests/integration/test_sessions_api_postgres.py::test_list_include_deleted_flag
+ERROR tests/integration/test_sessions_api_postgres.py::test_patch_rejects_bad_titles
+ERROR tests/integration/test_sessions_api_postgres.py::test_patch_unknown_session_returns_404
+ERROR tests/integration/test_sessions_api_postgres.py::test_list_returns_503_when_db_down
+ERROR tests/integration/test_sessions_api_postgres.py::test_save_session_state_raises_on_db_failure
+ERROR tests/integration/test_sessions_api_postgres.py::test_create_session_returns_503_when_db_down
+ERROR tests/integration/test_sessions_api_postgres.py::test_cursor_tolerates_unencoded_plus
+INTEGRATION_EXIT=1
+=== agent_gate/tests ===
+.................ssssss.s..ssssss.....s........................s........ [ 26%]
+..................s..................................................... [ 52%]
+................................................................s....... [ 78%]
+................F.........................................               [100%]
+================================== FAILURES ===================================
+_______________________ test_init_writes_expected_files _______________________
+
+tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-367/test_init_writes_expected_file0')
+
+>   ???
+E   assert '\\' not in '["C:/Users/...UTF8": "1"}]'
+E     
+E     '\\' is contained here:
+E       ["C:/Users/wayyet/OneDrive/Downloads/\u5f00\u53d1\u4ee3\u7801/kuaishou/auto-video-editor/.venv/Scripts/python.exe", "-m", "agent_gate.mcp_server", "--outputs-root", "C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-367/test_init_writes_expected_file0/out", "--graph-factory", "toy_graph:build_graph", {"PYTHONPATH": "C:/Users/wayyet/OneDrive/Downloads/\u5f00\u53d1\u4ee3\u7801/kuaishou/auto-video-editor/agent_gate/fixtures;C:/Users/wayyet/OneDrive/Downloads/\u5f00\u53d1\u4ee3\u7801/kuaishou/auto-video-editor", "AGENT_GATE_REPO_ROOT": "C:/Users/wayyet/OneDrive/Do...
+E     
+E     ...Full output truncated (2 lines hidden), use '-vv' to show
+
+E:\Documents\kuaishou\auto-video-editor\agent_gate\tests\test_scaffold.py:45: AssertionError
+=========================== short test summary info ===========================
+FAILED agent_gate/tests/test_scaffold.py::test_init_writes_expected_files - a...
+AGENTGATE_EXIT=1
+=== node tests ===
+✔ started/succeeded/failed/waiting 状态机与耗时历史 (1.8471ms)
+✔ retrying 保留历史不覆盖(§11.1) (0.2184ms)
+✔ resumed 从等待转回执行中 (0.155ms)
+✔ 并行超步:两个节点同时活动 (0.2273ms)
+✔ 重放去重:id <= cursor 不重复应用;null id 照常应用不推进游标 (0.1773ms)
+✔ run 状态机 + branch.selected 记录 (0.2042ms)
+✔ finalizeSkipped 仅终态生效,且不动禁用/不可达节点 (0.2114ms)
+✔ finalizeSkipped 终态后标记未执行节点 (0.1602ms)
+✔ edgeStates:双端执行过才点亮;END 边单侧判定;running 目标边 active (0.4271ms)
+✔ edgeStates:END 门边未命中不点亮;单出边源完成后点亮 (0.363ms)
+✔ edgeStates:挂起(等待人工)时 END 边不点亮 (0.1365ms)
+✔ 布局 key:主图带 mode+schema_version;旧子流程 key 不变 (0.1253ms)
+✔ deriveRunState 与后端快照同规则 (0.1253ms)
+✔ normalizeMainGraph 推导依赖与后继,保留元数据 (0.3269ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 106.6739
+NODE_EXIT=0
+=== ALL DONE ===

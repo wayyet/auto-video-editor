@@ -268,13 +268,11 @@ def resolved_trash_children() -> list[Path]:
 # ---------------------------------------------------------------------------
 # 模块名修正:FireRed 实际是 ``open_storyline.mcp.server``,不是 ``openstoryline.server``。
 # 端口修正:MCP Server 默认 8001 + path /mcp + streamable-http(见 FireRed config.toml)。
-# Web 端口修正:agent_fastapi 走 7860(README 266 行)。
-#
-# 2026-09 迁移后,MCP 子进程链路已删除;OPENSTORYLINE_CMD / OPENSTORYLINE_MCP_PORT
-# 仅作向后兼容常量保留(README 仍引用),运行时由 node_02 直接 spawn uvicorn 子进程。
-OPENSTORYLINE_CMD: list[str] = [
-    "python", "-m", "open_storyline.mcp.server",
-]
+# 2026-09 迁移后,MCP 子进程链路已删除。``OPENSTORYLINE_CMD`` 与
+# ``openstoryline_mcp_url()`` 已随单流水线重构删除(2026-11-04 阶段2,零消费者);
+# ``OPENSTORYLINE_MCP_PORT`` / ``OPENSTORYLINE_WEB_PORT`` /
+# ``OPENSTORYLINE_HEALTH_TIMEOUT_S`` 仍被 ``nodes/node_02_launch_openstoryline``
+# 消费(human 模式节点,阶段3 图收敛时随节点一并删除)。
 OPENSTORYLINE_MCP_PORT: int = 8001
 OPENSTORYLINE_WEB_PORT: int = 7860
 OPENSTORYLINE_HEALTH_TIMEOUT_S: int = 30
@@ -401,18 +399,10 @@ STORYLINE_ENABLE_RENDER_SMOKE_TEST: bool = (
 
 
 # ---------------------------------------------------------------------------
-# Phase 4 vendored copy(vendored OpenStoryline)路径常量
+# (vendored OpenStoryline 路径常量已删除 —— 单流水线架构 2026-11-04 阶段2:
+#  消费方 asr_runner 的 vendored 分支为死链,随旧聊天运行时一并移除。
+#  .venv-openstoryline/ 本地目录留待部署清理步骤由操作员处理。)
 # ---------------------------------------------------------------------------
-# 19 节点的临时透传壳子从 vendored OpenStoryline 拉数据 — 由于本地主
-# venv 不能装 torch,阶段 0 走 subprocess 调独立 venv 跑子任务。后续阶段 7
-# 才彻底解耦。
-# 2026-11-01 目录扁平化:OpenStoryline 代码上移仓库根(不再有 openstoryline/
-# 子目录),独立虚拟环境重建为根目录 ``.venv-openstoryline/``(主 ``.venv``
-# 不装 torch 等重依赖,两环境保持隔离)。
-VENDORED_OPENSTORYLINE_ROOT: Path = Path(__file__).resolve().parent
-VENDORED_OPENSTORYLINE_VENV_PY: Path = (
-    VENDORED_OPENSTORYLINE_ROOT / ".venv-openstoryline" / "Scripts" / "python.exe"
-)
 
 
 # ---------------------------------------------------------------------------
@@ -611,10 +601,6 @@ SUBTITLE_SCOUT_STYLE_ENABLED: bool = (
 # ---------------------------------------------------------------------------
 # 派生:最终访问的 URL
 # ---------------------------------------------------------------------------
-def openstoryline_mcp_url() -> str:
-    return f"http://127.0.0.1:{OPENSTORYLINE_MCP_PORT}/mcp"
-
-
 def openstoryline_web_url() -> str:
     return f"http://127.0.0.1:{OPENSTORYLINE_WEB_PORT}"
 
