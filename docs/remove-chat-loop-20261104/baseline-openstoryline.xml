@@ -1,0 +1,2021 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="66" skipped="9" tests="325" time="50.467" timestamp="2026-11-04T06:25:34.985198+08:00" hostname="DESKTOP-H9JRHQJ"><testcase classname="tests_openstoryline.test_agent_mcode_branch" name="test_mcode_branch_skips_api_key_validation" time="0.020" /><testcase classname="tests_openstoryline.test_agent_mcode_branch" name="test_mcode_branch_does_not_connect_8001" time="0.014" /><testcase classname="tests_openstoryline.test_agent_mcode_branch" name="test_mcode_branch_does_not_register_langchain_skills" time="0.016" /><testcase classname="tests_openstoryline.test_agent_mcode_branch" name="test_mcode_branch_uses_mcode_model" time="0.018" /><testcase classname="tests_openstoryline.test_agent_mcode_branch" name="test_mcode_branch_passes_config_to_model" time="0.017" /><testcase classname="tests_openstoryline.test_agent_mcode_branch" name="test_mcode_branch_requires_configured_cwd" time="0.011" /><testcase classname="tests_openstoryline.test_agent_mcode_branch" name="test_mcode_branch_requires_existing_cwd" time="0.011" /><testcase classname="tests_openstoryline.test_agent_mcode_branch" name="test_mcode_branch_requires_mcp_json" time="0.012" /><testcase classname="tests_openstoryline.test_agent_mcode_branch" name="test_mcode_branch_requires_agents_md" time="0.013" /><testcase classname="tests_openstoryline.test_agent_mcode_branch" name="test_mcode_branch_config_error_raises_before_agent_built" time="0.011" /><testcase classname="tests_openstoryline.test_agent_mcode_branch" name="test_non_mcode_mcp_failure_semantics_unchanged" time="7.606" /><testcase classname="tests_openstoryline.test_agent_mcode_branch" name="test_non_mcode_branch_still_validates_api_key" time="0.020" /><testcase classname="tests_openstoryline.test_agent_mcode_branch" name="test_non_mcode_branch_uses_chat_openai" time="0.020" /><testcase classname="tests_openstoryline.test_glm_live" name="test_glm_text_chat_completion" time="0.001"><skipped type="pytest.skip" message="未设置 OPENSTORYLINE_GLM_API_KEY:GLM live 验证默认跳过(C-T1/C-T2 待验证项)">C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\auto-video-editor\tests_openstoryline\test_glm_live.py:47: 未设置 OPENSTORYLINE_GLM_API_KEY:GLM live 验证默认跳过(C-T1/C-T2 待验证项)</skipped></testcase><testcase classname="tests_openstoryline.test_glm_live" name="test_glm_structured_output" time="0.001"><skipped type="pytest.skip" message="未设置 OPENSTORYLINE_GLM_API_KEY:GLM live 验证默认跳过(C-T1/C-T2 待验证项)">C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\auto-video-editor\tests_openstoryline\test_glm_live.py:54: 未设置 OPENSTORYLINE_GLM_API_KEY:GLM live 验证默认跳过(C-T1/C-T2 待验证项)</skipped></testcase><testcase classname="tests_openstoryline.test_glm_live" name="test_glm_vlm_image_input" time="0.001"><skipped type="pytest.skip" message="未设置 OPENSTORYLINE_GLM_VLM_MODEL:VLM 图像验证跳过">C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\auto-video-editor\tests_openstoryline\test_glm_live.py:68: 未设置 OPENSTORYLINE_GLM_VLM_MODEL:VLM 图像验证跳过</skipped></testcase><testcase classname="tests_openstoryline.test_glm_live" name="test_glm_timeout_enforced" time="0.001"><skipped type="pytest.skip" message="未设置 OPENSTORYLINE_GLM_API_KEY:GLM live 验证默认跳过(C-T1/C-T2 待验证项)">C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\auto-video-editor\tests_openstoryline\test_glm_live.py:88: 未设置 OPENSTORYLINE_GLM_API_KEY:GLM live 验证默认跳过(C-T1/C-T2 待验证项)</skipped></testcase><testcase classname="tests_openstoryline.test_glm_preset" name="test_glm_preset_hidden_without_api_key" time="0.016" /><testcase classname="tests_openstoryline.test_glm_preset" name="test_glm_preset_appears_in_llm_dropdown_with_key" time="0.017" /><testcase classname="tests_openstoryline.test_glm_preset" name="test_glm_preset_vlm_needs_explicit_vlm_model" time="0.015" /><testcase classname="tests_openstoryline.test_glm_preset" name="test_glm_preset_hidden_when_key_is_placeholder" time="0.016" /><testcase classname="tests_openstoryline.test_glm_preset" name="test_menu_label_is_glm_not_zcode" time="0.015" /><testcase classname="tests_openstoryline.test_glm_preset" name="test_default_endpoint_is_general_not_coding_plan" time="0.004" /><testcase classname="tests_openstoryline.test_glm_preset" name="test_ensure_agent_glm_llm_uses_glm_config" time="4.589" /><testcase classname="tests_openstoryline.test_glm_preset" name="test_ensure_agent_glm_vlm_uses_vlm_model_name" time="2.964" /><testcase classname="tests_openstoryline.test_glm_preset" name="test_ensure_agent_glm_without_key_raises_reconfig" time="0.031" /><testcase classname="tests_openstoryline.test_glm_preset" name="test_ensure_agent_glm_vlm_without_vlm_model_raises" time="0.026" /><testcase classname="tests_openstoryline.test_glm_preset" name="test_missing_secret_config_fields_reports_glm" time="0.023" /><testcase classname="tests_openstoryline.test_glm_preset" name="test_load_settings_env_overrides_glm" time="0.013" /><testcase classname="tests_openstoryline.test_glm_preset" name="test_settings_without_glm_section_still_loads" time="0.034" /><testcase classname="tests_openstoryline.test_glm_preset" name="test_config_toml_glm_section_has_no_secret" time="0.002" /><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_prompt_keeps_system_messages_first" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_prompt_keeps_last_user_message" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_prompt_truncates_complete_turns" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_prompt_handles_unpaired_messages" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_prompt_rejects_oversized_current_message" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_prompt_drops_oldest_turn_when_over_budget" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_prompt_includes_media_manifest_and_session_id" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_prompt_does_not_inline_multimodal_attachments" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_parse_exec_json_takes_valid_result" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_parse_exec_json_takes_whole_output" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_parse_exec_json_rejects_garbage" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_parse_exec_json_rejects_empty_output" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_model_raises_on_non_succeeded_status" time="0.010"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_model_raises_on_non_succe0')
+fake_mcode_cli = &lt;function fake_mcode_cli.&lt;locals&gt;.make at 0x0000026F632C84A0&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_chat_model.py:228: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:173: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_model_raises_on_non_succe0/fake_mcode_1/fake_mcode.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...pData\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_model_raises_on_non_succe0\\fake_mcode_1\\fake_mcode.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_model_raises_on_nonzero_exit_code" time="0.008"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_model_raises_on_nonzero_e0')
+fake_mcode_cli = &lt;function fake_mcode_cli.&lt;locals&gt;.make at 0x0000026F632CA5C0&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_chat_model.py:245: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:173: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_model_raises_on_nonzero_e0/fake_mcode_1/fake_mcode.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...pData\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_model_raises_on_nonzero_e0\\fake_mcode_1\\fake_mcode.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_resolve_agent_bin_uses_project_resolver" time="0.009" /><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_explicit_invalid_bin_fails" time="0.005" /><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_unresolvable_mcode_bin_raises" time="0.004" /><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_command_uses_stdin_and_mode_flag" time="0.009"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_command_uses_stdin_and_mo0')
+fake_mcode_cli = &lt;function fake_mcode_cli.&lt;locals&gt;.make at 0x0000026F632CB380&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_chat_model.py:318: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:173: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_command_uses_stdin_and_mo0/fake_mcode_1/fake_mcode.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...pData\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_command_uses_stdin_and_mo0\\fake_mcode_1\\fake_mcode.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_sync_generate_returns_ai_message" time="0.009"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_sync_generate_returns_ai_0')
+fake_mcode_cli = &lt;function fake_mcode_cli.&lt;locals&gt;.make at 0x0000026F632CB920&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_chat_model.py:346: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:173: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_sync_generate_returns_ai_0/fake_mcode_1/fake_mcode.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...pData\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_sync_generate_returns_ai_0\\fake_mcode_1\\fake_mcode.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_async_generate_returns_ai_message" time="0.009"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_async_generate_returns_ai0')
+fake_mcode_cli = &lt;function fake_mcode_cli.&lt;locals&gt;.make at 0x0000026F632CBD80&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_chat_model.py:367: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:173: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_async_generate_returns_ai0/fake_mcode_1/fake_mcode.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...pData\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_async_generate_returns_ai0\\fake_mcode_1\\fake_mcode.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_bind_tools_returns_self" time="0.005" /><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_lightweight_mode_embeds_bridge_instructions_in_prompt" time="0.008"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_lightweight_mode_embeds_b0')
+fake_mcode_cli = &lt;function fake_mcode_cli.&lt;locals&gt;.make at 0x0000026F6349C040&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_chat_model.py:394: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:173: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_lightweight_mode_embeds_b0/fake_mcode_1/fake_mcode.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...pData\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_lightweight_mode_embeds_b0\\fake_mcode_1\\fake_mcode.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_standard_mode_does_not_duplicate_bridge_instructions" time="0.007"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_standard_mode_does_not_du0')
+fake_mcode_cli = &lt;function fake_mcode_cli.&lt;locals&gt;.make at 0x0000026F6349D120&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_chat_model.py:408: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:173: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_standard_mode_does_not_du0/fake_mcode_1/fake_mcode.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...pData\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_standard_mode_does_not_du0\\fake_mcode_1\\fake_mcode.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_prompt_bridge_instructions_go_first" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_timeout_kills_process_tree" time="0.007"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_timeout_kills_process_tre0')
+fake_mcode_cli = &lt;function fake_mcode_cli.&lt;locals&gt;.make at 0x0000026F6349C7C0&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_chat_model.py:434: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:173: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_timeout_kills_process_tre0/fake_mcode_1/fake_mcode.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...pData\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_timeout_kills_process_tre0\\fake_mcode_1\\fake_mcode.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_chat_model" name="test_cancel_kills_process_tree" time="0.009"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_cancel_kills_process_tree0')
+fake_mcode_cli = &lt;function fake_mcode_cli.&lt;locals&gt;.make at 0x0000026F6349C9A0&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_chat_model.py:449: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:173: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_cancel_kills_process_tree0/fake_mcode_1/fake_mcode.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...pData\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_cancel_kills_process_tree0\\fake_mcode_1\\fake_mcode.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_config" name="test_settings_loads_without_mcode_section" time="0.025" /><testcase classname="tests_openstoryline.test_mcode_config" name="test_mcode_section_values_are_loaded" time="0.024" /><testcase classname="tests_openstoryline.test_mcode_config" name="test_config_toml_local_overrides_mcode" time="0.030" /><testcase classname="tests_openstoryline.test_mcode_config" name="test_env_overrides_mcode_paths" time="0.021" /><testcase classname="tests_openstoryline.test_mcode_config" name="test_env_override_beats_local_file" time="0.022" /><testcase classname="tests_openstoryline.test_mcode_config" name="test_mcode_path_fields_stay_plain_strings" time="0.024" /><testcase classname="tests_openstoryline.test_mcode_config" name="test_unknown_key_in_mcode_section_is_rejected" time="0.021" /><testcase classname="tests_openstoryline.test_mcode_config" name="test_public_config_toml_has_no_local_paths_or_secrets" time="0.025" /><testcase classname="tests_openstoryline.test_mcode_config" name="test_config_toml_local_is_gitignored" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_frontend_policy" name="test_frontend_policy_unit_tests_pass" time="0.212" /><testcase classname="tests_openstoryline.test_mcode_media" name="test_resolve_auto_editor_dir_uses_env" time="0.004" /><testcase classname="tests_openstoryline.test_mcode_media" name="test_resolve_media_root_prefers_config" time="0.004" /><testcase classname="tests_openstoryline.test_mcode_media" name="test_resolve_media_root_falls_back_to_inputs" time="0.006" /><testcase classname="tests_openstoryline.test_mcode_media" name="test_allowed_media_roots_reads_env" time="0.006" /><testcase classname="tests_openstoryline.test_mcode_media" name="test_allowed_media_roots_default" time="0.007" /><testcase classname="tests_openstoryline.test_mcode_media" name="test_media_copy_is_atomic_and_verified" time="0.032" /><testcase classname="tests_openstoryline.test_mcode_media" name="test_media_copy_does_not_move_or_delete_source" time="0.024" /><testcase classname="tests_openstoryline.test_mcode_media" name="test_media_copy_failure_leaves_no_part_file" time="0.021" /><testcase classname="tests_openstoryline.test_mcode_media" name="test_media_copy_detects_size_mismatch" time="0.021" /><testcase classname="tests_openstoryline.test_mcode_media" name="test_media_source_must_be_in_session_media_dir" time="0.009" /><testcase classname="tests_openstoryline.test_mcode_media" name="test_media_path_must_be_under_allowed_root" time="0.008" /><testcase classname="tests_openstoryline.test_mcode_media" name="test_media_rejects_bad_session_id" time="0.008" /><testcase classname="tests_openstoryline.test_mcode_media" name="test_media_rejects_missing_source" time="0.011" /><testcase classname="tests_openstoryline.test_mcode_media" name="test_media_copy_is_idempotent" time="0.028" /><testcase classname="tests_openstoryline.test_mcode_media" name="test_media_copy_avoids_overwrite_on_conflict" time="0.045" /><testcase classname="tests_openstoryline.test_mcode_media" name="test_media_copy_is_idempotent_in_conflict_path" time="0.040" /><testcase classname="tests_openstoryline.test_mcode_media" name="test_media_manifest_lists_verified_absolute_paths" time="0.017" /><testcase classname="tests_openstoryline.test_mcode_media" name="test_media_manifest_excludes_files_outside_whitelist" time="0.011" /><testcase classname="tests_openstoryline.test_mcode_media" name="test_media_manifest_missing_dir_returns_empty" time="0.004" /><testcase classname="tests_openstoryline.test_mcode_media" name="test_media_copy_failure_prevents_result_write" time="0.401" /><testcase classname="tests_openstoryline.test_mcode_media" name="test_media_copy_success_writes_result_and_returns_prepared" time="0.034" /><testcase classname="tests_openstoryline.test_mcode_media" name="test_media_copy_source_outside_session_dir_is_rejected" time="0.017" /><testcase classname="tests_openstoryline.test_mcode_media" name="test_media_copy_skips_files_without_media_id" time="0.020" /><testcase classname="tests_openstoryline.test_mcode_media" name="test_media_copy_resolves_path_server_side_when_client_sends_empty" time="0.029" /><testcase classname="tests_openstoryline.test_mcode_process_env" name="test_build_process_env_snapshots_current_environ" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_process_env" name="test_build_process_env_fills_missing_base_keys" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_process_env" name="test_build_process_env_keeps_explicit_values" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_process_env" name="test_model_snapshot_taken_at_construction" time="0.003" /><testcase classname="tests_openstoryline.test_mcode_process_env" name="test_sync_generate_receives_snapshot" time="0.005"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_sync_generate_receives_sn0')
+env_cli_factory = &lt;function env_cli_factory.&lt;locals&gt;.make at 0x0000026F6379F380&gt;
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000026F63803EE0&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_process_env.py:186: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_process_env.py:110: in make
+    ???
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_sync_generate_receives_sn0/fake_env_cli_1/fake_env_cli.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...a\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_sync_generate_receives_sn0\\fake_env_cli_1\\fake_env_cli.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_process_env" name="test_async_generate_receives_snapshot" time="0.008"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_async_generate_receives_s0')
+env_cli_factory = &lt;function env_cli_factory.&lt;locals&gt;.make at 0x0000026F637E34C0&gt;
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000026F63693150&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_process_env.py:198: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_process_env.py:110: in make
+    ???
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_async_generate_receives_s0/fake_env_cli_1/fake_env_cli.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...a\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_async_generate_receives_s0\\fake_env_cli_1\\fake_env_cli.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_process_env" name="test_probe_receives_same_snapshot" time="0.008"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_probe_receives_same_snaps0')
+env_cli_factory = &lt;function env_cli_factory.&lt;locals&gt;.make at 0x0000026F6349DBC0&gt;
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000026F614D84B0&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_process_env.py:211: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_process_env.py:110: in make
+    ???
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_probe_receives_same_snaps0/fake_env_cli_1/fake_env_cli.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...a\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_probe_receives_same_snaps0\\fake_env_cli_1\\fake_env_cli.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_process_env" name="test_stream_receives_same_snapshot" time="0.007"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_stream_receives_same_snap0')
+env_cli_factory = &lt;function env_cli_factory.&lt;locals&gt;.make at 0x0000026F6379FF60&gt;
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000026F6380FE70&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_process_env.py:224: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_process_env.py:110: in make
+    ???
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_stream_receives_same_snap0/fake_env_cli_1/fake_env_cli.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...a\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_stream_receives_same_snap0\\fake_env_cli_1\\fake_env_cli.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_process_env" name="test_all_four_paths_share_one_snapshot" time="0.008"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_all_four_paths_share_one_0')
+env_cli_factory = &lt;function env_cli_factory.&lt;locals&gt;.make at 0x0000026F63821620&gt;
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000026F6380FC40&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_process_env.py:239: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_process_env.py:110: in make
+    ???
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_all_four_paths_share_one_0/fake_env_cli_1/fake_env_cli.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...a\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_all_four_paths_share_one_0\\fake_env_cli_1\\fake_env_cli.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_process_env" name="test_env_change_after_construction_does_not_leak" time="0.005"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_env_change_after_construc0')
+env_cli_factory = &lt;function env_cli_factory.&lt;locals&gt;.make at 0x0000026F63822160&gt;
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000026F6380F690&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_process_env.py:274: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_process_env.py:110: in make
+    ???
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_env_change_after_construc0/fake_env_cli_1/fake_env_cli.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...a\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_env_change_after_construc0\\fake_env_cli_1\\fake_env_cli.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_process_env" name="test_explicit_process_env_is_respected" time="0.005"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_explicit_process_env_is_r0')
+env_cli_factory = &lt;function env_cli_factory.&lt;locals&gt;.make at 0x0000026F637E3A60&gt;
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000026F63803EE0&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_process_env.py:289: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_process_env.py:110: in make
+    ???
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_explicit_process_env_is_r0/fake_env_cli_1/fake_env_cli.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...a\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_explicit_process_env_is_r0\\fake_env_cli_1\\fake_env_cli.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_process_env" name="test_stream_snapshot_survives_runtime_env_change" time="0.007"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_stream_snapshot_survives_0')
+env_cli_factory = &lt;function env_cli_factory.&lt;locals&gt;.make at 0x0000026F63822340&gt;
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000026F6380CC20&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_process_env.py:310: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_process_env.py:110: in make
+    ???
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_stream_snapshot_survives_0/fake_env_cli_1/fake_env_cli.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...a\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_stream_snapshot_survives_0\\fake_env_cli_1\\fake_env_cli.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_runner" name="test_yields_events_and_reports_exit_code" time="0.352"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_yields_events_and_reports0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000026F6380C670&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:154: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:131: in _make_cli
+    ???
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_yields_events_and_reports0/fake_stream_cli.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ayyet\\AppData\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_yields_events_and_reports0\\fake_stream_cli.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_runner" name="test_first_event_arrives_before_process_exit" time="0.007"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_first_event_arrives_befor0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000026F6380C9F0&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:175: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:131: in _make_cli
+    ???
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_first_event_arrives_befor0/fake_stream_cli.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ayyet\\AppData\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_first_event_arrives_befor0\\fake_stream_cli.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_runner" name="test_writes_prompt_to_stdin" time="0.007"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_writes_prompt_to_stdin0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000026F6380DB70&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:195: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:131: in _make_cli
+    ???
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_writes_prompt_to_stdin0/fake_stream_cli.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...\\wayyet\\AppData\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_writes_prompt_to_stdin0\\fake_stream_cli.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_runner" name="test_text_deltas_concatenate_to_final_output" time="0.008"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_text_deltas_concatenate_t0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000026F6380E580&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:205: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:131: in _make_cli
+    ???
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_text_deltas_concatenate_t0/fake_stream_cli.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ayyet\\AppData\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_text_deltas_concatenate_t0\\fake_stream_cli.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_runner" name="test_large_stderr_is_drained_and_bounded" time="0.008"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_large_stderr_is_drained_a0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000026F6380FC40&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:223: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:131: in _make_cli
+    ???
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_large_stderr_is_drained_a0/fake_stream_cli.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ayyet\\AppData\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_large_stderr_is_drained_a0\\fake_stream_cli.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_runner" name="test_timeout_kills_process_tree" time="0.007"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_timeout_kills_process_tre1')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000026F6380C130&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:246: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:131: in _make_cli
+    ???
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_timeout_kills_process_tre1/fake_stream_cli.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ayyet\\AppData\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_timeout_kills_process_tre1\\fake_stream_cli.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_runner" name="test_cancel_kills_process_tree" time="0.007"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_cancel_kills_process_tree1')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000026F6380C440&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:258: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:131: in _make_cli
+    ???
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_cancel_kills_process_tree1/fake_stream_cli.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ayyet\\AppData\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_cancel_kills_process_tree1\\fake_stream_cli.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_runner" name="test_schema_error_is_raised" time="0.007"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_schema_error_is_raised0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000026F63813620&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:281: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:131: in _make_cli
+    ???
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_schema_error_is_raised0/fake_stream_cli.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...\\wayyet\\AppData\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_schema_error_is_raised0\\fake_stream_cli.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_runner" name="test_nonzero_exit_without_result_raises" time="0.010"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_nonzero_exit_without_resu0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000026F63813540&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:289: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:131: in _make_cli
+    ???
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_nonzero_exit_without_resu0/fake_stream_cli.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ayyet\\AppData\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_nonzero_exit_without_resu0\\fake_stream_cli.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_runner" name="test_nonzero_exit_with_result_is_not_fatal" time="0.007"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_nonzero_exit_with_result_0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000026F63813F50&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:298: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:131: in _make_cli
+    ???
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_nonzero_exit_with_result_0/fake_stream_cli.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ayyet\\AppData\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_nonzero_exit_with_result_0\\fake_stream_cli.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_runner" name="test_missing_executable_raises" time="0.006" /><testcase classname="tests_openstoryline.test_mcode_runner" name="test_consumer_break_terminates_child" time="0.009"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_consumer_break_terminates0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000026F63810980&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:322: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:131: in _make_cli
+    ???
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_consumer_break_terminates0/fake_stream_cli.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ayyet\\AppData\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_consumer_break_terminates0\\fake_stream_cli.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_runner" name="test_explicit_aclose_terminates_child" time="0.008"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_explicit_aclose_terminate0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000026F638104B0&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:336: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:131: in _make_cli
+    ???
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_explicit_aclose_terminate0/fake_stream_cli.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ayyet\\AppData\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_explicit_aclose_terminate0\\fake_stream_cli.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_runner" name="test_runner_cannot_be_reused" time="0.007"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_runner_cannot_be_reused0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000026F63811240&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:350: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_runner.py:131: in _make_cli
+    ???
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_runner_cannot_be_reused0/fake_stream_cli.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...\wayyet\\AppData\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_runner_cannot_be_reused0\\fake_stream_cli.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_runner" name="test_empty_command_rejected" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_source_isolation" name="test_mcode_tiers_resolve_to_mcode_source[mcode-operator]" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_source_isolation" name="test_mcode_events_all_carry_mcode_source[mcode-operator]" time="0.009" /><testcase classname="tests_openstoryline.test_mcode_source_isolation" name="test_mcode_tier_resolves_from_session_state_not_browser_param" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_source_isolation" name="test_llm_source_has_no_mcode_adapter" time="0.009" /><testcase classname="tests_openstoryline.test_mcode_source_isolation" name="test_llm_source_still_forwards_langgraph_text" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_source_isolation" name="test_llm_source_never_writes_mcode_event" time="0.009" /><testcase classname="tests_openstoryline.test_mcode_source_isolation" name="test_mcode_source_does_not_forward_langgraph_text" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_source_isolation" name="test_langgraph_chunk_and_mcode_event_carry_the_same_text" time="0.008"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_langgraph_chunk_and_mcode0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F6384EC00&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_source_isolation.py:222: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_langgraph_chunk_and_mcode0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_langgraph_chunk_and_mcode0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_source_isolation" name="test_mcode_failure_does_not_fall_back_to_other_model[final_json]" time="0.008"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_mcode_failure_does_not_fa0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F6384D080&gt;
+transport = 'final_json'
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_source_isolation.py:272: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_mcode_failure_does_not_fa0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_mcode_failure_does_not_fa0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_source_isolation" name="test_mcode_failure_does_not_fall_back_to_other_model[stream_json]" time="0.009"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_mcode_failure_does_not_fa1')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F6384F600&gt;
+transport = 'stream_json'
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_source_isolation.py:272: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_mcode_failure_does_not_fa1/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_mcode_failure_does_not_fa1\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_source_isolation" name="test_mcode_failure_produces_no_final_output" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_source_isolation" name="test_two_sessions_keep_their_ids_separate" time="0.016" /><testcase classname="tests_openstoryline.test_mcode_source_isolation" name="test_two_concurrent_turns_do_not_share_sink" time="0.009"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_two_concurrent_turns_do_n0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F6384C220&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_source_isolation.py:330: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_two_concurrent_turns_do_n0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_two_concurrent_turns_do_n0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_source_isolation" name="test_event_with_mismatched_ids_is_discarded" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_source_isolation" name="test_event_with_mismatched_turn_id_is_discarded" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_source_isolation" name="test_tool_lifecycle_is_driven_by_status_enum" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_source_isolation" name="test_failed_tool_maps_to_error_end" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_source_isolation" name="test_tool_output_is_summarized_and_truncated" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_source_isolation" name="test_text_delta_comes_from_both_started_and_updated" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_source_isolation" name="test_final_output_comes_from_exec_completed" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_source_isolation" name="test_turn_failed_maps_to_failed_status" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_source_isolation" name="test_trace_event_limit_is_enforced" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_source_isolation" name="test_chat_session_sink_provider_returns_current_sink" time="0.013" /><testcase classname="tests_openstoryline.test_mcode_status_constants" name="test_status_uses_completed_constant" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_status_constants" name="test_protocol_has_no_done_state" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_status_constants" name="test_done_outcome_token_is_not_a_worker_state" time="0.002" /><testcase classname="tests_openstoryline.test_mcode_status_constants" name="test_source_files_do_not_use_done_literal[mcode_chat_model.py]" time="0.003" /><testcase classname="tests_openstoryline.test_mcode_status_constants" name="test_source_files_do_not_use_done_literal[mcode_media.py]" time="0.002" /><testcase classname="tests_openstoryline.test_mcode_status_constants" name="test_source_files_do_not_use_done_literal[agent.py]" time="0.002" /><testcase classname="tests_openstoryline.test_mcode_status_constants" name="test_source_files_do_not_use_done_literal[agent_fastapi.py]" time="0.007" /><testcase classname="tests_openstoryline.test_mcode_status_constants" name="test_new_mcode_files_do_not_hardcode_worker_status[mcode_chat_model.py]" time="0.006"><skipped type="pytest.skip" message="mcode_chat_model.py 没写死任何 worker 状态字面量">C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_status_constants.py:126: mcode_chat_model.py 没写死任何 worker 状态字面量</skipped></testcase><testcase classname="tests_openstoryline.test_mcode_status_constants" name="test_new_mcode_files_do_not_hardcode_worker_status[mcode_media.py]" time="0.003"><skipped type="pytest.skip" message="mcode_media.py 没写死任何 worker 状态字面量">C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_status_constants.py:126: mcode_media.py 没写死任何 worker 状态字面量</skipped></testcase><testcase classname="tests_openstoryline.test_mcode_status_constants" name="test_new_mcode_files_do_not_hardcode_worker_status[agent.py]" time="0.002"><skipped type="pytest.skip" message="agent.py 没写死任何 worker 状态字面量">C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_status_constants.py:126: agent.py 没写死任何 worker 状态字面量</skipped></testcase><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_parses_single_event_line" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_parses_turn_completed_with_object_model" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_line_split_across_chunks_is_reassembled" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_multibyte_character_split_across_chunks" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_crlf_and_blank_lines_are_tolerated" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_close_flushes_trailing_line_without_newline" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_first_delta_arrives_in_item_started" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_deltas_keep_order" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_final_output_and_deltas_coexist_without_duplication" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_reasoning_event_is_dropped" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_reasoning_content_never_becomes_text_delta" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_tool_call_status_mapping" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_tool_call_failed_status" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_unknown_tool_status_does_not_break_stream" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_unknown_event_type_is_skipped_with_diagnostic" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_malformed_json_line_is_skipped_not_fatal" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_strict_json_raises_on_malformed_line" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_item_without_id_is_skipped" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_schema_version_mismatch_raises" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_missing_envelope_id_raises" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_exec_completed_without_result_raises" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_fixture_lines_are_valid_json[sample_lightweight_ok.jsonl]" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_fixture_lines_are_valid_json[sample_standard_toolcall.jsonl]" time="0.002" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_fixture_has_no_sensitive_strings[sample_lightweight_ok.jsonl]" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_fixture_has_no_sensitive_strings[sample_standard_toolcall.jsonl]" time="0.002" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_fixture_event_order_is_stable[sample_lightweight_ok.jsonl]" time="0.001" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_fixture_event_order_is_stable[sample_standard_toolcall.jsonl]" time="0.002" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_standard_fixture_first_delta_is_in_item_started" time="0.003" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_standard_fixture_delta_concatenation_matches_final_output" time="0.003" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_standard_fixture_dropped_reasoning" time="0.002" /><testcase classname="tests_openstoryline.test_mcode_stream_parser" name="test_standard_fixture_tool_lifecycle_is_status_driven" time="0.003" /><testcase classname="tests_openstoryline.test_mcode_streaming" name="test_astream_yields_deltas_in_order" time="0.008"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_astream_yields_deltas_in_0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F6385A980&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_streaming.py:54: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_astream_yields_deltas_in_0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_astream_yields_deltas_in_0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_streaming" name="test_first_delta_arrives_before_process_exit" time="0.007"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_first_delta_arrives_befor0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F6385AC00&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_streaming.py:64: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_first_delta_arrives_befor0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_first_delta_arrives_befor0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_streaming" name="test_streaming_command_uses_stream_json_format" time="0.008"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_streaming_command_uses_st0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F6384F4C0&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_streaming.py:77: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_streaming_command_uses_st0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_streaming_command_uses_st0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_streaming" name="test_final_output_equal_to_deltas_is_not_duplicated" time="0.007"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_final_output_equal_to_del0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F6385B880&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_streaming.py:93: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_final_output_equal_to_del0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_final_output_equal_to_del0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_streaming" name="test_missing_tail_is_appended_once" time="0.007"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_missing_tail_is_appended_0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F6385BCE0&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_streaming.py:104: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_missing_tail_is_appended_0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_missing_tail_is_appended_0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_streaming" name="test_extra_process_text_is_not_duplicated" time="0.007"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_extra_process_text_is_not0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F6385BBA0&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_streaming.py:119: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_extra_process_text_is_not0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_extra_process_text_is_not0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_streaming" name="test_reasoning_never_becomes_a_chunk" time="0.007"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_reasoning_never_becomes_a0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F6385AF20&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_streaming.py:134: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_reasoning_never_becomes_a0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_reasoning_never_becomes_a0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_streaming" name="test_reasoning_is_not_forwarded_to_event_sink" time="0.007"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_reasoning_is_not_forwarde0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F6385BC40&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_streaming.py:149: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_reasoning_is_not_forwarde0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_reasoning_is_not_forwarde0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_streaming" name="test_event_sink_receives_cli_events" time="0.006"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_event_sink_receives_cli_e0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F63910900&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_streaming.py:180: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_event_sink_receives_cli_e0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_event_sink_receives_cli_e0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_streaming" name="test_event_sink_provider_is_called_per_stream" time="0.007"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_event_sink_provider_is_ca0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F639111C0&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_streaming.py:203: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_event_sink_provider_is_ca0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_event_sink_provider_is_ca0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_streaming" name="test_broken_event_sink_does_not_break_the_call" time="0.006"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_broken_event_sink_does_no0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F63910CC0&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_streaming.py:224: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_broken_event_sink_does_no0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_broken_event_sink_does_no0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_streaming" name="test_auto_transport_degrades_when_cli_lacks_stream_json" time="0.007"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_auto_transport_degrades_w0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F63910E00&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_streaming.py:245: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_auto_transport_degrades_w0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_auto_transport_degrades_w0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_streaming" name="test_auto_transport_uses_stream_json_when_supported" time="0.007"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_auto_transport_uses_strea0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F63910400&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_streaming.py:260: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_auto_transport_uses_strea0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_auto_transport_uses_strea0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_streaming" name="test_final_json_transport_skips_probe" time="0.006"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_final_json_transport_skip0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F63912700&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_streaming.py:271: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_final_json_transport_skip0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_final_json_transport_skip0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_streaming" name="test_legacy_ainvoke_still_uses_json_format" time="0.009"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_legacy_ainvoke_still_uses0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F63912D40&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_streaming.py:290: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_legacy_ainvoke_still_uses0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_legacy_ainvoke_still_uses0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_streaming" name="test_legacy_invoke_still_uses_json_format" time="0.012"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_legacy_invoke_still_uses_0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F63910FE0&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_streaming.py:304: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_legacy_invoke_still_uses_0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_legacy_invoke_still_uses_0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_streaming" name="test_prompt_still_goes_through_stdin[auto]" time="0.011"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_prompt_still_goes_through0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F63910CC0&gt;
+transport = 'auto'
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_streaming.py:315: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_prompt_still_goes_through0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_prompt_still_goes_through0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_streaming" name="test_prompt_still_goes_through_stdin[stream_json]" time="0.011"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_prompt_still_goes_through1')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F63913EC0&gt;
+transport = 'stream_json'
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_streaming.py:315: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_prompt_still_goes_through1/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_prompt_still_goes_through1\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_streaming" name="test_prompt_still_goes_through_stdin[final_json]" time="0.014"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_prompt_still_goes_through2')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F63912D40&gt;
+transport = 'final_json'
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_streaming.py:315: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_prompt_still_goes_through2/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_prompt_still_goes_through2\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_trace" name="test_trace_does_not_land_in_history" time="0.017" /><testcase classname="tests_openstoryline.test_mcode_trace" name="test_trace_is_capped_per_turn" time="0.035" /><testcase classname="tests_openstoryline.test_mcode_trace" name="test_trace_cap_follows_config" time="0.015" /><testcase classname="tests_openstoryline.test_mcode_trace" name="test_trace_cap_is_per_turn" time="0.017" /><testcase classname="tests_openstoryline.test_mcode_trace" name="test_trace_entry_text_is_truncated" time="0.015" /><testcase classname="tests_openstoryline.test_mcode_trace" name="test_trace_truncation_limit_follows_config" time="0.017" /><testcase classname="tests_openstoryline.test_mcode_trace" name="test_trace_masks_secrets_before_writing" time="0.017" /><testcase classname="tests_openstoryline.test_mcode_trace" name="test_trace_only_keeps_whitelisted_fields" time="0.016" /><testcase classname="tests_openstoryline.test_mcode_trace" name="test_trace_write_failure_is_isolated" time="0.017" /><testcase classname="tests_openstoryline.test_mcode_trace" name="test_trace_write_failure_does_not_break_dispatch" time="0.018" /><testcase classname="tests_openstoryline.test_mcode_trace" name="test_trace_is_persisted_and_restored" time="0.024" /><testcase classname="tests_openstoryline.test_mcode_trace" name="test_restore_reapplies_bounds" time="0.023" /><testcase classname="tests_openstoryline.test_mcode_trace" name="test_trace_keeps_only_recent_turns" time="0.018" /><testcase classname="tests_openstoryline.test_mcode_trace" name="test_restore_ignores_garbage" time="0.018" /><testcase classname="tests_openstoryline.test_mcode_ws_e2e" name="test_ws_e2e_mcode_turn_streams_text_and_process_events" time="0.008"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws_e2e_mcode_turn_streams0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F638EAAC0&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_e2e.py:152: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_e2e.py:112: in _run_ws_turn
+    ???
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws_e2e_mcode_turn_streams0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_ws_e2e_mcode_turn_streams0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_ws_e2e" name="test_ws_e2e_process_events_do_not_leak_into_body" time="0.007"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws_e2e_process_events_do_0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F638EBBA0&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_e2e.py:201: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_e2e.py:112: in _run_ws_turn
+    ???
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws_e2e_process_events_do_0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_ws_e2e_process_events_do_0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_ws_e2e" name="test_ws_e2e_llm_turn_has_no_mcode_panel_events" time="0.007"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws_e2e_llm_turn_has_no_mc0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F638EB2E0&gt;
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000026F6393B230&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_e2e.py:233: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_e2e.py:112: in _run_ws_turn
+    ???
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws_e2e_llm_turn_has_no_mc0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_ws_e2e_llm_turn_has_no_mc0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_ws_e2e" name="test_ws_e2e_trace_is_recorded_not_in_history" time="0.006"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws_e2e_trace_is_recorded_0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F638EB100&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_e2e.py:252: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_e2e.py:112: in _run_ws_turn
+    ???
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws_e2e_trace_is_recorded_0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_ws_e2e_trace_is_recorded_0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_ws_events" name="test_ws01_first_delta_arrives_before_cli_exit" time="0.008"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws01_first_delta_arrives_0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F638EB600&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_events.py:196: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_events.py:114: in _run_mcode_turn
+    ???
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws01_first_delta_arrives_0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_ws01_first_delta_arrives_0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_ws_events" name="test_ws02_status_and_text_are_separate_streams" time="0.010"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws02_status_and_text_are_0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F63960C20&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_events.py:217: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_events.py:114: in _run_mcode_turn
+    ???
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws02_status_and_text_are_0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_ws02_status_and_text_are_0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_ws_events" name="test_ws02_status_events_carry_run_id_and_seq" time="0.010"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws02_status_events_carry_0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F63961440&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_events.py:250: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_events.py:114: in _run_mcode_turn
+    ???
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws02_status_events_carry_0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_ws02_status_events_carry_0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_ws_events" name="test_ws03_tool_lifecycle_order" time="0.009"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws03_tool_lifecycle_order0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F63912E80&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_events.py:277: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_events.py:114: in _run_mcode_turn
+    ???
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws03_tool_lifecycle_order0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_ws03_tool_lifecycle_order0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_ws_events" name="test_ws03_failed_tool_is_marked_error" time="0.010"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws03_failed_tool_is_marke0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F60CB3060&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_events.py:307: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_events.py:114: in _run_mcode_turn
+    ???
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws03_failed_tool_is_marke0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_ws03_failed_tool_is_marke0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_ws_events" name="test_ws04_cancel_keeps_partial_text_and_stops_loading" time="0.008"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws04_cancel_keeps_partial0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F63821940&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_events.py:326: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_events.py:114: in _run_mcode_turn
+    ???
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws04_cancel_keeps_partial0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_ws04_cancel_keeps_partial0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_ws_events" name="test_ws05_error_keeps_previous_text" time="0.009"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws05_error_keeps_previous0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F63822160&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_events.py:360: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_events.py:114: in _run_mcode_turn
+    ???
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws05_error_keeps_previous0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_ws05_error_keeps_previous0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_ws_events" name="test_ws06_llm_turn_has_no_mcode_adapter" time="0.010" /><testcase classname="tests_openstoryline.test_mcode_ws_events" name="test_ws06_llm_history_has_no_mcode_trace" time="0.011" /><testcase classname="tests_openstoryline.test_mcode_ws_events" name="test_ws07_trace_restore_does_not_duplicate_answer" time="0.007"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws07_trace_restore_does_n0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F6379F100&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_events.py:411: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_events.py:114: in _run_mcode_turn
+    ???
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws07_trace_restore_does_n0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_ws07_trace_restore_does_n0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcode_ws_events" name="test_ws_timeline_fixture_matches_real_run" time="0.008"><failure message="UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)">tmp_path = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws_timeline_fixture_match0')
+fake_mcode_stream_cli = &lt;function fake_mcode_stream_cli.&lt;locals&gt;.make at 0x0000026F638E80E0&gt;
+
+&gt;   ???
+
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_events.py:452: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+E:\Documents\kuaishou\auto-video-editor\tests_openstoryline\test_mcode_ws_events.py:114: in _run_mcode_turn
+    ???
+tests_openstoryline\conftest.py:654: in make
+    cli_path.write_text(
+C:\Program Files\Python313\Lib\pathlib\_local.py:555: in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/wayyet/AppData/Local/Temp/pytest-of-wayyet/pytest-362/test_ws_timeline_fixture_match0/fake_stream_1/fake_stream.cmd')
+data = '@echo off\r\n"C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\.venv\\Scripts\\python.exe" ...ata\\Local\\Temp\\pytest-of-wayyet\\pytest-362\\test_ws_timeline_fixture_match0\\fake_stream_1\\fake_stream.py" %*\r\n'
+encoding = 'ascii', errors = None, newline = None
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        """
+        Open the file in text mode, write to it, and close the file.
+        """
+        if not isinstance(data, str):
+            raise TypeError('data must be str, not %s' %
+                            data.__class__.__name__)
+        with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+&gt;           return f.write(data)
+                   ^^^^^^^^^^^^^
+E           UnicodeEncodeError: 'ascii' codec can't encode characters in position 48-51: ordinal not in range(128)
+
+C:\Program Files\Python313\Lib\pathlib\_abc.py:652: UnicodeEncodeError</failure></testcase><testcase classname="tests_openstoryline.test_mcp_legacy_compat" name="test_legacy_import_is_canonical_module[open_storyline.hooks.chat_middleware-open_storyline.mcp.hooks.chat_middleware]" time="0.019" /><testcase classname="tests_openstoryline.test_mcp_legacy_compat" name="test_legacy_import_is_canonical_module[open_storyline.hooks.node_interceptors-open_storyline.mcp.hooks.node_interceptors]" time="0.022" /><testcase classname="tests_openstoryline.test_mcp_legacy_compat" name="test_legacy_import_is_canonical_module[open_storyline.register_tools-open_storyline.mcp.register_tools]" time="0.304" /><testcase classname="tests_openstoryline.test_mcp_legacy_compat" name="test_legacy_import_is_canonical_module[open_storyline.sampling_handler-open_storyline.mcp.sampling_handler]" time="0.017" /><testcase classname="tests_openstoryline.test_mcp_legacy_compat" name="test_legacy_import_is_canonical_module[open_storyline.sampling_requester-open_storyline.mcp.sampling_requester]" time="0.019" /><testcase classname="tests_openstoryline.test_mcp_legacy_compat" name="test_legacy_import_is_canonical_module[open_storyline.server-open_storyline.mcp.server]" time="0.052" /><testcase classname="tests_openstoryline.test_media_upload_frontend" name="test_media_upload_frontend_unit_tests_pass" time="0.189" /><testcase classname="tests_openstoryline.test_web_mcode_wiring" name="test_mcode_tiers_appear_in_model_dropdown" time="0.015" /><testcase classname="tests_openstoryline.test_web_mcode_wiring" name="test_mcode_tiers_hidden_when_not_configured" time="0.009" /><testcase classname="tests_openstoryline.test_web_mcode_wiring" name="test_mcode_tiers_hidden_when_cwd_missing" time="0.013" /><testcase classname="tests_openstoryline.test_web_mcode_wiring" name="test_default_model_is_mcode_when_builtin_key_is_placeholder" time="0.013" /><testcase classname="tests_openstoryline.test_web_mcode_wiring" name="test_default_model_stays_builtin_when_credential_usable" time="0.013" /><testcase classname="tests_openstoryline.test_web_mcode_wiring" name="test_default_model_stays_builtin_when_mcode_not_configured" time="0.013" /><testcase classname="tests_openstoryline.test_web_mcode_wiring" name="test_ensure_agent_routes_mcode_tier_to_mcode_branch" time="0.018" /><testcase classname="tests_openstoryline.test_web_mcode_wiring" name="test_ensure_agent_mcode_operator_uses_standard_mode" time="0.019" /><testcase classname="tests_openstoryline.test_web_mcode_wiring" name="test_ensure_agent_ignores_builtin_credentials_in_mcode_mode" time="0.017" /><testcase classname="tests_openstoryline.test_web_mcode_wiring" name="test_ensure_agent_switches_from_builtin_to_mcode" time="0.020" /><testcase classname="tests_openstoryline.test_web_mcode_wiring" name="test_ensure_agent_builtin_path_still_uses_chat_openai" time="0.017" /><testcase classname="tests_openstoryline.test_web_mcode_wiring" name="test_restore_keeps_mcode_tier" time="0.103" /><testcase classname="tests_openstoryline.test_web_mcode_wiring" name="test_restore_falls_back_when_builtin_credential_missing" time="0.062" /><testcase classname="tests_openstoryline.test_web_mcode_wiring" name="test_restore_keeps_builtin_when_credential_usable" time="0.053" /><testcase classname="tests_openstoryline.test_web_mcode_wiring" name="test_restore_drops_unknown_model_key" time="0.084" /><testcase classname="tests_openstoryline.test_web_mcode_wiring" name="test_resolve_mcode_tier_prefers_llm" time="0.001" /><testcase classname="tests_openstoryline.test_web_mcode_wiring" name="test_looks_like_placeholder_secret" time="0.001" /><testcase classname="tests_openstoryline.test_web_zcode_wiring" name="test_dropdown_contains_zcode_when_available" time="0.248" /><testcase classname="tests_openstoryline.test_web_zcode_wiring" name="test_dropdown_absent_when_not_configured" time="0.009" /><testcase classname="tests_openstoryline.test_web_zcode_wiring" name="test_dropdown_disabled_with_note_when_selfcheck_fails" time="0.289" /><testcase classname="tests_openstoryline.test_web_zcode_wiring" name="test_default_falls_back_to_zcode_when_builtin_creds_unusable" time="0.299" /><testcase classname="tests_openstoryline.test_web_zcode_wiring" name="test_turn_source_zcode" time="0.002" /><testcase classname="tests_openstoryline.test_web_zcode_wiring" name="test_langgraph_text_not_forwarded_for_zcode" time="0.001" /><testcase classname="tests_openstoryline.test_web_zcode_wiring" name="test_make_zcode_adapter_gating" time="0.018" /><testcase classname="tests_openstoryline.test_web_zcode_wiring" name="test_ensure_agent_builds_zcode_model" time="0.318" /><testcase classname="tests_openstoryline.test_web_zcode_wiring" name="test_capture_zcode_session_id" time="0.272" /><testcase classname="tests_openstoryline.test_web_zcode_wiring" name="test_zcode_session_id_persists_in_dump_state" time="0.262" /><testcase classname="tests_openstoryline.test_web_zcode_wiring" name="test_zcode_session_id_restored_from_state" time="0.232" /><testcase classname="tests_openstoryline.test_workflow_chat_indicator_frontend" name="test_workflow_chat_indicator_frontend_unit_tests_pass" time="2.591" /><testcase classname="tests_openstoryline.test_workflow_monitor_frontend" name="test_workflow_monitor_frontend_unit_tests_pass" time="0.196" /><testcase classname="tests_openstoryline.test_zcode_agent_branch" name="test_is_zcode_model[ZCode Agent-True]" time="0.001" /><testcase classname="tests_openstoryline.test_zcode_agent_branch" name="test_is_zcode_model[zcode-agent-True]" time="0.001" /><testcase classname="tests_openstoryline.test_zcode_agent_branch" name="test_is_zcode_model[zcode-True]" time="0.001" /><testcase classname="tests_openstoryline.test_zcode_agent_branch" name="test_is_zcode_model[  ZCode Agent  -True]" time="0.001" /><testcase classname="tests_openstoryline.test_zcode_agent_branch" name="test_is_zcode_model[mcode-operator-False]" time="0.001" /><testcase classname="tests_openstoryline.test_zcode_agent_branch" name="test_is_zcode_model[GLM API / BigModel-False]" time="0.001" /><testcase classname="tests_openstoryline.test_zcode_agent_branch" name="test_is_zcode_model[deepseek-v4-pro-False]" time="0.001" /><testcase classname="tests_openstoryline.test_zcode_agent_branch" name="test_is_zcode_model[__custom__-False]" time="0.001" /><testcase classname="tests_openstoryline.test_zcode_agent_branch" name="test_is_zcode_model[-False]" time="0.001" /><testcase classname="tests_openstoryline.test_zcode_agent_branch" name="test_is_zcode_model[None-False]" time="0.001" /><testcase classname="tests_openstoryline.test_zcode_agent_branch" name="test_zcode_branch_skips_api_key_validation" time="0.292" /><testcase classname="tests_openstoryline.test_zcode_agent_branch" name="test_zcode_branch_uses_zcode_model" time="0.246" /><testcase classname="tests_openstoryline.test_zcode_agent_branch" name="test_zcode_branch_passes_config_to_model" time="0.242" /><testcase classname="tests_openstoryline.test_zcode_agent_branch" name="test_zcode_branch_providers_reach_model" time="0.217" /><testcase classname="tests_openstoryline.test_zcode_agent_branch" name="test_zcode_branch_requires_configured_cwd" time="0.015" /><testcase classname="tests_openstoryline.test_zcode_agent_branch" name="test_zcode_branch_requires_existing_cwd" time="0.014" /><testcase classname="tests_openstoryline.test_zcode_agent_branch" name="test_zcode_branch_requires_resolvable_bin" time="0.016" /><testcase classname="tests_openstoryline.test_zcode_agent_branch" name="test_zcode_branch_fails_when_help_flag_missing" time="0.207" /><testcase classname="tests_openstoryline.test_zcode_agent_branch" name="test_selfcheck_ok_with_fake_cli" time="0.210" /><testcase classname="tests_openstoryline.test_zcode_agent_branch" name="test_selfcheck_fails_when_flag_missing" time="0.251" /><testcase classname="tests_openstoryline.test_zcode_agent_branch" name="test_selfcheck_fails_on_broken_cli" time="0.110" /><testcase classname="tests_openstoryline.test_zcode_agent_branch" name="test_selfcheck_caches_success" time="0.202" /><testcase classname="tests_openstoryline.test_zcode_chat_model" name="test_command_shape" time="0.114" /><testcase classname="tests_openstoryline.test_zcode_chat_model" name="test_command_carries_resume" time="0.086" /><testcase classname="tests_openstoryline.test_zcode_chat_model" name="test_no_resume_rolls_back_to_prompt_history" time="0.091" /><testcase classname="tests_openstoryline.test_zcode_chat_model" name="test_prompt_overflow_raises" time="0.008" /><testcase classname="tests_openstoryline.test_zcode_chat_model" name="test_result_mapping" time="0.077" /><testcase classname="tests_openstoryline.test_zcode_chat_model" name="test_parse_zcode_json_prefers_contract_block" time="0.001" /><testcase classname="tests_openstoryline.test_zcode_chat_model" name="test_parse_zcode_json_missing_keys_raises" time="0.001" /><testcase classname="tests_openstoryline.test_zcode_chat_model" name="test_parse_zcode_json_empty_raises" time="0.001" /><testcase classname="tests_openstoryline.test_zcode_chat_model" name="test_nonzero_exit_without_output_raises" time="0.075" /><testcase classname="tests_openstoryline.test_zcode_chat_model" name="test_nonzero_exit_with_contract_block_warns_but_succeeds" time="0.095" /><testcase classname="tests_openstoryline.test_zcode_chat_model" name="test_event_stream_running_then_completed_then_final" time="0.087" /><testcase classname="tests_openstoryline.test_zcode_chat_model" name="test_event_failed_on_exec_error" time="0.099" /><testcase classname="tests_openstoryline.test_zcode_chat_model" name="test_event_tick_during_long_run" time="2.595" /><testcase classname="tests_openstoryline.test_zcode_chat_model" name="test_timeout_kills_tree" time="2.427" /><testcase classname="tests_openstoryline.test_zcode_chat_model" name="test_cancel_kills_tree" time="1.944" /><testcase classname="tests_openstoryline.test_zcode_chat_model" name="test_prompt_resume_mode_has_no_history_block" time="0.001" /><testcase classname="tests_openstoryline.test_zcode_chat_model" name="test_prompt_bridge_always_inline" time="0.001" /><testcase classname="tests_openstoryline.test_zcode_chat_model" name="test_prompt_media_manifest_included" time="0.001" /><testcase classname="tests_openstoryline.test_zcode_config" name="test_settings_loads_without_zcode_section" time="0.017" /><testcase classname="tests_openstoryline.test_zcode_config" name="test_settings_loads_zcode_section" time="0.018" /><testcase classname="tests_openstoryline.test_zcode_config" name="test_env_overrides_beat_file" time="0.017" /><testcase classname="tests_openstoryline.test_zcode_config" name="test_env_beats_local_file" time="0.032" /><testcase classname="tests_openstoryline.test_zcode_config" name="test_committed_config_toml_stays_neutral" time="0.005" /><testcase classname="tests_openstoryline.test_zcode_live" name="test_live_selfcheck_and_one_turn" time="0.000"><skipped type="pytest.skip" message="需要 OPENSTORYLINE_ZCODE_LIVE=1 显式开启(会消耗真实模型额度)">C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\auto-video-editor\tests_openstoryline\test_zcode_live.py:42: 需要 OPENSTORYLINE_ZCODE_LIVE=1 显式开启(会消耗真实模型额度)</skipped></testcase><testcase classname="tests_openstoryline.test_zcode_live" name="test_live_resume_context" time="0.000"><skipped type="pytest.skip" message="需要 OPENSTORYLINE_ZCODE_LIVE=1 显式开启(会消耗真实模型额度)">C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\auto-video-editor\tests_openstoryline\test_zcode_live.py:66: 需要 OPENSTORYLINE_ZCODE_LIVE=1 显式开启(会消耗真实模型额度)</skipped></testcase><testcase classname="tests_openstoryline.test_zcode_ws_e2e" name="test_e2e_zcode_turn_full_pipeline" time="0.396" /><testcase classname="tests_openstoryline.test_zcode_ws_e2e" name="test_e2e_zcode_session_id_captured_for_resume" time="0.303" /><testcase classname="tests_openstoryline.test_zcode_ws_e2e" name="test_e2e_zcode_error_path" time="0.414" /><testcase classname="tests_openstoryline.test_zcode_ws_events" name="test_ws_z1_happy_path_timeline" time="0.108" /><testcase classname="tests_openstoryline.test_zcode_ws_events" name="test_ws_z2_no_tool_events" time="0.120" /><testcase classname="tests_openstoryline.test_zcode_ws_events" name="test_ws_z3_trace_recorded_separately" time="0.111" /><testcase classname="tests_openstoryline.test_zcode_ws_events" name="test_ws_z4_trace_disabled_drops_status_but_keeps_final" time="0.110" /><testcase classname="tests_openstoryline.test_zcode_ws_events" name="test_ws_z5_seq_monotonic" time="0.099" /><testcase classname="tests_openstoryline.test_zcode_ws_events" name="test_ws_z6_error_path_emits_failed_status" time="0.112" /><testcase classname="tests_openstoryline.test_zcode_ws_events" name="test_ws_z7_cancel_emits_cancelled_status" time="2.044" /><testcase classname="tests_openstoryline.test_zcode_ws_events" name="test_ws_z8_tick_events" time="2.131" /></testsuite></testsuites>
