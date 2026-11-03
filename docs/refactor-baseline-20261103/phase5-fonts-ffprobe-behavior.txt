@@ -1,0 +1,9 @@
+fontTools in main venv: 4.66.0
+assembly font_dirs: ['\\root\\.fonts', '\\usr\\share\\fonts', 'C:\\WINDOWS\\Fonts', 'C:\\Users\\wayyet\\AppData\\Local\\Microsoft\\Windows\\Fonts']
+video_edit font_dirs: ['\\root\\.fonts', '\\usr\\share\\fonts', 'C:\\WINDOWS\\Fonts', 'C:\\Users\\wayyet\\AppData\\Local\\Microsoft\\Windows\\Fonts']
+assembly find_cjk_font(regular): C:\WINDOWS\Fonts\msyh.ttc
+video_edit find_cjk_font(regular): C:\WINDOWS\Fonts\msyh.ttc
+same hit: True
+bold same hit: True
+family_of_file same: True -> Microsoft YaHei
+require_ffmpeg same: True -> None
