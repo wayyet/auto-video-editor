@@ -6,6 +6,10 @@
 > 分析日期：2026-09-30  
 > 参考仓库：<https://github.com/wayyet/auto-video-editor>
 
+> 📌 **2026-11-03 现状更新（统计口径勘误，正文其余内容为历史记录）**
+> 本文写作时的 "21 个 LangGraph 图节点" 是 2026-09-30 时点。以基准 `a27298a` 为准：`graph.py` 当前注册 **53 个节点**（`g.add_node()` 调用数）、44 处 `add_edge()`、10 处 `add_conditional_edges()`，不再以 21/22/50 为当前口径。
+> helper 冗余收敛（草稿 I/O / 关卡 payload / Storyline 读盘单一来源）已完成并有防回归测试；后续收敛的执行记录见 `docs/修改文档/auto-video-editor_main_冗余模块合并设计与执行计划.md`（canonical）。
+
 ---
 
 ## 1. 本次分析结论

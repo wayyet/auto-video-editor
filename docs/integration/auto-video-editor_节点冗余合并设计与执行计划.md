@@ -6,6 +6,11 @@
 > 初版声明"本次未重新克隆仓库"，其三条核心结论（22 节点 / 删 `atomic_write_file` / join 被执行两次）**已被实际代码推翻**，详见第 1 节与第 3 节。
 > 范围说明：只涉及 auto-video-editor **自身**的 50 个 LangGraph 节点及其直接依赖的 `draft_ops/` / `nodes/storyline/` / `jy_common/` 工具层，不涉及 FireRed-OpenStoryline、video-agent-kit 等其他仓库。
 
+> 📌 **2026-11-03 现状更新（统计口径勘误，正文其余内容为历史记录）**
+> 节点统计以基准 `a27298a` 为准：`graph.py` 当前注册 **53 个节点**（`g.add_node()` 调用数），另有 **44 处 `add_edge()`** 与 **10 处 `add_conditional_edges()`**；本文写作时的 50/51/22 等数字是 `3b33fa7` 时点，不再作为当前基线。
+> 本文建议的 helper 收敛（R1–R4：草稿 I/O / 关卡 payload / Storyline 读盘）**已完成**，单一来源为 `nodes/_draft_io.py`、`nodes/_checkpoint.py`、`nodes/storyline/_common.py`，并由 `tests/unit/test_shared_node_helpers_single_source.py` 防回归（冗余合并计划阶段 3）。
+> 后续冗余收敛（MCP 六组源码、48 对提示词、Provider Contract、FFmpeg/字体审查）的执行设计与记录见 `docs/修改文档/auto-video-editor_main_冗余模块合并设计与执行计划.md`（canonical）。
+
 > ⚠️ **本文档第 5、7、8 节已作废（2026-09-30）**
 > 这三节仍在描述初版的两项改动（"删除 `atomic_writer_file.py`"、"把两条独立 `add_edge` 合并成列表边"）。
 > 核查结论是：**两项都不该做 / 已经做完了**（详见第 3.1、3.2 节）。

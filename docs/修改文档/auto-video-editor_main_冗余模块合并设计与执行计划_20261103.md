@@ -6,6 +6,12 @@
 > 计划版本：`v1.0`  
 > 日期：2026-11-03
 
+> ⚠️ **superseded(2026-11-03)**:本文是前版模块计划,已被整合进主文档
+> [`docs/修改文档/auto-video-editor_main_冗余模块合并设计与执行计划.md`](./auto-video-editor_main_冗余模块合并设计与执行计划.md)
+> (基准 `a27298a`,v1.0 canonical)。执行记录以主文档与分支
+> `refactor/dedupe-openstoryline-mcp-20261103` 的提交历史为准;
+> 本文按计划 §6.8(6.4)保留为历史记录,不再维护。
+
 ---
 
 ## 1. 目标

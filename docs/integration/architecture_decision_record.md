@@ -308,6 +308,44 @@ Phase 1 验证必须先解决。
 
 ---
 
+## ADR-015 OpenStoryline MCP 唯一实现目录与旧路径兼容别名
+
+**2026-11-03 新增**(冗余模块合并计划阶段 1,commit `54be813`)。
+
+**决定**:
+
+- `src/open_storyline/mcp/`(`server.py`、`register_tools.py`、`sampling_handler.py`、`sampling_requester.py`、`hooks/chat_middleware.py`、`hooks/node_interceptors.py`)是 MCP 功能的**唯一实现目录**;生产代码(`agent.py`、`agent_fastapi.py`)一律 import `open_storyline.mcp.*`。
+- 旧根目录路径(`open_storyline.hooks.*`、`open_storyline.register_tools`、`open_storyline.sampling_*`、`open_storyline.server`)**不删除**,改写为薄兼容层:导入时执行 `sys.modules[__name__] = _implementation`,把旧模块名映射到规范模块对象;`open_storyline/server.py` 另保留 `python -m open_storyline.server` 旧启动入口(`__main__` 时调用规范 `main()`)。
+- 采用 `sys.modules` 模块对象别名而非 `import *`:后者漏下划线符号、且会把 monkeypatch 与模块级状态分散到两个模块对象;别名保证新旧路径 `import_module(legacy) is import_module(canonical)`(由 `tests_openstoryline/test_mcp_legacy_compat.py` 锁定)。
+
+**理由**:两份源码曾逐字节相同(Git Blob SHA 一致),是纯分叉风险;生产导入与 ADR-001 的 MCP 启动路径均已指向 `open_storyline.mcp.*`,旧路径只需服务历史脚本/外部插件。
+
+**后果**:
+
+- 旧路径不再包含业务实现,后续只会随规范模块一起演进;删除旧路径是后续独立决策,需先完成全仓引用扫描。
+- 不改变 `python -m open_storyline.mcp.server` 正式启动方式;不改变 MCP Tool 注册与 Sampling 行为。
+
+---
+
+## ADR-016 提示词单一物理资源目录(prompts/tasks)+ 双 Loader Facade
+
+**2026-11-03 新增**(冗余模块合并计划阶段 2A/2B,commit `ad24e90`/`bd3242a`)。
+
+**决定**:
+
+- 仓库根 `prompts/tasks/<kind>/<lang>/<part>.md` 是提示词 Markdown 的**唯一物理目录**;`storyline_capabilities/prompts/` 下的 48 份逐字一致副本已删除,该目录仅保留 `__init__.py`(Loader)。
+- `storyline_capabilities/prompts` 的 `PROMPTS_ROOT` 指向仓库根 `prompts/tasks`;`src/open_storyline/utils/prompts.py` 原本就指向该目录,未移动任何根目录文件。
+- **两套 Loader 的 Python 实现不合并**(`open_storyline.utils.prompts` 严格语义:缺文件抛 `FileNotFoundError`、缺变量报错、`{{name}}`;`storyline_capabilities.prompts` 宽松语义:缺文件返回空串、保留未解析占位符、兼容 `{name}`/`{name:?}`)——2B 抽取的共享底层 `jy_common/prompt_core.py` 以策略参数(严格/宽松 × 单/双花括号 × 缺失策略)承载差异,两套 Facade 的公开 API 与调用方可观察行为不变(golden 渲染对比测试锁定)。
+
+**理由**:48 组资源逐字节相同是双写漂移风险;但两套 Loader 的错误策略与占位符语法是**调用方可观察契约**,合并实现必须以行为不变为前提,否则影响模型输入。
+
+**后果**:
+
+- 新增/修改提示词只需改 `prompts/tasks/` 一处;两套 Loader 的既有单测与 golden 测试守护语义不回归。
+- 2B 的共享底层属内部复用;后续迭代如需进一步统一,仍以 golden 渲染对比为前置(计划 §4.2)。
+
+---
+
 ## 参考文档
 
 - `docs/integration/storyline_tools_inventory.md` — MCP tool 清单(v3.1 已同步 22 tool 数)

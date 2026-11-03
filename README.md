@@ -16,7 +16,7 @@ auto-video-editor/
 ├── .gitignore
 ├── config.py                           集中配置(Week1/3 待核实项占位)
 ├── state.py                            WorkflowState TypedDict(Week 3 +5 字段)
-├── graph.py                            StateGraph 装配 + 编译(Week 3 13+1 节点)
+├── graph.py                            StateGraph 装配 + 编译(53 节点注册 / 44 add_edge / 10 add_conditional_edges,2026-11-03 口径)
 ├── nodes/
 │   ├── node_01_clean_cache.py          ─┐
 │   ├── node_02_launch_openstoryline.py │
