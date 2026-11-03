@@ -76,3 +76,6 @@ out/
 
 # 本机 Agent 工具配置（mcp.json 含本机绝对路径，跨机无意义）
 .agents/
+
+# 单流水线重构 2026-11-04:config.toml.local 带日期备份(含 API key,不入库)
+/config.toml.local.bak-*
