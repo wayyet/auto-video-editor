@@ -21,28 +21,10 @@ from storyline_capabilities.vlm_client import (
 )
 from storyline_capabilities.prompts import render_prompt
 from storyline_capabilities.duration_budget import build_group_budget_text
+from storyline_capabilities._common import clip_duration_sec, default_user_request
 
 
 _DEFAULT_GROUP_SIZE: int = 3
-
-
-def _clip_duration_sec(clip: dict[str, Any]) -> float:
-    """从 clip 的 ``source_ref``(毫秒)算该片段时长(秒);拿不到返回 0。"""
-    ref = clip.get("source_ref") or {}
-    start = ref.get("start")
-    end = ref.get("end")
-    if start is None or end is None:
-        return 0.0
-    try:
-        return max(0.0, (float(end) - float(start)) / 1000.0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _default_user_request(lang: str) -> str:
-    return (
-        "无其他要求" if str(lang).lower().startswith("zh") else "No additional requirements"
-    )
 
 
 def group_clips(
@@ -83,7 +65,7 @@ def group_clips(
         f"- {c.get('clip_id', '?')}: {c.get('caption', '')}" for c in filtered_clips
     )
     selected_clips = [str(c.get("clip_id") or "") for c in filtered_clips]
-    total_input_duration_sec = sum(_clip_duration_sec(c) for c in filtered_clips)
+    total_input_duration_sec = sum(clip_duration_sec(c) for c in filtered_clips)
     duration_budget = build_group_budget_text(
         target_duration_ms, total_input_duration_sec, lang
     )
@@ -92,7 +74,7 @@ def group_clips(
         "group_clips",
         "user",
         lang=lang,
-        user_request=str(user_request or "").strip() or _default_user_request(lang),
+        user_request=str(user_request or "").strip() or default_user_request(lang),
         duration_budget=duration_budget,
         clip_captions=clip_captions,
         clip_number=len(filtered_clips),

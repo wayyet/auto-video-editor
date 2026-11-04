@@ -13,6 +13,7 @@ from storyline_capabilities.vlm_client import (
     parse_json_loose,
 )
 from storyline_capabilities.prompts import render_prompt
+from storyline_capabilities._common import default_user_request
 
 
 # 字体候选(本地资源库里只有这两个默认字体;``config.ASSETS_FONTS_DIR`` 有别的
@@ -21,12 +22,6 @@ DEFAULT_FONT_CANDIDATES: list[dict[str, str]] = [
     {"font_name": "SourceHanSansCN-Bold.otf", "lang": "zh"},
     {"font_name": "Roboto-Bold.ttf", "lang": "en"},
 ]
-
-
-def _default_user_request(lang: str) -> str:
-    return (
-        "无其他要求" if str(lang).lower().startswith("zh") else "No additional requirements"
-    )
 
 
 def recommend_text(
@@ -83,7 +78,7 @@ def recommend_text(
             (s.get("narration", "") or "")[:80] for s in (group_scripts or [])
         ),
         candidates=candidates if candidates is not None else DEFAULT_FONT_CANDIDATES,
-        user_request=str(user_request or "").strip() or _default_user_request(lang),
+        user_request=str(user_request or "").strip() or default_user_request(lang),
     )
 
     try:

@@ -14,26 +14,10 @@ from storyline_capabilities.vlm_client import (
 )
 from storyline_capabilities.prompts import render_prompt
 from storyline_capabilities.duration_budget import build_filter_budget_text
+from storyline_capabilities._common import clip_duration_sec, default_user_request
 
 
 _DEFAULT_KEEP_RATIO: float = 0.7  # 默认保留 70%
-
-
-def _clip_duration_sec(clip: dict[str, Any]) -> float:
-    """从 caption 的 ``source_ref``(毫秒)算该片段时长(秒);拿不到返回 0。"""
-    ref = clip.get("source_ref") or {}
-    start = ref.get("start")
-    end = ref.get("end")
-    if start is None or end is None:
-        return 0.0
-    try:
-        return max(0.0, (float(end) - float(start)) / 1000.0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _default_user_request(lang: str) -> str:
-    return "无其他要求" if str(lang).lower().startswith("zh") else "No additional requirements"
 
 
 def _source_of(clip: dict[str, Any]) -> str:
@@ -137,7 +121,7 @@ def filter_clips(
     clip_captions = "\n".join(
         f"- {c.get('clip_id', '?')}: {c.get('caption', '')}" for c in captions
     )
-    total_input_duration_sec = sum(_clip_duration_sec(c) for c in captions)
+    total_input_duration_sec = sum(clip_duration_sec(c) for c in captions)
     duration_budget = build_filter_budget_text(
         target_duration_ms, total_input_duration_sec, lang
     )
@@ -146,7 +130,7 @@ def filter_clips(
         "filter_clips",
         "user",
         lang=lang,
-        user_request=str(user_request or "").strip() or _default_user_request(lang),
+        user_request=str(user_request or "").strip() or default_user_request(lang),
         clip_captions=clip_captions,
         duration_budget=duration_budget,
     )

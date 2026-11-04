@@ -13,12 +13,7 @@ from storyline_capabilities.vlm_client import (
     parse_json_loose,
 )
 from storyline_capabilities.prompts import render_prompt
-
-
-def _default_user_request(lang: str) -> str:
-    return (
-        "无其他要求" if str(lang).lower().startswith("zh") else "No additional requirements"
-    )
+from storyline_capabilities._common import default_user_request
 
 
 def recommend_transition(
@@ -50,7 +45,7 @@ def recommend_transition(
         "generate_ai_transition",
         "user",
         lang=lang,
-        user_request=str(user_request or "").strip() or _default_user_request(lang),
+        user_request=str(user_request or "").strip() or default_user_request(lang),
         groups="\n".join(
             f"- {g.get('group_id', '?')}: {g.get('theme', '')}"
             for g in groups
