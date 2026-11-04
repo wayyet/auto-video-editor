@@ -1,6 +1,6 @@
-"""nodes 层草稿读写的公共样板(冗余收敛 R1 + R2)。
+"""nodes 层草稿读写的公共样板(冗余收敛 R1 + R2 + R5)。
 
-收敛两件逐字重复的样板,让"读-改-写"这条链在节点层只剩**业务差异**:
+收敛三件逐字重复的样板,让"读-改-写"这条链在节点层只剩**业务差异**:
 
 - **R1 读盘** — 6 份一字不差的 ``_load_draft``(node_07 / 08 / 09 / 10 / 11 / 13)
   统一为 :func:`load_draft`。
@@ -8,6 +8,9 @@
   :func:`apply_and_write`(节点 08/09/10/11)与 :func:`jianying_running_tags`
   (节点 13:写入发生在公开 API :func:`nodes.node_13_adjust_volume.jianying_adjust_volume`
   内部,拿不到 ``write_result``,所以只复用告警标签生成)。
+- **R5 草稿结构小工具** — node_07 / 09 / 11 各抄一份的 ``_find_video_track`` 与
+  ``_upsert_by_id``,统一为 :func:`find_video_track` 与 :func:`upsert_by_id`
+  (后者统一返回 bool,True = 本次新增)。
 
 ⚠️ **入参陷阱(抽错会静默坏掉剪映 5.9+)**
 :func:`write_draft` 传给 ``safe_write_draft`` 的是 ``draft_path.parent``(目录),
@@ -125,9 +128,42 @@ def apply_and_write(
     return [done_tag, *jianying_running_tags(node_tag, (write_result,))]
 
 
+# ---------------------------------------------------------------------------
+# R5:草稿结构小工具(原先 node_07 / 09 / 11 各抄一份)
+# ---------------------------------------------------------------------------
+def find_video_track(draft: dict) -> dict:
+    """取第一条 ``type == "video"`` 的轨道。
+
+    没有视频轨时退回第一条轨;连轨都没有则返回一条空的视频轨(不写回 draft)。
+    """
+    for track in draft.get("tracks", []):
+        if track.get("type") == "video":
+            return track
+    tracks = draft.get("tracks", [])
+    return tracks[0] if tracks else {"type": "video", "segments": []}
+
+
+def upsert_by_id(items: list[dict], item: dict) -> bool:
+    """按 ``id`` 覆盖写入;没有同 id 条目才追加。返回 True 表示本次是新增。
+
+    幂等:同一条目重放多次不会叠出重复项。2026-10 K2=B 加固时,node_09 / node_11
+    横跨关卡②、resume 路径变多,纯 append 会让 ``materials.transitions`` /
+    ``video_effects`` / ``stickers`` 每重放一次就多一份。
+    """
+    item_id = item.get("id")
+    for idx, existing in enumerate(items):
+        if existing.get("id") == item_id:
+            items[idx] = item
+            return False
+    items.append(item)
+    return True
+
+
 __all__ = [
     "load_draft",
     "write_draft",
     "jianying_running_tags",
     "apply_and_write",
+    "find_video_track",
+    "upsert_by_id",
 ]

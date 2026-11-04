@@ -16,17 +16,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from jy_common.sticker_resolver import resolve_sticker_resource_id
-from nodes._draft_io import apply_and_write, load_draft
+from nodes._draft_io import apply_and_write, find_video_track, load_draft, upsert_by_id
 from nodes._dual_draft import ZH, dual_draft_targets, missing_en_note
 from state import WorkflowState
-
-
-def _find_video_track(draft: dict) -> dict:
-    for track in draft.get("tracks", []):
-        if track.get("type") == "video":
-            return track
-    tracks = draft.get("tracks", [])
-    return tracks[0] if tracks else {"type": "video", "segments": []}
 
 
 def _segment_range(seg: dict) -> tuple[int, int]:
@@ -72,21 +64,6 @@ def _find_overlapping_segment(
     return best[1] if best else None
 
 
-def _upsert_by_id(items: list[dict], item: dict) -> bool:
-    """按 ``id`` 覆盖写入;返回 True 表示本次是新增。
-
-    2026-10 K2=B 幂等加固:本节点现在横跨关卡②,resume 路径变多,纯 append 会让
-    ``materials.stickers`` 每次重放都多一份。
-    """
-    item_id = item.get("id")
-    for idx, existing in enumerate(items):
-        if existing.get("id") == item_id:
-            items[idx] = item
-            return False
-    items.append(item)
-    return True
-
-
 def _append_ref_once(refs: list, sticker_id: str) -> None:
     """往 segment 的 ``extra_material_refs``(剪映格式:字符串 id 列表)里补引用。
 
@@ -116,7 +93,7 @@ def _inject_sticker_into(draft: dict, tag: str) -> list[str]:
 
     materials = draft.setdefault("materials", {})
     stickers_material = materials.setdefault("stickers", [])
-    video_track = _find_video_track(draft)
+    video_track = find_video_track(draft)
     segments = video_track.get("segments", [])
 
     texts = materials.get("texts", []) or []
@@ -133,7 +110,7 @@ def _inject_sticker_into(draft: dict, tag: str) -> list[str]:
             "resource_id": resource_id,
             "target_timerange": dict(text_obj.get("target_timerange", {}) or {}),
         }
-        _upsert_by_id(stickers_material, sticker_obj)
+        upsert_by_id(stickers_material, sticker_obj)
 
         # Week 3 补全:按 timerange 找时间重叠 segment
         target_tr = text_obj.get("target_timerange", {}) or {}

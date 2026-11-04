@@ -18,20 +18,12 @@ import re
 from pathlib import Path
 
 from jy_common.template_library import TemplateLibrary, load_resource_libraries
-from nodes._draft_io import apply_and_write, load_draft
+from nodes._draft_io import apply_and_write, find_video_track, load_draft, upsert_by_id
 from nodes._dual_draft import ZH, dual_draft_targets, missing_en_note
 from state import WorkflowState
 
 
 _VIP_ID_PATTERN = re.compile(r"^\d{19}$")
-
-
-def _find_video_track(draft: dict) -> dict:
-    for track in draft.get("tracks", []):
-        if track.get("type") == "video":
-            return track
-    tracks = draft.get("tracks", [])
-    return tracks[0] if tracks else {"type": "video", "segments": []}
 
 
 def _boundary_count(video_track: dict, shot_plan: dict | None) -> int:
@@ -94,20 +86,6 @@ def _resolve_vip_video_effect(
     return out
 
 
-def _upsert_by_id(items: list[dict], item: dict) -> None:
-    """按 ``id`` 覆盖写入,而不是 append(幂等:重放不会叠出重复条目)。
-
-    2026-10 K2=B 加固:本节点现在横跨关卡②,resume 路径变多,纯 append 会让
-    ``materials.transitions`` / ``video_effects`` 每重放一次就多一份。
-    """
-    item_id = item.get("id")
-    for idx, existing in enumerate(items):
-        if existing.get("id") == item_id:
-            items[idx] = item
-            return
-    items.append(item)
-
-
 def _inject_fx_into(
     draft: dict,
     template_lib: TemplateLibrary,
@@ -127,7 +105,7 @@ def _inject_fx_into(
     transitions = materials.setdefault("transitions", [])
     video_effects = materials.setdefault("video_effects", [])
 
-    video_track = _find_video_track(draft)
+    video_track = find_video_track(draft)
     n_boundaries = _boundary_count(video_track, shot_plan)
 
     for i in range(n_boundaries):
@@ -147,7 +125,7 @@ def _inject_fx_into(
             )
         trans_obj = dict(trans_obj)
         trans_obj["id"] = f"transition-{i + 1}"
-        _upsert_by_id(transitions, trans_obj)
+        upsert_by_id(transitions, trans_obj)
 
     # 视频特效:固定 id 的单条全局特效(按 id 覆盖 → 重放幂等)
     effect_obj = _resolve_vip_video_effect(template_lib, "default")
@@ -159,7 +137,7 @@ def _inject_fx_into(
             )
         effect_obj = dict(effect_obj)
         effect_obj["id"] = "vfx-default"
-        _upsert_by_id(video_effects, effect_obj)
+        upsert_by_id(video_effects, effect_obj)
     else:
         warning_msgs.append(f"[{tag}] 未找到可用视频特效,跳过")
 

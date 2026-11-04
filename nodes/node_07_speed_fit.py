@@ -24,23 +24,13 @@ from config import (
     NODE_07_MAX_RETRY,
     TARGET_DURATION_US,
 )
-from nodes._draft_io import jianying_running_tags, load_draft, write_draft
+from nodes._draft_io import find_video_track, jianying_running_tags, load_draft, write_draft
 from state import WorkflowState
 
 
 # ---------------------------------------------------------------------------
 # 公共工具:读/写 draft_content.json
 # ---------------------------------------------------------------------------
-def _find_video_track(draft: dict) -> dict:
-    """Week 3 占位:取第一个 type=='video' 的轨道;Week 4 接入真实轨道结构时细化。"""
-    for track in draft.get("tracks", []):
-        if track.get("type") == "video":
-            return track
-    # fallback: 直接返回 tracks[0] 或空 dict
-    tracks = draft.get("tracks", [])
-    return tracks[0] if tracks else {"type": "video", "segments": []}
-
-
 def _compute_total_duration_us(video_track: dict) -> int:
     return sum(int(seg.get("target_timerange", {}).get("duration", 0)) for seg in video_track.get("segments", []))
 
@@ -100,7 +90,7 @@ def speed_fit(state: WorkflowState) -> dict:
         return {**state, "status_log": status_log}
     draft_path = Path(raw_draft_path)
     draft = load_draft(draft_path)
-    video_track = _find_video_track(draft)
+    video_track = find_video_track(draft)
 
     src_segments = list(video_track.get("segments", []))
     fps = video_track.get("fps", NODE_07_DEFAULT_FPS)
