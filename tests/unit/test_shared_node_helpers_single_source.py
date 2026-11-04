@@ -34,6 +34,8 @@ SINGLE_SOURCE: dict[str, str] = {
     "write_draft": "nodes/_draft_io.py",
     "jianying_running_tags": "nodes/_draft_io.py",
     "apply_and_write": "nodes/_draft_io.py",
+    "find_video_track": "nodes/_draft_io.py",
+    "upsert_by_id": "nodes/_draft_io.py",
     # H2: nodes/_checkpoint.py —— 关卡 payload 与 resume 收尾
     "build_interrupt_payload": "nodes/_checkpoint.py",
     "post_resume": "nodes/_checkpoint.py",
