@@ -34,6 +34,7 @@ from .timeline_ops import (
     load_timeline,
     normalize_track_type,
     timeline_clips,
+    timeline_duration,
 )
 
 
@@ -395,49 +396,6 @@ def expected_from_timeline(timeline_path: Path) -> dict:
         "height": height,
         "fps": fps,
     }
-
-
-def timeline_duration(data: dict) -> float | None:
-    max_end = 0.0
-    if isinstance(data.get("tracks"), list):
-        for track in data["tracks"]:
-            if not isinstance(track, dict) or not isinstance(track.get("clips"), list):
-                continue
-            track_type = normalize_track_type(track.get("type") or track.get("track_type") or track.get("name") or "")
-            cursor = 0.0
-            for clip in track["clips"]:
-                if not isinstance(clip, dict):
-                    continue
-                start = safe_float(clip.get("start", clip.get("start_time", clip.get("in", 0)))) or 0.0
-                end = safe_float(clip.get("end", clip.get("end_time", clip.get("out"))))
-                duration = safe_float(clip.get("duration"))
-                if end is not None:
-                    source_duration = max(0.0, end - start)
-                elif duration is not None:
-                    source_duration = duration
-                else:
-                    continue
-                speed = safe_float(clip.get("speed")) or 1.0
-                render_duration = source_duration / speed if speed > 0 else source_duration
-                timeline_start = safe_float(clip.get("timeline_start", clip.get("position")))
-                if timeline_start is None:
-                    timeline_start = cursor
-                timeline_end = timeline_start + render_duration
-                cursor = max(cursor, timeline_end)
-                if track_type in VIDEO_TRACK_TYPES or track_type:
-                    max_end = max(max_end, timeline_end)
-    else:
-        cursor = 0.0
-        for clip in timeline_clips(data):
-            start = safe_float(clip.get("start", clip.get("start_time", clip.get("in", 0)))) or 0.0
-            end = safe_float(clip.get("end", clip.get("end_time", clip.get("out"))))
-            duration = safe_float(clip.get("duration"))
-            source_duration = (end - start) if end is not None else duration
-            if source_duration is None:
-                continue
-            cursor += max(0.0, source_duration)
-        max_end = cursor
-    return round(max_end, 6) if max_end > 0 else None
 
 
 def timeline_expectation_issues(media: dict, expected: dict) -> list[dict]:

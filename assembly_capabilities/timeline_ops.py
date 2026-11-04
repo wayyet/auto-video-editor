@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any
 
 from .ffproc import run_proc
-from .media_probe import media_duration_seconds
+from .media_probe import media_duration_seconds, safe_float
 from .result import ToolResult
 from .run_context import RunContext
 
@@ -661,6 +661,16 @@ def coerce_timeline_number(value: object) -> float | None:
     except Exception:
         return None
     return parsed
+
+
+def _finite_number(value: object) -> float | None:
+    """数值解析(严格版):bool / 非数字 / NaN / inf 一律当作缺失,返回 None。
+
+    ``timeline_duration`` 用它:给 QC 用的时长不能被 ``True`` / ``nan`` 这类脏值带偏。
+    """
+    if isinstance(value, bool):
+        return None
+    return safe_float(value)
 
 
 def normalize_clip(clip: dict[str, Any], ctx: RunContext) -> dict[str, Any]:
@@ -1350,18 +1360,18 @@ def timeline_duration(data: dict) -> float | None:
             for clip in track["clips"]:
                 if not isinstance(clip, dict):
                     continue
-                start = coerce_timeline_number(clip.get("start", clip.get("start_time", clip.get("in", 0)))) or 0.0
-                end = coerce_timeline_number(clip.get("end", clip.get("end_time", clip.get("out"))))
-                duration = coerce_timeline_number(clip.get("duration"))
+                start = _finite_number(clip.get("start", clip.get("start_time", clip.get("in", 0)))) or 0.0
+                end = _finite_number(clip.get("end", clip.get("end_time", clip.get("out"))))
+                duration = _finite_number(clip.get("duration"))
                 if end is not None:
                     source_duration = max(0.0, end - start)
                 elif duration is not None:
                     source_duration = duration
                 else:
                     continue
-                speed = coerce_timeline_number(clip.get("speed")) or 1.0
+                speed = _finite_number(clip.get("speed")) or 1.0
                 render_duration = source_duration / speed if speed > 0 else source_duration
-                timeline_start = coerce_timeline_number(clip.get("timeline_start", clip.get("position")))
+                timeline_start = _finite_number(clip.get("timeline_start", clip.get("position")))
                 if timeline_start is None:
                     timeline_start = cursor
                 timeline_end = timeline_start + render_duration
@@ -1371,9 +1381,9 @@ def timeline_duration(data: dict) -> float | None:
     else:
         cursor = 0.0
         for clip in timeline_clips(data):
-            start = coerce_timeline_number(clip.get("start", clip.get("start_time", clip.get("in", 0)))) or 0.0
-            end = coerce_timeline_number(clip.get("end", clip.get("end_time", clip.get("out"))))
-            duration = coerce_timeline_number(clip.get("duration"))
+            start = _finite_number(clip.get("start", clip.get("start_time", clip.get("in", 0)))) or 0.0
+            end = _finite_number(clip.get("end", clip.get("end_time", clip.get("out"))))
+            duration = _finite_number(clip.get("duration"))
             source_duration = (end - start) if end is not None else duration
             if source_duration is None:
                 continue
