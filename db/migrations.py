@@ -35,13 +35,13 @@ LangGraph 自己的 4 张 checkpoint 表(``checkpoints`` / ``checkpoint_blobs`` 
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Sequence
 
 import psycopg
 
 from db.connection import connection as _db_connection
+from db.postgres_config import resolve_postgres_target
 
 __all__ = [
     "MIGRATIONS",
@@ -420,18 +420,12 @@ def apply_migrations(
 def postgres_uri() -> str:
     """当前生效的 Postgres 连接串。
 
-    优先级:环境变量 ``POSTGRES_URI`` → ``config.POSTGRES_URI``。
-    与 ``monitoring/runs_table.py`` 保持同一套约定。
+    与主图 / worker 共用 :func:`db.postgres_config.resolve_postgres_target`,
+    优先级:``AGENT_GATE_POSTGRES_URI`` → ``POSTGRES_URI`` → ``config.POSTGRES_URI``
+    → 默认值。DSN 形状非法会抛 ``ValueError``;``APP_ENV=production`` 且设置了
+    ``AGENT_GATE_POSTGRES_URI`` 会抛 ``RuntimeError``。
     """
-    env = os.environ.get("POSTGRES_URI", "").strip()
-    if env:
-        return env
-    try:
-        from config import POSTGRES_URI
-
-        return POSTGRES_URI
-    except Exception:  # pragma: no cover - config 不可导入时的兜底
-        return "postgresql://postgres:devpass@localhost:5432/video_workflow"
+    return resolve_postgres_target().uri
 
 
 def apply_migrations_to_db(
