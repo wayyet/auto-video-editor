@@ -21,7 +21,7 @@ from pathlib import Path
 from state import WorkflowState
 from storyline.contract import StorylineErrorCode
 from storyline_capabilities.generate_voiceover import generate_voiceover
-from nodes.storyline._common import append_status_tag, _resolve_outputs_root
+from nodes.storyline._common import append_status_tag, _resolve_outputs_root, extract_user_request
 
 logger = logging.getLogger(__name__)
 
@@ -36,16 +36,6 @@ def _read_script_dict(state: WorkflowState) -> dict | None:
         return None
 
 
-def _extract_user_request(state: WorkflowState) -> str:
-    targets = state.get("storyline_targets") or {}
-    if isinstance(targets, dict):
-        for k in ("voiceover_request", "tts_request", "user_request"):
-            v = targets.get(k)
-            if isinstance(v, str) and v.strip():
-                return v
-    return ""
-
-
 def storyline_generate_voiceover_node(state: WorkflowState) -> dict:
     outputs_root = _resolve_outputs_root(state)
     out_dir = outputs_root / "storyline"
@@ -55,7 +45,7 @@ def storyline_generate_voiceover_node(state: WorkflowState) -> dict:
     group_scripts: list[dict] = []
     if isinstance(script_doc, dict):
         group_scripts = list(script_doc.get("group_scripts") or [])
-    user_request = _extract_user_request(state)
+    user_request = extract_user_request(state, "voiceover_request", "tts_request", "user_request")
 
     if not group_scripts:
         # 没有脚本:返回最小空 artifact 满足 join_storyline mapper 兼容;

@@ -25,6 +25,7 @@ from nodes.storyline._common import (
     _read_groups,
     append_status_tag,
     _resolve_outputs_root,
+    extract_user_request,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,20 +47,10 @@ def _read_script(state: WorkflowState) -> list[dict]:
     return []
 
 
-def _extract_user_request(state: WorkflowState) -> str:
-    targets = state.get("storyline_targets") or {}
-    if isinstance(targets, dict):
-        for k in ("bgm_request", "music_request", "user_request"):
-            v = targets.get(k)
-            if isinstance(v, str) and v.strip():
-                return v
-    return ""
-
-
 def storyline_select_bgm_node(state: WorkflowState) -> dict:
     groups = _read_groups(state)
     scripts = _read_script(state)
-    user_request = _extract_user_request(state)
+    user_request = extract_user_request(state, "bgm_request", "music_request", "user_request")
 
     narration_text = "\n".join(
         (g.get("narration") or "").strip() for g in scripts if g.get("narration")
