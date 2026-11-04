@@ -1380,25 +1380,3 @@ def timeline_duration(data: dict) -> float | None:
             cursor += max(0.0, source_duration)
         max_end = cursor
     return round(max_end, 6) if max_end > 0 else None
-
-
-def stream_fps(stream: dict, key: str | None = None) -> float | None:
-    keys = [key] if key else ["avg_frame_rate", "r_frame_rate"]
-    for item in keys:
-        value = stream.get(item)
-        if not value or value == "0/0":
-            continue
-        try:
-            if "/" in str(value):
-                num, den = str(value).split("/", 1)
-                den_f = float(den)
-                if den_f == 0:
-                    continue
-                fps = float(num) / den_f
-            else:
-                fps = float(value)
-        except Exception:
-            continue
-        if math.isfinite(fps) and fps > 0:
-            return round(fps, 6)
-    return None
