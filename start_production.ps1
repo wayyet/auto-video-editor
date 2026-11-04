@@ -1,16 +1,18 @@
 # ============================================================
 # auto-video-editor 一键启动(生产全栈)—— 唯一完整工作流启动入口
 #
-# 该脚本封装 plan.md 的 Phase 0~3:
+# 2026-11-04 单流水线架构收敛(阶段5):OpenStoryline Web 生命周期
+# (Phase 0.6/0.7 的 agent_fastapi:app)退役,7860 端口改为承载**只读监控服务**
+# monitor_fastapi.py;human 模式参数(STORYLINE_MODE)随 human 模式链删除。
+#
+# 该脚本封装的 Phase:
 #   Phase 0    准备视频输入 + 生成 initial-state.json
 #   Phase 0.5  Docker Desktop daemon 就绪
-#   Phase 0.55 openstoryline 资源/模型校验
 #   Phase 0.58 scripts\preflight.ps1(6 步自检,**只跑一次**)
-#              —— 排在 Web 启动之前:preflight Step 4-6 负责拉起 Postgres 容器 +
-#              连通性 + checkpoint schema,而 Web 每次会话读取都硬依赖 Postgres。
-#              (2026-11-01 故障:原 Phase 1 排在健康检查之后,容器停了 → Web 永远
-#              不健康 → 本块永远执行不到 → 一键启动必败。前移后数据库先于 Web 在线。)
-#   Phase 0.6/0.7  OpenStoryline Web 生命周期(仅 human 模式)+ 健康检查
+#              —— 排在监控服务启动之前:preflight Step 4-6 负责拉起 Postgres
+#              容器 + 连通性 + checkpoint schema(2026-11-01 故障教训:数据库
+#              必须先于 7860 服务在线)。
+#   Phase 0.6/0.7  只读监控服务(monitor_fastapi:app,主 .venv)生命周期 + 健康检查
 #   Phase 2    scripts\run_workflow.py --production --skip-preflight
 #   Phase 3    验收(checkpoints / heartbeat / drafts / outputs)
 #
@@ -19,18 +21,18 @@
 #   - Step 1(Docker 服务)需管理员权限;脚本开头自检,非管理员直接退出
 #   - Phase 0.6/0.7 只起**一个** uvicorn;7860 已被健康服务占用时,仅当 PID 文件
 #     证明归属且配置指纹一致才复用;本项目所有但指纹不一致 → 受控重启;
-#     归属不明 → fail-closed exit 23(nodes\node_02 只探测、绝不启动)
+#     归属不明 → fail-closed exit 23(监控只读,绝不杀未知进程)
 #   - 默认 thread-id = video-001;默认源视频来自 jianying-editor skill 演示素材
 #   - 全程 UTF-8,避免中文/符号乱码
 #   - 每一步写日志到 logs\start_<时间戳>.log;失败保留现场不退
-#   - 抛 GraphInterrupt(node_06 关卡①)是预期行为,不视为失败
+#   - 工作流停在人工关卡(①/②/③)是预期行为:run_workflow.py 退出码 0,
+#     用 agent_gate status 或 scripts/resume_workflow.py --dry-run 查看挂起关卡
 #   - 日志文件**单写者**:子进程输出顺序 Add-Content,禁止 Tee-Object
 #   - -WhatIf 严格零副作用:不建目录、不建日志文件、不起进程
 #
 # 用法(管理员 Windows PowerShell):
 #   .\start_production.ps1                                # 默认参数一键启动
 #   .\start_production.ps1 -ThreadId video-002            # 自定义 thread-id
-#   .\start_production.ps1 -StorylineMode auto            # 明确走 auto 模式(不起 Web)
 #   .\start_production.ps1 -PostgresUri postgresql://u:p@host:5432/db
 #   .\start_production.ps1 -SkipPhase3                     # 不跑验收
 #   .\start_production.ps1 -WhatIf                         # 仅打印计划(零副作用)
@@ -45,9 +47,6 @@ param(
     # Postgres 连接串(唯一真相)。localhost:5432 → 本地托管(起容器 + 对齐角色/库);
     # 其它 host/端口 → 外部模式(不碰本地容器)。
     [string]$PostgresUri    = 'postgresql://postgres:devpass@localhost:5432/video_workflow',
-    # human = 起 OpenStoryline Web + 走人工关卡(默认);auto = 19 节点确定性图,不起 Web
-    [ValidateSet('auto', 'human')]
-    [string]$StorylineMode  = 'human',
     [switch]$SkipPhase3,
     [switch]$WhatIf
 )
@@ -76,18 +75,13 @@ $RunScript  = Join-Path $RepoRoot 'scripts\run_workflow.py'
 $StateJson  = Join-Path $RepoRoot ("runtime\initial_state_${ThreadId}.json")
 $VenvActivate = Join-Path $RepoRoot '.venv\Scripts\Activate.ps1'
 
-# OpenStoryline 本地直起路径(Phase 0.6 / 0.7 用)
-# 2026-11-01 目录扁平化:OpenStoryline 代码上移仓库根(不再有 openstoryline/ 子目录),
-# agent_fastapi.py / src / web 均在仓库根,独立 venv 为根目录 .venv-openstoryline/。
-$OsDir     = $RepoRoot
-$OsVenvPy  = Join-Path $RepoRoot '.venv-openstoryline\Scripts\python.exe'
-$OsAgent   = Join-Path $RepoRoot 'agent_fastapi.py'
-$OsSrc     = Join-Path $RepoRoot 'src'
-# 端口:Web 7860(走 uvicorn agent_fastapi:app);MCP 8001 保留常量但不再起子进程。
-$OsMcpPort = 8001
-$OsWebPort = 7860
-$OsWebLog  = Join-Path $LogsDir ("openstoryline_web_${Timestamp}.log")
-$OsPidFile = Join-Path $LogsDir ("openstoryline_pids_${Timestamp}.json")
+# 只读监控服务(Phase 0.6 / 0.7 用;2026-11-04 阶段5 起接管 7860)
+# 依赖主 .venv(fastapi/uvicorn 已声明于 requirements.txt + pyproject.toml);
+# .venv-openstoryline/ 已随旧聊天运行时退役,本脚本不再引用。
+$MonitorScript = Join-Path $RepoRoot 'monitor_fastapi.py'
+$MonitorPort   = 7860
+$MonitorLog    = Join-Path $LogsDir ("monitor_${Timestamp}.log")
+$MonitorPidFile = Join-Path $LogsDir ("monitor_pids_${Timestamp}.json")
 
 # 派生路径
 $InputsFull = Join-Path $InputsDir $InputsFileName
@@ -162,7 +156,7 @@ $maskedUri = Get-MaskedUri $PostgresUri
 # ---------------------------------------------------------------
 # Web 健康探测(纯读,无副作用)
 # ---------------------------------------------------------------
-function Test-OsWebHealthy {
+function Test-WebHealthy {
     # GET <url>,200 即健康
     param([string]$Url, [int]$TimeoutSec = 3)
     try {
@@ -173,7 +167,7 @@ function Test-OsWebHealthy {
     }
 }
 
-function Test-OsPortOpen {
+function Test-PortOpen {
     # 端口是否在听
     param([int]$Port)
     $prev = $ErrorActionPreference
@@ -200,15 +194,16 @@ function Test-TcpPortOpen {
 }
 
 function Get-WebConfigFingerprint {
-    # C-T2(执行设计 §6.6.C 第一阶段):本次启动期望的 Web 配置指纹。
-    # sha256("<PostgresUri>|<StorylineMode>") 前 16 位十六进制。
-    # 单向哈希 —— 不泄密码;只用于比对「上次启动 Web 的配置」与「这次想用的配置」
+    # C-T2(执行设计 §6.6.C 第一阶段):本次启动期望的服务配置指纹。
+    # sha256("<PostgresUri>") 前 16 位十六进制(阶段5:STORYLINE_MODE 已删,
+    # 监控服务配置只随 Postgres DSN 变化)。
+    # 单向哈希 —— 不泄密码;只用于比对「上次启动服务的配置」与「这次想用的配置」
     # 是否一致,解决「HTTP 200 健康证明不了配置正确」的复用误判(§4.2 P0)。
-    param([string]$Uri, [string]$Mode)
+    param([string]$Uri)
 
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try {
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes("$Uri|$Mode")
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes("$Uri")
         return ([System.BitConverter]::ToString($sha.ComputeHash($bytes)) -replace '-', '').ToLower().Substring(0, 16)
     } finally {
         $sha.Dispose()
@@ -216,13 +211,12 @@ function Get-WebConfigFingerprint {
 }
 
 function Find-OwningWebRecord {
-    # C-T2:在本仓库 logs\ 的历史 PID 文件里,找「仍存活的、由本项目启动的 Web」
-    # 的最新一条记录。归属口径:reused=false 且 web_pid>0 且该 PID 仍存活 ——
-    # reused=true 的记录本来就不记 PID(复用没有进程所有权),不能作归属证据。
-    # 旧格式记录没有 config_fingerprint 字段 → 返回 $null(配置无法证明一致)。
-    # 找不到归属记录返回 $null(调用方按未知进程 fail-closed)。
-    $candidates = Get-ChildItem -Path $LogsDir -Filter 'openstoryline_pids_*.json' -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -ne $OsPidFile } |
+    # C-T2:在本仓库 logs\ 的历史 PID 文件里,找「仍存活的、由本项目启动的
+    # 监控服务」的最新一条记录。归属口径:reused=false 且 monitor_pid>0 且该
+    # PID 仍存活 —— reused=true 的记录本来就不记 PID(复用没有进程所有权),
+    # 不能作归属证据。找不到归属记录返回 $null(调用方按未知进程 fail-closed)。
+    $candidates = Get-ChildItem -Path $LogsDir -Filter 'monitor_pids_*.json' -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -ne $MonitorPidFile } |
         Sort-Object LastWriteTime -Descending
     foreach ($f in $candidates) {
         try {
@@ -232,17 +226,17 @@ function Find-OwningWebRecord {
         $pidVal = $prev.web_pid
         if ($null -eq $pidVal -or [int]$pidVal -le 0) { continue }
         if ($null -eq (Get-Process -Id $pidVal -ErrorAction SilentlyContinue)) { continue }
-        # PID 复用防御:进程活着 ≠ 还是当初那个 Web。命令行里没有 agent_fastapi
-        # 的(PID 已被其它进程复用)不算归属证据 —— 宁可 fail-closed 也不误杀。
+        # PID 复用防御:进程活着 ≠ 还是当初那个监控服务。命令行里没有
+        # monitor_fastapi 的(PID 已被其它进程复用)不算归属证据 ——
+        # 宁可 fail-closed 也不误杀。
         try {
             $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$pidVal" -ErrorAction SilentlyContinue
-            if ($null -ne $proc -and $proc.CommandLine -and $proc.CommandLine -notmatch 'agent_fastapi') { continue }
+            if ($null -ne $proc -and $proc.CommandLine -and $proc.CommandLine -notmatch 'monitor_fastapi') { continue }
         } catch { }   # 命令行查不到(权限等)→ 维持 PID 文件归属口径
         return @{
             web_pid            = [int]$pidVal
             web_cmd_pid        = $prev.web_cmd_pid
             config_fingerprint = $prev.config_fingerprint
-            storyline_mode     = $prev.storyline_mode
             source_file        = Split-Path $f.FullName -Leaf
         }
     }
@@ -257,20 +251,14 @@ if ($WhatIf) {
     Write-Host '[WhatIf] 不会执行任何修改,以下为计划:' -ForegroundColor Yellow
     Write-Host ''
     Write-Host "  ThreadId      : $ThreadId" -ForegroundColor Cyan
-    Write-Host "  StorylineMode : $StorylineMode" -ForegroundColor Cyan
     Write-Host "  Postgres URI  : $maskedUri" -ForegroundColor Cyan
     Write-Host "  URI 分类      : $(if ($target.Kind -eq 'local-managed') { '本地托管(起 edb-postgres16 容器 + 对齐角色/库)' } else { "外部(host=$($target.Host):$($target.Port),不碰本地容器)" })" -ForegroundColor Cyan
     Write-Host ''
     Write-Host '  Phase 0   : 复制视频 + 生成 initial_state JSON' -ForegroundColor Cyan
     Write-Host '  Phase 0.5 : 确保 Docker Desktop daemon 在线(只服务 Postgres)' -ForegroundColor Cyan
-    Write-Host '  Phase 0.55: 校验 openstoryline 资源/模型(.storyline/models + resource/)' -ForegroundColor Cyan
-    Write-Host "  Phase 0.58: $Preflight(完整预检,先拉起 Postgres 再起 Web;**本次运行只执行一次**)" -ForegroundColor Cyan
-    if ($StorylineMode -eq 'auto') {
-        Write-Host '  Phase 0.6/0.7: 跳过(auto 模式不起 OpenStoryline Web)' -ForegroundColor Cyan
-    } else {
-        Write-Host "  Phase 0.6/0.7: OpenStoryline Web(:$OsWebPort)—— 端口在听且健康 → 按 PID 归属+配置指纹判定:一致→复用;本项目所有但不一致→受控重启;归属不明→报冲突退出(23);端口空闲 → 起一个 uvicorn;占用但 HTTP≠200 → 报冲突退出(23)" -ForegroundColor Cyan
-        Write-Host "              写 PID 文件:$OsPidFile(MCP 端口 $OsMcpPort 不再起子进程,仅作常量保留)" -ForegroundColor Cyan
-    }
+    Write-Host "  Phase 0.58: $Preflight(完整预检,先拉起 Postgres 再起监控服务;**本次运行只执行一次**)" -ForegroundColor Cyan
+    Write-Host "  Phase 0.6/0.7: 只读监控服务 monitor_fastapi(:$MonitorPort,主 .venv)—— 端口在听且健康 → 按 PID 归属+配置指纹判定:一致→复用;本项目所有但不一致→受控重启;归属不明→报冲突退出(23);端口空闲 → 起一个 uvicorn;占用但 HTTP≠200 → 报冲突退出(23)" -ForegroundColor Cyan
+    Write-Host "              写 PID 文件:$MonitorPidFile" -ForegroundColor Cyan
     Write-Host "  Phase 2   : $VenvPy $RunScript --production --skip-preflight --thread-id $ThreadId --initial-state-json $StateJson" -ForegroundColor Cyan
     if (-not $SkipPhase3) {
         Write-Host '  Phase 3   : checkpoints SQL(带 THREAD_ID)+ heartbeat + outputs/drafts 列目录' -ForegroundColor Cyan
@@ -316,8 +304,9 @@ function Write-SubProcessOutput {
 
 # ---------------------------------------------------------------
 # 环境变量注入 + 还原
-#   POSTGRES_URI / STORYLINE_MODE / THREAD_ID 由本脚本显式注入给子进程,
+#   POSTGRES_URI / THREAD_ID 由本脚本显式注入给子进程,
 #   不受调用方 shell 残留污染;脚本结束(finally)时还原原值。
+#   (STORYLINE_MODE 已随 human 模式链删除,阶段5 起不再注入。)
 #   ⚠️ 注入必须发生在任何 Start-Process 之前(含 Phase 0.5 的 Docker Desktop
 #   与 Phase 0.6 的 Uvicorn):子进程只在创建瞬间复制父进程的环境快照,
 #   父进程之后补设的变量不会到达已运行的子进程 —— 2026-10-31 worker
@@ -331,7 +320,7 @@ foreach ($name in @(
     'AGENT_GATE_POSTGRES_URI',   # agent_gate 测试隔离变量,优先级高于 POSTGRES_URI;生产启动前备份并清除,防遗留值覆盖生产 DSN
     'APP_ENV',                   # 统一环境标识(B-T4);本脚本钉 production,resolver 据此拒绝测试库变量
     'AGENT_GATE_CKPT_BACKEND',   # agent_gate checkpoint 后端;本脚本钉 postgres(显式声明,防残留非法值)
-    'STORYLINE_MODE',
+    'STORYLINE_MODE',            # legacy:human 模式已删;仍备份+清除,防调用方残留值触发 config import 期 fail-fast
     'THREAD_ID',
     'PYTHONUNBUFFERED',
     'PYTHONIOENCODING',
@@ -340,8 +329,8 @@ foreach ($name in @(
     $envBackup[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
 
-# 统一注入(早于所有子进程创建):Web → MCode → MCP → Worker 整条进程链
-# 都从这里继承本次启动的 DSN 与模式开关。
+# 统一注入(早于所有子进程创建):监控服务 → run_workflow 整条进程链
+# 都从这里继承本次启动的 DSN。
 $env:POSTGRES_URI  = $PostgresUri
 Remove-Item Env:AGENT_GATE_POSTGRES_URI -ErrorAction SilentlyContinue
 # B-T4/C-T1:生产标记。统一解析层(db.postgres_config)在 APP_ENV=production
@@ -350,7 +339,8 @@ Remove-Item Env:AGENT_GATE_POSTGRES_URI -ErrorAction SilentlyContinue
 $env:APP_ENV = 'production'
 # C-T1:钉住 checkpoint 后端为 postgres(显式声明,防残留的空值/非法值)。
 $env:AGENT_GATE_CKPT_BACKEND = 'postgres'
-$env:STORYLINE_MODE = $StorylineMode
+# STORYLINE_MODE 显式清除(human 模式已删;防调用方残留值让 config import 即报错)
+Remove-Item Env:STORYLINE_MODE -ErrorAction SilentlyContinue
 $env:THREAD_ID      = $ThreadId
 # Windows 下 python stdout 默认 GBK,PowerShell 按 UTF-8 解码 → 中文乱码。
 # 显式钉 UTF-8,让 Phase 2/Phase 3 的 Python 子进程输出在控制台和日志里都可读。
@@ -362,18 +352,16 @@ if ($target.Kind -ne 'local-managed') {
     $env:AUTO_VIDEO_EDITOR_PREFLIGHT_SKIP_POSTGRES_START = '1'
     Write-Phase "  AUTO_VIDEO_EDITOR_PREFLIGHT_SKIP_POSTGRES_START=1(外部 Postgres 模式)"
 }
-Write-Phase ("注入环境变量(所有子进程启动之前;脚本结束时还原): POSTGRES_URI = {0}, APP_ENV = {1}, AGENT_GATE_CKPT_BACKEND = {2}, STORYLINE_MODE = {3}, THREAD_ID = {4}, PYTHONIOENCODING = {5}" -f $maskedUri, $env:APP_ENV, $env:AGENT_GATE_CKPT_BACKEND, $StorylineMode, $ThreadId, $env:PYTHONIOENCODING)
+Write-Phase ("注入环境变量(所有子进程启动之前;脚本结束时还原): POSTGRES_URI = {0}, APP_ENV = {1}, AGENT_GATE_CKPT_BACKEND = {2}, THREAD_ID = {3}, PYTHONIOENCODING = {4}(STORYLINE_MODE 已清除:human 模式已删)" -f $maskedUri, $env:APP_ENV, $env:AGENT_GATE_CKPT_BACKEND, $ThreadId, $env:PYTHONIOENCODING)
 
 # ---------------------------------------------------------------
 # 顶部 banner
 # ---------------------------------------------------------------
 Write-Phase ('=' * 60) 'Magenta'
-Write-Phase "auto-video-editor 一键启动(生产全栈)" 'Magenta'
+Write-Phase "auto-video-editor 一键启动(生产全栈;auto-only 单流水线)" 'Magenta'
 Write-Phase ("ThreadId      : {0}" -f $ThreadId) 'Magenta'
-Write-Phase ("StorylineMode : {0}" -f $StorylineMode) 'Magenta'
 Write-Phase ("Postgres URI  : {0}" -f $maskedUri) 'Magenta'
 Write-Phase ("日志路径      : {0}" -f $LogFile) 'Magenta'
-Write-Phase ("OsDir (OpenStoryline 子系统) : {0}" -f $OsDir) 'Magenta'
 Write-Phase ('=' * 60) 'Magenta'
 
 try {
@@ -473,50 +461,22 @@ try {
         Write-PhaseOk "Docker Desktop daemon 已就绪"
     }
 
-    # ===============================================================
-    # Phase 0.55 — 校验 OpenStoryline 资源/模型(2026-09 迁移后新增)
-    #   resource/ ~526 MB; .storyline/models/ ~116 MB; 入 .gitignore,需手工拉。
-    #   auto 模式也保留本步(auto 依赖 .venv-openstoryline 的 ASR)。
-    #   2026-11-01 扁平化:resource/ 与 .storyline/ 都在仓库根。
-    # ===============================================================
-    Write-Phase ''
-    Write-Phase "Phase 0.55:校验 OpenStoryline 资源/模型" 'Cyan'
-
-    $OsResource = Join-Path $RepoRoot 'resource'
-    $OsModels   = Join-Path $RepoRoot '.storyline\models'
-
-    $needDownload = $false
-    if (-not (Test-Path $OsResource) -or -not (Get-ChildItem $OsResource -ErrorAction SilentlyContinue)) {
-        Write-PhaseWarn "resource/ 缺失或为空"
-        $needDownload = $true
-    }
-    if (-not (Test-Path $OsModels) -or -not (Get-ChildItem $OsModels -ErrorAction SilentlyContinue)) {
-        Write-PhaseWarn ".storyline/models/ 缺失或为空"
-        $needDownload = $true
-    }
-    if ($needDownload) {
-        Write-Phase "    请运行以下命令手动下载(总大小约 642 MB):" 'Yellow'
-        Write-Phase "      .\scripts\download_resources.ps1" 'Yellow'
-        Write-Phase "      .\scripts\download_models.ps1" 'Yellow'
-        Write-Phase "    或一键: .\scripts\install.ps1" 'Yellow'
-        Write-Phase "    完成后重跑 start_production.ps1" 'Yellow'
-        exit 26
-    }
-    Write-PhaseOk "OpenStoryline 资源/模型已就绪"
+    # (Phase 0.55 已删除 —— 2026-11-04 阶段5,R-16:仓库根 resource/ 与
+    #   .storyline/models 只有旧聊天运行时/vendored ASR 消费,阶段2/3 已删;
+    #   auto 链资源 storyline_capabilities/resource/*.yaml 已入库,无需下载校验。)
 
     # ===============================================================
     # Phase 0.58 — preflight.ps1(本次运行**唯一一次**完整预检)
-    #   2026-11-01 前移到 Web 启动之前(原 Phase 1,排在 Phase 0.7 之后):
-    #   preflight Step 4-6 负责拉起 Postgres 容器 + 连通性 + checkpoint schema,
-    #   而 Web 的每次会话读取都硬依赖 Postgres(agent_fastapi load_from_state)。
-    #   旧顺序下容器一旦未运行,Web 永远不健康 → 在 Phase 0.7 exit 22,本块
+    #   2026-11-01 前移到 7860 服务启动之前(原 Phase 1,排在 Phase 0.7 之后):
+    #   preflight Step 4-6 负责拉起 Postgres 容器 + 连通性 + checkpoint schema。
+    #   旧顺序下容器一旦未运行,7860 服务永远不健康 → 在 Phase 0.7 exit 22,本块
     #   永远执行不到(2026-11-01 01:16 线上故障根因)。前移后:数据库先于
-    #   Web 在线;preflight 失败也会带着精确的 Step 退出码(10-16/20)直接中止。
+    #   7860 服务在线;preflight 失败也会带着精确的 Step 退出码(10-16/20)直接中止。
     #   注:POSTGRES_URI 等环境变量已在脚本头部(envBackup 段)、任何
     #   Start-Process 之前注入,preflight 与 Phase 2/3 子进程直接继承本次值。
     # ===============================================================
     Write-Phase ''
-    Write-Phase "Phase 0.58:Pre-flight 自检(6 步:先拉起 Postgres,再起 Web;本次运行只执行一次)" 'Cyan'
+    Write-Phase "Phase 0.58:Pre-flight 自检(6 步:先拉起 Postgres,再起监控服务;本次运行只执行一次)" 'Cyan'
 
     if (-not (Test-Path $Preflight)) {
         Write-PhaseErr "找不到 $Preflight"
@@ -540,255 +500,244 @@ try {
     Write-PhaseOk "preflight.ps1 全部通过(Postgres 已在线,checkpoint schema 已就绪)"
 
     # ===============================================================
-    # Phase 0.6 / 0.7 — OpenStoryline Web 生命周期(仅 human 模式)
-    #   方案 A:生产脚本管 Web 生命周期;nodes\node_02 只探测复用,绝不启动。
-    #   四分支(C-T2 起,复用不再仅凭 HTTP 200,设计 §6.6.C):
+    # Phase 0.6 / 0.7 — 只读监控服务生命周期(monitor_fastapi,主 .venv)
+    #   2026-11-04 阶段5:7860 从 OpenStoryline Web(agent_fastapi:app +
+    #   .venv-openstoryline)切换为**只读**监控(monitor_fastapi:app,主 .venv)。
+    #   四分支(沿用 C-T2 归属+指纹纪律,不因迁移放松):
     #     复用     —— 7860 在听 + HTTP 200 + PID 文件证明归属 + 配置指纹一致
-    #     受控重启 —— 归本项目所有,但指纹不一致 / 旧格式无指纹 → 停本项目进程后重起
-    #     端口冲突 —— 7860 在听 但 HTTP ≠ 200,或健康但归属不明 → exit 23(不杀未知进程)
+    #     受控重启 —— 归本项目所有,但指纹不一致 → 停本项目进程后重起
+    #     端口冲突 —— 7860 在听 但 HTTP != 200,或健康但归属不明 → exit 23(不杀未知进程)
     #     端口空闲 —— 起一次 uvicorn,等 PID 存活 + 端口在听 + HTTP 200
+    #   监控只读:不启动/恢复/修改任何工作流状态;触发只走 run_workflow CLI
+    #   与 agent_gate(MCP / drive)。
     # ===============================================================
-    $osPidReused = $false
-    $webPyPid    = $null
-    $webProc     = $null
+    $monPidReused = $false
+    $webPyPid     = $null
+    $webProc      = $null
 
-    if ($StorylineMode -eq 'auto') {
-        Write-Phase ''
-        Write-Phase "Phase 0.6/0.7:跳过(auto 模式不依赖 OpenStoryline Web UI)" 'Yellow'
-    } else {
-        Write-Phase ''
-        Write-Phase "Phase 0.6:OpenStoryline Web(:$OsWebPort,MCP 链路已迁移解耦)" 'Cyan'
+    Write-Phase ''
+    Write-Phase "Phase 0.6:只读监控服务 monitor_fastapi(:$MonitorPort,主 .venv)" 'Cyan'
 
-        # 路径校验(venv / 入口文件 / 包)
-        if (-not (Test-Path $OsVenvPy)) {
-            Write-PhaseErr "找不到 $OsVenvPy"
-            Write-Phase "    请先跑 scripts\install.ps1 建 .venv-openstoryline 并装依赖" 'Yellow'
-            exit 18
-        }
-        if (-not (Test-Path $OsAgent)) {
-            Write-PhaseErr "找不到 $OsAgent(扁平化后 agent_fastapi.py 应在仓库根,请确认代码完整)" 'Yellow'
-            exit 18
-        }
-        if (-not (Test-Path (Join-Path $OsSrc 'open_storyline\__init__.py'))) {
-            Write-PhaseErr "找不到 $OsSrc\open_storyline\__init__.py" 'Yellow'
-            exit 18
-        }
+    # 路径校验(主 venv 与入口文件)
+    if (-not (Test-Path $VenvPy)) {
+        Write-PhaseErr "找不到 $VenvPy"
+        Write-Phase "    请先跑 scripts\install.ps1 建主 .venv 并装依赖(含 fastapi/uvicorn)" 'Yellow'
+        exit 18
+    }
+    if (-not (Test-Path $MonitorScript)) {
+        Write-PhaseErr "找不到 $MonitorScript(阶段1 监控拆分产物,请确认代码完整)" 'Yellow'
+        exit 18
+    }
 
-        $webUrl     = "http://127.0.0.1:$OsWebPort/"
-        $webPortOpen = Test-OsPortOpen $OsWebPort
-        # C-T2:本次启动期望的配置指纹(启动/复用/重启时都写进 PID 文件,供下次比对)
-        $expectedFp = Get-WebConfigFingerprint -Uri $PostgresUri -Mode $StorylineMode
+    $webUrl      = "http://127.0.0.1:$MonitorPort/"
+    $webPortOpen = Test-PortOpen $MonitorPort
+    # C-T2:本次启动期望的配置指纹(启动/复用/重启时都写进 PID 文件,供下次比对)
+    $expectedFp = Get-WebConfigFingerprint -Uri $PostgresUri
 
-        if ($webPortOpen) {
-            if (-not (Test-OsWebHealthy -Url $webUrl -TimeoutSec 5)) {
-                # 分支 2:端口冲突 —— fail-closed,不杀未知进程
-                Write-PhaseErr "端口 $OsWebPort 已被占用,但 GET $webUrl 不返回 200(端口冲突)"
-                Write-Phase "    本脚本不会杀任何未确认归属的进程。请手动处理占用该端口的进程后重跑。" 'Yellow'
-                exit 23
-            }
-
-            # 服务健康 → 先验「归属 + 配置指纹」(C-T2,执行设计 §6.6.C 第一阶段):
-            # HTTP 200 证明不了这个进程由本仓库、以本次 -PostgresUri / 运行模式启动。
-            $owner = Find-OwningWebRecord
-            if ($null -eq $owner) {
-                # 分支 2b:健康但归属不明 → fail-closed(不杀未知进程)
-                Write-PhaseErr "端口 $OsWebPort 上有健康服务,但找不到 PID 文件能证明它由本项目启动 → 按未知进程处理(fail-closed)"
-                $listener = Get-NetTCPConnection -LocalPort $OsWebPort -State Listen -ErrorAction SilentlyContinue |
-                    Select-Object -First 1
-                if ($null -ne $listener) {
-                    $op = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
-                    if ($null -ne $op) {
-                        Write-Phase ("    占用进程:PID={0}({1})。请确认归属后手动停止再重跑。" -f $op.Id, $op.ProcessName) 'Yellow'
-                    }
-                }
-                Write-Phase "    本脚本只复用/重启 PID 文件明确归本项目所有的 Web,不自动杀未知进程。" 'Yellow'
-                exit 23
-            }
-
-            if ($owner.config_fingerprint -and ($owner.config_fingerprint -eq $expectedFp)) {
-                # 分支 1:归属 + 配置指纹双确认 → 复用
-                $osPidReused = $true
-                Write-PhaseOk ("OpenStoryline Web 已在运行且健康,配置指纹一致({0}),复用现有进程" -f $expectedFp)
-                $pidObj = [ordered]@{
-                    timestamp   = $Timestamp
-                    reused      = $true
-                    os_dir      = $OsDir
-                    web_pid     = $null
-                    web_cmd_pid = $null
-                    web_log     = $null
-                    config_fingerprint = $expectedFp
-                    storyline_mode     = $StorylineMode
-                    reused_from        = $owner.source_file
-                }
-                $pidObj | ConvertTo-Json | Set-Content -Path $OsPidFile -Encoding UTF8
-                Write-PhaseOk ("PID 文件(reused): {0}" -f $OsPidFile)
-            } else {
-                # 分支 1b:归本项目所有,但配置无法证明一致(指纹不同 / 旧格式无指纹)
-                # → 受控重启:只杀 PID 文件明确归属的进程,再以本次注入的环境重启。
-                # 这是修复「旧 Web 持有过期环境仍被复用」(§4.2 P0)的关键路径。
-                $curFp = '<旧格式无指纹>'
-                if ($owner.config_fingerprint) { $curFp = $owner.config_fingerprint }
-                Write-PhaseWarn ("现有 Web 归本项目所有(PID={0},来自 {1}),但配置指纹不一致(现有 {2},期望 {3})→ 受控重启" -f $owner.web_pid, $owner.source_file, $curFp, $expectedFp)
-                foreach ($killPid in @($owner.web_pid, $owner.web_cmd_pid)) {
-                    if ($null -ne $killPid -and [int]$killPid -gt 0) {
-                        Stop-Process -Id $killPid -Force -ErrorAction SilentlyContinue
-                    }
-                }
-                $portFreeDeadline = (Get-Date).AddSeconds(15)
-                while ((Get-Date) -lt $portFreeDeadline -and (Test-OsPortOpen $OsWebPort)) {
-                    Start-Sleep -Milliseconds 500
-                }
-                if (Test-OsPortOpen $OsWebPort) {
-                    Write-PhaseErr "受控重启失败:停止本项目 Web 后端口 $OsWebPort 仍被占用(可能另有进程抢占)"
-                    Write-Phase "    本脚本不会杀未知进程。请手动处理后重跑。" 'Yellow'
-                    exit 23
-                }
-                Write-PhaseOk "旧 Web 已停止、端口已释放;按本次配置重新启动"
-            }
+    if ($webPortOpen) {
+        if (-not (Test-WebHealthy -Url $webUrl -TimeoutSec 5)) {
+            # 分支 2:端口冲突 —— fail-closed,不杀未知进程
+            Write-PhaseErr "端口 $MonitorPort 已被占用,但 GET $webUrl 不返回 200(端口冲突)"
+            Write-Phase "    本脚本不会杀任何未确认归属的进程。请手动处理占用该端口的进程后重跑。" 'Yellow'
+            exit 23
         }
 
-        if (-not $osPidReused) {
-            # 分支 3:端口空闲(或刚受控重启释放)—— 起一次 uvicorn
-            # 孤儿清理:扫本仓库之前的 PID 文件,把仍活着的 web python 进程 kill
-            Get-ChildItem -Path $LogsDir -Filter 'openstoryline_pids_*.json' -ErrorAction SilentlyContinue |
-                Where-Object { $_.FullName -ne $OsPidFile } |
-                Sort-Object LastWriteTime -Descending |
-                ForEach-Object {
-                    try {
-                        $prev = Get-Content -Path $_.FullName -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue
-                        if ($null -ne $prev -and $prev.reused -eq $true) { return }
-                        $pidVal = $prev.web_pid
-                        if ($null -ne $pidVal -and $pidVal -gt 0) {
-                            $alive = Get-Process -Id $pidVal -ErrorAction SilentlyContinue
-                            if ($null -ne $alive) {
-                                Write-Phase ("  杀孤儿 web PID={0}" -f $pidVal)
-                                Stop-Process -Id $pidVal -Force -ErrorAction SilentlyContinue
-                            }
-                        }
-                    } catch { }
+        # 服务健康 → 先验「归属 + 配置指纹」(C-T2):
+        # HTTP 200 证明不了这个进程由本仓库、以本次 -PostgresUri 启动。
+        $owner = Find-OwningWebRecord
+        if ($null -eq $owner) {
+            # 分支 2b:健康但归属不明 → fail-closed(不杀未知进程)
+            Write-PhaseErr "端口 $MonitorPort 上有健康服务,但找不到 PID 文件能证明它由本项目启动 → 按未知进程处理(fail-closed)"
+            $listener = Get-NetTCPConnection -LocalPort $MonitorPort -State Listen -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+            if ($null -ne $listener) {
+                $op = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
+                if ($null -ne $op) {
+                    Write-Phase ("    占用进程:PID={0}({1})。请确认归属后手动停止再重跑。" -f $op.Id, $op.ProcessName) 'Yellow'
                 }
-
-            # 强制 Python 不缓冲(便于日志实时落盘)
-            $env:PYTHONUNBUFFERED = '1'
-
-            Write-Phase "  启动 Web 服务(uvicorn agent_fastapi:app --host 127.0.0.1 --port $OsWebPort)..."
-            $webBatPath = Join-Path $env:TEMP "openstoryline_web_${Timestamp}.bat"
-            # bat 以纯 ASCII 落盘(规避 cmd 代码页差异),因此内容里不能出现任何非
-            # ASCII 字符:仓库路径含中文(如 "…\开发代码\…")时,绝对路径会被编码成
-            # "???",cmd 解析不了 → python 起不来、重定向目标非法 → 连日志文件都
-            # 建不出来(2026-11-03 启动失败根因)。bat 由下方 -WorkingDirectory
-            # $RepoRoot 启动,故 python 与日志一律写相对路径(随常量自动推导)。
-            $osVenvPyRel = $OsVenvPy.Substring($RepoRoot.Length).TrimStart('\')
-            $osWebLogRel = $OsWebLog.Substring($RepoRoot.Length).TrimStart('\')
-            $webBatContent = @"
-@echo off
-set PYTHONUNBUFFERED=1
-"$osVenvPyRel" -m uvicorn agent_fastapi:app --host 127.0.0.1 --port $OsWebPort 1> "$osWebLogRel" 2>&1
-"@
-            [System.IO.File]::WriteAllText($webBatPath, $webBatContent, [System.Text.Encoding]::ASCII)
-            $webProc = Start-Process `
-                -FilePath 'cmd.exe' `
-                -ArgumentList "/c `"$webBatPath`"" `
-                -WorkingDirectory $RepoRoot `
-                -WindowStyle Hidden `
-                -PassThru
-            $webPyPid = $null
-            $webDeadline = (Get-Date).AddSeconds(8)
-            while ((Get-Date) -lt $webDeadline -and $null -eq $webPyPid) {
-                Start-Sleep -Milliseconds 500
-                try {
-                    $child = Get-CimInstance Win32_Process -Filter "ParentProcessId=$($webProc.Id)" -ErrorAction SilentlyContinue |
-                        Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -match 'agent_fastapi:app' } |
-                        Select-Object -First 1
-                    if ($null -ne $child) { $webPyPid = [int]$child.ProcessId }
-                } catch { }
             }
-            if ($null -eq $webPyPid) {
-                Write-PhaseWarn ("未在 8s 内抓到 python.exe 子进程,先用 cmd.exe PID={0} 兜底" -f $webProc.Id)
-                $webPyPid = $webProc.Id
-            }
-            Write-Phase ("  Web cmd PID={0} -> python PID={1}" -f $webProc.Id, $webPyPid)
+            Write-Phase "    本脚本只复用/重启 PID 文件明确归本项目所有的监控服务,不自动杀未知进程。" 'Yellow'
+            exit 23
+        }
 
-            # 写 PID 文件(供 stop_production.ps1 读;config_fingerprint/storyline_mode
-            # 供下次启动的复用判定,C-T2)
+        if ($owner.config_fingerprint -and ($owner.config_fingerprint -eq $expectedFp)) {
+            # 分支 1:归属 + 配置指纹双确认 → 复用
+            $monPidReused = $true
+            Write-PhaseOk ("监控服务已在运行且健康,配置指纹一致({0}),复用现有进程" -f $expectedFp)
             $pidObj = [ordered]@{
                 timestamp   = $Timestamp
-                reused      = $false
-                os_dir      = $OsDir
-                web_pid     = $webPyPid
-                web_cmd_pid = $webProc.Id
-                web_log     = $OsWebLog
+                reused      = $true
+                os_dir      = $RepoRoot
+                web_pid     = $null
+                web_cmd_pid = $null
+                web_log     = $null
                 config_fingerprint = $expectedFp
-                storyline_mode     = $StorylineMode
+                reused_from = $owner.source_file
             }
-            $pidObj | ConvertTo-Json | Set-Content -Path $OsPidFile -Encoding UTF8
-            Write-PhaseOk ("PID 文件: {0}" -f $OsPidFile)
+            $pidObj | ConvertTo-Json | Set-Content -Path $MonitorPidFile -Encoding UTF8
+            Write-PhaseOk ("PID 文件(reused): {0}" -f $MonitorPidFile)
+        } else {
+            # 分支 1b:归本项目所有,但配置无法证明一致(指纹不同)
+            # → 受控重启:只杀 PID 文件明确归属的进程,再以本次注入的环境重启。
+            $curFp = '<无指纹>'
+            if ($owner.config_fingerprint) { $curFp = $owner.config_fingerprint }
+            Write-PhaseWarn ("现有监控服务归本项目所有(PID={0},来自 {1}),但配置指纹不一致(现有 {2},期望 {3})→ 受控重启" -f $owner.web_pid, $owner.source_file, $curFp, $expectedFp)
+            foreach ($killPid in @($owner.web_pid, $owner.web_cmd_pid)) {
+                if ($null -ne $killPid -and [int]$killPid -gt 0) {
+                    Stop-Process -Id $killPid -Force -ErrorAction SilentlyContinue
+                }
+            }
+            $portFreeDeadline = (Get-Date).AddSeconds(15)
+            while ((Get-Date) -lt $portFreeDeadline -and (Test-PortOpen $MonitorPort)) {
+                Start-Sleep -Milliseconds 500
+            }
+            if (Test-PortOpen $MonitorPort) {
+                Write-PhaseErr "受控重启失败:停止本项目监控服务后端口 $MonitorPort 仍被占用(可能另有进程抢占)"
+                Write-Phase "    本脚本不会杀未知进程。请手动处理后重跑。" 'Yellow'
+                exit 23
+            }
+            Write-PhaseOk "旧监控服务已停止、端口已释放;按本次配置重新启动"
         }
+    }
 
-        # -----------------------------------------------------------
-        # 健康检查(本次启动:PID 存活 + 端口在听 + HTTP 200;复用:端口 + HTTP 200)
-        # -----------------------------------------------------------
-        Write-Phase ''
-        Write-Phase "Phase 0.7:校验 OpenStoryline Web 健康" 'Cyan'
-
-        $healthyDeadline = (Get-Date).AddSeconds(180)
-        $osHealthy = $false
-        while ((Get-Date) -lt $healthyDeadline) {
-            if (-not $osPidReused) {
-                $webAlive = ($null -ne (Get-Process -Id $webPyPid -ErrorAction SilentlyContinue))
-                if (-not $webAlive) {
-                    Write-PhaseErr ("Web 进程 (PID={0}) 已退出,日志尾:" -f $webPyPid)
-                    if (Test-Path $OsWebLog) {
-                        Get-Content $OsWebLog -Tail 80 -ErrorAction SilentlyContinue |
-                            ForEach-Object { Write-Phase ("    $_") }
+    if (-not $monPidReused) {
+        # 分支 3:端口空闲(或刚受控重启释放)—— 起一次 uvicorn
+        # 孤儿清理:扫本仓库之前的 PID 文件,把仍活着的 monitor python 进程 kill
+        Get-ChildItem -Path $LogsDir -Filter 'monitor_pids_*.json' -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -ne $MonitorPidFile } |
+            Sort-Object LastWriteTime -Descending |
+            ForEach-Object {
+                try {
+                    $prev = Get-Content -Path $_.FullName -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue
+                    if ($null -ne $prev -and $prev.reused -eq $true) { return }
+                    $pidVal = $prev.web_pid
+                    if ($null -ne $pidVal -and $pidVal -gt 0) {
+                        $alive = Get-Process -Id $pidVal -ErrorAction SilentlyContinue
+                        if ($null -ne $alive) {
+                            Write-Phase ("  杀孤儿 monitor PID={0}" -f $pidVal)
+                            Stop-Process -Id $pidVal -Force -ErrorAction SilentlyContinue
+                        }
                     }
-                    exit 21
-                }
+                } catch { }
             }
 
-            $portsOk = Test-OsPortOpen $OsWebPort
-            $httpOk  = Test-OsWebHealthy -Url $webUrl -TimeoutSec 3
-            if ($portsOk -and $httpOk) {
-                $osHealthy = $true
-                break
-            }
-            Start-Sleep -Seconds 2
+        # 强制 Python 不缓冲(便于日志实时落盘)
+        $env:PYTHONUNBUFFERED = '1'
+
+        Write-Phase "  启动监控服务(uvicorn monitor_fastapi:app --host 127.0.0.1 --port $MonitorPort)..."
+        $monBatPath = Join-Path $env:TEMP "monitor_${Timestamp}.bat"
+        # bat 以纯 ASCII 落盘(规避 cmd 代码页差异),因此内容里不能出现任何非
+        # ASCII 字符:仓库路径含中文(如 "…\开发代码\…")时,绝对路径会被编码成
+        # "???",cmd 解析不了 → python 起不来(2026-11-03 启动失败根因)。
+        # bat 由下方 -WorkingDirectory $RepoRoot 启动,故 python 与日志一律写相对路径。
+        $monVenvPyRel = $VenvPy.Substring($RepoRoot.Length).TrimStart('\')
+        $monLogRel    = $MonitorLog.Substring($RepoRoot.Length).TrimStart('\')
+        $monBatContent = @"
+@echo off
+set PYTHONUNBUFFERED=1
+"$monVenvPyRel" -m uvicorn monitor_fastapi:app --host 127.0.0.1 --port $MonitorPort 1> "$monLogRel" 2>&1
+"@
+        [System.IO.File]::WriteAllText($monBatPath, $monBatContent, [System.Text.Encoding]::ASCII)
+        $webProc = Start-Process `
+            -FilePath 'cmd.exe' `
+            -ArgumentList "/c `"$monBatPath`"" `
+            -WorkingDirectory $RepoRoot `
+            -WindowStyle Hidden `
+            -PassThru
+        $webPyPid = $null
+        $webDeadline = (Get-Date).AddSeconds(8)
+        while ((Get-Date) -lt $webDeadline -and $null -eq $webPyPid) {
+            Start-Sleep -Milliseconds 500
+            try {
+                $child = Get-CimInstance Win32_Process -Filter "ParentProcessId=$($webProc.Id)" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -match 'monitor_fastapi:app' } |
+                    Select-Object -First 1
+                if ($null -ne $child) { $webPyPid = [int]$child.ProcessId }
+            } catch { }
         }
+        if ($null -eq $webPyPid) {
+            Write-PhaseWarn ("未在 8s 内抓到 python.exe 子进程,先用 cmd.exe PID={0} 兜底" -f $webProc.Id)
+            $webPyPid = $webProc.Id
+        }
+        Write-Phase ("  monitor cmd PID={0} -> python PID={1}" -f $webProc.Id, $webPyPid)
 
-        if (-not $osHealthy) {
-            Write-PhaseErr "180s 内 OpenStoryline Web 未就绪"
-            Write-Phase ("    端口 : {0} 在听 = {1}" -f $OsWebPort, (Test-OsPortOpen $OsWebPort)) 'Yellow'
-            Write-Phase ("    URL  : {0}" -f $webUrl) 'Yellow'
-            Write-Phase ("    复用 : {0}" -f $osPidReused) 'Yellow'
+        # 写 PID 文件(供 stop_production.ps1 读;config_fingerprint 供下次启动的复用判定)
+        $pidObj = [ordered]@{
+            timestamp   = $Timestamp
+            reused      = $false
+            os_dir      = $RepoRoot
+            web_pid     = $webPyPid
+            web_cmd_pid = $webProc.Id
+            web_log     = $MonitorLog
+            config_fingerprint = $expectedFp
+        }
+        $pidObj | ConvertTo-Json | Set-Content -Path $MonitorPidFile -Encoding UTF8
+        Write-PhaseOk ("PID 文件: {0}" -f $MonitorPidFile)
+    }
 
-            # 精确根因提示(2026-11-01 加固):先探测 Postgres 端口,把「数据库
-            # 未在线」这个最常见根因从笼统的 180s 超时里摘出来再报错。
-            $pgTcpOk = Test-TcpPortOpen -Hostname $target.Host -Port $target.Port
-            if (-not $pgTcpOk) {
-                Write-Phase ("    Postgres : {0}:{1} 不可达(TCP 探测 {2}ms 超时)" -f $target.Host, $target.Port, 1500) 'Yellow'
-                if ($target.Kind -eq 'local-managed') {
-                    Write-Phase '    → 根因大概率:本地 Postgres 容器(edb-postgres16)未运行。' 'Yellow'
-                    Write-Phase '      先 docker start edb-postgres16(或 scripts\start_postgres.ps1)再重跑。' 'Yellow'
-                } else {
-                    Write-Phase "    → 外部 Postgres(host=$($target.Host):$($target.Port))不可达,请检查实例与网络后重跑。" 'Yellow'
-                }
-            } else {
-                Write-Phase ("    Postgres : {0}:{1} 端口可达(数据库在线;Web 未就绪是应用自身问题,见下方日志尾)" -f $target.Host, $target.Port) 'Yellow'
-            }
+    # -----------------------------------------------------------
+    # Phase 0.7:健康检查(本次启动:PID 存活 + 端口在听 + HTTP 200;复用:端口 + HTTP 200)
+    # -----------------------------------------------------------
+    Write-Phase ''
+    Write-Phase "Phase 0.7:校验监控服务健康" 'Cyan'
 
-            if (-not $osPidReused) {
-                Write-Phase ("    进程 : PID={0} 存活 = {1}" -f $webPyPid, ($null -ne (Get-Process -Id $webPyPid -ErrorAction SilentlyContinue))) 'Yellow'
-                if (Test-Path $OsWebLog) {
-                    Write-Phase '    最近日志尾:' 'Yellow'
-                    Get-Content $OsWebLog -Tail 40 -ErrorAction SilentlyContinue |
+    $healthyDeadline = (Get-Date).AddSeconds(60)
+    $monHealthy = $false
+    while ((Get-Date) -lt $healthyDeadline) {
+        if (-not $monPidReused) {
+            $webAlive = ($null -ne (Get-Process -Id $webPyPid -ErrorAction SilentlyContinue))
+            if (-not $webAlive) {
+                Write-PhaseErr ("监控服务进程 (PID={0}) 已退出,日志尾:" -f $webPyPid)
+                if (Test-Path $MonitorLog) {
+                    Get-Content $MonitorLog -Tail 80 -ErrorAction SilentlyContinue |
                         ForEach-Object { Write-Phase ("    $_") }
                 }
+                exit 21
             }
-            Write-Phase '    不启动工作流(未就绪的服务不参与生产)。' 'Yellow'
-            exit 22
         }
-        Write-PhaseOk "OpenStoryline Web 健康(:$OsWebPort 就绪)"
+
+        $portsOk = Test-PortOpen $MonitorPort
+        $httpOk  = Test-WebHealthy -Url $webUrl -TimeoutSec 3
+        if ($portsOk -and $httpOk) {
+            $monHealthy = $true
+            break
+        }
+        Start-Sleep -Seconds 2
     }
+
+    if (-not $monHealthy) {
+        Write-PhaseErr "60s 内监控服务未就绪"
+        Write-Phase ("    端口 : {0} 在听 = {1}" -f $MonitorPort, (Test-PortOpen $MonitorPort)) 'Yellow'
+        Write-Phase ("    URL  : {0}" -f $webUrl) 'Yellow'
+        Write-Phase ("    复用 : {0}" -f $monPidReused) 'Yellow'
+
+        # 精确根因提示:先探测 Postgres 端口,把「数据库未在线」这个最常见
+        # 根因从笼统的超时里摘出来再报错。
+        $pgTcpOk = Test-TcpPortOpen -Hostname $target.Host -Port $target.Port
+        if (-not $pgTcpOk) {
+            Write-Phase ("    Postgres : {0}:{1} 不可达(TCP 探测 {2}ms 超时)" -f $target.Host, $target.Port, 1500) 'Yellow'
+            if ($target.Kind -eq 'local-managed') {
+                Write-Phase '    → 根因大概率:本地 Postgres 容器(edb-postgres16)未运行。' 'Yellow'
+                Write-Phase '      先 docker start edb-postgres16(或 scripts\start_postgres.ps1)再重跑。' 'Yellow'
+            } else {
+                Write-Phase "    → 外部 Postgres(host=$($target.Host):$($target.Port))不可达,请检查实例与网络后重跑。" 'Yellow'
+            }
+        } else {
+            Write-Phase ("    Postgres : {0}:{1} 端口可达(数据库在线;监控服务未就绪是应用自身问题,见下方日志尾)" -f $target.Host, $target.Port) 'Yellow'
+        }
+
+        if (-not $monPidReused) {
+            Write-Phase ("    进程 : PID={0} 存活 = {1}" -f $webPyPid, ($null -ne (Get-Process -Id $webPyPid -ErrorAction SilentlyContinue))) 'Yellow'
+            if (Test-Path $MonitorLog) {
+                Write-Phase '    最近日志尾:' 'Yellow'
+                Get-Content $MonitorLog -Tail 40 -ErrorAction SilentlyContinue |
+                    ForEach-Object { Write-Phase ("    $_") }
+            }
+        }
+        Write-Phase '    不启动工作流(未就绪的服务不参与生产)。' 'Yellow'
+        exit 22
+    }
+    Write-PhaseOk "监控服务健康(:$MonitorPort 就绪;只读,不触发工作流)"
 
     # ===============================================================
     # Phase 2 — run_workflow.py --production --skip-preflight
@@ -806,8 +755,9 @@ set PYTHONUNBUFFERED=1
         exit 15
     }
 
-    # 注意:GraphInterrupt(node_06 关卡①)会抛到外层,这是预期行为。
-    # Python 进程退出码 != 0 不一定代表失败 — 我们只对"非 interrupt 报错"判失败。
+    # 注意:停在人工关卡(①/②/③)时 run_workflow.py **正常返回退出码 0**
+    # (run_with_events 先落 run.interrupted 事件,恢复经 agent_gate resume 或
+    # scripts\resume_workflow.py --checkpoint ① --value true 放行)。
     # 顺序写日志(单写者)+ 实时输出 + 保留全部行用于诊断。
     $pyOutput = @()
     & $VenvPy $RunScript `
@@ -823,23 +773,8 @@ set PYTHONUNBUFFERED=1
     }
     $pyExit = $LASTEXITCODE
 
-    $isGraphInterrupt = $false
-    foreach ($line in $pyOutput) {
-        if ($line -match 'GraphInterrupt|checkpoint.*①|"checkpoint":\s*"①"') {
-            $isGraphInterrupt = $true
-            break
-        }
-    }
-
     if ($pyExit -eq 0) {
-        Write-PhaseOk "run_workflow.py 退出码 0(端到端跑完)"
-    } elseif ($pyExit -eq 3) {
-        # run_workflow.py 判定 node_02 未就绪 → 工作流提前终止
-        Write-PhaseErr "run_workflow.py 退出码 3:OpenStoryline 未就绪,工作流提前终止"
-        Write-Phase ($pyOutput | Select-Object -Last 20) 'Yellow'
-        exit 24
-    } elseif ($isGraphInterrupt) {
-        Write-PhaseOk "run_workflow.py 在 node_06 关卡① 抛 GraphInterrupt(预期行为,需用户在 JianyingPro 手动重排)"
+        Write-PhaseOk "run_workflow.py 退出码 0(跑完,或停在人工关卡等待放行 —— 用 agent_gate status 查看挂起关卡)"
     } else {
         Write-PhaseErr "run_workflow.py 退出码 $pyExit,日志最后 20 行:"
         Write-Phase ($pyOutput | Select-Object -Last 20) 'Yellow'

@@ -1,3 +1,7 @@
+> ⚠️ **历史文档(2026-11-04 单流水线架构收敛后失效)**:本文档描述的聊天 Web /
+> OpenStoryline Web / human 模式 / mcode-zcode 档位链路已删除;现行架构见 `README.md`
+> 与 `docs/integration/architecture_decision_record.md`。内容保留仅作历史记录。
+
 # Web UI 上传入口合并执行设计
 
 > ⚠️ **历史状态标记(2026-11-01)**:OpenStoryline 目录扁平化迁移(见《docs/修改文档/auto-video-editor-openstoryline-目录扁平化迁移执行设计.md》)完成后,本文中的 `openstoryline/...` 路径已上移至仓库根(`agent_fastapi.py`、`web/`、`src/open_storyline/`、`outputs/openstoryline/` 等)。本文仅作历史记录,不代表当前目录结构,请勿按本文路径操作。

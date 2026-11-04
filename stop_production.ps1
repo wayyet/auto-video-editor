@@ -3,7 +3,8 @@
 #
 # 与 start_production.ps1 对称 —— 把启动时拉起的进程 / 容器按逆序停掉:
 #   Phase 1  python run_workflow.py + agent_gate worker
-#   Phase 2  OpenStoryline 本地 Web(按 PID 文件 kill + 命令行兜底)
+#   Phase 2  只读监控服务 monitor_fastapi(按 PID 文件 kill + 命令行兜底)
+#            (2026-11-04 阶段5:7860 从 OpenStoryline Web 换为 monitor_fastapi:app)
 #   Phase 3  edb-postgres16 容器 (复用 scripts\stop_postgres.ps1)
 #   Phase 4  -StopDockerDesktop 才停 Docker Desktop(docker desktop stop)
 #   Phase 5  -CleanState 才删 initial_state JSON
@@ -14,9 +15,10 @@
 #   - 默认不删任何数据(命名卷、outputs、drafts、checkpoints 全保留)
 #   - 不需要管理员权限(只有 -StopDockerDesktop 路径需要)
 #   - UTF-8 控制台 + 日志,与 start_production.ps1 同风格
-#   - **所有权口径**:PID 文件里 ``reused=true`` 表示那个 Web 是外部进程,
+#   - **所有权口径**:PID 文件里 ``reused=true`` 表示那个监控服务是外部进程,
 #     本脚本**不拥有**它 → PID kill 与命令行兜底都不执行,只提示手动处理。
-#     PID 文件缺失 / 解析失败 → 保持现有命令行兜底。
+#     PID 文件缺失 / 解析失败 → 保持现有命令行兜底(只匹配 monitor_fastapi:app,
+#     未知进程一律不碰)。
 #
 # 用法(普通 Windows PowerShell 即可):
 #   .\stop_production.ps1                                # 默认安全停止
@@ -70,7 +72,7 @@ function Write-Plan {
 if ($WhatIf) {
     Write-Plan '[WhatIf] 不会执行任何修改,以下为计划:' 'Yellow'
     Write-Plan '  Phase 1:kill python run_workflow.py (--production) + agent_gate worker'
-    Write-Plan '  Phase 2:Stop-Process OpenStoryline Web (按 PID 文件 + 命令行兜底)'
+    Write-Plan '  Phase 2:Stop-Process 只读监控服务 monitor_fastapi (按 PID 文件 + 命令行兜底)'
     Write-Plan '         (PID 文件标记 reused=true 时 → 复用进程保留不动,只提示手动处理)'
     if ($RemoveContainers) {
         Write-Plan "  Phase 3:$StopPostgres -Remove (容器删,卷永远保留)"
@@ -164,25 +166,24 @@ try {
 }
 
 # ===============================================================
-# Phase 2 — stop OpenStoryline 本地 Web
+# Phase 2 — stop 只读监控服务 monitor_fastapi(:7860)
 #   优先按 PID 文件 kill;文件缺失 / 解析失败时按命令行兜底
 #   **所有权口径**:PID 文件 reused=true → 那是外部进程,本脚本不拥有它,
-#   PID kill 与命令行兜底(agent_fastapi:app)都不执行,只提示手动处理。
+#   PID kill 与命令行兜底(monitor_fastapi:app)都不执行,只提示手动处理。
 # ===============================================================
 Write-Phase ''
-Write-Phase "Phase 2:停止 OpenStoryline 本地 Web(:7860)" 'Cyan'
+Write-Phase "Phase 2:停止只读监控服务 monitor_fastapi(:7860)" 'Cyan'
 
 # 收集要 kill 的 PID:先扫 PID 文件,再扫命令行兜底
-$OsMcpPort = 8001
-$OsWebPort = 7860
+$MonitorPort = 7860
 $pidsToKill = [System.Collections.Generic.HashSet[int]]::new()
 $pidsSource = [System.Collections.Generic.List[string]]::new()
-# reused=true → 外部复用进程,跳过命令行兜底里的 agent_fastapi:app 匹配
+# reused=true → 外部复用进程,跳过命令行兜底里的 monitor_fastapi:app 匹配
 $skipWebCmdFallback = $false
 $ownershipState = 'unknown'   # owned | reused | not-found
 
 # 路径 1:读最新 PID 文件(按 LastWriteTime 倒序取一个)
-$latestPidFile = Get-ChildItem -Path $LogsDir -Filter 'openstoryline_pids_*.json' -ErrorAction SilentlyContinue |
+$latestPidFile = Get-ChildItem -Path $LogsDir -Filter 'monitor_pids_*.json' -ErrorAction SilentlyContinue |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if ($null -ne $latestPidFile) {
     try {
@@ -192,10 +193,10 @@ if ($null -ne $latestPidFile) {
             $skipWebCmdFallback = $true
             $ownershipState = 'reused'
             Write-Phase ("  读 PID 文件:{0}" -f $latestPidFile.Name)
-            Write-Phase "  PID 文件标记为 reused(端口复用)—— 复用的 Web 保留不动,需要手动停止" 'Yellow'
+            Write-Phase "  PID 文件标记为 reused(端口复用)—— 复用的监控服务保留不动,需要手动停止" 'Yellow'
         } elseif ($null -ne $prev) {
             $ownershipState = 'owned'
-            foreach ($pidName in @('mcp_pid', 'web_pid', 'web_cmd_pid')) {
+            foreach ($pidName in @('web_pid', 'web_cmd_pid')) {
                 $pidVal = $prev.$pidName
                 if ($null -ne $pidVal -and $pidVal -gt 0 -and -not $pidsToKill.Contains([int]$pidVal)) {
                     $pidsToKill.Add([int]$pidVal) | Out-Null
@@ -214,15 +215,15 @@ if ($null -ne $latestPidFile) {
 }
 
 # 路径 2:命令行兜底(Get-CimInstance 查 python.exe 命令行)
-#   reused=true → 跳过 agent_fastapi:app(那是外部复用的 Web,不能杀)
+#   reused=true → 跳过 monitor_fastapi:app(那是外部复用的监控服务,不能杀)
 if ($skipWebCmdFallback) {
-    Write-Phase "  复用模式:跳过命令行兜底(不杀外部 agent_fastapi:app 进程)" 'Yellow'
+    Write-Phase "  复用模式:跳过命令行兜底(不杀外部 monitor_fastapi:app 进程)" 'Yellow'
 } else {
     try {
         $pyProcs = Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue
         foreach ($p in $pyProcs) {
             $cl = $p.CommandLine
-            if ($cl -and ($cl -match 'open_storyline\.mcp\.server' -or $cl -match 'agent_fastapi:app')) {
+            if ($cl -and ($cl -match 'monitor_fastapi:app')) {
                 if (-not $pidsToKill.Contains([int]$p.ProcessId)) {
                     $pidsToKill.Add([int]$p.ProcessId) | Out-Null
                     $preview = if ($cl.Length -gt 100) { $cl.Substring(0, 100) + '...' } else { $cl }
@@ -236,7 +237,7 @@ if ($skipWebCmdFallback) {
 }
 
 if ($pidsToKill.Count -eq 0) {
-    Write-Phase "  未发现 OpenStoryline 进程,无需 kill"
+    Write-Phase "  未发现 monitor_fastapi 进程,无需 kill"
     if ($ownershipState -eq 'owned') { $ownershipState = 'not-found' }
 } else {
     foreach ($pidVal in $pidsToKill) {
@@ -258,33 +259,33 @@ if ($pidsToKill.Count -eq 0) {
 # 停止状态三态
 switch ($ownershipState) {
     'owned'   { Write-PhaseOk "停止状态:本次启动所有(已终止)" }
-    'reused'  { Write-Phase "停止状态:复用(保留)—— 复用的 Web 保留不动,需要手动停止" 'Yellow' }
+    'reused'  { Write-Phase "停止状态:复用(保留)—— 复用的监控服务保留不动,需要手动停止" 'Yellow' }
     'not-found' { Write-Phase "停止状态:未发现进程" 'Yellow' }
     default   { Write-Phase "停止状态:未确认(PID 文件缺失,已走命令行兜底)" 'Yellow' }
 }
 
-# 路径 3:端口兜底校验 — 等 ≤5s 看 8001 / 7860 是否释放
+# 路径 3:端口兜底校验 — 等 ≤5s 看 7860 是否释放(只看本项目服务端口,
+# 绝不按端口盲杀其它进程)
 if ($skipWebCmdFallback) {
-    Write-Phase "  复用模式:跳过端口释放校验(外部 Web 仍占着 :7860,属预期)" 'Yellow'
+    Write-Phase "  复用模式:跳过端口释放校验(外部服务仍占着 :7860,属预期)" 'Yellow'
 } else {
     $portDeadline = (Get-Date).AddSeconds(5)
     $portsReleased = $false
     while ((Get-Date) -lt $portDeadline) {
         $prevEA = $ErrorActionPreference
         $ErrorActionPreference = 'SilentlyContinue'
-        $mcpOpen = (Test-NetConnection -ComputerName '127.0.0.1' -Port $OsMcpPort -InformationLevel Quiet -WarningAction SilentlyContinue) -eq $true
-        $webOpen = (Test-NetConnection -ComputerName '127.0.0.1' -Port $OsWebPort -InformationLevel Quiet -WarningAction SilentlyContinue) -eq $true
+        $webOpen = (Test-NetConnection -ComputerName '127.0.0.1' -Port $MonitorPort -InformationLevel Quiet -WarningAction SilentlyContinue) -eq $true
         $ErrorActionPreference = $prevEA
-        if (-not $mcpOpen -and -not $webOpen) { $portsReleased = $true; break }
+        if (-not $webOpen) { $portsReleased = $true; break }
         Start-Sleep -Milliseconds 500
     }
     if (-not $portsReleased) {
-        Write-PhaseWarn "5s 内 8001 / 7860 未释放(可能仍有别处占用)"
+        Write-PhaseWarn "5s 内 7860 未释放(可能仍有别处占用)"
     }
 }
 
 if ($RemoveContainers) {
-    Write-Phase "  OpenStoryline 已无容器(本地直起),-RemoveContainers 不作用于 OpenStoryline" 'Yellow'
+    Write-Phase "  监控服务为本地直起(无容器),-RemoveContainers 只作用于 Postgres 容器" 'Yellow'
 }
 
 # ===============================================================

@@ -1,69 +1,62 @@
-# AI 视频剪辑自动化工作流 — Week 2 + Week 3 交付物
+# AI 视频剪辑自动化工作流 — 单流水线架构(auto-only)
 
-本目录实现附件《第 2 周分阶段实施计划》与《第 3 周详细实施计划》的全部交付物:
-
-- **Week 2**:LangGraph 5 节点骨架(节点 1-5)+ draft_content.json 加密检测/版本策略/原子写入底层库 + 端到端集成测试
-- **Week 3**:扩展为 13+1 节点完整图(节点 1-13 + 1 升级节点)+ 关卡①/② interrupt/resume 联调 + 心跳监控 + 持久化 SqliteSaver(历史实现,当前版本已不支持;运行时持久化已统一为 PostgreSQL)
-- **PostgreSQL 统一改造**:运行时唯一数据库 = PostgreSQL(`video_workflow`);SQLite 检查点后端与本地 `.sqlite` 落盘已删除,聊天会话从 JSON 文件迁入 `chat_sessions` 表,浏览器侧栏历史以服务端为唯一事实来源
+> **2026-11-04 架构收敛**:旧的 Web 聊天回合运行时(`agent_fastapi.py` +
+> `src/open_storyline/` + 聊天前端 + `.venv-openstoryline`)已整体删除,项目收敛为
+> **唯一的 LangGraph 流水线循环**。人工关卡 ①/②/③(`interrupt`/`resume`)保留;
+> LLM 关卡答题走 `agent_gate drive` 无人值守监督;监控独立为只读服务
+> `monitor_fastapi.py`。历史架构见 `README-OpenStoryline.md`(已标注失效)。
 
 ## 1. 目录结构
 
 ```
 auto-video-editor/
 ├── README.md                           本文件
-├── pyproject.toml                      项目元数据 + 依赖
+├── monitor_fastapi.py                  [阶段1] 只读监控服务(/ + /node-map + /api/workflow/*)
+├── pyproject.toml                      项目元数据 + 依赖(含 fastapi/uvicorn)
 ├── requirements.txt                    pip 兜底依赖清单
-├── .gitignore
-├── config.py                           集中配置(Week1/3 待核实项占位)
-├── state.py                            WorkflowState TypedDict(Week 3 +5 字段)
-├── graph.py                            StateGraph 装配 + 编译(53 节点注册 / 44 add_edge / 10 add_conditional_edges,2026-11-03 口径)
+├── config.py                           集中配置(STORYLINE_MODE 恒 auto,非 auto 值 import 即报错)
+├── state.py                            WorkflowState TypedDict
+├── graph.py                            StateGraph 装配 + 编译(START 直连 storyline_load_media;
+│                                       节点/边统计以编译图为准,见 docs/remove-chat-loop-20261104/schema-snapshots)
 ├── nodes/
-│   ├── node_01_clean_cache.py          ─┐
-│   ├── node_02_launch_openstoryline.py │
-│   ├── node_03_open_preview.py         │ Week 2 已有
-│   ├── node_04a_import_video.py        │ 手动导入关卡(等网页【📥 导入视频】按钮)
-│   ├── node_04b_get_storyboard_plan.py │ 读 outputs/openstoryline 产物 → storyline_plan
-│   ├── node_05_generate_draft.py       ─┘
-│   ├── node_06_human_reorder.py        [新] 关卡① interrupt + 副作用挪后
-│   ├── node_07_speed_fit.py            [新] 护栏节点 + 帧对齐分配公式
-│   ├── node_08_add_subtitles.py        [新] ASR Mock + 字幕样式注入
-│   ├── node_09_inject_fx.py            [新] 转场 + 视频特效注入
-│   ├── node_10_inject_text_fx.py       [新] 花字样式追加
-│   ├── node_11_inject_sticker.py       [新] 贴纸 resource_id 关联
-│   ├── node_12_human_add_bgm.py        [新] 关卡② interrupt(同节点6结构)
-│   └── node_13_adjust_volume.py        [新] 占位节点(Week 4 实现)
-├── draft_ops/                          Week 2 底层库(无 LangGraph 依赖,Week 3 复用)
-│   ├── atomic_writer.py
-│   ├── encryption_detector.py
-│   └── version_strategy.py
-├── jy_common/                          [新] Week 3 共享模块
-│   ├── template_library.py             模板加载 + 资源库 by_name 查询(Week 4 已迁移自 pyJianYingDraft)
-│   ├── asr_client.py                   ASR Mock 接口(Week 4 接 FireRedASR2S)
-│   └── sticker_resolver.py             关键词→resource_id 解析
-├── templates/                          Week 4 已迁移自 pyJianYingDraft metadata
-│   ├── fx_template.json                风格索引(name + style_tag),真实 ID 在 fx_resource_library.json
-│   ├── fx_resource_library.json        转场 + 视频特效 VIP 资源库(由 scripts/build_resource_library.py 生成)
-│   ├── text_style_template.json        文字样式模板,默认 entrance_animation_name 在 text_resource_library.json 解析
-│   ├── text_resource_library.json      文字入场/循环/出场 VIP 资源库(由 scripts/build_resource_library.py 生成)
-│   └── sticker_template.json
+│   ├── node_05_generate_draft.py       草稿生成(storyline_plan 优先,shot_plan 兜底)
+│   ├── node_06_human_reorder.py        关卡① interrupt
+│   ├── node_07_speed_fit.py            护栏节点 + 帧对齐分配公式
+│   ├── node_08_add_subtitles.py        ASR + 字幕样式注入
+│   ├── node_08b_add_subtitles_en.py    英文字幕
+│   ├── node_09_inject_fx.py            转场 + 视频特效
+│   ├── node_10_inject_text_fx.py       花字(中/英)
+│   ├── node_11_inject_sticker.py       贴纸
+│   ├── node_12_human_add_bgm.py        关卡② interrupt
+│   ├── node_13_adjust_volume.py        音量
+│   ├── node_14..17 / node_16a / checkpoint3 / fork / join   英文线 + 尾链 + 交付 QA
+│   ├── assembly/                       assembly QC 六节点(QC 通道,可开关)
+│   └── storyline/                      auto 链 19 节点(load_media → … → join)
+├── storyline_capabilities/             auto 链本地能力层(ASR stub/BGM/配音/转场/提示词)
+├── assembly_capabilities/              assembly QC 能力层
+├── agent_gate/                         Agent 调度:MCP server / worker / 信箱 / drive / resume
+├── monitoring/                         事件存储 / 统一 runner / 图 schema / 心跳
+├── db/                                 应用层迁移(migrations;chat_sessions/workflow_chat_links
+│                                       为 legacy:定义保留、应用层不读写、存量不 DROP)
+├── web/
+│   ├── api_workflow.py                 只读监控 API(无 POST /runs、无 chat-session 查询)
+│   ├── monitor.html                    [阶段1] 监控首页
+│   ├── static/workflow_monitor.mjs     SSE 事件流 + 节点状态
+│   └── node_map/                       节点图页
 ├── scripts/
-│   └── build_resource_library.py       一次性生成器 — 从 pyJianYingDraft metadata 导出 VIP 资源库
-├── monitoring/                         [新] Week 3 心跳监控
-│   ├── heartbeat_writer.py             编排进程内 daemon 线程
-│   ├── heartbeat_monitor.ps1           外部监控脚本(任务计划程序触发)
-│   └── register_heartbeat_task.ps1     任务计划程序注册脚本
-├── db/                                 [新] PostgreSQL 统一改造:迁移器 + 会话仓储
-│   ├── migrations.py                   版本化应用层迁移(app_schema_migrations)
-│   ├── connection.py                   连接辅助(client_encoding=utf-8)
-│   └── session_repository.py           chat_sessions 仓储(乐观锁 + 游标分页)
-├── mcp_clients/
-│   └── openstoryline_client.py         Week 2 已交付
+│   ├── run_workflow.py                 入口 A:直接 CLI(--production)
+│   ├── resume_workflow.py              [阶段3前置] 入口 A 的 checkpoint 恢复(--checkpoint ①/②/③)
+│   ├── preflight.ps1                   6 步预检(Postgres 拉起 + schema)
+│   └── migrate_db.py                   应用层迁移(幂等)
+├── start_production.ps1                一键启动(工作流 + 监控服务;auto-only)
+├── stop_production.ps1                 一键停止(只停本项目 PID 记录的进程)
+├── draft_ops/ / jy_common/ / templates/ / mcp_clients/   剪映草稿底层库 + 共享模块
 ├── docs/
-│   └── poc_report.md                   Week 2 阶段 E PoC 报告
+│   ├── remove-chat-loop-20261104/      本次收敛的基线/回归/快照证据
+│   └── integration/architecture_decision_record.md        ADR
 └── tests/
-    ├── conftest.py                     Week 2 共享 fixtures
-    ├── unit/                           Week 2: 29 + Week 3: 31 = 60 单测
-    └── integration/                    Week 2: 8 + Week 3: 16 = 24 集成测试
+    ├── unit/                           单测(阶段4 后全绿)
+    └── integration/                    集成测试(PG 可达环境)
 ```
 
 ## 2. 环境与安装
@@ -192,18 +185,18 @@ New-Item -ItemType Directory -Force -Path inputs | Out-Null
 
 > 2026-10-21 起,`scripts\start_local.ps1` **已删除**。根目录的
 > `.\start_production.ps1` 是**唯一**完整工作流启动入口。
+> 2026-11-04 阶段5 起:7860 端口承载**只读监控服务** `monitor_fastapi:app`(主 `.venv`);
+> OpenStoryline Web 生命周期已随旧聊天运行时退役;`-StorylineMode` 参数删除
+> (auto-only,`STORYLINE_MODE` 恒 auto)。
 
 **启动**(需要「以管理员身份运行」的 Windows PowerShell):
 
 ```powershell
-# 默认:thread-id=video-001,STORYLINE_MODE=human,本地 Postgres 容器
+# 默认:thread-id=video-001,本地 Postgres 容器,顺带起只读监控(:7860)
 .\start_production.ps1
 
 # 换 thread-id
 .\start_production.ps1 -ThreadId video-002
-
-# 明确走 auto 模式(19 节点确定性图,不启动 OpenStoryline Web)
-.\start_production.ps1 -StorylineMode auto
 
 # 指定 Postgres(支持任意 URI,见下)
 .\start_production.ps1 -PostgresUri postgresql://app:secret@localhost:5432/appdb
@@ -217,7 +210,6 @@ New-Item -ItemType Directory -Force -Path inputs | Out-Null
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `-ThreadId` | `video-001` | LangGraph `thread_id`,同时写入 `runtime\initial_state_<id>.json` 与 checkpoint 查询 |
-| `-StorylineMode` | `human` | `human` = 走人工关卡(启动 OpenStoryline Web);`auto` = 19 节点确定性图(**不**启动 Web)。非法值在参数绑定阶段被拒(`ValidateSet`) |
 | `-PostgresUri` | `postgresql://postgres:devpass@localhost:5432/video_workflow` | 连接的唯一真相。`localhost:5432` → **本地托管**模式(起 `edb-postgres16` 容器 + 自动对齐角色/库);其它 host/端口 → **外部**模式(完全不碰本地容器) |
 | `-SourceVideo` | jianying-editor 演示素材路径 | 复制到 `-InputsDir` 的源视频 |
 | `-InputsDir` | `FireRed-OpenStoryline\inputs` | 素材目录 |
@@ -239,34 +231,35 @@ New-Item -ItemType Directory -Force -Path inputs | Out-Null
 **停止**:
 
 ```powershell
-.\stop_production.ps1                        # 停工作流进程 + Web + Postgres 容器(卷永远保留)
-.\stop_production.ps1 -RemoveContainers      # 顺带删容器(卷仍保留)
+.\stop_production.ps1                        # 停工作流进程 + 监控服务 + Postgres 容器(卷永远保留)
+.\stop_production.ps1 -RemoveContainers      # 顺带删 Postgres 容器(卷仍保留)
 .\stop_production.ps1 -CleanState -CleanHeartbeat
 .\stop_production.ps1 -WhatIf                # 只打印计划,零副作用
 ```
 
-> **所有权口径**:启动时若 `:7860` 已被健康的 OpenStoryline Web 占用,脚本会**复用**它
-> (不启第二个进程),PID 文件标记 `reused=true`。`stop_production.ps1` 遇到 `reused=true`
-> 时**既不按 PID kill、也不走命令行兜底** —— 那个进程不是本项目拥有的,保留不动,
-> 需要停止请手动处理。
+> **所有权口径**:启动时若 `:7860` 已被健康的监控服务占用,脚本会**复用**它
+> (不启第二个进程),PID 文件(`logs\monitor_pids_*.json`)标记 `reused=true`。
+> `stop_production.ps1` 遇到 `reused=true` 时**既不按 PID kill、也不走命令行兜底** ——
+> 那个进程不是本项目拥有的,保留不动,需要停止请手动处理。命令行兜底只匹配
+> `monitor_fastapi:app`,**绝不**按端口盲杀未知进程。
 
 **退出码表**
 
 | 码 | 含义 |
 |---|---|
-| 0 | 成功 |
-| 3 | `run_workflow.py`:OpenStoryline 未就绪,工作流提前终止(脚本透传为 24) |
+| 0 | 成功(工作流跑完,或停在人工关卡 ①/②/③ 等待放行 —— 均为正常终态) |
 | 10-16 | preflight Step 1-6 失败(脚本透传) |
 | 19 | `-PostgresUri` 非法(格式 / 缺 host / 缺库名) |
 | 20 | Postgres 角色/库对齐失败 |
-| 21 | Web 进程启动后提前退出 |
-| 22 | Web 健康检查超时(180s) |
+| 21 | 监控服务进程启动后提前退出 |
+| 22 | 监控服务健康检查超时(60s) |
 | 23 | `:7860` 端口冲突(被非本项目进程占用) |
-| 24 | 工作流因 `node_02` 未就绪提前终止 |
 | 25 | Phase 3 checkpoint 查询失败(验收未完成) |
-| 26 | openstoryline 资源/模型缺失 |
 | 27 | `run_workflow.py` 非预期失败 |
 | 99 | preflight 未捕获异常 |
+
+> 旧码 3/24(OpenStoryline 未就绪提前终止)与 26(resource/models 缺失)已随
+> human 模式链与 Phase 0.55 删除(2026-11-04 阶段3/5)。
 
 **失败与恢复**
 
@@ -274,19 +267,71 @@ New-Item -ItemType Directory -Force -Path inputs | Out-Null
 |---|---|---|
 | `当前 PowerShell 不是管理员` | 11 | 用「以管理员身份运行」重开 PowerShell,或按 README §2.4 手动起 `com.docker.service` |
 | `Docker Desktop 启动后 90s 内 daemon 未就绪` | 17 | 手动打开 Docker Desktop GUI,等「Docker Desktop is running」后重跑 |
-| `resource/ 缺失或为空` | 26 | 跑 `.\scripts\download_resources.ps1` + `download_models.ps1`(约 642 MB;2026-11-01 扁平化后资源/模型在仓库根) |
 | `端口 7860 已被占用,但 GET 不返回 200` | 23 | 手动查出占用进程并处理;脚本**不会**杀未确认归属的进程 |
-| `180s 内 OpenStoryline Web 未就绪` | 22 | 看报错里的 `Postgres :` 行——容器未运行时先 `docker start edb-postgres16`;再看 `logs\openstoryline_web_*.log` 尾部。脚本**不会**带未就绪的服务跑工作流 |
+| `60s 内监控服务未就绪` | 22 | 看报错里的 `Postgres :` 行——容器未运行时先 `docker start edb-postgres16`;再看 `logs\monitor_*.log` 尾部。脚本**不会**带未就绪的服务跑工作流 |
 | `preflight.ps1 退出码 15(Postgres 不可达)` | 15 | 确认 `-PostgresUri` 可连;外部库需先自行建库建角色 |
 | `角色/库对齐失败` | 20 | 看 `logs\start_*.log` 里 `align_postgres.py` 的报错(密码已脱敏) |
 | `验收未完成:checkpoint 查询失败` | 25 | 确认 Postgres 可连 + `checkpoints` 表已建(Phase 0.58 preflight 的 Step 6 会建) |
-| `OpenStoryline 未就绪,工作流提前终止` | 24 | Web 没起来;human 模式下先确认 `:7860` 的服务健康 |
 
 **日志**
 
-每次运行写一份 `logs\start_<时间戳>.log`;OpenStoryline Web 另写
-`logs\openstoryline_web_<时间戳>.log`,PID 信息写 `logs\openstoryline_pids_<时间戳>.json`。
+每次运行写一份 `logs\start_<时间戳>.log`;监控服务另写
+`logs\monitor_<时间戳>.log`,PID 信息写 `logs\monitor_pids_<时间戳>.json`。
 日志里的密码一律脱敏成 `***`。
+
+### 2.7 运行入口、恢复与监控(单流水线两路触发)
+
+**入口 A —— 直接 CLI**(进程内,`VIDEO_LLM_BACKEND`/信箱选答题后端):
+
+```powershell
+# 启动(通常经 start_production.ps1;亦可直接跑)
+.\.venv\Scripts\python.exe scripts\run_workflow.py --production --thread-id <THREAD_ID> `
+    --initial-state-json runtime\initial_state_<THREAD_ID>.json
+
+# 查看挂起的人工关卡(不执行恢复)
+.\.venv\Scripts\python.exe scripts\resume_workflow.py --thread-id <THREAD_ID> --dry-run
+
+# 放行指定关卡(操作员交互终端执行;--checkpoint 支持 ①/②/③ 或 legacy_id)
+.\.venv\Scripts\python.exe scripts\resume_workflow.py --thread-id <THREAD_ID> --checkpoint ① --value true
+```
+
+**入口 B —— Agent / MCP / drive**(无人值守):
+
+```powershell
+# 前置:素材必须在白名单内($env:AGENT_GATE_MEDIA_ROOTS),否则 safe_media_path 拒绝
+$env:AGENT_GATE_MEDIA_ROOTS = "E:\Documents\kuaishou\video-ops\inputs"
+
+# 无人值守:自动拉起 worker + mcode 会话答题 + 崩溃自动重启;
+# 到达人工关卡返回退出码 10,等待真人放行
+python -m agent_gate drive `
+  --thread-id drive-20261105-001 `
+  --outputs-root outputs `
+  --agent mcode `
+  --project-dir "E:\Documents\kuaishou\video-ops" `
+  --video "E:\Documents\kuaishou\video-ops\inputs\30s.mp4"
+
+# 查看挂起关卡(先读 interrupts 的实际 checkpoint 标识,不要假定固定停在同一关)
+python -m agent_gate status --thread-id drive-20261105-001 --outputs-root outputs
+
+# 真人在交互终端放行(不要用 --force-no-tty 绕过真人关卡;该参数只用于受控 CI)
+python -m agent_gate resume --thread-id drive-20261105-001 --outputs-root outputs `
+  --checkpoint "<status 返回的 checkpoint>" --value true
+```
+
+> ⚠️ **恢复语义不混用**(ADR-2026-11-04):入口 A 启动的运行只能由
+> `scripts\resume_workflow.py` 恢复;入口 B(agent_gate worker)启动的运行只能由
+> `agent_gate resume` 恢复。两者共享 PostgreSQL checkpoint 与事件表,但不共享控制状态。
+
+**监控(只读)**:
+
+```powershell
+# 独立启动(一键启动已包含;手动启动:)
+.\.venv\Scripts\python.exe -m uvicorn monitor_fastapi:app --host 127.0.0.1 --port 7860
+```
+
+- 首页 <http://127.0.0.1:7860/>(SSE 事件流 + 节点状态);节点图 </node-map>。
+- 监控**只读**:查询运行快照、SSE 补发、图拓扑;刷新/重连绝不触发工作流。
+  工作流触发只有入口 A/B 两条路径。
 
 ## 3. 运行测试
 
@@ -522,14 +567,17 @@ runs_table.list_suspended()  # 运维查询入口
 为 no-op、不阻塞主流程,但会打 **ERROR** 级日志并累加 `runs_table.degraded_count()`
 ——静默降级会让人误以为"已保存"。
 
-### 4.9b `db/` — 应用层迁移与 `chat_sessions` 仓储
+### 4.9b `db/` — 应用层迁移(`chat_sessions` 已转 legacy)
+
+> ⚠️ **2026-11-04 阶段4**:`db/session_repository.py` 已删除,应用层停止读写
+> `chat_sessions` / `workflow_chat_links`;两者的**已发布迁移定义(1/5)原样保留**
+> (迁移台账不可改写),存量表与数据**不 DROP**。本节以下为历史记录。
 
 PostgreSQL 统一改造方案(阶段 A / B)新增的应用层数据访问层。**运行时唯一库 = `video_workflow`**。
 
 | 模块 | 职责 |
 |---|---|
-| `db/migrations.py` | 版本化 SQL 迁移器。管 `app_schema_migrations` / `chat_sessions` / `workflow_runs` |
-| `db/session_repository.py` | `chat_sessions` 仓储:CRUD、乐观锁(`version`)、游标分页 |
+| `db/migrations.py` | 版本化 SQL 迁移器。管 `app_schema_migrations` / `workflow_runs` / `workflow_run_events`(1/5 为 legacy 定义) |
 | `db/connection.py` | 连接辅助:把 `client_encoding` 设成 UTF-8(本机库是 `SQL_ASCII`) |
 
 **分工边界**:LangGraph 自己的 4 张 checkpoint 表由 `AsyncPostgresSaver.setup()` 建
@@ -543,23 +591,13 @@ PostgreSQL 统一改造方案(阶段 A / B)新增的应用层数据访问层。*
 .\.venv\Scripts\python.exe scripts\migrate_db.py --status
 ```
 
-```python
-from db.session_repository import SessionRepository
+⚠️ **本机库是 `SQL_ASCII`**:写 JSONB 必须用 `ensure_ascii=False`
+(见 `db.connection.configure_json_dumps`),否则 PG 报 `UntranslatableCharacter`。
 
-repo = SessionRepository()                      # 用 POSTGRES_URI / config 默认值
-repo.create(session_id, state_json=state)       # 新建
-repo.update_state(session_id, state, expected_version=1)  # 乐观锁:版本对不上抛冲突
-repo.list(limit=50, cursor=(updated_at, sid))   # 游标分页(不用 offset)
-```
+### 4.9c 会话状态入 PostgreSQL(阶段 D)与会话 REST API —— **已随旧聊天运行时删除**
 
-⚠️ **本机库是 `SQL_ASCII`**:写 JSONB 必须用 `db.session_repository.jsonb()`
-(内部 `ensure_ascii=False`),否则 PG 报 `UntranslatableCharacter`;读 TEXT 列用
-`text_value()` 解码。详见 `db/connection.py` 的模块文档。
-
-### 4.9c 会话状态入 PostgreSQL(阶段 D)与会话 REST API
-
-聊天会话的完整状态存 `chat_sessions.state_json`(JSONB),**不再**写 `session_state.json`。
-浏览器侧栏历史以**服务端为唯一事实来源**。
+> ⚠️ **2026-11-04 阶段2**:聊天 Web(`agent_fastapi.py`)与会话 REST API 整体删除,
+> 本节仅作历史记录。存量 `chat_sessions` 数据保留在库中(不清理)。
 
 | 方法 | 路由 | 说明 |
 |---|---|---|
@@ -576,15 +614,9 @@ repo.list(limit=50, cursor=(updated_at, sid))   # 游标分页(不用 offset)
 - 限流:`GET /api/sessions` 走独立桶 `list_sessions`(burst 10 / rpm 30),不挤占通用 `api_general`。
 
 ```powershell
-# 一次性工具:旧 session_state.json 导入 chat_sessions(幂等;--archive 会把旧文件移出活动路径)
-.\.venv\Scripts\python.exe scripts\import_session_states.py --dry-run
-.\.venv\Scripts\python.exe scripts\import_session_states.py --archive
-
-# 断连演练:PostgreSQL 不可达时必须明确报错,且不落本地文件
-.\.venv\Scripts\python.exe scripts\drill_disconnect.py
+# (以下两个一次性工具已随旧聊天运行时删除 —— 2026-11-04 阶段2:
+#  scripts/import_session_states.py、scripts/drill_disconnect.py)
 ```
-
-⚠️ `scripts/import_session_states.py` 是**一次性迁移工具**,`scripts/drill_disconnect.py` 是**断连演练工具**;两者都不是运行时组件,运行时代码已不引用任何 SQLite / JSON 文件。
 
 ### 4.10 2026-10 接入原"不可达节点"(三个开关)
 
@@ -594,7 +626,7 @@ repo.list(limit=50, cursor=(updated_at, sid))   # 游标分页(不用 offset)
 
 | 新节点 | 挂在哪(相关的现有节点) | 触发条件 | 开关(默认 `1`) |
 |---|---|---|---|
-| `clean_cache` | **不接边**(保留 `add_node` 注册,零条入边/出边);仅 Web「清理缓存」按钮(`POST /api/system/clean-cache`)显式触发 | 只有人点 Web 按钮 | —(无开关) |
+| ~~`clean_cache`~~ | **已删除**(2026-11-04 阶段3,R-10:唯一触发入口 clean-cache 端点随旧聊天运行时删除) | — | — |
 | `storyline_search_web_topic` | `storyline_load_media` 之后,与 `storyline_search_media` / `storyline_split_shots` 并行的旁支(走到 END) | `STORYLINE_MODE=auto` + `storyline_targets.query` 非空 | `STORYLINE_ENABLE_WEB_TOPIC` |
 | `storyline_local_asr` | `storyline_split_shots` 之后,与 `storyline_understand_clips` 并行的旁支 | `STORYLINE_MODE=auto` + 素材有音轨 | `STORYLINE_ENABLE_ASR_BRANCH` |
 | `storyline_speech_rough_cut` | 紧跟 `storyline_local_asr`(走到 END) | 随 `local_asr` | 同上 |
@@ -603,7 +635,7 @@ repo.list(limit=50, cursor=(updated_at, sid))   # 游标分页(不用 offset)
 
 备注:
 
-- `clean_cache` ⚠️ **不再自动执行**;需要清理请点 Web 按钮(有破坏性:会删剪映草稿 `.bak`/`.backup`、回收站、FireRed 缓存与日志、`__pycache__` 等)。
+- `clean_cache` **已删除**(2026-11-04 阶段3):清理缓存端点与节点不复存在;如需清理能力,另做独立 CLI 设计。
 - 网页话题:标题作为"外部不可信参考"软注入 `storyline_generate_script` 的 `overall`;失败 / 无结果不影响主线。
 - ASR:只回填 `Clip.transcript`,不改镜头和时长;默认 `STORYLINE_ASR_MODE=stub` 时转写为空,无可见变化。
 - ASR 已知限制(接入前就存在,本次没改):配了 `STORYLINE_PEXELS_API_KEY` 时,`storyline_search_media` 会把 `storyline_media_artifact` 整个换成搜索结果清单,
@@ -665,37 +697,38 @@ $env:STORYLINE_ENABLE_AI_TRANSITION = "0"
 
 ### 10.1 页面入口与能力
 
-- 入口:<http://127.0.0.1:7860/node-map>(agent_fastapi 托管,uvicorn 绑定 127.0.0.1)。
-- **双视图**:「完整 LangGraph 工作流」(拓扑由编译图程序化提取,含 START/END、
-  条件边、并行 fan-in、QC/fusion 开关状态)与「OpenStoryline 子流程」(原 14 节点
-  静态图,布局数据互不影响)。`?view=storyline` 直达旧图。
+- 入口:<http://127.0.0.1:7860/>(监控首页,`monitor_fastapi.py` 托管,uvicorn 绑定
+  127.0.0.1;阶段5 起由 `start_production.ps1` 管理生命周期);节点图
+  </node-map>。
+- **拓扑视图**:「完整 LangGraph 工作流」由编译图程序化提取(含 START/END、
+  条件边、并行 fan-in、QC 开关状态;阶段3 起 auto-only,无 fusion)。
 - **实时状态**:输入 `thread_id` 点「订阅」即通过 SSE 重放该线程全部事件并持续跟进。
-  节点七态:执行中(蓝脉冲)/已完成(绿)/等待人工或网页导入(琥珀)/重试中(橙)/
+  节点七态:执行中(蓝脉冲)/已完成(绿)/等待人工(琥珀)/重试中(橙)/
   失败(红)/未参与(虚化)/未连通(虚线);已走路径绿色高亮,未命中分支不预点亮。
-- 布局缓存 key 纳入 `workflow_id + mode + schema_version`,human/auto 与新旧图互不污染。
+- 布局缓存 key 纳入 `workflow_id + mode + schema_version`。
 
 ### 10.2 事件从哪来(双入口统一)
 
-- CLI(`scripts/run_workflow.py`)与 Web `POST /api/workflow/runs` 都经统一 runner
-  (`monitoring/workflow_runner.py`,astream `tasks/updates/custom` + `version="v2"`),
-  事件先落 PostgreSQL `workflow_run_events` 表,再推送;断线重连按全局 `id` 游标补发。
-- `agent_gate` worker(独立进程)保持同步 `invoke` 语义,补发运行级事件
-  (`run.started/resumed/interrupted/completed/failed`);节点级事件为后续可选增强。
-- `import_video` 的网页文件握手会发 `node.waiting_input(waiting_kind=web_file_handshake)`,
-  与 LangGraph `interrupt` 关卡(⓪①②③)在 UI 上可区分。
+- CLI(`scripts/run_workflow.py`,经 `scripts/resume_workflow.py` 恢复)与
+  `agent_gate` worker 都产出 §7.1 标准事件:CLI 经统一 runner
+  (`monitoring/workflow_runner.py`,astream `tasks/updates/custom` + `version="v2"`)
+  事件先落 PostgreSQL `workflow_run_events` 表再推送;断线重连按全局 `id` 游标补发;
+  worker 补发运行级事件(`run.started/resumed/interrupted/completed/failed`)。
+- LangGraph `interrupt` 人工关卡(①②③)以 `node.waiting_input(waiting_kind=interrupt)`
+  + `run.interrupted` 呈现(2026-11-04 阶段3 起 human 模式 5 节点与网页文件握手已删除)。
 
-### 10.3 监控 API 端点(宿主 `web/api_workflow.py`)
+### 10.3 监控 API 端点(宿主 `monitor_fastapi.py` → `web/api_workflow.py`,只读)
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/workflow/graph` | 主图拓扑 JSON(节点/边/元数据/flags;`?refresh=1` 重建缓存) |
-| POST | `/api/workflow/runs` | 显式启动运行(主 venv CLI 子进程);重复启动 409 |
 | GET | `/api/workflow/runs/{thread_id}` | 运行快照(事件计数/游标/派生状态/attempt 汇总) |
 | GET | `/api/workflow/runs/{thread_id}/events` | SSE 事件流;`Last-Event-ID` 补发 |
-| POST | `/api/workflow/runs/{thread_id}/resume` | 挂起探测 + 外部恢复指引(不直接执行 resume) |
+| GET | `/api/workflow/runs/{thread_id}/resume-status` | 挂起探测 + 外部恢复指引(只读,不执行 resume) |
 
 访问控制:有 `Origin` 头时必须是本机来源(跨源 403);curl/同源导航不受影响。
-`GET .../events` 只读,绝不触发图执行;刷新页面只重放事件。
+所有端点只读,绝不触发图执行;刷新页面只重放事件。旧 `POST /api/workflow/runs`
+(监控 API 启动工作流)已于阶段1 删除 —— 触发只走入口 A/B(§2.7)。
 
 ### 10.4 排错
 

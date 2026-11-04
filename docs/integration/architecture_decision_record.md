@@ -353,3 +353,26 @@ Phase 1 验证必须先解决。
 - **跨仓库主索引文档**:`FireRed-OpenStoryline/docs/FireRed-OpenStoryline 嵌入 auto-video-editor：集成评审与落地方案 (最终修正版).md`
   — 完整 plan v3.0(13 节)。**本仓库 docs/ 下没有副本**;若只在 auto-video-editor 仓库内查,会找不到此文件。
   历史会话 artifacts `plan.md` 与此文档同字节,可作为本地副本。
+---
+
+## ADR-2026-11-04 · 删除对话回合循环,收敛为单流水线架构(阶段0-6)
+
+**状态**:已接受并实施(阶段0-5 提交于 `refactor/remove-chat-loop-20261104` 工作线;阶段6 回归见 `docs/remove-chat-loop-20261104/regression.md`)。
+
+**背景**:项目曾存在两套循环 —— ①对话回合循环(聊天 Web `agent_fastapi.py` + mcode/zcode 档位子进程,每条消息一次 900s 预算的回合执行)与 ②LangGraph 流水线循环(后台 worker、checkpoint、可恢复)。两层配置、路径双份、回合冷启动与终止语义模糊在 2026-11-03「素材路径不存在」故障中暴露出高昂的接缝治理成本。
+
+**决定**:
+
+1. **彻底删除①对话回合循环**:`agent_fastapi.py`、`src/open_storyline/` 整包、聊天前端、`requirements-openstoryline.txt`、`.venv-openstoryline`(本地目录留部署清理)全部移除(阶段2)。
+2. **图收敛为 auto-only**(阶段3):`STORYLINE_MODE` 恒 `auto`(非 auto 值 import 期 fail-fast);human 模式 5 节点(checkpoint0/import_video/get_storyboard_plan/launch_openstoryline/open_preview)、human 融合层(`nodes/storyline/fusion.py`)、`clean_cache` 节点删除;`START` 直连 `storyline_load_media`;关卡①②③(interrupt/resume)保留 —— 这是流水线的内建暂停点,不是旧聊天遗产。
+3. **监控只读**(阶段1/5):`monitor_fastapi.py`(主 `.venv`,127.0.0.1:7860)只挂查询/SSE/node-map;`POST /api/workflow/runs`(监控 API 启动工作流)删除;启停脚本只管理本项目 PID 记录的监控进程,不按端口盲杀。
+4. **双生产入口 + 恢复语义分离**(§11 前置于阶段3):入口 A 直接 CLI `scripts/run_workflow.py --production`,恢复走 `scripts/resume_workflow.py`(先 `aget_state` 校验 checkpoint 确属该 thread,再经 `run_with_events` 执行 `Command(resume=...)`,与启动同事件管线);入口 B `agent_gate`(MCP `run_start` / CLI `drive` 无人值守监督),恢复走 `agent_gate resume`(TTY 保护)。两入口共享 PostgreSQL checkpoint 与事件表,但**不共享控制状态,禁止跨入口恢复**。
+5. **legacy schema 保留**(阶段4,R-08):`chat_sessions` / `workflow_chat_links` 应用层读写全部删除,但已发布迁移定义(1/5)不改写、存量表与数据不 DROP;fresh/existing 双路径迁移验证通过。
+
+**理由**:两条循环并存时,一次运行的控制状态分裂在两套机制里(聊天回合的 900s 预算 vs worker 的 checkpoint 状态机),恢复、监控、配置各要维护两份。收敛后:唯一业务循环 = LangGraph 流水线;`drive` 是 worker+答题会话的**监督**循环(不是替代);监控纯只读消除"第三条触发路径"。评审修订版 R-01~R-22 修正项全部落实。
+
+**后果**:
+
+- 正面:配置/路径单份;恢复语义每入口自洽;测试面缩小(旧运行时 325 条测试与 66 条存量失败一并出清);unit 套件阶段4 后首次全绿。
+- 代价:聊天 UI 与 human 手动规划路径不可用(如需人工规划,用关卡①②③ + agent_gate resume 的既有机制);跨图版本恢复旧 thread 不受支持(部署纪律:不跨版本恢复活跃 checkpoint)。
+- 中性:`.venv-openstoryline/` 本地目录未删,由操作员在回滚窗口结束后手动处理;`docs/` 历史文档保留并加失效头注。

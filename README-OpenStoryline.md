@@ -1,3 +1,7 @@
+> ⚠️ **历史文档(2026-11-04 单流水线架构收敛后失效)**:本文档描述的聊天 Web /
+> OpenStoryline Web / human 模式 / mcode-zcode 档位链路已删除;现行架构见 `README.md`
+> 与 `docs/integration/architecture_decision_record.md`。内容保留仅作历史记录。
+
 # OpenStoryline (auto-video-editor 嵌入版)
 
 > 本目录是 [FireRed-OpenStoryline](https://github.com/wayyet/FireRed-OpenStoryline)
