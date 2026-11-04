@@ -42,8 +42,8 @@ class JianyingCoverClient(Protocol):
         ...
 
 
-def _default_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """找一个能用的字体,缺字体时回退到默认字体。"""
+def default_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """找一个能用的字体,缺字体时回退到默认字体(node_14 封面节点也用它)。"""
     candidates = [
         r"C:\Windows\Fonts\msyhbd.ttc",
         r"C:\Windows\Fonts\msyh.ttc",
@@ -71,7 +71,7 @@ def _draw_text_centered(
     """把文字画到画布下 78% 位置(剪映习惯),返回 bbox + 字体信息。"""
     draw = ImageDraw.Draw(img)
     canvas_w, canvas_h = img.size
-    font = _default_font(int(canvas_h * 0.07))
+    font = default_font(int(canvas_h * 0.07))
     # bbox = 文字包围盒(left, top, right, bottom)
     bbox = draw.textbbox((0, 0), text, font=font, stroke_width=stroke_width)
     text_w = bbox[2] - bbox[0]

@@ -17,10 +17,10 @@ import io
 import json
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 from draft_ops.atomic_writer_file import atomic_write_file
-from mcp_clients.jianying_cover_client import call_write_cover_9x16
+from mcp_clients.jianying_cover_client import call_write_cover_9x16, default_font
 from state import WorkflowState
 
 
@@ -32,23 +32,6 @@ COVER_SPECS: dict[str, dict] = {
     "16:9": {"w": 1920, "h": 1080, "name": "16x9"},
     "4:3": {"w": 1440, "h": 1080, "name": "4x3"},
 }
-
-
-def _default_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """找一个能用的字体,缺字体时回退到默认字体。"""
-    candidates = [
-        r"C:\Windows\Fonts\msyhbd.ttc",
-        r"C:\Windows\Fonts\msyh.ttc",
-        r"C:\Windows\Fonts\simhei.ttf",
-        r"C:\Windows\Fonts\arialbd.ttf",
-    ]
-    for c in candidates:
-        if Path(c).exists():
-            try:
-                return ImageFont.truetype(c, size)
-            except OSError:
-                continue
-    return ImageFont.load_default()
 
 
 def _png_bytes(img: Image.Image) -> bytes:
@@ -95,7 +78,7 @@ def _draw_title(img: Image.Image, title: str, ratio: str) -> dict:
     draw = ImageDraw.Draw(img)
     canvas_w, canvas_h = img.size
     font_size = int(canvas_h * 0.07)
-    font = _default_font(font_size)
+    font = default_font(font_size)
     bbox = draw.textbbox((0, 0), title, font=font, stroke_width=8)
     text_w = bbox[2] - bbox[0]
     text_h = bbox[3] - bbox[1]
