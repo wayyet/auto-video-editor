@@ -26,6 +26,9 @@ Phase 0 警告:**真正部署时仍以 ``list_tools()`` 运行时输出为准**,
 做快照比对。
 """
 
+# 【遗留·只标记不删除】2026-11 重复冗余扫描:生产代码零调用(只有测试引用,或完全无人引用)。
+# 按"遗留项只加注释、不删除"的既定决定保留。要删除时:先 grep 全仓确认零引用,再连测试一起删。
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

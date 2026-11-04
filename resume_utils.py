@@ -14,6 +14,10 @@
 ``tests/integration/test_resume_all_pending_integration.py``(Day 3)。
 """
 
+# 【遗留·只标记不删除】2026-11 重复冗余扫描:生产代码零调用(只有测试引用,或完全无人引用)。
+# 按"遗留项只加注释、不删除"的既定决定保留。要删除时:先 grep 全仓确认零引用,再连测试一起删。
+# 注:M16(配对逻辑收敛进 agent_gate/resume_match)之后本模块仍保留。
+
 from __future__ import annotations
 
 import logging

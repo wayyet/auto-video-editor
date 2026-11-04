@@ -264,6 +264,10 @@ def write_srt_from_segments(draft_dir: Path, segments: list[SubtitleSegment]) ->
 # ``_build_interrupt_payload`` / ``write_srt_from_segments`` / ``_read_segments_from_draft``。
 # 可删的只有下面这个 shim 函数。
 # ---------------------------------------------------------------------------
+# 【遗留·只标记不删除】2026-11 重复冗余扫描:node_16_translate_subtitles 已被 node_16a 与
+# node_checkpoint3_layout_review 取代,生产代码零调用(只有测试引用)。
+# 按"遗留项只加注释、不删除"的既定决定保留。注意:本文件其余辅助函数仍被这两个节点使用,
+# 不要整文件删除。要删除时:先 grep 全仓确认零引用,再连测试一起删。
 def node_16_translate_subtitles(state: WorkflowState) -> dict:
     """向后兼容 shim(Week 5 拆分过渡):按顺序执行"翻译+layout 校验+条件
     interrupt 模拟+写 SRT",对外行为与 Week 4 一致,但实现委托给 16a /

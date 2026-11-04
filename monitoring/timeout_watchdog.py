@@ -15,6 +15,10 @@ LangGraph runtime timeout hook;Week 4 用户实测时如 LangGraph 1.2.x 提供
 原生 timeout API,优先切换到原生 API。
 """
 
+# 【遗留·只标记不删除】2026-11 重复冗余扫描:生产代码零调用(只有测试引用,或完全无人引用)。
+# 按"遗留项只加注释、不删除"的既定决定保留。要删除时:先 grep 全仓确认零引用,再连测试一起删。
+# 补充:开关 ENABLE_TWO_LEVEL_TIMEOUT(默认不启用)在 config.py 里,但 graph.py 没有接入这个模块。
+
 from __future__ import annotations
 
 import concurrent.futures
