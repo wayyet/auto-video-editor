@@ -74,7 +74,7 @@ _FAMILY_BY_STEM = (
     ("wqy-zenhei", "WenQuanYi Zen Hei"),
     ("wqy-microhei", "WenQuanYi Micro Hei"),
     ("uming", "AR PL UMing CN"),
-    ("ukai", "AR PL UMai CN"),
+    ("ukai", "AR PL UKai CN"),
     ("droidsansfallback", "Droid Sans Fallback"),
 )
 
