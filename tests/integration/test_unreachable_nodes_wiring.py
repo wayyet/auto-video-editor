@@ -5,18 +5,17 @@
 ``storyline_speech_rough_cut`` / ``storyline_generate_ai_transition`` /
 ``storyline_plan_timeline_ai_transition``。
 
-⚠️ ``clean_cache`` **不在其中**:它有意**不接图**(保留 ``add_node`` 注册,零条边),
-只由 Web UI「清理缓存」按钮经 ``POST /api/system/clean-cache`` 显式触发。
-⇒ 任何 ``graph.invoke()`` 都不会自动触发它;可达性不变量要豁免它(见
-``test_every_registered_node_is_reachable_from_start``)。
+(阶段3 注:曾与它们同批"注册但零边"的 ``clean_cache`` 已随旧聊天运行时
+删除;human 模式前置节点 launch_openstoryline / open_preview 亦已删除,
+START 直连 ``storyline_load_media``。)
 
 策略:**真实编译 LangGraph**,只把"重 IO / LLM / 外部进程"的节点换成确定性假节点
-(open_preview / launch_openstoryline / load_media / split_shots / understand / filter / group),
+(load_media / split_shots / understand / filter / group),
 其余(plan_timeline_pro / qa_gate / join / render_video / generate_script /
 两个 AI 转场节点 …)全部走真实实现。用 ``stream_mode="debug"`` 记录每个超步执行了哪些节点。
 
 锁定的不变量:
-1. 结构:除 ``clean_cache``(有意不可达)外,所有注册节点都能从 START 到达;
+1. 结构:所有注册节点都能从 START 到达;
    **条件触发**的节点(web_topic / local_asr /
    speech_rough_cut / search_media)不在任何 fan-in 屏障里(D10)。
 2. 位置:五个节点**各挂在自己最相关的现有节点旁**(邻居表 NEIGHBORS),且两两不共用挂接点
@@ -50,9 +49,6 @@ WIRED_NODES = {
     "storyline_generate_ai_transition",
     "storyline_plan_timeline_ai_transition",
 }
-# ``clean_cache`` 有意**不接图**:只由 Web「清理缓存」按钮触发,不是"漏接边"。
-# 可达性不变量要豁免它 —— 见 test_every_registered_node_is_reachable_from_start。
-UNWIRED_BY_DESIGN = {"clean_cache"}
 # 条件触发的节点("有时跑有时不跑"):任何一个都不允许出现在 fan-in 屏障(add_edge([...], X))的源里 —— D10。
 # AI 转场两个节点不在此列:建图时按开关决定接不接,接了就**每轮必跑**,所以可以进屏障。
 CONDITIONAL_NODES = {
@@ -67,8 +63,6 @@ CONDITIONAL_NODES = {
 # 默认 stub BGM 时长 90s > 目标 35s,所以 qa 会重试 3 次 → group_clips 共 4 轮。
 # ---------------------------------------------------------------------------
 _PREFIX = [
-    ["launch_openstoryline"],
-    ["open_preview"],
     ["storyline_load_media"],
     ["storyline_split_shots"],
     ["storyline_understand_clips"],
@@ -170,13 +164,9 @@ def _reachable_from_start(edges: set[tuple[str, str]]) -> set[str]:
 
 
 def test_every_registered_node_is_reachable_from_start(monkeypatch: pytest.MonkeyPatch) -> None:
-    """通用不变量:不再有"注册了但永远走不到"的节点(以后新增节点漏接边会在这里报警)。
-
-    ⚠️ 豁免 ``UNWIRED_BY_DESIGN``(目前只有 ``clean_cache``):它**有意**不接图,
-    只由 Web「清理缓存」按钮触发 —— 这不算"漏接边"。
-    """
+    """通用不变量:不再有"注册了但永远走不到"的节点(以后新增节点漏接边会在这里报警)。"""
     _, compiled = _compiled(monkeypatch)
-    nodes = set(compiled.get_graph().nodes) - {"__start__", "__end__"} - UNWIRED_BY_DESIGN
+    nodes = set(compiled.get_graph().nodes) - {"__start__", "__end__"}
     unreachable = nodes - _reachable_from_start(_edge_set(compiled))
     assert not unreachable, f"这些节点注册了但从 START 不可达:{sorted(unreachable)}"
 
@@ -416,16 +406,6 @@ def run_auto(
             "status_log": ["storyline_group_clips_done"],
         }
 
-    monkeypatch.setattr(graph_module, "open_preview", lambda state: {"preview_opened": True})
-    monkeypatch.setattr(
-        graph_module,
-        "launch_openstoryline_service",
-        lambda state: {
-            "openstoryline_ready": True,
-            "status_log": ["node_02_launch_openstoryline_auto_skipped"],
-        },
-    )
-    # clean_cache 不接图(不会在图里被调用),所以这里不需要给它换假节点。
     monkeypatch.setattr(graph_module, "storyline_load_media_node", fake_load_media)
     monkeypatch.setattr(graph_module, "storyline_split_shots_node", fake_split_shots)
     monkeypatch.setattr(graph_module, "storyline_understand_clips_node", fake_understand)
@@ -521,19 +501,15 @@ def run_auto(
 
     saver = saver if saver is not None else InMemorySaver()
 
-    token = graph_module._STORYLINE_MODE_OVERRIDE.set("auto")
-    try:
-        g = graph_module.build_graph(checkpointer=saver, thread_id="wiring", start_heartbeat_thread=False)
-        cfg = {"configurable": {"thread_id": "wiring"}, "recursion_limit": 100}
-        order: list[tuple[int, str]] = []
-        for ev in g.stream(state, cfg, stream_mode="debug"):
-            if ev["type"] == "task":
-                order.append((ev["step"], ev["payload"]["name"]))
-                if stop_after and ev["payload"]["name"] == stop_after:
-                    break
-        snap = g.get_state(cfg)
-    finally:
-        graph_module._STORYLINE_MODE_OVERRIDE.reset(token)
+    g = graph_module.build_graph(checkpointer=saver, thread_id="wiring", start_heartbeat_thread=False)
+    cfg = {"configurable": {"thread_id": "wiring"}, "recursion_limit": 100}
+    order: list[tuple[int, str]] = []
+    for ev in g.stream(state, cfg, stream_mode="debug"):
+        if ev["type"] == "task":
+            order.append((ev["step"], ev["payload"]["name"]))
+            if stop_after and ev["payload"]["name"] == stop_after:
+                break
+    snap = g.get_state(cfg)
 
     values = dict(snap.values or {})
     timeline = None
@@ -590,10 +566,8 @@ def test_defaults_run_all_five_nodes_with_expected_shape(
     assert WIRED_NODES <= set(names), f"没执行到:{sorted(WIRED_NODES - set(names))}"
     assert run.next_nodes == ("node_06_human_reorder",)
 
-    # clean_cache 不接图:第一个任务是 launch_openstoryline,紧随其后的是 open_preview
-    assert run.order[0][1] == "launch_openstoryline"
-    assert run.order[1][1] == "open_preview"
-    assert "clean_cache" not in names
+    # 阶段3 auto-only:第一个任务就是 storyline_load_media(START 直连)
+    assert run.order[0][1] == "storyline_load_media"
 
     # 并行 fan-out:同一超步
     assert run.steps_of("storyline_search_web_topic") == run.steps_of("storyline_split_shots")
@@ -900,17 +874,13 @@ def test_checkpoint_roundtrip_on_shared_checkpointer(
     run = run_auto(monkeypatch, tmp_path, saver=saver)
     assert run.next_nodes == ("node_06_human_reorder",)
 
-    token = graph_module._STORYLINE_MODE_OVERRIDE.set("auto")
-    try:
-        g2 = graph_module.build_graph(checkpointer=saver, thread_id="wiring", start_heartbeat_thread=False)
-        cfg = {"configurable": {"thread_id": "wiring"}, "recursion_limit": 100}
-        assert tuple(g2.get_state(cfg).next) == ("node_06_human_reorder",)
-        names: list[str] = []
-        for ev in g2.stream(Command(resume=True), cfg, stream_mode="debug"):
-            if ev["type"] == "task":
-                names.append(ev["payload"]["name"])
-                if ev["payload"]["name"] == "node_07_speed_fit":
-                    break
-    finally:
-        graph_module._STORYLINE_MODE_OVERRIDE.reset(token)
+    g2 = graph_module.build_graph(checkpointer=saver, thread_id="wiring", start_heartbeat_thread=False)
+    cfg = {"configurable": {"thread_id": "wiring"}, "recursion_limit": 100}
+    assert tuple(g2.get_state(cfg).next) == ("node_06_human_reorder",)
+    names: list[str] = []
+    for ev in g2.stream(Command(resume=True), cfg, stream_mode="debug"):
+        if ev["type"] == "task":
+            names.append(ev["payload"]["name"])
+            if ev["payload"]["name"] == "node_07_speed_fit":
+                break
     assert names[:2] == ["node_06_human_reorder", "node_07_speed_fit"]

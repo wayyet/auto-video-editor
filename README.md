@@ -77,7 +77,7 @@ auto-video-editor/
 ### 2.2 一键安装
 
 ```powershell
-cd E:\Documents\kuaishou\auto-video-editor
+cd C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\auto-video-editor
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
@@ -291,7 +291,7 @@ New-Item -ItemType Directory -Force -Path inputs | Out-Null
 ## 3. 运行测试
 
 ```powershell
-cd E:\Documents\kuaishou\auto-video-editor
+cd C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\auto-video-editor
 .\.venv\Scripts\Activate.ps1
 
 # 跑全部测试

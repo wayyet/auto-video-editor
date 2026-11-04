@@ -158,7 +158,7 @@ media 目录内」的校验。
 ### 测试
 
 ```powershell
-cd E:\Documents\kuaishou\auto-video-editor
+cd C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\auto-video-editor
 $env:PYTHONUTF8='1'; $env:PYTHONIOENCODING='utf-8'
 
 # OpenStoryline 自己的测试(必须用 openstoryline 的 venv)

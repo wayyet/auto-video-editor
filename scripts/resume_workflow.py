@@ -31,11 +31,10 @@
 
 退出码
 --------
-- ``0``  成功(含"恢复后停在下一道人工关卡"的正常挂起);
+- ``0``  成功(含"恢复后停在下一道人工关卡"的正常挂起;最终 state 有
+  ``error_log`` 时逐行打印到 stderr,便于定位);
 - ``1``  图执行异常(run_with_events 先发 ``run.failed`` 再抛出);
 - ``2``  pre-flight 失败 / 参数非法;
-- ``3``  OpenStoryline 未就绪导致提前终止(与 run_workflow 同语义;auto-only
-  图改造后此码不再产生);
 - ``4``  该 thread 无挂起关卡可恢复;
 - ``5``  指定 checkpoint 与挂起关卡不匹配(或多重挂起未指定)。
 """
@@ -65,7 +64,6 @@ except (AttributeError, OSError):
 EXIT_OK = 0
 EXIT_GRAPH_ERROR = 1
 EXIT_PREFLIGHT = 2
-EXIT_OPENSTORYLINE_NOT_READY = 3
 EXIT_NOT_SUSPENDED = 4
 EXIT_CHECKPOINT_MISMATCH = 5
 
@@ -81,7 +79,7 @@ def _parse_args() -> argparse.Namespace:
         "--checkpoint",
         default=None,
         help=(
-            "要恢复的关卡标识:interrupt payload 的 checkpoint(⓪/①/②/③)或 "
+            "要恢复的关卡标识:interrupt payload 的 checkpoint(①/②/③)或 "
             "legacy_id(如 checkpoint2_add_bgm)。唯一挂起时可省略;多重挂起时必填"
         ),
     )
@@ -160,7 +158,7 @@ def match_interrupt(
 ) -> Optional[dict[str, Any]]:
     """按 ``--checkpoint`` 选出要恢复的挂起关卡;选不出返回 ``None``。
 
-    匹配顺序:payload ``checkpoint``(⓪/①/②/③)→ ``legacy_id`` → interrupt ``id``。
+    匹配顺序:payload ``checkpoint``(①/②/③)→ ``legacy_id`` → interrupt ``id``。
     ``checkpoint`` 为空时:恰好一个挂起 → 该关卡;0 个或多个 → ``None``(歧义,
     必须显式指定)。纯函数,便于单测。
     """
@@ -234,18 +232,13 @@ def _maybe_preflight(args: argparse.Namespace) -> int:
 def _check_final_state(result: Any) -> int:
     """检查恢复后的最终 state,返回进程退出码(与 run_workflow 同语义)。
 
-    - ``openstoryline_ready is False`` → 退出码 3(工作流因 OpenStoryline Web
-      未就绪提前终止;auto-only 图改造后删除)。
-    - 其它情况 → 0。
+    阶段3 起 ``openstoryline_ready`` 字段与"OpenStoryline 未就绪提前终止
+    (退出码 3)"语义随 human 模式链一并删除:恢复走到最终 state 即成功
+    (恒 ``EXIT_OK``);``error_log`` 各行打印到 stderr 供定位。
     """
-    if isinstance(result, dict) and result.get("openstoryline_ready") is False:
-        print(
-            "[workflow] ✗ OpenStoryline 未就绪,工作流提前终止",
-            file=sys.stderr,
-        )
+    if isinstance(result, dict):
         for line in result.get("error_log") or []:
             print(f"[workflow]   {line}", file=sys.stderr)
-        return EXIT_OPENSTORYLINE_NOT_READY
     return EXIT_OK
 
 

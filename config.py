@@ -16,284 +16,7 @@ PostgreSQL 统一改造(方案 §4.1 / 阶段 C):
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
-
-
-# ---------------------------------------------------------------------------
-# 节点 1:clean_cache 路径列表
-# ---------------------------------------------------------------------------
-# 对齐技能 ``kuaishou-clean-cache``(见 FireRed-OpenStoryline\.claude\skills\
-# kuaishou-clean-cache\SKILL.md)的「一类·常规再生缓存」清单,补齐 auto-video-editor
-# 自身 + 同级 FireRed-OpenStoryline + 共享 AppData 的可再生缓存条目。
-#
-# 双层结构:
-# - ``CACHE_PATHS_TO_CLEAN``:简单路径(直接 ``Path`` 指向目录/文件)。
-# - ``CACHE_GLOB_SPECS``:递归/通配条目(调用 ``resolved_cache_paths()`` 时才展开)。
-#
-# 关键约束(技能三类·禁止删除):
-# - 剪映 ``%LOCALAPPDATA%\JianyingPro\User Data\Cache`` —— 已注入的 VIP 转场/特效/花字/贴纸
-#   需重新联网下载才能渲染,**用户 2026-07-04 指定禁删**,绝对不进入清理清单。
-# - 剪映 ``%LOCALAPPDATA%\JianyingPro\User Data\Log`` —— 用户 2026-07-04 指定禁删。
-# - FireRed ``.venv``、模型权重、剪映草稿本体 等一律不进入本表。
-# - 2026-11-01 用户决定:``outputs/`` ``inputs/`` ``out/`` 三根的**内容清空**纳入本按钮
-#   (见下方 ``CACHE_TRASH_CHILDREN_ROOTS``),且**所有删除项改为移入 Windows 回收站**,
-#   不再 ``shutil.rmtree`` / ``unlink`` 彻底删除 —— 上面两条剪映禁删约束不变。
-#
-# ``resolved_cache_paths()`` 在每次调用时把两类 spec 扁平化为 ``list[Path]``,
-# 反映当下的文件系统状态;不在磁盘上的路径会被静默跳过(不计入 cleaned)。
-#
-# 2026-11-01 目录扁平化:本仓(嵌入版 OpenStoryline)的缓存根一律由
-# ``Path(__file__).resolve().parent`` 推导,不再硬编码本机绝对路径;
-# FireRed-OpenStoryline 是外部独立仓库,仍保留绝对路径(维护该外部仓库时才有效)。
-_REPO_ROOT_DIR: Path = Path(__file__).resolve().parent
-
-CACHE_PATHS_TO_CLEAN: list[str] = [
-    # 原有:系统级临时目录(低风险,保留)
-    r"%LOCALAPPDATA%\Temp\OpenStoryline",
-    r"%TEMP%\jianying_workflow_tmp",
-    # ---- 新增:剪映草稿回收站(技能一类 §2.3,2026-07-04 已升为常规清理项) ----
-    r"%LOCALAPPDATA%\JianyingPro\User Data\Projects\com.lveditor.draft\.recycle_bin",
-    # ---- 新增:本仓(嵌入版)OpenStoryline 服务端可再生缓存(2026-11-01 扁平化后) ----
-    # 只清 .server_cache;.storyline/models、resource/、outputs/openstoryline/、两个 venv 一律禁删。
-    str(_REPO_ROOT_DIR / ".storyline" / ".server_cache"),
-    # ---- 新增:FireRed-OpenStoryline 一类项(技能命令模板 #1/#3) ----
-    r"E:\Documents\kuaishou\FireRed-OpenStoryline\.storyline\.server_cache",
-    r"E:\Documents\kuaishou\FireRed-OpenStoryline\.playwright-cli",
-    r"E:\Documents\kuaishou\.playwright-cli",
-    # ---- 新增:FireRed 日志 / 安装 / 测试 / 配置备份(技能命令模板 #4) ----
-    r"E:\Documents\kuaishou\FireRed-OpenStoryline\web.out.log",
-    r"E:\Documents\kuaishou\FireRed-OpenStoryline\web.err.log",
-    r"E:\Documents\kuaishou\FireRed-OpenStoryline\mcp.out.log",
-    r"E:\Documents\kuaishou\FireRed-OpenStoryline\mcp.err.log",
-    r"E:\Documents\kuaishou\FireRed-OpenStoryline\install_log.txt",
-    r"E:\Documents\kuaishou\FireRed-OpenStoryline\test_result.txt",
-    r"E:\Documents\kuaishou\FireRed-OpenStoryline\test_tts_result.txt",
-    # ---- 新增:env_check 报告(技能命令模板 #4) ----
-    r"E:\Documents\kuaishou\env_check_report.txt",
-    # ---- 新增:剪映程序日志 + 剪艾 agent boot 日志(技能命令模板 #6) ----
-    r"E:\Documents\kuaishou\JianyingPro\5.9.0.11632\log",
-    r"E:\Documents\kuaishou\剪艾（剪辑agent）\win-unpacked\boot.log",
-    # ---- 新增:auto-video-editor 自身 .pytest_cache + .docker-proxy 日志(推导,不硬编码) ----
-    str(_REPO_ROOT_DIR / ".pytest_cache"),
-    str(_REPO_ROOT_DIR / ".docker-proxy" / "gost.out.log"),
-    str(_REPO_ROOT_DIR / ".docker-proxy" / "gost.err.log"),
-]
-
-
-# ---------------------------------------------------------------------------
-# 节点 1:clean_cache 递归/通配 spec
-# ---------------------------------------------------------------------------
-# 简单路径放 ``CACHE_PATHS_TO_CLEAN``;以下条目需要通配/递归,调用
-# ``resolved_cache_paths()`` 时按 ``kind`` 展开为扁平 ``list[Path]``。
-#
-# - ``dir_recurse``:对 ``root`` 做 ``rglob(pattern)``,只保留目录。
-# - ``dir_children``:对 ``root`` 做 ``iterdir()``,只保留目录(不动文件,用于
-#   保护 ``tmp/`` 根下 4 个模板 JSON)。
-# - ``file_recurse``:对 ``root`` 做 ``rglob(pattern)``,只保留文件。
-# - ``file_pattern``:对 ``root`` 做 ``glob(pattern)``,只保留文件(非递归)。
-#
-# ``exclude_substr`` 是路径黑名单(命中即丢弃),用于把 ``__pycache__`` 递归
-# 排除在 ``.venv/`` 与 ``venv/`` 之外。
-@dataclass(frozen=True)
-class CacheGlobSpec:
-    """一条递归/通配清理条目。"""
-
-    root: str  # 含环境变量,展开后必须存在(或本轮结果为空)
-    kind: Literal["dir_recurse", "file_recurse", "dir_children", "file_pattern"]
-    pattern: str  # rglob/glob/iterdir 参数
-    exclude_substr: tuple[str, ...] = ()  # 例如 ("\\venv\\", "\\.venv\\")
-    description: str = ""
-
-
-CACHE_GLOB_SPECS: list[CacheGlobSpec] = [
-    # 技能一类 #2:源码 __pycache__ —— 排除两个 venv
-    # (2026-11-01 扁平化:OpenStoryline 独立 venv 改名 .venv-openstoryline,
-    #  ``\\.venv\\`` 不再能命中它,需显式补排除串 —— 验收 A15 要求两个 venv 原样)
-    CacheGlobSpec(
-        root=r"E:\Documents\kuaishou",
-        kind="dir_recurse",
-        pattern="__pycache__",
-        exclude_substr=("\\venv\\", "\\.venv\\", "\\.venv-openstoryline\\"),
-        description="源码 __pycache__ (排除 venv)",
-    ),
-    # 技能一类 #7:tmp/ 子目录(保留根下 4 个模板 json)
-    CacheGlobSpec(
-        root=r"E:\Documents\kuaishou\tmp",
-        kind="dir_children",
-        pattern="*",
-        exclude_substr=(),
-        description="tmp 子目录(不动根下 4 个模板)",
-    ),
-    # 技能一类 #10:.DS_Store 残留
-    CacheGlobSpec(
-        root=r"E:\Documents\kuaishou",
-        kind="file_recurse",
-        pattern=".DS_Store",
-        description=".DS_Store 残留",
-    ),
-    # 技能一类 #11:剪映草稿注入 .bak 备份
-    CacheGlobSpec(
-        root=r"%LOCALAPPDATA%\JianyingPro\User Data\Projects\com.lveditor.draft",
-        kind="file_recurse",
-        pattern="*.bak",
-        description="剪映草稿 .bak 备份",
-    ),
-    CacheGlobSpec(
-        root=r"%LOCALAPPDATA%\JianyingPro\User Data\Projects\com.lveditor.draft",
-        kind="dir_recurse",
-        pattern=".backup",
-        description="剪映草稿 .backup 目录",
-    ),
-    # auto-video-editor 独有:runtime/initial_state_*.json(推导,不硬编码)
-    CacheGlobSpec(
-        root=str(_REPO_ROOT_DIR / "runtime"),
-        kind="file_pattern",
-        pattern="initial_state_*.json",
-        description="start_production 生成的 initial_state",
-    ),
-    # auto-video-editor 独有:logs/*.log(推导,不硬编码)
-    CacheGlobSpec(
-        root=str(_REPO_ROOT_DIR / "logs"),
-        kind="file_recurse",
-        pattern="*.log",
-        description="start/stop/openstoryline/_sanity 日志",
-    ),
-    # FireRed config.toml.bak.*
-    CacheGlobSpec(
-        root=r"E:\Documents\kuaishou\FireRed-OpenStoryline",
-        kind="file_pattern",
-        pattern="config.toml.bak.*",
-        description="FireRed config.toml 备份",
-    ),
-]
-
-
-def _expand_spec(spec: CacheGlobSpec) -> list[Path]:
-    """把一条 ``CacheGlobSpec`` 展开为扁平 ``list[Path]``。
-
-    展开规则:
-    - ``root`` 不存在 → 返回 ``[]``(静默跳过,不抛异常)。
-    - ``dir_recurse``/``file_recurse``:对 ``root.rglob(pattern)`` 结果应用
-      ``exclude_substr`` 过滤。
-    - ``dir_children``:对 ``root.iterdir()`` 取 ``is_dir()``,应用过滤。
-    - ``file_pattern``:对 ``root.glob(pattern)`` 取 ``is_file()``,应用过滤。
-    """
-    root = Path(os.path.expandvars(spec.root))
-    if not root.exists():
-        return []
-
-    def keep(p: Path) -> bool:
-        s = str(p)
-        return not any(token in s for token in spec.exclude_substr)
-
-    if spec.kind == "dir_recurse":
-        return [p for p in root.rglob(spec.pattern) if p.is_dir() and keep(p)]
-    if spec.kind == "file_recurse":
-        return [p for p in root.rglob(spec.pattern) if p.is_file() and keep(p)]
-    if spec.kind == "dir_children":
-        return [p for p in root.iterdir() if p.is_dir() and keep(p)]
-    if spec.kind == "file_pattern":
-        return [p for p in root.glob(spec.pattern) if p.is_file() and keep(p)]
-    raise ValueError(f"Unknown CacheGlobSpec.kind: {spec.kind!r}")
-
-
-def resolved_cache_paths() -> list[Path]:
-    """把 ``CACHE_PATHS_TO_CLEAN`` + ``CACHE_GLOB_SPECS`` 扁平化为 ``list[Path]``。
-
-    - 简单路径:展开环境变量后,只保留当下磁盘上存在的 ``Path``。
-    - 递归/通配:按 ``_expand_spec`` 展开,root 不存在则返回空项。
-    - 调用时才展开(``rglob`` 等),保证反映当下文件系统状态。
-    """
-    out: list[Path] = []
-    for raw in CACHE_PATHS_TO_CLEAN:
-        p = Path(os.path.expandvars(raw))
-        if p.exists():
-            out.append(p)
-    for spec in CACHE_GLOB_SPECS:
-        out.extend(_expand_spec(spec))
-    return out
-
-
-# ---------------------------------------------------------------------------
-# 节点 1:clean_cache「一键回收根」(2026-11-01 用户指定新增)
-# ---------------------------------------------------------------------------
-# 「清理缓存」按钮除上面的再生缓存清单外,还把以下目录的**直接子项**全部清空
-# (只清内容,根目录本身保留):
-# - ``outputs/``:按 job 隔离的历史任务产物(manifest / draft / artifacts)
-# - ``inputs/``:导入的源素材与抽帧目录
-# - ``out/``:RunContext 默认 scratch(测试残留)
-#
-# 与 ``CACHE_PATHS_TO_CLEAN`` 的区别:那份清单「删条目本身」(目录整体消失),
-# 这里「保留根、清空子项」,且子项**文件与目录都要**(out/ 根下直接躺着
-# media.json 等散文件)。删除方式见 nodes/node_01_clean_cache.py:一律移入
-# Windows 回收站,回收失败只记 error_log,绝不回退成永久删除。
-CACHE_TRASH_CHILDREN_ROOTS: list[str] = [
-    # 2026-11-01 扁平化:三根由仓库根推导,不再硬编码本机绝对路径。
-    str(_REPO_ROOT_DIR / "outputs"),
-    str(_REPO_ROOT_DIR / "inputs"),
-    str(_REPO_ROOT_DIR / "out"),
-]
-
-# 三根内容清空的**保留子项**(按根目录名 → 不可清的子项名集合)。
-# 2026-11-01 目录扁平化新增:``outputs/openstoryline/`` 是 OpenStoryline 会话
-# 产物(业务数据,非可再生缓存),迁移设计 §5.1 / 验收 A15 明确禁清 ——
-# 三根内容清空扫到它时必须跳过(其余 job-* 等子项照常回收)。
-CACHE_TRASH_CHILDREN_KEEP_NAMES: dict[str, frozenset] = {
-    "outputs": frozenset({"openstoryline"}),
-}
-
-
-def resolved_trash_children() -> list[Path]:
-    """把 ``CACHE_TRASH_CHILDREN_ROOTS`` 展开为各根下**当下存在**的直接子项。
-
-    - 根不存在 / 不是目录 → 静默跳过(与 ``resolved_cache_paths`` 同契约)。
-    - 文件与目录都返回(区别于 ``dir_children`` glob spec 的只返回目录)。
-    - 命中 ``CACHE_TRASH_CHILDREN_KEEP_NAMES`` 的保留子项**不返回**(禁清)。
-    - 每次调用时展开,反映当下文件系统状态。
-    """
-    children: list[Path] = []
-    for raw in CACHE_TRASH_CHILDREN_ROOTS:
-        root = Path(os.path.expandvars(raw))
-        if not root.is_dir():
-            continue
-        keep = CACHE_TRASH_CHILDREN_KEEP_NAMES.get(root.name, frozenset())
-        children.extend(c for c in root.iterdir() if c.name not in keep)
-    return children
-
-
-# ---------------------------------------------------------------------------
-# 节点 2:launch_openstoryline(2026-09 迁移解耦版 — 本地 uvicorn + httpx 健康检查)
-# ---------------------------------------------------------------------------
-# 模块名修正:FireRed 实际是 ``open_storyline.mcp.server``,不是 ``openstoryline.server``。
-# 端口修正:MCP Server 默认 8001 + path /mcp + streamable-http(见 FireRed config.toml)。
-# 2026-09 迁移后,MCP 子进程链路已删除。``OPENSTORYLINE_CMD`` 与
-# ``openstoryline_mcp_url()`` 已随单流水线重构删除(2026-11-04 阶段2,零消费者);
-# ``OPENSTORYLINE_MCP_PORT`` / ``OPENSTORYLINE_WEB_PORT`` /
-# ``OPENSTORYLINE_HEALTH_TIMEOUT_S`` 仍被 ``nodes/node_02_launch_openstoryline``
-# 消费(human 模式节点,阶段3 图收敛时随节点一并删除)。
-OPENSTORYLINE_MCP_PORT: int = 8001
-OPENSTORYLINE_WEB_PORT: int = 7860
-OPENSTORYLINE_HEALTH_TIMEOUT_S: int = 30
-
-# ---------------------------------------------------------------------------
-# 节点 4a:import_video 手动导入关卡(2026-10 拆分 node_04 新增)
-# ---------------------------------------------------------------------------
-# ``import_video`` 节点发出 ``import_video_request.json`` 后,轮询同目录的
-# ``import_video_result.json``;Web UI 左上角【📥 导入视频】按钮被点击时由
-# ``POST /api/system/import-video`` 端点回写结果文件。
-# 注意:这三个值都是 ``import_video`` 节点**运行时**通过 ``config.XXX`` 读取
-# 的(不是模块顶层 ``from config import``),因此单测可用
-# ``monkeypatch.setattr(config, "IMPORT_VIDEO_WAIT_TIMEOUT_S", 0)`` 加速。
-IMPORT_VIDEO_WAIT_TIMEOUT_S: int = int(os.environ.get("IMPORT_VIDEO_WAIT_TIMEOUT_S", "600"))
-IMPORT_VIDEO_POLL_INTERVAL_S: float = float(os.environ.get("IMPORT_VIDEO_POLL_INTERVAL_S", "1"))
-# True  = 必须人工点网页按钮才导入(默认,需求要求);
-# False = 应急回滚,import_video 节点自己把 video_input_path 当结果,
-#         恢复改造前的"自动导入"行为。
-IMPORT_VIDEO_MANUAL_REQUIRED: bool = (
-    os.environ.get("IMPORT_VIDEO_MANUAL_REQUIRED", "true").lower().strip() in ("1", "true", "yes")
-)
 
 
 # ---------------------------------------------------------------------------
@@ -351,41 +74,18 @@ def storyline_outputs_root() -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Phase 4 双模路由(对应 plan_v4 §5 阶段 0 开工决策)
+# 模式路由(2026-11-04 单流水线架构收敛 阶段3):auto-only
 # ---------------------------------------------------------------------------
-# - ``STORYLINE_MODE=human``(默认):沿用关卡⓪(node_checkpoint0_storyline_plan +
-#   node_04a_import_video 手动导入关卡 + node_04b_get_storyboard_plan 读
-#   vendored Web UI 产物路径)**完全不动**,保证既有 unit
-#   + 关卡⓪ interrupt/resume 不回归。
-# - ``STORYLINE_MODE=auto``:走新增的 ``nodes/storyline/`` 19 节点确定性图,产出
-#   ``storyline_timeline_plan`` 直接喂 node_05 mapper。
-# 设置方式:启动前 ``$env:STORYLINE_MODE="auto"``(也可在 build_graph() 注入位里
-# 显式传 override)。
-STORYLINE_MODE: str = os.environ.get("STORYLINE_MODE", "human").lower().strip()
-if STORYLINE_MODE not in ("human", "auto"):
+# human 模式(关卡⓪ + import_video 手动导入 + get_storyboard_plan 读盘,
+# 以及 human 融合层 STORYLINE_HUMAN_FUSION/STORYLINE_FUSION_DISABLE)已整体删除。
+# STORYLINE_MODE 只接受 "auto";其他值(含 "human")在 import 时 fail-fast,
+# 避免旧环境变量把新图拉进已不存在的路径(评审修订版 §6 阶段3 任务 1)。
+STORYLINE_MODE: str = os.environ.get("STORYLINE_MODE", "auto").lower().strip()
+if STORYLINE_MODE != "auto":
     raise ValueError(
-        f"STORYLINE_MODE 必须是 'human' 或 'auto',当前 {STORYLINE_MODE!r}"
+        f"STORYLINE_MODE 只支持 'auto'(human 模式已删除),当前 {STORYLINE_MODE!r};"
+        "请清除 STORYLINE_MODE 环境变量或显式设为 auto"
     )
-
-# ---------------------------------------------------------------------------
-# human 模式融合:auto 的 21 个 storyline 节点以"侧支"并入 human 主图
-# ---------------------------------------------------------------------------
-# - ``STORYLINE_HUMAN_FUSION``:默认**开启**(2026-11-01 灰度验收通过后转正,见
-#   《剧情线自动模式节点并入人工模式主图设计与执行计划》§10.7)。只在
-#   ``STORYLINE_MODE=human`` 时生效;**构图时**读取(与 ``ASSEMBLY_QC_GATE_ENABLED``
-#   同一惯例,改完需重新 build_graph)。要临时整体关掉,设 ``STORYLINE_HUMAN_FUSION=0``
-#   并重启进程。
-# - ``STORYLINE_FUSION_DISABLE``:逗号分隔的节点名,运行时跳过(例如
-#   ``storyline_local_asr,storyline_render_video``),用来单独关掉某个慢节点。
-STORYLINE_HUMAN_FUSION: bool = (
-    os.environ.get("STORYLINE_HUMAN_FUSION", "1").lower().strip() in ("1", "true", "yes")
-)
-STORYLINE_FUSION_DISABLE: frozenset = frozenset(
-    s.strip()
-    for s in os.environ.get("STORYLINE_FUSION_DISABLE", "").split(",")
-    if s.strip()
-)
-
 
 # ---------------------------------------------------------------------------
 # Phase 4 render_video 冒烟测试旁支(对应 plan_v4 §5 阶段 6 / ADR-006)
@@ -403,13 +103,6 @@ STORYLINE_ENABLE_RENDER_SMOKE_TEST: bool = (
 #  消费方 asr_runner 的 vendored 分支为死链,随旧聊天运行时一并移除。
 #  .venv-openstoryline/ 本地目录留待部署清理步骤由操作员处理。)
 # ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# 节点 3:open_preview
-# ---------------------------------------------------------------------------
-# [TODO: Week1] Edge 浏览器在本机的可执行文件名;若用 Chrome 则改 "chrome"。
-EDGE_BROWSER_EXECUTABLE: str = "msedge"
 
 
 # ---------------------------------------------------------------------------
@@ -596,13 +289,6 @@ SUBTITLE_SCOUT_STYLE_ENABLED: bool = (
     os.environ.get("SUBTITLE_SCOUT_STYLE_ENABLED", "true").lower().strip()
     in ("1", "true", "yes")
 )
-
-
-# ---------------------------------------------------------------------------
-# 派生:最终访问的 URL
-# ---------------------------------------------------------------------------
-def openstoryline_web_url() -> str:
-    return f"http://127.0.0.1:{OPENSTORYLINE_WEB_PORT}"
 
 
 def make_checkpointer(backend: str = "memory", thread_id: str = "default"):

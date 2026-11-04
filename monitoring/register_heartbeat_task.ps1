@@ -7,7 +7,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$ScriptPath = "E:\Documents\kuaishou\auto-video-editor\monitoring\heartbeat_monitor.ps1",
+    [string]$ScriptPath = (Join-Path $PSScriptRoot "heartbeat_monitor.ps1"),
     [string]$TaskName = "VideoWorkflow-HeartbeatMonitor",
     [int]$IntervalMinutes = 2
 )

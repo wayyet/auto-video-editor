@@ -1,11 +1,11 @@
 """关卡(人工 interrupt)节点的公共样板(冗余收敛 R4)。
 
-关卡 ⓪ / ① / ② 三处原本是同构的三段式::
+关卡 ① / ② 两处原本是同构的三段式::
 
     interrupt(_build_interrupt_payload(state))
     return _post_resume(state)
 
-差异只有 4 个参数:``checkpoint`` 标识(⓪/①/②)、``legacy_id``、``step``、
+差异只有 4 个参数:``checkpoint`` 标识(①/②)、``legacy_id``、``step``、
 以及 resume 后要写的通知/标记。本模块把前两段里真正重复的部分抽成两个纯函数,
 节点侧只保留"自己的一行 interrupt 调用 + 各自的薄封装"。
 
@@ -46,13 +46,13 @@ def build_interrupt_payload(
     """构造关卡 interrupt payload(纯函数,无副作用)。
 
     Args:
-        checkpoint: 关卡标识,如 ``"⓪"`` / ``"①"`` / ``"②"``。
+        checkpoint: 关卡标识,如 ``"①"`` / ``"②"``。
             **必须逐字保持** —— ``resume_all_pending`` 按它匹配 resume 值。
         legacy_id: 旧版标识(Week 5 之前命名),保留给存量人工脚本。
-        step: 关卡在流程中的序号(⓪=4 / ①=6 / ②=12)。
+        step: 关卡在流程中的序号(①=6 / ②=12)。
         instructions: 展示给人看的操作指引。
-        extra_payload: 关卡特有的附加字段(如 ``draft_path`` /
-            ``openstoryline_web_url``)。渲染位置在 ``step`` 与
+        extra_payload: 关卡特有的附加字段(如 ``draft_path``)。
+            渲染位置在 ``step`` 与
             ``instructions`` 之间,与收敛前各节点的字面顺序一致。
             **不允许覆盖** ``checkpoint`` / ``legacy_id`` / ``step`` 三个契约键。
 
@@ -92,7 +92,7 @@ def post_resume(
         state: LangGraph 传入的 state。
         log_tag: 追加到 ``status_log`` 的 tag,如 ``"checkpoint1_resumed"``。
         notifier: 通知函数 ``(state, checkpoint_tag) -> None``;``None`` 表示
-            本关卡不发通知(如关卡 ⓪ 只需写日志)。
+            本关卡不发通知(当前 ①/② 均发通知,参数保留给未来关卡)。
         notified_field: 非空时把该 state 字段置 ``True``,作为"已通知"审计位
             (Week 2 测试依赖 ``reorder_notified`` / ``bgm_notified``)。
 

@@ -1,9 +1,9 @@
 """MCP 客户端集合(2026-09 迁移解耦版)。
 
 迁移后变化:
-- ``OpenStorylineMCPClient`` 已删除(改走本地 uvicorn + httpx 健康检查,见
-  ``nodes/node_02_launch_openstoryline.py``)。其异常类 ``ContractInvalid``
-  迁到 ``storyline.contract``。
+- ``OpenStorylineMCPClient`` 已删除(2026-10 起 OpenStoryline 由本地 uvicorn
+  直连 + httpx 健康检查,阶段3 后 human 模式的探测节点也已删除)。其异常类
+  ``ContractInvalid`` 迁到 ``storyline.contract``。
 - 保留 ``firered_image_edit_client`` / ``jianying_cover_client`` 两个 MCP 客户端
   (节点 15 / 节点 16a 用),与 OpenStoryline 完全解耦。
 """

@@ -47,7 +47,7 @@ test("started/succeeded/failed/waiting 状态机与耗时历史", () => {
   assert.equal(s.nodes.b.lastError.type, "ValueError");
 
   applyEvent(s, ev("node.started", { id: 5, node_id: "c" }));
-  applyEvent(s, ev("node.waiting_input", { id: 6, node_id: "c", payload: { waiting_kind: "interrupt", detail: { checkpoints: ["⓪"] } } }));
+  applyEvent(s, ev("node.waiting_input", { id: 6, node_id: "c", payload: { waiting_kind: "interrupt", detail: { checkpoints: ["①"] } } }));
   assert.equal(s.nodes.c.status, NODE_STATUS.WAITING);
   assert.equal(s.nodes.c.waitingKind, "interrupt");
   // interrupt 挂起不是失败,也不是完成

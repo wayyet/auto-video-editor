@@ -30,21 +30,6 @@ from state import WorkflowState
 # ---------------------------------------------------------------------------
 # Fixtures(同 test_week5_resilience.py 风格)
 # ---------------------------------------------------------------------------
-class _StubProc:
-    def __init__(self, pid: int = 11111) -> None:
-        self.pid = pid
-
-
-@pytest.fixture(autouse=True)
-def _patch_external(monkeypatch: pytest.MonkeyPatch) -> None:
-    import nodes.node_02_launch_openstoryline as m2
-    import nodes.node_03_open_preview as m3
-
-    monkeypatch.setattr(m2, "_wait_for_ready", lambda url, t: True)
-    monkeypatch.setattr(
-        m3, "subprocess",
-        type("S", (), {"Popen": staticmethod(lambda *a, **k: _StubProc())}),
-    )
 
 
 def _seed_draft(draft_dir: Path, duration_us: int = 35_000_000) -> Path:

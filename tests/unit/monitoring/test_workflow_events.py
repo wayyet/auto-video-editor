@@ -245,7 +245,7 @@ def test_to_sse_frame_with_id_matches_protocol_example():
 
 
 def test_to_sse_frame_without_id_omits_id_line():
-    e = make_event("node.waiting_input", thread_id="t", node_id="import_video",
+    e = make_event("node.waiting_input", thread_id="t", node_id="custom_handshake",
                    payload={"waiting_kind": "web_file_handshake"})
     frame = to_sse_frame(e)
     assert not frame.startswith("id:")

@@ -5,10 +5,9 @@
 - 故意异常重试:已节点失败,确认重试不重复执行上游
 - render_video 冒烟:STORYLINE_ENABLE_RENDER_SMOKE_TEST=1,产物可写
 - 时长硬约束:超长素材,确认 qa_gate 回退 group_clips 重跑
-- 双模式切换:human / auto 间切换不破坏 checkpoint 恢复
 
 策略:
-- 不直接 graph.invoke() 跑完整链路(图会起 uvicorn 副作用)。
+- 不直接 graph.invoke() 跑完整链路(避免外部副作用)。
 - 仅测 storyline 子图路径:逐个调用 storyline 节点函数,模拟 LangGraph
   fan-in / 状态合并。这覆盖 plan §2.2 拓扑但不触发外部副作用。
 """
@@ -23,41 +22,17 @@ from typing import Any
 
 import pytest
 
-from config import STORYLINE_MODE
 from langgraph.checkpoint.memory import InMemorySaver
 from graph import build_graph
 
 
 # ===========================================================================
-# 双模式切换(plan §7.2 阶段 6 验收第 5 条)
+# STORYLINE_MODE 契约(阶段3 auto-only;双模式切换已随 human 模式删除)
 # ===========================================================================
-def test_human_mode_default() -> None:
-    """未设置 STORYLINE_MODE 时,默认走 human 路径(plan §5 阶段 0 决策)。"""
-    assert STORYLINE_MODE == "human"
-
-
-def test_graph_compiles_in_human_mode() -> None:
+def test_graph_compiles_auto_only() -> None:
+    """阶段3 auto-only:全图只有一个模式,直接编译(plan §7.1 阶段 0 验收第 2 条)。"""
     g = build_graph(checkpointer=InMemorySaver(), start_heartbeat_thread=False)
     assert g is not None
-    # human-mode 路径不应进入 storyline_load_media;测试图的可编译性即可
-
-
-def test_graph_compiles_in_auto_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    """STORYLINE_MODE=auto 时图仍能编译(plan §7.1 阶段 0 验收第 2 条)。"""
-    monkeypatch.setenv("STORYLINE_MODE", "auto")
-    g = build_graph(checkpointer=InMemorySaver(), start_heartbeat_thread=False)
-    assert g is not None
-
-
-def test_graph_compiles_after_mode_switch(monkeypatch: pytest.MonkeyPatch) -> None:
-    """human → auto 切换不破坏 checkpoint 恢复(plan §7.2 第 5 条)。"""
-    # 第一次 human
-    g1 = build_graph(checkpointer=InMemorySaver(), start_heartbeat_thread=False)
-    assert g1 is not None
-    # 第二次切到 auto
-    monkeypatch.setenv("STORYLINE_MODE", "auto")
-    g2 = build_graph(checkpointer=InMemorySaver(), start_heartbeat_thread=False)
-    assert g2 is not None
 
 
 # ===========================================================================
@@ -429,81 +404,3 @@ def test_auto_mode_does_not_import_vendored_runtime() -> None:
         assert "import funasr" not in content, (
             f"{py_file.name} import funasr — 违反 ADR-001"
         )
-
-
-# ===========================================================================
-# 阶段 7:auto-mode 跳过 node_02 vendored Web UI(plan §5 阶段 7 第 3 条)
-# ===========================================================================
-def test_node_02_auto_mode_skips_uvicorn(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``STORYLINE_MODE=auto`` 时 node_02_launch_openstoryline 应跳过 uvicorn 子进程。
-
-    验收点(plan §7.3 第 1 条):auto-mode 跑 19 节点完全不需要 vendored Web
-    服务。本测试验证节点**连探测都不发起**(health_checker 抛异常就会 fail),
-    节点仍返回 ``openstoryline_ready=True`` 且 append ``node_02_auto_skipped``。
-    """
-    monkeypatch.setenv("STORYLINE_MODE", "auto")
-
-    # 重载 config + node_02:节点模块顶层的
-    # ``from config import STORYLINE_MODE`` 已经把值绑到模块命名空间,
-    # 必须 reload node_02 才能拿到新的 STORYLINE_MODE。
-    from importlib import reload
-    import config as _cfg
-    reload(_cfg)
-    import nodes.node_02_launch_openstoryline as _n2
-    reload(_n2)
-
-    # health_checker 故意抛异常:如果 auto-mode 路径错误地发起了健康探测,
-    # 这个异常会冒到上层,测试 fail。
-    def boom_checker(url, timeout_s):
-        raise AssertionError("auto-mode 不应发起 OpenStoryline 健康探测")
-
-    state: dict[str, Any] = {"error_log": [], "session_id": "auto_test"}
-    out = _n2.launch_openstoryline_service(
-        state, health_checker=boom_checker
-    )
-    assert out["openstoryline_ready"] is True
-    assert out["openstoryline_pid"] is None
-    assert any(
-        t == "node_02_launch_openstoryline_auto_skipped"
-        for t in out.get("status_log", [])
-    ), f"缺少 auto_skipped 标记: status_log={out.get('status_log')}"
-    assert out.get("error_log") == []
-
-
-def test_node_02_human_mode_reuses_existing_service(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``STORYLINE_MODE=human``(默认)只**探测**已有服务,不再启动 uvicorn 子进程。
-
-    验收点(2026-10 启动入口统一):Web 生命周期归 ``start_production.ps1`` 管,
-    node_02 只探测 —— 探测成功 → ``ready=True`` + ``pid is None``
-    + ``status_log`` 含 ``node_02_openstoryline_reused``。
-    """
-    # 确保 STORYLINE_MODE 不是 auto(其他测试可能改了 env)
-    monkeypatch.setenv("STORYLINE_MODE", "human")
-
-    from importlib import reload
-    import config as _cfg
-    reload(_cfg)
-    import nodes.node_02_launch_openstoryline as _n2
-    reload(_n2)
-
-    def fake_checker(url, timeout_s):
-        return True
-
-    state: dict[str, Any] = {"error_log": []}
-    out = _n2.launch_openstoryline_service(
-        state, health_checker=fake_checker
-    )
-    assert out["openstoryline_ready"] is True
-    # 本节点不拥有进程 → 不记 PID
-    assert out["openstoryline_pid"] is None
-    assert "node_02_openstoryline_reused" in (out.get("status_log") or [])
-    # 不应 append auto_skipped
-    assert "node_02_launch_openstoryline_auto_skipped" not in (
-        out.get("status_log") or []
-    )
-    # 模块里不应再有进程启动能力
-    assert not hasattr(_n2, "subprocess")

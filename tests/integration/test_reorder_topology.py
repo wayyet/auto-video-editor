@@ -22,23 +22,6 @@ from langgraph.types import Command
 from graph import build_graph
 
 
-class _StubProc:
-    pid = 11111
-
-
-@pytest.fixture(autouse=True)
-def _patch_external(monkeypatch: pytest.MonkeyPatch) -> None:
-    """屏蔽节点 2/3 的真实进程拉起(与 test_week4_graph 同一写法)。"""
-    import nodes.node_02_launch_openstoryline as m2
-    import nodes.node_03_open_preview as m3
-
-    monkeypatch.setattr(m2, "_wait_for_ready", lambda url, t: True)
-    monkeypatch.setattr(
-        m3, "subprocess",
-        type("S", (), {"Popen": staticmethod(lambda *a, **k: _StubProc())}),
-    )
-
-
 def _seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
     """预置 35s 草稿;**不**预置 asr_segments_zh —— 必须由 node_08 自己产出。"""
     draft_dir = tmp_path / "drafts" / "demo"
@@ -130,8 +113,7 @@ def test_execution_order_after_reorder(tmp_path, monkeypatch):
     for n in ("node_09_inject_fx", "node_11_inject_sticker", "node_13_adjust_volume", "join_before_delivery",
               "node_16a_translate_and_check", "node_08b_add_subtitles_en", "node_10b_inject_text_fx_en"):
         assert sum(1 for _, x in steps if x == n) == 1, n
-    # 正常路径:依次挂起 ① → ②。关卡⓪ 被 tests/conftest.py 的 autouse 夹具
-    # (_skip_checkpoint0_for_pre_migration_tests)旁路,所以这里不会出现 ⓪。
+    # 正常路径:依次挂起 ① → ②(阶段3 后关卡⓪ 已随 human 模式链删除)。
     assert stops == [["①"], ["②"]]
 
 
@@ -152,7 +134,7 @@ def test_checkpoint3_path_no_parallel_conflict_and_human_edit_survives(tmp_path,
     steps, stops, final = _drive(_seed(tmp_path, monkeypatch),
                                  force_layout_issue=True, human_edit="HUMAN FIXED LINE")
     s = lambda n: _first_step(steps, n)  # noqa: E731
-    # ③ 与 ② 永不同时挂起:先 ③(英文线),尾链走到 BGM 时才 ②。⓪ 同上被旁路。
+    # ③ 与 ② 永不同时挂起:先 ③(英文线),尾链走到 BGM 时才 ②。
     assert stops == [["①"], ["③"], ["②"]]
     # K3=B:花字(10b)先于人工校对(③)—— 人工在剪映里看到的就是带花字的最终效果
     assert s("node_10b_inject_text_fx_en") < s("node_checkpoint3_layout_review") < s("node_17_inject_english_tts") < s("node_09_inject_fx")

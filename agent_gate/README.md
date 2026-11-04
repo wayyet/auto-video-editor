@@ -13,7 +13,7 @@ client:写入 `tasks/*.task.json`,阻塞等 Agent 通过 MCP 提交 `*.result.js
 ## 最短用法
 
 ```powershell
-$REPO = "E:\Documents\kuaishou\auto-video-editor"
+$REPO = "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\auto-video-editor"
 $PY   = "$REPO\.venv\Scripts\python.exe"
 Set-Location $REPO
 

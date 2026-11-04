@@ -11,7 +11,7 @@
    ``safe_write_draft``;`apply_and_write` 的完成标签与剪映告警顺序不变。
    这是 `_draft_io` 模块 docstring 里"入参陷阱"的行为级护栏。
 
-关卡行为本身(⓪/①/② payload、resume)由 ``test_nodes_checkpoint_helper.py``
+关卡行为本身(①/② payload、resume)由 ``test_nodes_checkpoint_helper.py``
 与各节点测试覆盖;本文件只锁"单一来源"与易错语义。
 """
 

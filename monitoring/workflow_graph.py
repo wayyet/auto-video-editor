@@ -8,10 +8,9 @@
   ``edges`` / ``waiting_edges`` / ``branches`` 三件套,而**不是**
   ``compiled_graph.get_graph()``。2026-11-01 实测(langgraph 1.2.9,
   ``langgraph/pregel/_draw.py``):``get_graph()`` 是**静态模拟 + 画图启发式**,
-  会 (a) 给所有"只入不出"的 termini 节点**合成** ``→__end__`` 边(默认构建下
-  21 个 storyline 死胡同/侧支节点各多一条),并 (b) **漏掉**"有出边的节点的
-  普通边直连 END"(fusion 开启时 ``join_before_delivery→END`` 丢失)。
-  61 条真实边在画图里变成 81 条。偏差规则已在
+  会 (a) 给所有"只入不出"的 termini 节点**合成** ``→__end__`` 边(storyline
+  死胡同/侧支节点各多一条),并 (b) **漏掉**"有出边的节点的普通边直连 END"
+  (``storyline_join→END``)。真实边数与画图边数因此不一致,偏差规则已在
   ``tests/integration/test_workflow_graph_schema.py`` 固化为 langgraph 行为护栏。
 - 本模块是**纯函数层**:输入编译图 + config 模块,输出 §4.3 的图 JSON dict。
   不接 API、不碰前端、不触发任何图执行(阶段 4 再由 FastAPI router 消费)。
@@ -23,18 +22,16 @@
 输出的节点字段(§4.3 + 两处扩展):
 
     id / name / group / description / kind / checkpoint / enabled / reachable
-    + modes        —— 该节点归属哪条模式链:"human"/"auto"/两者(§5.2"另一模式的
-                      路径"展示的数据源);clean_cache 与 START/END 为 []
-    + waiting_kind —— 人工等待类别(import_video 为 "web_file_handshake"),
-                      其余节点无此字段
+    + modes        —— 该节点归属哪条链:2026-11-04 起图收敛为 auto-only
+                      单流水线,非 terminal 节点一律 ["auto"];START/END 为 []
+    + waiting_kind —— 人工等待类别(阶段3 删除 import_video 后,当前图内
+                      无该类节点;字段仅当注册表声明时透出)
 
 `reachable` 语义:从 START 出发、沿编译图全部边(含条件边 —— 条件边**可能**被
 选中)BFS 可达。``ASSEMBLY_QC_GATE_ENABLED=False`` 时 6 个 assembly 节点注册
-无边、``clean_cache`` 零边,天然不可达 —— 与设计 §6.2-A 的"注册但未连通"
-一致,无需特判。
+无边,天然不可达 —— 与设计 §6.2-A 的"注册但未连通"一致,无需特判。
 
 `enabled` 语义:本构建下是否可能参与执行(与 reachable 互补):
-    - clean_cache:False(只由 Web 按钮经 /api/system/clean-cache 显式触发);
     - assembly 6 节点:跟随 ``ASSEMBLY_QC_GATE_ENABLED``;
     - 其余:True。
 
@@ -64,11 +61,10 @@ WORKFLOW_ID = "auto_video_editor_main"
 #: schema 结构版本;布局缓存 key 纳入它(设计 §6.2-F 第 7 条)。改字段结构时 +1。
 SCHEMA_VERSION = 1
 
-#: 关卡编号全集(⓪①②③ + import_video 的文件握手类别)
-CHECKPOINT_MARKS = ("⓪", "①", "②", "③")
+#: 关卡编号全集(阶段3 删除关卡⓪后剩 ①②③)
+CHECKPOINT_MARKS = ("①", "②", "③")
 
 QC_FLAG = "ASSEMBLY_QC_GATE_ENABLED"
-FUSION_FLAG = "STORYLINE_HUMAN_FUSION"
 
 _ASSEMBLY_NODES = (
     "assembly_discover_and_probe",
@@ -87,45 +83,11 @@ _NODE_META: dict[str, dict[str, Any]] = {
     # ---- 终端(START/END 归一化目标) ----
     "START": {"name": "开始", "group": "terminal", "description": "LangGraph 工作流入口"},
     "END": {"name": "结束", "group": "terminal", "description": "LangGraph 工作流出口"},
-    # ---- 入口 / 运维 ----
-    "clean_cache": {
-        "name": "清理缓存",
-        "group": "ops",
-        "description": "由 Web「清理缓存」按钮经 /api/system/clean-cache 显式触发;零边注册,不经图执行",
-    },
-    "launch_openstoryline": {
-        "name": "探测 OpenStoryline",
-        "group": "entry",
-        "description": "human 模式只做 HTTP 健康探测(不拉起进程);探测失败时门禁直接 END",
-    },
-    "open_preview": {
-        "name": "打开预览",
-        "group": "entry",
-        "description": "打开 OpenStoryline 预览页,之后按 STORYLINE_MODE 分流 human/auto",
-    },
-    # ---- human 规划链 ----
-    "checkpoint0_storyline_plan": {
-        "name": "人工规划确认关卡⓪",
-        "group": "human_plan",
-        "description": "interrupt:等人工在 OpenStoryline 网页完成分镜/文案/BGM/时间线规划后 resume",
-        "checkpoint": "⓪",
-    },
-    "import_video": {
-        "name": "网页导入视频(文件握手)",
-        "group": "human_plan",
-        "description": "写 import_video_request.json 后轮询结果文件(1s/600s),等网页【导入视频】回写;非 interrupt",
-        "waiting_kind": "web_file_handshake",
-    },
-    "get_storyboard_plan": {
-        "name": "读取分镜规划",
-        "group": "human_plan",
-        "description": "读 vendored 产物目录中的 storyline_plan / shot_plan;无产物则 END",
-    },
-    # ---- 草稿(双模式汇合点) ----
+    # ---- 草稿 ----
     "generate_draft": {
         "name": "生成剪映草稿",
         "group": "draft",
-        "description": "生成初始剪映草稿;human 与 auto 两条模式链在此汇合",
+        "description": "生成初始剪映草稿;storyline 链与主图链在此衔接",
     },
     # ---- assembly QC 通道(ASSEMBLY_QC_GATE_ENABLED 控制) ----
     "assembly_discover_and_probe": {
@@ -259,11 +221,11 @@ _NODE_META: dict[str, dict[str, Any]] = {
         "group": "fx_delivery",
         "description": "交付前 QA;单前驱,不再承担 fan-in",
     },
-    # ---- storyline(auto 链 / human 融合侧支) ----
+    # ---- storyline(auto 链) ----
     "storyline_load_media": {
         "name": "载入媒体",
         "group": "storyline_media",
-        "description": "auto 模式自动导入素材;融合模式下等网页导入成功后才执行",
+        "description": "auto 链起点(START 直连);解析/导入源视频素材",
     },
     "storyline_search_media": {
         "name": "检索素材",
@@ -371,12 +333,6 @@ _NODE_META: dict[str, dict[str, Any]] = {
 # 条件边标签注册表:(from, to) -> 标签(归一化后的 id;START/END 用大写)
 # ---------------------------------------------------------------------------
 _EDGE_LABELS: dict[tuple[str, str], str] = {
-    ("launch_openstoryline", "open_preview"): "Web 就绪(auto 恒通)",
-    ("launch_openstoryline", "END"): "human 且 OpenStoryline 未就绪",
-    ("open_preview", "checkpoint0_storyline_plan"): "STORYLINE_MODE=human",
-    ("open_preview", "storyline_load_media"): "STORYLINE_MODE=auto",
-    ("get_storyboard_plan", "generate_draft"): "有 storyline_plan 或 shot_plan",
-    ("get_storyboard_plan", "END"): "无规划产物",
     ("generate_draft", "assembly_discover_and_probe"): "QC 通道启用时",
     ("assembly_validate_render_qc", "assembly_repair_loop"): "未达标且仍可重试",
     ("assembly_validate_render_qc", "assembly_write_report"): "通过/达上限/软降级",
@@ -389,7 +345,7 @@ _EDGE_LABELS: dict[tuple[str, str], str] = {
     ("node_10b_inject_text_fx_en", "node_17_inject_english_tts"): "布局无问题",
     ("node_15_localize_covers_en", "node_09_inject_fx"): "列表 fan-in(与 17 汇合)",
     ("node_17_inject_english_tts", "node_09_inject_fx"): "列表 fan-in(与 15 汇合)",
-    # ---- auto 链条件边(fusion 关闭时才接线) ----
+    # ---- auto 链条件边 ----
     ("storyline_load_media", "storyline_search_media"): "已配检索源",
     ("storyline_load_media", "storyline_split_shots"): "未配检索源",
     ("storyline_load_media", "storyline_search_web_topic"): "WEB_TOPIC 开启且有 query",
@@ -414,13 +370,6 @@ _EDGE_LABELS: dict[tuple[str, str], str] = {
     ("storyline_join", "generate_draft"): "有规划产物",
     ("storyline_join", "END"): "无规划产物",
 }
-
-#: human-only 链节点(auto 模式不经过)
-_HUMAN_ONLY_NODES = frozenset({
-    "checkpoint0_storyline_plan",
-    "import_video",
-    "get_storyboard_plan",
-})
 
 # ---------------------------------------------------------------------------
 # 内部工具
@@ -470,29 +419,17 @@ def _real_topology(compiled_graph: Any) -> tuple[list[str], set[tuple[str, str, 
 
 
 def _current_mode(config_module: Any) -> str:
-    """解析当前 STORYLINE_MODE,与 ``graph._build_state_graph`` 的读法一致。
+    """解析当前 STORYLINE_MODE。
 
-    ``graph`` 模块级的 ``STORYLINE_MODE`` 是 import 时绑定(单测 monkeypatch
-    ``config.STORYLINE_MODE`` 不影响它),另有 ``_STORYLINE_MODE_OVERRIDE``
-    contextvar 供测试注入 —— 两者的优先级与 graph.py 相同:override 优先。
-    graph 不可导入时(纯 monitoring 场景)退回 ``config.STORYLINE_MODE``。
+    阶段3 起 graph 直读 ``config.STORYLINE_MODE``(非 ``"auto"`` 时 import
+    期 fail-fast),本函数与构图时的读法一致:直接取 config 模块值。
     """
-    try:
-        from graph import _STORYLINE_MODE_OVERRIDE, STORYLINE_MODE as _graph_mode
-    except Exception:  # noqa: BLE001 — 纯监控场景无 graph 依赖
-        return config_module.STORYLINE_MODE
-    return _STORYLINE_MODE_OVERRIDE.get() or _graph_mode
+    return config_module.STORYLINE_MODE
 
 
-def _edge_label(src: str, dst: str, *, fusion_on: bool, qc_enabled: bool) -> Optional[str]:
-    """边的展示标签:注册表优先;融合侧支边统一标注。"""
-    label = _EDGE_LABELS.get((src, dst))
-    if label:
-        return label
-    if fusion_on and not src.startswith("storyline_") and dst.startswith("storyline_"):
-        if (src, dst) != ("open_preview", "storyline_load_media"):
-            return "human 融合侧支"
-    return None
+def _edge_label(src: str, dst: str) -> Optional[str]:
+    """边的展示标签:注册表优先,未注册的边无标签。"""
+    return _EDGE_LABELS.get((src, dst))
 
 
 # ---------------------------------------------------------------------------
@@ -505,8 +442,8 @@ def build_graph_schema(compiled_graph: Any, config: Any = None) -> dict[str, Any
         compiled_graph: ``build_graph(...)`` 返回的 CompiledStateGraph;
             边真源取 ``compiled_graph.builder``(见模块 docstring 的画图伪边说明)。
         config: config 模块(monkeypatch 测试传模块对象);None 时 ``import config``。
-            只读 ``ASSEMBLY_QC_GATE_ENABLED`` / ``STORYLINE_HUMAN_FUSION`` /
-            ``STORYLINE_MODE``(经 :func:`_current_mode`,与构图时的读法一致)。
+            只读 ``ASSEMBLY_QC_GATE_ENABLED`` 与 ``STORYLINE_MODE``(经
+            :func:`_current_mode`,与构图时的读法一致)。
 
     Returns:
         dict: ``workflow_id / schema_version / mode / flags / nodes / edges``。
@@ -518,9 +455,6 @@ def build_graph_schema(compiled_graph: Any, config: Any = None) -> dict[str, Any
 
     mode = _current_mode(config_module)
     qc_enabled = bool(getattr(config_module, QC_FLAG))
-    fusion_raw = bool(getattr(config_module, FUSION_FLAG))
-    # 与 graph._build_state_graph 同一条规则:fusion 只在 human 模式生效。
-    fusion_on = mode == "human" and fusion_raw
 
     node_ids, real_edges = _real_topology(compiled_graph)
 
@@ -544,7 +478,7 @@ def build_graph_schema(compiled_graph: Any, config: Any = None) -> dict[str, Any
             "from": src,
             "to": dst,
             "kind": kind,
-            "label": _edge_label(src, dst, fusion_on=fusion_on, qc_enabled=qc_enabled),
+            "label": _edge_label(src, dst),
         })
 
     # ---- reachable:从 START 沿全部边 BFS(条件边计入 —— 它可能被选中) ----
@@ -562,19 +496,6 @@ def build_graph_schema(compiled_graph: Any, config: Any = None) -> dict[str, Any
                 queue.append(nxt)
 
     # ---- 节点 ----
-    if fusion_on:
-        try:
-            from nodes.storyline.fusion import FUSION_NODE_NAMES
-        except Exception:  # noqa: BLE001 — 注册表缺失时退回按前缀
-            FUSION_NODE_NAMES = tuple(
-                nid for nid in _NODE_META if nid.startswith("storyline_")
-            )
-        storyline_names = set(FUSION_NODE_NAMES)
-        storyline_modes = ["human"]
-    else:
-        storyline_names = {nid for nid in _NODE_META if nid.startswith("storyline_")}
-        storyline_modes = ["auto"]
-
     nodes: list[dict[str, Any]] = []
     for raw_id in node_ids:
         nid = raw_id
@@ -586,23 +507,13 @@ def build_graph_schema(compiled_graph: Any, config: Any = None) -> dict[str, Any
         if is_terminal:
             kind = "terminal"
             node_modes: list[str] = []
-        elif nid == "clean_cache":
-            kind = "task"
-            node_modes = []
-        elif nid in _HUMAN_ONLY_NODES:
-            kind = "task"
-            node_modes = ["human"]
-        elif nid in storyline_names:
-            kind = "task"
-            node_modes = list(storyline_modes)
         else:
+            # auto-only 单流水线:所有任务节点都属于 auto 链
             kind = "task"
-            node_modes = ["human", "auto"]
+            node_modes = ["auto"]
 
         if nid in _ASSEMBLY_NODES:
             enabled = qc_enabled
-        elif nid == "clean_cache":
-            enabled = False
         else:
             enabled = True
 
@@ -625,7 +536,7 @@ def build_graph_schema(compiled_graph: Any, config: Any = None) -> dict[str, Any
         "workflow_id": WORKFLOW_ID,
         "schema_version": SCHEMA_VERSION,
         "mode": mode,
-        "flags": {QC_FLAG: qc_enabled, FUSION_FLAG: fusion_raw},
+        "flags": {QC_FLAG: qc_enabled},
         "nodes": nodes,
         "edges": edges,
     }

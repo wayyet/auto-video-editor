@@ -11,8 +11,8 @@
 4. **通过 / retry 耗尽** → 写 ``storyline_qa_done`` 走 join_storyline。
 
 设计纪律(plan §4.2):
-- 节点 **不** 触发副作用(只读产物 + 写 status_log),避免重放副作用。沿用现有
-  ``node_checkpoint0_storyline_plan.py:38-41`` 的安全模式。
+- 节点 **不** 触发副作用(只读产物 + 写 status_log),避免重放副作用
+  (与主图人工关卡节点 ``nodes/_checkpoint.py`` 收敛的安全模式同纪律)。
 - retry 计数用 state 字段而不是文件,3 次封顶后强制走 join(失败也继续,不阻塞
   node_05,符合 ``node_07`` 的"超限升级给人工,不阻断"已有行为 — 与
   ``graph.py:escalate_guardrail_failure`` 同思路)。

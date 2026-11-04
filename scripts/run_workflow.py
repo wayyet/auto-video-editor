@@ -252,25 +252,16 @@ def _apply_chat_session_id(state: dict, args: argparse.Namespace) -> dict:
 def _check_final_state(result: Optional[dict]) -> int:
     """检查图的最终 state,返回进程退出码。
 
-    - ``openstoryline_ready is False`` → 打印明确错误,返回 **3**
-      (工作流因 OpenStoryline Web 未就绪而提前终止)。
-    - 其它情况 → 0。
-
-    注意:LangGraph 1.2.9 下 ``invoke/ainvoke`` **不抛** ``GraphInterrupt``,
-    停在人工关卡时正常返回。因此"停在人工关卡"与"因 node_02 未就绪提前终止"
-    可以靠 ``openstoryline_ready`` 区分开,不会互相误判。
+    阶段3 起 ``openstoryline_ready`` 字段与"node_02 未就绪提前终止(退出码 3)"
+    语义随 human 模式链一并删除:只要流程走到最终 state 就算正常结束(**恒 0**);
+    失败信息统一由 ``error_log`` 透出 —— 这里把 error_log 各行打印到 stderr,
+    便于 CLI 使用者定位。
     """
     if not isinstance(result, dict):
         return 0
-    if result.get("openstoryline_ready") is False:
-        print(
-            "[workflow] ✗ OpenStoryline 未就绪,工作流提前终止",
-            file=sys.stderr,
-        )
-        errors = result.get("error_log") or []
-        for line in errors:
-            print(f"[workflow]   {line}", file=sys.stderr)
-        return 3
+    errors = result.get("error_log") or []
+    for line in errors:
+        print(f"[workflow]   {line}", file=sys.stderr)
     return 0
 
 

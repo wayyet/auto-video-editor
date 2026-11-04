@@ -92,12 +92,9 @@ STREAM_VERSION = "v2"
 
 #: state 增量里允许进 ``summary`` 的白名单键(§7.3 规则 3:不把整个 state 推给
 #: 浏览器)。值仍会经 make_event 的递归脱敏(绝对路径降级文件名等)。
+#: 阶段3 删除 import_video_* / openstoryline_ready 后仅剩这两个键;
+#: chat_link 相关键阶段4 处理,此处不动。
 STATE_SUMMARY_KEYS = frozenset({
-    "import_video_status",
-    "import_video_filename",
-    "import_video_media_paths",
-    "import_video_web_session_id",
-    "openstoryline_ready",
     "draft_encryption_status",
     "video_input_paths",
 })

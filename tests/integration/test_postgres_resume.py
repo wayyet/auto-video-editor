@@ -205,25 +205,6 @@ def test_postgres_state_survives_new_saver(postgres_uri: str) -> None:
 # ---------------------------------------------------------------------------
 # 场景 2:真实工作流图 —— 新 saver 接管关卡① 的挂起任务
 # ---------------------------------------------------------------------------
-class _StubProc:
-    def __init__(self, pid: int = 22222) -> None:
-        self.pid = pid
-
-
-@pytest.fixture(autouse=True)
-def _patch_external(monkeypatch: pytest.MonkeyPatch) -> None:
-    """屏蔽节点 2/3 的真实进程拉起(与 test_week5_resilience.py 同款)。"""
-    import nodes.node_02_launch_openstoryline as m2
-    import nodes.node_03_open_preview as m3
-
-    monkeypatch.setattr(m2, "_wait_for_ready", lambda url, t: True)
-    monkeypatch.setattr(
-        m3,
-        "subprocess",
-        type("S", (), {"Popen": staticmethod(lambda *a, **k: _StubProc())}),
-    )
-
-
 def _seed_draft(draft_dir: Path, duration_us: int = 35_000_000) -> Path:
     draft_dir.mkdir(parents=True, exist_ok=True)
     draft_file = draft_dir / "draft_content.json"

@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""捕获四种开关组合下的 build_graph_schema() 快照（只报告，不修改任何文件）。
+"""捕获开关组合下的 build_graph_schema() 快照(只报告,不修改任何文件)。
 
-用途：冗余模块合并重构（阶段 0 基线 / G-A2 验收）在改造前后各运行一次，
-对比节点与边是否发生变化。快照只用于对比，不作为第二份运行时拓扑源。
+用途:拓扑重构(阶段 3 auto-only 收敛)在改造前后各运行一次,对比节点与
+边是否发生变化。快照只用于对比,不作为第二份运行时拓扑源。
 
-用法（从仓库根目录运行）：
+阶段3 起 STORYLINE_MODE 恒为 "auto"(非 auto 值 config import 期 fail-fast),
+fusion 开关已随 human 模式链删除,组合只保留 QC 通道与 AI 转场两个开关。
+
+用法(从仓库根目录运行):
     python scripts/capture_graph_schema_snapshots.py [输出目录]
 
 输出目录缺省为 docs/refactor-baseline-20261103/schema-snapshots。
-每个组合一个 JSON 文件，包含组合环境变量、基准提交与完整 schema。
+每个组合一个 JSON 文件,包含组合环境变量、基准提交与完整 schema。
 """
 from __future__ import annotations
 
@@ -21,12 +24,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# (文件名, ASSEMBLY_QC_GATE_ENABLED, STORYLINE_HUMAN_FUSION, STORYLINE_ENABLE_AI_TRANSITION)
-COMBOS: list[tuple[str, str, str, str]] = [
-    ("default_baseline", "true", "false", "false"),
-    ("assembly_qc_off", "false", "false", "false"),
-    ("human_fusion_on", "true", "true", "false"),
-    ("ai_transition_on", "true", "false", "true"),
+# (文件名, ASSEMBLY_QC_GATE_ENABLED, STORYLINE_ENABLE_AI_TRANSITION)
+COMBOS: list[tuple[str, str, str]] = [
+    ("default_baseline", "true", "false"),
+    ("assembly_qc_off", "false", "false"),
+    ("ai_transition_on", "true", "true"),
 ]
 
 _CHILD_BOOTSTRAP = r'''
@@ -48,11 +50,10 @@ json.dump(schema, sys.stdout, ensure_ascii=False)
 '''
 
 
-def capture_one(name: str, qc: str, fusion: str, ai_transition: str) -> dict:
+def capture_one(name: str, qc: str, ai_transition: str) -> dict:
     env = os.environ.copy()
-    env["STORYLINE_MODE"] = "human"
+    env["STORYLINE_MODE"] = "auto"
     env["ASSEMBLY_QC_GATE_ENABLED"] = qc
-    env["STORYLINE_HUMAN_FUSION"] = fusion
     env["STORYLINE_ENABLE_AI_TRANSITION"] = ai_transition
     proc = subprocess.run(
         [sys.executable, "-c", _CHILD_BOOTSTRAP],
@@ -63,15 +64,14 @@ def capture_one(name: str, qc: str, fusion: str, ai_transition: str) -> dict:
         encoding="utf-8",
     )
     if proc.returncode != 0:
-        raise RuntimeError(f"组合 {name} 建图失败：\n{proc.stderr[-2000:]}")
+        raise RuntimeError(f"组合 {name} 建图失败:\n{proc.stderr[-2000:]}")
     schema = json.loads(proc.stdout)
     return {
         "meta": {
             "combo": name,
             "env": {
-                "STORYLINE_MODE": "human",
+                "STORYLINE_MODE": "auto",
                 "ASSEMBLY_QC_GATE_ENABLED": qc,
-                "STORYLINE_HUMAN_FUSION": fusion,
                 "STORYLINE_ENABLE_AI_TRANSITION": ai_transition,
             },
             "captured_at": datetime.now().isoformat(timespec="seconds"),
@@ -87,8 +87,8 @@ def main() -> int:
     if not out_dir.is_absolute():
         out_dir = Path.cwd() / out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
-    for name, qc, fusion, ai in COMBOS:
-        payload = capture_one(name, qc, fusion, ai)
+    for name, qc, ai in COMBOS:
+        payload = capture_one(name, qc, ai)
         nodes = payload["schema"].get("nodes")
         n_nodes = len(nodes) if isinstance(nodes, (list, dict)) else "?"
         target = out_dir / f"{name}.json"

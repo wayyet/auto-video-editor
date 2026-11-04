@@ -9,7 +9,7 @@
    resume → run.resumed + node.resumed,PG 游标跨运行单调;
 5. 重试回路:同一节点再次启动 → attempt 递增 + node.retrying +
    branch.selected(时序推断,§7.3 规则 8);
-6. import_video 式 custom 等待事件 → node.waiting_input(web_file_handshake);
+6. custom 握手等待事件(web_file_handshake) → node.waiting_input(web_file_handshake);
 7. 节点异常:node.failed(脱敏)+ run.failed,异常照常冒出;
 8. 脱敏:state 增量白名单外键值不外泄(提示词/绝对路径);
 9. 事件全部落 PG 且 id 单调(isolated 测试库);存储不可用时显式降级
@@ -126,18 +126,18 @@ def _node_handshake(state: dict) -> dict:
     w = _writer()
     w({
         "monitor_event": "waiting_input",
-        "node_id": "import_video",
+        "node_id": "custom_handshake",
         "waiting_kind": "web_file_handshake",
         "detail": {"job_id": "job-probe", "timeout_s": 600},
     })
-    return {"seen": ["import_video"]}
+    return {"seen": ["custom_handshake"]}
 
 
 def _handshake_graph() -> Any:
     g = StateGraph(ProbeState)
-    g.add_node("import_video", _node_handshake)
-    g.add_edge(START, "import_video")
-    g.add_edge("import_video", END)
+    g.add_node("custom_handshake", _node_handshake)
+    g.add_edge(START, "custom_handshake")
+    g.add_edge("custom_handshake", END)
     return g.compile(checkpointer=InMemorySaver())
 
 
@@ -348,7 +348,7 @@ async def test_retry_attempt_increments(isolated_postgres_db, monkeypatch) -> No
 
 
 # ---------------------------------------------------------------------------
-# 4. custom 等待事件(import_video 握手语义,§7.3 规则 7)
+# 4. custom 等待事件(web_file_handshake 握手语义,§7.3 规则 7)
 # ---------------------------------------------------------------------------
 async def test_custom_waiting_event(isolated_postgres_db, monkeypatch) -> None:
     _isolate_event_store(monkeypatch, isolated_postgres_db())
@@ -359,12 +359,12 @@ async def test_custom_waiting_event(isolated_postgres_db, monkeypatch) -> None:
     )
     waiting = _by_type(events, "node.waiting_input")
     assert len(waiting) == 1
-    assert waiting[0]["node_id"] == "import_video"
+    assert waiting[0]["node_id"] == "custom_handshake"
     assert waiting[0]["payload"]["waiting_kind"] == "web_file_handshake"
     assert waiting[0]["payload"]["detail"]["job_id"] == "job-probe"
     # 等待事件在 succeeded 之前;任务照常收尾
     idx = {f"{e['event_type']}:{e['node_id']}": i for i, e in enumerate(events)}
-    assert idx["node.waiting_input:import_video"] < idx["node.succeeded:import_video"]
+    assert idx["node.waiting_input:custom_handshake"] < idx["node.succeeded:custom_handshake"]
     assert _types(events)[-1] == "run.completed"
 
 

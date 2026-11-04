@@ -1,0 +1,1125 @@
+{
+  "meta": {
+    "combo": "ai_transition_on",
+    "env": {
+      "STORYLINE_MODE": "auto",
+      "ASSEMBLY_QC_GATE_ENABLED": "true",
+      "STORYLINE_ENABLE_AI_TRANSITION": "true"
+    },
+    "captured_at": "2026-11-04T23:19:04"
+  },
+  "schema": {
+    "workflow_id": "auto_video_editor_main",
+    "schema_version": 1,
+    "mode": "auto",
+    "flags": {
+      "ASSEMBLY_QC_GATE_ENABLED": true
+    },
+    "nodes": [
+      {
+        "id": "START",
+        "name": "开始",
+        "group": "terminal",
+        "description": "LangGraph 工作流入口",
+        "kind": "terminal",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": []
+      },
+      {
+        "id": "generate_draft",
+        "name": "生成剪映草稿",
+        "group": "draft",
+        "description": "生成初始剪映草稿;storyline 链与主图链在此衔接",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "node_06_human_reorder",
+        "name": "人工调整镜头顺序①",
+        "group": "edit_review",
+        "description": "interrupt:关卡①,人工在剪映里调整镜头顺序",
+        "kind": "task",
+        "checkpoint": "①",
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "node_07_speed_fit",
+        "name": "时长适配(35s)",
+        "group": "edit_review",
+        "description": "把成片总时长压到目标以内;未达标自环重试,超限升级护栏",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "escalate_guardrail_failure",
+        "name": "护栏失败升级",
+        "group": "edit_review",
+        "description": "node_07 连续重试超限后的兜底:写 error_log 并终止",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "bridge_snapshot2",
+        "name": "桥接快照2",
+        "group": "edit_review",
+        "description": "条件边不能改 state,由本节点把 snapshot2 路径写入 state",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "node_08_add_subtitles",
+        "name": "添加中文字幕",
+        "group": "subtitles_covers",
+        "description": "同步写 asr_segments_zh 到 state;英文线 16a 显式依赖它",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "node_09_inject_fx",
+        "name": "注入特效",
+        "group": "fx_delivery",
+        "description": "尾链起点;中英两份草稿同时处理",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "node_10_inject_text_fx",
+        "name": "注入中文花字",
+        "group": "subtitles_covers",
+        "description": "中文字幕花字/描边/入场动画",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "node_10b_inject_text_fx_en",
+        "name": "注入英文花字",
+        "group": "subtitles_covers",
+        "description": "英文花字先于关卡③落地,人工校对看到最终效果(K3=B)",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "node_11_inject_sticker",
+        "name": "注入贴纸",
+        "group": "fx_delivery",
+        "description": "贴纸注入,同时作用于中英两份草稿",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "node_12_human_add_bgm",
+        "name": "人工添加 BGM②",
+        "group": "fx_delivery",
+        "description": "interrupt:关卡②,人工选曲一次,post_resume 镜像到英文草稿",
+        "kind": "task",
+        "checkpoint": "②",
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "node_13_adjust_volume",
+        "name": "音量调节",
+        "group": "fx_delivery",
+        "description": "各音轨音量调整",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "assembly_discover_and_probe",
+        "name": "素材发现与探测",
+        "group": "assembly_qc",
+        "description": "扫描源视频与渲染产物,做 ffprobe 探测",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "assembly_asr_and_visual_observe",
+        "name": "ASR 与视觉观察",
+        "group": "assembly_qc",
+        "description": "对草稿素材做语音识别与关键帧观察",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "assembly_build_timeline",
+        "name": "装配时间线",
+        "group": "assembly_qc",
+        "description": "根据观察结果装配时间线草案",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "assembly_validate_render_qc",
+        "name": "渲染与质量检查",
+        "group": "assembly_qc",
+        "description": "检查时间线、渲染产物及质量指标;条件边决定修复回路或写报告",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "assembly_repair_loop",
+        "name": "QC 修复回路",
+        "group": "assembly_qc",
+        "description": "按 QC 结论执行修复动作,复检走回 assembly_validate_render_qc",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "assembly_write_report",
+        "name": "写 QC 报告",
+        "group": "assembly_qc",
+        "description": "达标/达重试上限后写质检报告,交回关卡①",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "fork_draft_for_english_branch",
+        "name": "复制英文分支草稿",
+        "group": "subtitles_covers",
+        "description": "从中文主草稿复制出英文分支草稿",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "node_14_make_covers",
+        "name": "生成封面",
+        "group": "subtitles_covers",
+        "description": "生成中文封面",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "node_15_localize_covers_en",
+        "name": "封面英文本地化",
+        "group": "subtitles_covers",
+        "description": "封面英文化;与 node_17 列表 fan-in 汇合后才触发尾链",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "node_16a_translate_and_check",
+        "name": "翻译与布局检测",
+        "group": "subtitles_covers",
+        "description": "翻译字幕并做布局检测;命中问题才触发关卡③",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "node_08b_add_subtitles_en",
+        "name": "添加英文字幕",
+        "group": "subtitles_covers",
+        "description": "英文字幕写入英文分支草稿",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "node_checkpoint3_layout_review",
+        "name": "布局人工复核③",
+        "group": "subtitles_covers",
+        "description": "interrupt:关卡③,仅布局检测命中时触发;未命中走旁路",
+        "kind": "task",
+        "checkpoint": "③",
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "node_17_inject_english_tts",
+        "name": "注入英文 TTS",
+        "group": "subtitles_covers",
+        "description": "调 FireRedTTS2 生成英文配音;与 node_15 列表 fan-in 汇合后才触发尾链",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "join_before_delivery",
+        "name": "交付前 QA 闸门",
+        "group": "fx_delivery",
+        "description": "交付前 QA;单前驱,不再承担 fan-in",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "storyline_load_media",
+        "name": "载入媒体",
+        "group": "storyline_media",
+        "description": "auto 链起点(START 直连);解析/导入源视频素材",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "storyline_search_media",
+        "name": "检索素材",
+        "group": "storyline_media",
+        "description": "Pexels 等检索源按 query 拉素材;已配检索源才触发",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "storyline_search_web_topic",
+        "name": "网页话题检索",
+        "group": "storyline_media",
+        "description": "WEB_TOPIC 开启且有 query 时并行旁支;死胡同,产物由 generate_script 软读取",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "storyline_split_shots",
+        "name": "分镜切分",
+        "group": "storyline_media",
+        "description": "按镜头切分素材;ASR 分支开启且有音轨时并行 fan-out 出 local_asr",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "storyline_local_asr",
+        "name": "本地 ASR",
+        "group": "storyline_asr",
+        "description": "funasr 本地识别;死胡同分支,产物经 state 回填 plan_timeline_pro",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "storyline_speech_rough_cut",
+        "name": "语音粗剪",
+        "group": "storyline_asr",
+        "description": "基于 ASR 的粗剪;死胡同分支,不进任何 fan-in 屏障(D10)",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "storyline_generate_ai_transition",
+        "name": "生成 AI 转场",
+        "group": "storyline_timeline",
+        "description": "与 plan_timeline_pro 共用同一道 4 源屏障;按 STORYLINE_ENABLE_AI_TRANSITION 接边",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "storyline_understand_clips",
+        "name": "理解片段",
+        "group": "storyline_understand",
+        "description": "对片段做语义理解,产出理解摘要",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "storyline_filter_clips",
+        "name": "过滤片段",
+        "group": "storyline_understand",
+        "description": "按质量/相关性过滤片段",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "storyline_group_clips",
+        "name": "片段分组",
+        "group": "storyline_understand",
+        "description": "qa 重试回路的目标节点;分组产物供文案/时间线使用",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "storyline_generate_script",
+        "name": "生成文案",
+        "group": "storyline_script",
+        "description": "按分组与话题生成长文案;并行 fan-out 出模板/配音/BGM/文本四路",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "storyline_script_template_recommendation",
+        "name": "文案模板推荐",
+        "group": "storyline_script",
+        "description": "为文案推荐呈现模板",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "storyline_generate_voiceover",
+        "name": "生成配音",
+        "group": "storyline_script",
+        "description": "生成配音时长参考,供 BGM 与时间线对齐",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "storyline_select_bgm",
+        "name": "选择 BGM",
+        "group": "storyline_script",
+        "description": "等配音完成后选择 BGM",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "storyline_recommend_transition",
+        "name": "推荐转场",
+        "group": "storyline_script",
+        "description": "等 BGM 完成后推荐转场",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "storyline_recommend_text",
+        "name": "推荐文本",
+        "group": "storyline_script",
+        "description": "推荐屏幕文本样式",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "storyline_plan_timeline_pro",
+        "name": "时间线规划",
+        "group": "storyline_timeline",
+        "description": "4 源屏障(分组/文案/配音/BGM)后规划时间线",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "storyline_plan_timeline_ai_transition",
+        "name": "AI 转场时间线规划",
+        "group": "storyline_timeline",
+        "description": "屏障 [plan_timeline_pro, generate_ai_transition] 之后;qa 校验含 AI 转场的最终时间线",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "storyline_render_video",
+        "name": "渲染视频",
+        "group": "storyline_render",
+        "description": "按时间线渲染;qa 通过后触发",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "storyline_qa_gate",
+        "name": "剧情 QA 闸门",
+        "group": "storyline_render",
+        "description": "3 源屏障后校验;未过回 group_clips 重试,通过走渲染",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "storyline_join",
+        "name": "剧情结果汇合",
+        "group": "storyline_render",
+        "description": "反序列化规划产物;有 storyline_plan 进 generate_draft,无则 END",
+        "kind": "task",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": [
+          "auto"
+        ]
+      },
+      {
+        "id": "END",
+        "name": "结束",
+        "group": "terminal",
+        "description": "LangGraph 工作流出口",
+        "kind": "terminal",
+        "checkpoint": null,
+        "enabled": true,
+        "reachable": true,
+        "modes": []
+      }
+    ],
+    "edges": [
+      {
+        "id": "START->storyline_load_media",
+        "from": "START",
+        "to": "storyline_load_media",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "assembly_asr_and_visual_observe->assembly_build_timeline",
+        "from": "assembly_asr_and_visual_observe",
+        "to": "assembly_build_timeline",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "assembly_build_timeline->assembly_validate_render_qc",
+        "from": "assembly_build_timeline",
+        "to": "assembly_validate_render_qc",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "assembly_discover_and_probe->assembly_asr_and_visual_observe",
+        "from": "assembly_discover_and_probe",
+        "to": "assembly_asr_and_visual_observe",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "assembly_repair_loop->assembly_validate_render_qc",
+        "from": "assembly_repair_loop",
+        "to": "assembly_validate_render_qc",
+        "kind": "normal",
+        "label": "修复后复检"
+      },
+      {
+        "id": "assembly_validate_render_qc->assembly_repair_loop",
+        "from": "assembly_validate_render_qc",
+        "to": "assembly_repair_loop",
+        "kind": "conditional",
+        "label": "未达标且仍可重试"
+      },
+      {
+        "id": "assembly_validate_render_qc->assembly_write_report",
+        "from": "assembly_validate_render_qc",
+        "to": "assembly_write_report",
+        "kind": "conditional",
+        "label": "通过/达上限/软降级"
+      },
+      {
+        "id": "assembly_write_report->node_06_human_reorder",
+        "from": "assembly_write_report",
+        "to": "node_06_human_reorder",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "bridge_snapshot2->node_08_add_subtitles",
+        "from": "bridge_snapshot2",
+        "to": "node_08_add_subtitles",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "escalate_guardrail_failure->END",
+        "from": "escalate_guardrail_failure",
+        "to": "END",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "fork_draft_for_english_branch->node_16a_translate_and_check",
+        "from": "fork_draft_for_english_branch",
+        "to": "node_16a_translate_and_check",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "generate_draft->assembly_discover_and_probe",
+        "from": "generate_draft",
+        "to": "assembly_discover_and_probe",
+        "kind": "normal",
+        "label": "QC 通道启用时"
+      },
+      {
+        "id": "join_before_delivery->END",
+        "from": "join_before_delivery",
+        "to": "END",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "node_06_human_reorder->node_07_speed_fit",
+        "from": "node_06_human_reorder",
+        "to": "node_07_speed_fit",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "node_07_speed_fit->bridge_snapshot2",
+        "from": "node_07_speed_fit",
+        "to": "bridge_snapshot2",
+        "kind": "conditional",
+        "label": "时长达标"
+      },
+      {
+        "id": "node_07_speed_fit->escalate_guardrail_failure",
+        "from": "node_07_speed_fit",
+        "to": "escalate_guardrail_failure",
+        "kind": "conditional",
+        "label": "重试超限"
+      },
+      {
+        "id": "node_07_speed_fit->node_07_speed_fit",
+        "from": "node_07_speed_fit",
+        "to": "node_07_speed_fit",
+        "kind": "conditional",
+        "label": "未达标且可重试"
+      },
+      {
+        "id": "node_08_add_subtitles->fork_draft_for_english_branch",
+        "from": "node_08_add_subtitles",
+        "to": "fork_draft_for_english_branch",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "node_08_add_subtitles->node_10_inject_text_fx",
+        "from": "node_08_add_subtitles",
+        "to": "node_10_inject_text_fx",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "node_08b_add_subtitles_en->node_10b_inject_text_fx_en",
+        "from": "node_08b_add_subtitles_en",
+        "to": "node_10b_inject_text_fx_en",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "node_09_inject_fx->node_11_inject_sticker",
+        "from": "node_09_inject_fx",
+        "to": "node_11_inject_sticker",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "node_10_inject_text_fx->node_14_make_covers",
+        "from": "node_10_inject_text_fx",
+        "to": "node_14_make_covers",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "node_10b_inject_text_fx_en->node_17_inject_english_tts",
+        "from": "node_10b_inject_text_fx_en",
+        "to": "node_17_inject_english_tts",
+        "kind": "conditional",
+        "label": "布局无问题"
+      },
+      {
+        "id": "node_10b_inject_text_fx_en->node_checkpoint3_layout_review",
+        "from": "node_10b_inject_text_fx_en",
+        "to": "node_checkpoint3_layout_review",
+        "kind": "conditional",
+        "label": "布局检测命中"
+      },
+      {
+        "id": "node_11_inject_sticker->node_12_human_add_bgm",
+        "from": "node_11_inject_sticker",
+        "to": "node_12_human_add_bgm",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "node_12_human_add_bgm->node_13_adjust_volume",
+        "from": "node_12_human_add_bgm",
+        "to": "node_13_adjust_volume",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "node_13_adjust_volume->join_before_delivery",
+        "from": "node_13_adjust_volume",
+        "to": "join_before_delivery",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "node_14_make_covers->node_15_localize_covers_en",
+        "from": "node_14_make_covers",
+        "to": "node_15_localize_covers_en",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "node_15_localize_covers_en->node_09_inject_fx",
+        "from": "node_15_localize_covers_en",
+        "to": "node_09_inject_fx",
+        "kind": "normal",
+        "label": "列表 fan-in(与 17 汇合)"
+      },
+      {
+        "id": "node_16a_translate_and_check->node_08b_add_subtitles_en",
+        "from": "node_16a_translate_and_check",
+        "to": "node_08b_add_subtitles_en",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "node_17_inject_english_tts->node_09_inject_fx",
+        "from": "node_17_inject_english_tts",
+        "to": "node_09_inject_fx",
+        "kind": "normal",
+        "label": "列表 fan-in(与 15 汇合)"
+      },
+      {
+        "id": "node_checkpoint3_layout_review->node_17_inject_english_tts",
+        "from": "node_checkpoint3_layout_review",
+        "to": "node_17_inject_english_tts",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "storyline_filter_clips->storyline_group_clips",
+        "from": "storyline_filter_clips",
+        "to": "storyline_group_clips",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "storyline_generate_ai_transition->storyline_plan_timeline_ai_transition",
+        "from": "storyline_generate_ai_transition",
+        "to": "storyline_plan_timeline_ai_transition",
+        "kind": "normal",
+        "label": "AI 转场屏障"
+      },
+      {
+        "id": "storyline_generate_script->storyline_generate_ai_transition",
+        "from": "storyline_generate_script",
+        "to": "storyline_generate_ai_transition",
+        "kind": "normal",
+        "label": "列表 fan-in(4 源屏障)"
+      },
+      {
+        "id": "storyline_generate_script->storyline_generate_voiceover",
+        "from": "storyline_generate_script",
+        "to": "storyline_generate_voiceover",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "storyline_generate_script->storyline_plan_timeline_pro",
+        "from": "storyline_generate_script",
+        "to": "storyline_plan_timeline_pro",
+        "kind": "normal",
+        "label": "列表 fan-in(4 源屏障)"
+      },
+      {
+        "id": "storyline_generate_script->storyline_recommend_text",
+        "from": "storyline_generate_script",
+        "to": "storyline_recommend_text",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "storyline_generate_script->storyline_script_template_recommendation",
+        "from": "storyline_generate_script",
+        "to": "storyline_script_template_recommendation",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "storyline_generate_script->storyline_select_bgm",
+        "from": "storyline_generate_script",
+        "to": "storyline_select_bgm",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "storyline_generate_voiceover->storyline_generate_ai_transition",
+        "from": "storyline_generate_voiceover",
+        "to": "storyline_generate_ai_transition",
+        "kind": "normal",
+        "label": "列表 fan-in(4 源屏障)"
+      },
+      {
+        "id": "storyline_generate_voiceover->storyline_plan_timeline_pro",
+        "from": "storyline_generate_voiceover",
+        "to": "storyline_plan_timeline_pro",
+        "kind": "normal",
+        "label": "列表 fan-in(4 源屏障)"
+      },
+      {
+        "id": "storyline_generate_voiceover->storyline_select_bgm",
+        "from": "storyline_generate_voiceover",
+        "to": "storyline_select_bgm",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "storyline_group_clips->storyline_generate_ai_transition",
+        "from": "storyline_group_clips",
+        "to": "storyline_generate_ai_transition",
+        "kind": "normal",
+        "label": "列表 fan-in(4 源屏障)"
+      },
+      {
+        "id": "storyline_group_clips->storyline_generate_script",
+        "from": "storyline_group_clips",
+        "to": "storyline_generate_script",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "storyline_group_clips->storyline_plan_timeline_pro",
+        "from": "storyline_group_clips",
+        "to": "storyline_plan_timeline_pro",
+        "kind": "normal",
+        "label": "列表 fan-in(4 源屏障)"
+      },
+      {
+        "id": "storyline_group_clips->storyline_recommend_transition",
+        "from": "storyline_group_clips",
+        "to": "storyline_recommend_transition",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "storyline_join->END",
+        "from": "storyline_join",
+        "to": "END",
+        "kind": "conditional",
+        "label": "无规划产物"
+      },
+      {
+        "id": "storyline_join->generate_draft",
+        "from": "storyline_join",
+        "to": "generate_draft",
+        "kind": "conditional",
+        "label": "有规划产物"
+      },
+      {
+        "id": "storyline_load_media->storyline_search_media",
+        "from": "storyline_load_media",
+        "to": "storyline_search_media",
+        "kind": "conditional",
+        "label": "已配检索源"
+      },
+      {
+        "id": "storyline_load_media->storyline_search_web_topic",
+        "from": "storyline_load_media",
+        "to": "storyline_search_web_topic",
+        "kind": "conditional",
+        "label": "WEB_TOPIC 开启且有 query"
+      },
+      {
+        "id": "storyline_load_media->storyline_split_shots",
+        "from": "storyline_load_media",
+        "to": "storyline_split_shots",
+        "kind": "conditional",
+        "label": "未配检索源"
+      },
+      {
+        "id": "storyline_local_asr->storyline_speech_rough_cut",
+        "from": "storyline_local_asr",
+        "to": "storyline_speech_rough_cut",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "storyline_plan_timeline_ai_transition->storyline_qa_gate",
+        "from": "storyline_plan_timeline_ai_transition",
+        "to": "storyline_qa_gate",
+        "kind": "normal",
+        "label": "列表 fan-in(3 源屏障)"
+      },
+      {
+        "id": "storyline_plan_timeline_pro->storyline_plan_timeline_ai_transition",
+        "from": "storyline_plan_timeline_pro",
+        "to": "storyline_plan_timeline_ai_transition",
+        "kind": "normal",
+        "label": "AI 转场屏障"
+      },
+      {
+        "id": "storyline_qa_gate->storyline_group_clips",
+        "from": "storyline_qa_gate",
+        "to": "storyline_group_clips",
+        "kind": "conditional",
+        "label": "QA 未过,重试"
+      },
+      {
+        "id": "storyline_qa_gate->storyline_render_video",
+        "from": "storyline_qa_gate",
+        "to": "storyline_render_video",
+        "kind": "conditional",
+        "label": "QA 通过"
+      },
+      {
+        "id": "storyline_recommend_text->storyline_qa_gate",
+        "from": "storyline_recommend_text",
+        "to": "storyline_qa_gate",
+        "kind": "normal",
+        "label": "列表 fan-in(3 源屏障)"
+      },
+      {
+        "id": "storyline_recommend_transition->storyline_qa_gate",
+        "from": "storyline_recommend_transition",
+        "to": "storyline_qa_gate",
+        "kind": "normal",
+        "label": "列表 fan-in(3 源屏障)"
+      },
+      {
+        "id": "storyline_render_video->storyline_join",
+        "from": "storyline_render_video",
+        "to": "storyline_join",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "storyline_search_media->storyline_split_shots",
+        "from": "storyline_search_media",
+        "to": "storyline_split_shots",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "storyline_select_bgm->storyline_generate_ai_transition",
+        "from": "storyline_select_bgm",
+        "to": "storyline_generate_ai_transition",
+        "kind": "normal",
+        "label": "列表 fan-in(4 源屏障)"
+      },
+      {
+        "id": "storyline_select_bgm->storyline_plan_timeline_pro",
+        "from": "storyline_select_bgm",
+        "to": "storyline_plan_timeline_pro",
+        "kind": "normal",
+        "label": "列表 fan-in(4 源屏障)"
+      },
+      {
+        "id": "storyline_select_bgm->storyline_recommend_transition",
+        "from": "storyline_select_bgm",
+        "to": "storyline_recommend_transition",
+        "kind": "normal",
+        "label": null
+      },
+      {
+        "id": "storyline_split_shots->storyline_local_asr",
+        "from": "storyline_split_shots",
+        "to": "storyline_local_asr",
+        "kind": "conditional",
+        "label": "ASR 分支开启且有音轨"
+      },
+      {
+        "id": "storyline_split_shots->storyline_understand_clips",
+        "from": "storyline_split_shots",
+        "to": "storyline_understand_clips",
+        "kind": "conditional",
+        "label": "主干"
+      },
+      {
+        "id": "storyline_understand_clips->storyline_filter_clips",
+        "from": "storyline_understand_clips",
+        "to": "storyline_filter_clips",
+        "kind": "normal",
+        "label": null
+      }
+    ]
+  }
+}

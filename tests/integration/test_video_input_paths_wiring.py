@@ -1,109 +1,72 @@
-"""集成:多视频导入的**接线**是否贯通(2026-10 多选导入)。
+"""集成:多视频源路径的**接线**是否贯通(2026-10 多选导入;阶段3 auto-only 版)。
 
-链路:网页【导入视频】→ ``import_video_result.json``(多文件)→
-``node_04a`` 回填 ``state["video_input_paths"]`` → 下游
-``resolve_video_input_paths`` 拿到 N 个源视频。
+链路(阶段3 后,旧 ``node_04a`` 网页握手已删除):
+入口层写 ``state["video_input_paths"]`` → 下游
+``nodes/storyline/_common.py::resolve_video_input_paths`` 拿到 N 个源视频。
 
-同时守住**单视频零行为变更**:只导入 1 个时,``video_input_paths`` 长度 1,
-且与旧行为(``video_input_path`` 单值)等���。
+入口层写入者:
+- 直接 CLI:``scripts/run_workflow.py`` 的 ``_default_initial_state``
+  (``--video-input-paths`` 逗号分隔;``video_input_path`` 仍取第一个,保持兼容);
+- Agent 路径:``agent_gate`` run_start 载荷(见 ``agent_gate/cli.py``)。
+
+同时守住**单视频零行为变更**:只给 1 个时,``video_input_paths`` 长度 1,
+且与旧行为(``video_input_path`` 单值)等价。
 """
 from __future__ import annotations
 
-import json
+import importlib.util
 from pathlib import Path
 
-import pytest
-
-import config
-from nodes.node_04a_import_video import (
-    import_video,
-    import_video_result_filename,
-    write_import_result,
-)
-from nodes.storyline._common import resolve_video_input_paths
+_ROOT = Path(__file__).resolve().parents[2]
+_RUNNER = _ROOT / "scripts" / "run_workflow.py"
 
 
-def test_multi_file_import_wires_video_input_paths(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """导入 3 个视频 → state["video_input_paths"] 长度 3,下游能读到 3 个。"""
-    out_root = tmp_path / "outputs"
-    monkeypatch.setattr(config, "storyline_outputs_root", lambda: out_root)
+def _load_runner():
+    """按路径加载 ``scripts/run_workflow.py``(scripts/ 不是包)。"""
+    spec = importlib.util.spec_from_file_location("run_workflow_script", _RUNNER)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
-    write_import_result(
-        "job-wire",
-        {
-            "ok": True,
-            "web_session_id": "websid",
-            "media_id": "media_0001",
-            "filename": "a.mov",
-            "stored_path": "E:/media/a.mov",
-            "media_paths": ["E:/media/a.mov", "E:/media/b.mov", "E:/media/c.mov"],
-        },
-        root=out_root,
-    )
-    out = import_video(
-        {"session_id": "job-wire", "error_log": []},
-        outputs_root=out_root,
-        poll_interval_s=0,
-        timeout_s=0,
-    )
 
-    assert out["import_video_status"] == "imported"
-    assert len(out["video_input_paths"]) == 3
-    assert resolve_video_input_paths(out) == [
+def test_cli_multi_paths_wire_video_input_paths() -> None:
+    """``--video-input-paths`` 传 3 个路径 → state 列表长 3,下游读到 3 个。"""
+    from nodes.storyline._common import resolve_video_input_paths
+
+    runner = _load_runner()
+    state = runner._default_initial_state("job-wire", "E:/media/a.mov,E:/media/b.mov,E:/media/c.mov")
+
+    assert state["video_input_paths"] == [
         "E:/media/a.mov", "E:/media/b.mov", "E:/media/c.mov"
     ]
-    # 旧字段仍指向第一个(下游单值消费方不受影响)
-    assert out["video_input_path"] == "E:/media/a.mov"
-    assert out["import_video_media_path"] == "E:/media/a.mov"
+    assert resolve_video_input_paths(state) == [
+        "E:/media/a.mov", "E:/media/b.mov", "E:/media/c.mov"
+    ]
+    # 单值字段仍指向第一个(下游单值消费方不受影响)
+    assert state["video_input_path"] == "E:/media/a.mov"
 
 
-def test_single_file_import_keeps_legacy_behavior(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """只导入 1 个 → video_input_paths 长度 1,且值 == video_input_path。"""
-    out_root = tmp_path / "outputs"
-    monkeypatch.setattr(config, "storyline_outputs_root", lambda: out_root)
+def test_cli_single_path_keeps_legacy_behavior() -> None:
+    """只给 1 个路径 → video_input_paths 长度 1,且值 == video_input_path。"""
+    from nodes.storyline._common import resolve_video_input_paths
 
-    write_import_result(
-        "job-one",
-        {
-            "ok": True,
-            "media_id": "media_0001",
-            "filename": "a.mp4",
-            "stored_path": "E:/media/a.mp4",
-            "media_paths": ["E:/media/a.mp4"],
-        },
-        root=out_root,
-    )
-    out = import_video(
-        {"session_id": "job-one", "video_input_path": "E:/orig.mp4", "error_log": []},
-        outputs_root=out_root,
-        poll_interval_s=0,
-        timeout_s=0,
-    )
-    assert out["video_input_paths"] == ["E:/media/a.mp4"]
-    assert out["video_input_path"] == "E:/media/a.mp4"
-    assert resolve_video_input_paths(out) == ["E:/media/a.mp4"]
+    runner = _load_runner()
+    state = runner._default_initial_state("job-one", "E:/media/a.mp4")
+
+    assert state["video_input_paths"] == ["E:/media/a.mp4"]
+    assert state["video_input_path"] == "E:/media/a.mp4"
+    assert resolve_video_input_paths(state) == ["E:/media/a.mp4"]
 
 
-def test_result_file_records_all_media_paths(tmp_path: Path) -> None:
-    """握手结果文件里含 N 条 ``media_paths``(网页端回写的契约)。"""
-    from nodes.node_04a_import_video import build_result_payload, write_import_result
+def test_cli_no_extra_paths_falls_back_to_default_media() -> None:
+    """不传 ``--video-input-paths`` → 不写 video_input_paths 键,单值回退仍可用。"""
+    from nodes.storyline._common import resolve_video_input_paths
 
-    out_root = tmp_path / "outputs"
-    target = write_import_result(
-        "job-payload",
-        build_result_payload("websid", [
-            {"media_id": "media_0001", "filename": "a.mov", "stored_path": "E:/a.mov"},
-            {"media_id": "media_0002", "filename": "b.mov", "stored_path": "E:/b.mov"},
-        ]),
-        root=out_root,
-    )
-    payload = json.loads(target.read_text(encoding="utf-8"))
-    assert len(payload["media_paths"]) == 2
-    assert payload["media_paths"] == ["E:/a.mov", "E:/b.mov"]
-    # 单值字段(= 第一个)也在,老读取方不会挂
-    assert payload["stored_path"] == "E:/a.mov"
-    assert target.name == import_video_result_filename
+    runner = _load_runner()
+    state = runner._default_initial_state("job-default")
+
+    assert "video_input_paths" not in state
+    # 默认素材取仓库 fixture(或 inputs/),至少解析不出错
+    paths = resolve_video_input_paths(state)
+    assert paths == ([state["video_input_path"]] if state["video_input_path"] else [])

@@ -124,20 +124,8 @@ class WorkflowState(TypedDict, total=False):
     # 缺失时回退 ``video_input_path``(老 checkpoint / 老 initial_state 兼容)。
     video_input_paths: NotRequired[list[str]]
 
-    # 步骤 1
-    cache_cleaned: bool
-    cache_cleaned_paths: list[str]
-
-    # 步骤 2
-    openstoryline_pid: Optional[int]
-    openstoryline_mcp_endpoint: Optional[str]
-    openstoryline_web_url: Optional[str]
-    openstoryline_ready: bool
-
-    # 步骤 3
-    preview_opened: bool
-
-    # 步骤 4
+    # 步骤 4(阶段3 auto-only 收敛后唯一保留的旧人工步骤字段:
+    # node_05_generate_draft 兜底读取 + _route_after_storyline_join 判断仍依赖)
     shot_plan: Optional[dict]
 
     # 步骤 5(依赖阶段 B 的加密/版本状态)
@@ -251,7 +239,7 @@ class WorkflowState(TypedDict, total=False):
     storyline_ai_transition_artifact: Annotated[Optional[str], _last_wins]    # generate_ai_transition(ADR-005 默认关闭)
     storyline_web_topic_artifact: Annotated[Optional[str], _last_wins]        # search_web_topic(条件)
     storyline_render_smoke_test_path: Annotated[Optional[str], _last_wins]    # render_video(旁支)
-    # human 模式融合专用键(只写新键,不覆盖 human 主图已有字段):
+    # 2026-10 调序新增的独立键(避免与既有键并发写冲突):
     storyline_search_media_artifact: Annotated[Optional[str], _last_wins]     # search_media(不覆盖 storyline_media_artifact)
     storyline_timeline_plan_ai: Annotated[Optional[str], _last_wins]          # plan_timeline_ai_transition(不覆盖 storyline_timeline_plan)
     storyline_auto_plan: Annotated[Optional[dict], _last_wins]                # storyline_join(不覆盖 storyline_plan)
@@ -282,16 +270,6 @@ class WorkflowState(TypedDict, total=False):
     assembly_repair_evidence_path: NotRequired[Optional[str]]
     # node_05 宽高比归一化后的素材路径;None = 比例本就对齐,未做裁切。
     draft_source_normalized_path: NotRequired[Optional[str]]
-
-    # ===== node_04a import_video 新增(手动导入关卡,2026-10) =====
-    # 唯一写入者是 ``nodes/node_04a_import_video.py::import_video``(单写者,
-    # 故全部 NotRequired 无需 reducer)。老 checkpoint 恢复时缺失 = 正常。
-    # "pending" | "imported" | "failed" | "timeout"
-    import_video_status: NotRequired[str]
-    import_video_media_path: NotRequired[Optional[str]]      # 网页端落盘后的绝对路径(第一个)
-    import_video_media_paths: NotRequired[list[str]]           # 网页端落盘后的全部绝对路径
-    import_video_web_session_id: NotRequired[Optional[str]]  # OpenStoryline 会话 id(非 job_id)
-    import_video_filename: NotRequired[Optional[str]]
 
     # ===== 对话框节点指示(《对话框显示LangGraph当前运行节点执行设计》§4.1,2026-11) =====
     # 实际发起本工作流的**聊天会话 ID**(32 位十六进制),用于建立

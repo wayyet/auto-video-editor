@@ -132,8 +132,9 @@ def resolve_video_input_paths(state: WorkflowState) -> list[str]:
 
     优先级:
     1. ``state["video_input_paths"]`` —— 显式列表。
-       写入者:``nodes/node_04a_import_video.py``(网页【导入视频】导入成功时)
-       或 ``initial_state.json`` 直接给(auto mode 多视频入口)。
+       写入者:入口层在初始 state 给出(auto-only 单流水线,
+       ``scripts/run_workflow.py`` 的 ``--video-input-paths`` / ``initial_state.json``,
+       以及 ``agent_gate`` 的 run_start 载荷)。
     2. ``[state["video_input_path"]]`` —— 旧行为(单视频)。
     3. ``[]`` —— 都没有。
 

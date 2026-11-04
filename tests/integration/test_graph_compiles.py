@@ -38,16 +38,27 @@ def test_graph_compiles_with_custom_checkpointer() -> None:
     assert g.checkpointer is saver
 
 
-def test_graph_registers_split_import_nodes() -> None:
-    """2026-10 拆分 node_04:``import_video`` / ``get_storyboard_plan`` 均已注册。
+def test_graph_auto_only_entry_and_no_removed_nodes() -> None:
+    """阶段3 auto-only:START 直连 storyline_load_media;human 模式节点均已删除。
 
-    ``import_and_plan`` 应已消失(它被 04a 手动导入关卡 + 04b 读盘取代)。
+    ``import_and_plan`` / ``import_video`` / ``get_storyboard_plan`` 等
+    旧人工导入链节点都应消失(2026-10 拆分版已随阶段3 一并删除)。
     """
     g = build_graph(checkpointer=InMemorySaver(), start_heartbeat_thread=False)
     nodes = set(g.get_graph().nodes)
-    assert "import_video" in nodes
-    assert "get_storyboard_plan" in nodes
-    assert "import_and_plan" not in nodes
+    for removed in (
+        "import_and_plan",
+        "import_video",
+        "get_storyboard_plan",
+        "clean_cache",
+        "launch_openstoryline",
+        "open_preview",
+        "checkpoint0_storyline_plan",
+    ):
+        assert removed not in nodes, removed
+    # 入口:START 直连 storyline_load_media(普通边)
+    edges = {(e.source, e.target) for e in g.get_graph().edges}
+    assert ("__start__", "storyline_load_media") in edges
 
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@
 
 - 用 ``stream_mode="updates"`` 逐步驱动,这样能看到图走到哪一步。
 - 验证:
-  1. open_preview 之后能正确切到 storyline_load_media(_route_mode 起作用)
+  1. START 直连 storyline_load_media(阶段3 auto-only 拓扑)
   2. 19 节点壳子按 plan §2.2 拓扑顺序执行
   3. storyline_plan 字段被 join_storyline 写出
   4. 没有任何"storyline:*" 错误信息
@@ -23,7 +23,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from graph import _STORYLINE_MODE_OVERRIDE, build_graph  # noqa: E402
+from graph import build_graph  # noqa: E402
 
 
 def _seed_min_draft(tmp: Path) -> Path:
@@ -71,40 +71,36 @@ def main() -> int:
         tmp = Path(tmp_dir)
         draft_file = _seed_min_draft(tmp)
 
-        saved_token = _STORYLINE_MODE_OVERRIDE.set("auto")
-        try:
-            g = build_graph(
-                checkpointer=InMemorySaver(),
-                start_heartbeat_thread=False,
-                run_preflight=False,
-            )
-            state = {
-                "session_id": "smoke-auto",
-                "video_input_path": "E:/tmp/smoke.mp4",
-                "error_log": [],
-                "status_log": [],
-                "draft_path": str(draft_file),
-                "draft_encryption_status": "plaintext",
-                "draft_version_strategy": "strategy_a_version_lock",
-                "storyline_targets": {"target_duration_ms": 35000},
-            }
-            config = {"configurable": {"thread_id": "smoke-auto-thread"}}
+        g = build_graph(
+            checkpointer=InMemorySaver(),
+            start_heartbeat_thread=False,
+            run_preflight=False,
+        )
+        state = {
+            "session_id": "smoke-auto",
+            "video_input_path": "E:/tmp/smoke.mp4",
+            "error_log": [],
+            "status_log": [],
+            "draft_path": str(draft_file),
+            "draft_encryption_status": "plaintext",
+            "draft_version_strategy": "strategy_a_version_lock",
+            "storyline_targets": {"target_duration_ms": 35000},
+        }
+        config = {"configurable": {"thread_id": "smoke-auto-thread"}}
 
-            # 用 stream 模式逐步看
-            last_log: list[str] = []
-            for event in g.stream(state, config=config, stream_mode="updates"):
-                for node_name, delta in event.items():
-                    if isinstance(delta, dict):
-                        tags = delta.get("status_log")
-                        if isinstance(tags, list) and tags:
-                            for t in tags:
-                                if t not in last_log:
-                                    last_log.append(t)
-                                    print(f"  [{node_name}] {t}")
-            final_state = g.get_state(config)
-            out = final_state.values if final_state.values else state
-        finally:
-            _STORYLINE_MODE_OVERRIDE.reset(saved_token)
+        # 用 stream 模式逐步看
+        last_log: list[str] = []
+        for event in g.stream(state, config=config, stream_mode="updates"):
+            for node_name, delta in event.items():
+                if isinstance(delta, dict):
+                    tags = delta.get("status_log")
+                    if isinstance(tags, list) and tags:
+                        for t in tags:
+                            if t not in last_log:
+                                last_log.append(t)
+                                print(f"  [{node_name}] {t}")
+        final_state = g.get_state(config)
+        out = final_state.values if final_state.values else state
 
     # ---- 验收 ----
     expected = [

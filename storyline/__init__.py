@@ -8,10 +8,10 @@
 - ``mapper``:Canonical Timeline(整数毫秒) ↔ 剪映 ``draft_content.json``(整数微秒) 映射。
 - ``output_isolation``:`outputs/{job_id}/` 隔离 + 幂等键(``job_id + input_sha256 + config_sha256``)。
 
-集成模式(MCP-first):auto-video-editor 主进程通过 MCP SDK(stdio 或 streamable-http)
-连到独立 Python 3.11 环境内的 ``open_storyline.mcp.server``,本包负责把 MCP 返回
-的 ``tool_excute_result`` 拍平成本项目内部契约(Canonical Timeline),并把校验过的
-抓取 / 文案 / 时间线翻译成剪映草稿。
+集成模式(阶段1~7 本地化后的现状):storyline 链的能力已全部本地化到
+``storyline_capabilities/``(不再依赖 vendored OpenStoryline MCP server);
+本包保留 Canonical Timeline 契约层 —— 节点产物(时间线 JSON)经 ``contract``
+校验后由 ``mapper`` 翻译成剪映草稿。
 
 子模块不在包导入时 eager 加载;按需 import 即可。
 """

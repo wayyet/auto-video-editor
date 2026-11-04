@@ -7,7 +7,7 @@
 3. resume 时从 checkpoint 读取 chat_session_id(Command 输入不含该键);
 4. 不传 chat_session_id → 关联 store 零调用(旧 checkpoint 兼容,任务 1.6);
 5. 关联 store 抛异常 → 工作流照常完成(§10.4 任务 2.6 降级);
-6. import_video 式 custom 等待(node.waiting_input)**不**把关联标成
+6. custom 握手等待(node.waiting_input)**不**把关联标成
    waiting_human —— 那是运行中的等待,工作流未挂起(映射表注释的设计决策)。
 """
 
@@ -61,18 +61,18 @@ def _node_handshake(state: dict) -> dict:
 
     get_stream_writer()({
         "monitor_event": "waiting_input",
-        "node_id": "import_video",
+        "node_id": "custom_handshake",
         "waiting_kind": "web_file_handshake",
         "detail": {},
     })
-    return {"seen": ["import_video"]}
+    return {"seen": ["custom_handshake"]}
 
 
 def _handshake_graph() -> Any:
     g = StateGraph(ProbeState)
-    g.add_node("import_video", _node_handshake)
-    g.add_edge(START, "import_video")
-    g.add_edge("import_video", END)
+    g.add_node("custom_handshake", _node_handshake)
+    g.add_edge(START, "custom_handshake")
+    g.add_edge("custom_handshake", END)
     return g.compile(checkpointer=InMemorySaver())
 
 
