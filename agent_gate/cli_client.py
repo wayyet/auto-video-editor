@@ -22,7 +22,7 @@ import signal
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 from agent_gate.agent_bin import resolve_agent_bin
 from agent_gate.media import extract_frames, is_image
@@ -88,6 +88,26 @@ def run_process(cmd: list[str], stdin_text: str, *, cwd: str, env: dict[str, str
 
 def _mime(path: str) -> str:
     return mimetypes.guess_type(path)[0] or "image/jpeg"
+
+
+#: ``clean_env=True`` 时子进程只继承这些环境变量。
+CLEAN_ENV_KEEP = frozenset({"PATH", "SYSTEMROOT", "COMSPEC", "TEMP", "TMP", "LANG", "LC_ALL"})
+
+
+def build_agent_env(clean_env: bool, extra_env: Mapping[str, str]) -> dict[str, str]:
+    """构造 agent 子进程的环境变量(``_CLIClient`` 与 ``AgentLauncher`` 共用)。
+
+    ``clean_env=False`` 继承当前进程全部环境变量;``True`` 只保留
+    :data:`CLEAN_ENV_KEEP`,其余靠 ``extra_env`` 显式给。两种情况都强制
+    ``PYTHONUTF8=1``,最后叠加 ``extra_env``(同名时 ``extra_env`` 优先)。
+    """
+    if clean_env:
+        env = {k: v for k, v in os.environ.items() if k in CLEAN_ENV_KEEP}
+    else:
+        env = dict(os.environ)
+    env["PYTHONUTF8"] = "1"
+    env.update(extra_env)
+    return env
 
 
 class _CLIClient:
@@ -177,14 +197,7 @@ class _CLIClient:
         return images
 
     def _env(self) -> dict[str, str]:
-        if self.clean_env:
-            keep = {"PATH", "SYSTEMROOT", "COMSPEC", "TEMP", "TMP", "LANG", "LC_ALL"}
-            env = {k: v for k, v in os.environ.items() if k in keep}
-        else:
-            env = dict(os.environ)
-        env["PYTHONUTF8"] = "1"
-        env.update(self.extra_env)
-        return env
+        return build_agent_env(self.clean_env, self.extra_env)
 
     def _run(self, cmd: list[str], stdin_text: str, cwd: Path) -> tuple[int, str, str]:
         return run_process(cmd, stdin_text, cwd=str(self.workdir or cwd), env=self._env(),

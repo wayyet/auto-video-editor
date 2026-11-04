@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from agent_gate.agent_bin import resolve_agent_bin
-from agent_gate.cli_client import CLIBackendFailed, CLIBackendTimeout, run_process
+from agent_gate.cli_client import CLIBackendFailed, CLIBackendTimeout, build_agent_env, run_process
 
 MCP_SERVER_NAME = "video-agent"   # 必须与 .mcp.json 里的服务名一致
 
@@ -73,14 +73,7 @@ class AgentLauncher:
         raise NotImplementedError
 
     def env(self) -> dict[str, str]:
-        if self.clean_env:
-            keep = {"PATH", "SYSTEMROOT", "COMSPEC", "TEMP", "TMP", "LANG", "LC_ALL"}
-            env = {k: v for k, v in os.environ.items() if k in keep}
-        else:
-            env = dict(os.environ)
-        env["PYTHONUTF8"] = "1"
-        env.update(self.extra_env)
-        return env
+        return build_agent_env(self.clean_env, self.extra_env)
 
     def run(self, prompt: str) -> LaunchResult:
         try:
