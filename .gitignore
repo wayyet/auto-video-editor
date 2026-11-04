@@ -79,3 +79,6 @@ out/
 
 # 单流水线重构 2026-11-04:config.toml.local 带日期备份(含 API key,不入库)
 /config.toml.local.bak-*
+
+# 误落在仓库根的字幕产物(字幕应写到各草稿目录里)
+/subtitle_en.srt
