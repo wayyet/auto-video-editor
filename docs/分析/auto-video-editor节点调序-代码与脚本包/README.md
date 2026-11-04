@@ -1,5 +1,7 @@
 # auto-video-editor 节点调序 · 代码与脚本包
 
+> ⚠ `01_代码改动/` 下的 7 个 `.py` 是基线 `4c5b042` 时的快照，其中 5 个已和现行代码不同（`graph.py`、`nodes/node_08_add_subtitles.py`、`nodes/node_10_inject_text_fx.py`、`nodes/node_join_before_delivery.py`、`tests/integration/test_reorder_topology.py`），只用于追溯，不要当作现行代码。
+
 - 基线:`wayyet/auto-video-editor` 的 `main` @ `4c5b04289c45883718ddad7a6630d57be36db3c6`(2026-10-01 22:38 +0800)
 - 基线变化:首次分析基于 `b00201b`(2026-09-30);`main` 随后前进了 1 个提交(拆分 node_04)。补丁、测试、实证、图都已按 `4c5b042` 重做并重新验证。
 - 内容:把「英文线补 08b / 10b」和「09 / 11 / 12 / 13 推迟到 node_17 之后」落成可直接应用的代码,并附全部实证、分析、画图脚本。
