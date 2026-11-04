@@ -22,7 +22,8 @@ Docker 镜像按容器 locale 建库)。这带来两个坑:
 ⚠️ **JSONB 仍然必须 ``ensure_ascii=False``**:这是**服务端**限制 ——
 PG 要把 JSON 里的 ``\\uXXXX`` 转义翻译成库编码,而 ``SQL_ASCII`` 无法表示
 非 ASCII 字符 ⇒ ``UntranslatableCharacter``。改 ``client_encoding`` 解决不了,
-见 ``db.session_repository.jsonb``。
+见 ``db.connection.configure_json_dumps``(原 ``db.session_repository.jsonb``
+已随 2026-11-04 单流水线收敛阶段4 删除)。
 """
 
 from __future__ import annotations

@@ -183,7 +183,7 @@ def isolated_postgres_db(postgres_test_db: PostgresTestDbFactory) -> Callable[[]
 
         def test_x(isolated_postgres_db):
             uri = isolated_postgres_db()
-            repo = SessionRepository(uri=uri)
+            store = WorkflowEventStore(uri=uri)  # 或任何需要独立库的被测对象
 
     连不上 Postgres ⇒ 直接 **fail**(不静默 skip,避免"假绿")。
     """

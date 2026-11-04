@@ -270,13 +270,3 @@ class WorkflowState(TypedDict, total=False):
     assembly_repair_evidence_path: NotRequired[Optional[str]]
     # node_05 宽高比归一化后的素材路径;None = 比例本就对齐,未做裁切。
     draft_source_normalized_path: NotRequired[Optional[str]]
-
-    # ===== 对话框节点指示(《对话框显示LangGraph当前运行节点执行设计》§4.1,2026-11) =====
-    # 实际发起本工作流的**聊天会话 ID**(32 位十六进制),用于建立
-    # ``workflow_chat_links`` 会话—线程关联。与三个既有 ID 严格分离
-    # (执行设计 §2.4 / §10.3 红线 1-2):
-    # - ``session_id`` 仍是工作流业务会话(CLI 默认 = thread_id,语义不动);
-    # - ``thread_id`` 仍只作 LangGraph checkpoint / 事件查询键;
-    # - ``turn_id`` 仍只代表一次聊天请求。
-    # 可选字段:老 checkpoint 无该键,读取一律 ``state.get("chat_session_id")``。
-    chat_session_id: NotRequired[Optional[str]]

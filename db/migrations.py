@@ -5,7 +5,8 @@
 本模块**只**管应用层的表:
 
 - ``app_schema_migrations`` — 迁移版本台账(本模块自建,不算一条迁移)。
-- ``chat_sessions``         — 聊天会话(阶段 B 新建)。
+- ``chat_sessions``         — 聊天会话(阶段 B 新建;**legacy**:2026-11-04 单流水线
+  架构收敛后应用层停止读写,已发布的迁移 1 定义原样保留,存量表与数据不 DROP)。
 - ``workflow_runs``         — 运行台账(阶段 B 升级:CHECK / 索引 / TIMESTAMPTZ)。
 
 LangGraph 自己的 4 张 checkpoint 表(``checkpoints`` / ``checkpoint_blobs`` /
@@ -95,8 +96,12 @@ class Migration:
 
 
 # ---------------------------------------------------------------------------
-# 001 — chat_sessions
+# 001 — chat_sessions(legacy:应用层已停止读写,定义保留保迁移台账一致)
 # ---------------------------------------------------------------------------
+# 2026-11-04 单流水线架构收敛(阶段4):``chat_sessions`` 的仓储层
+# (``db/session_repository.py``)已删除,存量表与数据**不 DROP、不清理**;
+# 本迁移定义保留 —— 已发布迁移是历史记录,删掉会让新库与存量库的
+# 迁移台账不一致(评审修订版 R-08)。
 _CHAT_SESSIONS_SQL = """
 CREATE TABLE IF NOT EXISTS chat_sessions (
     session_id     TEXT PRIMARY KEY
@@ -267,9 +272,12 @@ CREATE INDEX IF NOT EXISTS idx_wre_run ON workflow_run_events (run_id);
 
 
 # ---------------------------------------------------------------------------
-# 005 — workflow_chat_links(聊天会话 ↔ 工作流线程关联,对话框节点指示设计 §4.3)
+# 005 — workflow_chat_links(legacy:应用层已停止读写,定义保留保迁移台账一致)
 # ---------------------------------------------------------------------------
-# 每个**聊天会话**保存最近一次关联的工作流线程:新运行启动时按
+# 2026-11-04 单流水线架构收敛(阶段4):关联的运行时写入链路
+# (``monitoring/workflow_chat_link_store.py`` 与 workflow_runner 挂钩)已删除,
+# 存量表与数据**不 DROP、不清理**;本迁移定义保留(理由同迁移 1,R-08)。
+# 原语义(保留作历史记录):每个**聊天会话**保存最近一次关联的工作流线程:新运行启动时按
 # ``chat_session_id`` upsert 覆盖;完成 / 失败后保留最后一行(刷新页面仍能
 # 显示终态),新工作流启动再覆盖。对话页凭会话 ID 经本表解析 thread_id。
 #
