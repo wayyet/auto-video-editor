@@ -31,13 +31,19 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
-import selectors
 import sys
+from pathlib import Path
 from urllib.parse import urlparse
 
 import psycopg
 from psycopg import sql
+
+# 让脚本不论从哪个目录运行,都能 import 仓库根下的 ``scripts._pg_common``。
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts._pg_common import mask_uri, run_async  # noqa: E402
 
 # Windows 默认 stdout 是 GBK，遇到中文 / 符号会报错；强制 UTF-8。
 try:
@@ -51,25 +57,11 @@ class AlignError(RuntimeError):
     """对齐失败(可操作的错误信息)。"""
 
 
-def _mask_uri(uri: str) -> str:
-    """把 URI 里的密码替换成 ``***``,用于任何输出。"""
-    try:
-        parsed = urlparse(uri)
-    except ValueError:
-        return "<无法解析的 URI>"
-    if not parsed.password:
-        return uri
-    netloc = parsed.netloc
-    if parsed.password in netloc:
-        netloc = netloc.replace(parsed.password, "***")
-    return parsed._replace(netloc=netloc).geturl()
-
-
 def _split_uri(uri: str) -> dict:
     """从 URI 里取出 user / password / host / port / dbname。"""
     parsed = urlparse(uri)
     if not parsed.hostname:
-        raise AlignError(f"URI 缺少 host:{_mask_uri(uri)}")
+        raise AlignError(f"URI 缺少 host:{mask_uri(uri)}")
     dbname = (parsed.path or "").lstrip("/")
     return {
         "user": parsed.username or "",
@@ -217,8 +209,8 @@ async def align(*, target_uri: str, admin_uri: str) -> int:
     # 维护库:用管理员身份连 postgres 库
     maintenance_uri = _admin_uri_with_db(admin_uri, "postgres")
 
-    print(f"==> 目标 URI : {_mask_uri(target_uri)}")
-    print(f"==> 管理员 URI: {_mask_uri(admin_uri)}")
+    print(f"==> 目标 URI : {mask_uri(target_uri)}")
+    print(f"==> 管理员 URI: {mask_uri(admin_uri)}")
 
     # 用管理员连接进维护库(autocommit:CREATE DATABASE 不能在事务块里跑)
     async with await psycopg.AsyncConnection.connect(
@@ -255,15 +247,6 @@ async def align(*, target_uri: str, admin_uri: str) -> int:
     return 0
 
 
-def _run(coro):
-    """用 SelectorEventLoop 跑协程;psycopg 异步在 Windows 上需要这个 loop。"""
-    loop = asyncio.SelectorEventLoop(selectors.SelectSelector())
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
-
-
 def main() -> int:
     """命令行入口。"""
     parser = argparse.ArgumentParser(
@@ -275,7 +258,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        rc = _run(align(target_uri=args.target_uri, admin_uri=args.admin_uri))
+        rc = run_async(align(target_uri=args.target_uri, admin_uri=args.admin_uri))
     except AlignError as exc:
         print(f"✗ 对齐失败:{exc}", file=sys.stderr)
         return 1

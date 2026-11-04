@@ -14,13 +14,18 @@
 
 from __future__ import annotations
 
-import asyncio
-import os
-import selectors
 import sys
+from pathlib import Path
 from urllib.parse import urlparse
 
 import psycopg
+
+# 让脚本不论从哪个目录运行,都能 import 仓库根下的 ``scripts._pg_common``。
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts._pg_common import mask_uri, require_postgres_uri, run_async  # noqa: E402
 
 
 EXPECTED_TABLES = {
@@ -38,30 +43,6 @@ try:
     sys.stderr.reconfigure(encoding="utf-8")
 except (AttributeError, OSError):
     pass
-
-
-def _postgres_uri() -> str:
-    """读取连接串；不把密码写入日志。"""
-    uri = os.environ.get("POSTGRES_URI", "").strip()
-    if not uri:
-        print("✗ 未设置 POSTGRES_URI", file=sys.stderr)
-        print("示例：$env:POSTGRES_URI='postgresql://postgres:devpass@localhost:5432/video_workflow'", file=sys.stderr)
-        raise SystemExit(2)
-    return uri
-
-
-def _mask_uri(uri: str) -> str:
-    """把 URI 里的密码替换成 ``***``，用于任何输出。"""
-    try:
-        parsed = urlparse(uri)
-    except ValueError:
-        return "<无法解析的 URI>"
-    if not parsed.password:
-        return uri
-    netloc = parsed.netloc
-    if parsed.password in netloc:
-        netloc = netloc.replace(parsed.password, "***")
-    return parsed._replace(netloc=netloc).geturl()
 
 
 def _expected_database(uri: str) -> str:
@@ -101,7 +82,7 @@ async def verify(uri: str, *, allow_missing_tables: bool = False) -> None:
             if database != expected_database:
                 raise RuntimeError(
                     f"当前数据库是 {database!r}，预期使用 {expected_database!r}；"
-                    f"实际 URI: {_mask_uri(uri)}"
+                    f"实际 URI: {mask_uri(uri)}"
                 )
 
             await cursor.execute(
@@ -126,24 +107,15 @@ async def verify(uri: str, *, allow_missing_tables: bool = False) -> None:
 
 async def run(*, allow_missing_tables: bool = False) -> None:
     """建立异步校验任务。"""
-    uri = _postgres_uri()
+    uri = require_postgres_uri()
     await verify(uri, allow_missing_tables=allow_missing_tables)
-
-
-def _run(coro):
-    """用 SelectorEventLoop 跑协程；psycopg 异步在 Windows 上需要这个 loop。"""
-    loop = asyncio.SelectorEventLoop(selectors.SelectSelector())
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
 
 
 def main() -> None:
     """命令行入口。"""
     allow_missing_tables = "--allow-missing-tables" in sys.argv[1:]
     try:
-        _run(run(allow_missing_tables=allow_missing_tables))
+        run_async(run(allow_missing_tables=allow_missing_tables))
     except SystemExit:
         raise
     except Exception as exc:
