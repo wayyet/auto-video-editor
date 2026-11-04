@@ -53,6 +53,7 @@ from db.postgres_config import (
     describe_postgres_target,
     resolve_postgres_target,
 )
+from agent_gate.resume_match import match_resume_values
 
 _logger = logging.getLogger("agent_gate.runner")
 
@@ -388,13 +389,9 @@ def resume_pending_sync(
     interrupts = list(snap.interrupts or [])
     if not interrupts:
         raise ValueError("无挂起可恢复:graph state 中没有 interrupts")
-    resume_map: dict[str, Any] = {}
-    for i in interrupts:
-        cp = (i.value or {}).get("checkpoint") if isinstance(i.value, dict) else None
-        if cp in values_by_checkpoint:
-            resume_map[i.id] = values_by_checkpoint[cp]
-        elif fallback_key in values_by_checkpoint and len(interrupts) == 1:
-            resume_map[i.id] = values_by_checkpoint[fallback_key]
+    resume_map, _unmatched = match_resume_values(
+        interrupts, values_by_checkpoint, fallback_key=fallback_key
+    )
     if not resume_map:
         raise ValueError(
             f"没有匹配的挂起。可用 checkpoint={[d['checkpoint'] for d in describe_interrupts(snap)]},"

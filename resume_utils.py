@@ -21,6 +21,8 @@ from typing import Any, Mapping
 
 from langgraph.types import Command
 
+from agent_gate.resume_match import match_resume_values
+
 logger = logging.getLogger(__name__)
 
 
@@ -53,30 +55,18 @@ async def resume_all_pending(
     if not interrupts:
         raise ValueError("无挂起可恢复:graph state 中没有 interrupts")
 
-    resume_map: dict[str, Any] = {}
-    matched_keys: list[str] = []
+    resume_map, unmatched_interrupts = match_resume_values(
+        interrupts, values_by_checkpoint, fallback_key=fallback_key
+    )
     unmatched: list[Any] = []
-
-    for i in interrupts:
-        cp = (i.value or {}).get("checkpoint")
-        if cp in values_by_checkpoint:
-            resume_map[i.id] = values_by_checkpoint[cp]
-            matched_keys.append(cp)
-        elif (
-            fallback_key in values_by_checkpoint
-            and len(interrupts) == 1
-        ):
-            # 单 interrupt + fallback_key → 用 fallback 值
-            resume_map[i.id] = values_by_checkpoint[fallback_key]
-            matched_keys.append(fallback_key)
-        else:
-            unmatched.append({"interrupt_id": i.id, "value": i.value})
-            logger.warning(
-                "resume_all_pending: interrupt %s 的 payload 缺 'checkpoint' 字段,"
-                " 且无 fallback_key 命中,跳过。value=%r",
-                i.id,
-                i.value,
-            )
+    for i in unmatched_interrupts:
+        unmatched.append({"interrupt_id": i.id, "value": i.value})
+        logger.warning(
+            "resume_all_pending: interrupt %s 的 payload 缺 'checkpoint' 字段,"
+            " 且无 fallback_key 命中,跳过。value=%r",
+            i.id,
+            i.value,
+        )
 
     if not resume_map:
         raise ValueError(
