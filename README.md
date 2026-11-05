@@ -333,6 +333,31 @@ python -m agent_gate resume --thread-id drive-20261105-001 --outputs-root output
 - 监控**只读**:查询运行快照、SSE 补发、图拓扑;刷新/重连绝不触发工作流。
   工作流触发只有入口 A/B 两条路径。
 
+### 2.8 创建台 /console(第二期,浏览器创建运行)
+
+浏览器里的第三类入口(仍经同一 `scripts/run_workflow.py`,非新 runner):
+
+1. 打开 <http://127.0.0.1:7860/console>;
+2. 输入剪辑提示词,拖入/选择 1-10 个 MP4/MOV(单文件 ≤2 GiB,可配);
+3. 设置目标时长(默认 35 秒)、画幅比例、输出语言;
+4. 点「创建并运行工作流」—— 服务端生成 `console-<12hex>` thread_id,
+   视频落盘 `outputs/<thread_id>/inputs/`,写 `initial_state.json`
+   (提示词只进 `storyline_targets.user_request/script_request`,绝不写 `query`),
+   以 `--llm-backend`(来自服务端 `CONSOLE_LLM_BACKEND`,不接受浏览器指定)启动子进程;
+5. 页面自动订阅既有 SSE 显示节点事件;「查看完整监控」跳转 `/?thread_id=`(自动订阅)。
+
+约束与安全:
+
+- 写 API 仅 `POST /api/console/runs`(202 即返回,不等待执行);带 Origin 的浏览器
+  请求必须先 `GET /api/console/csrf` 取 token 并随 `X-CSRF-Token` 提交(无 Origin
+  的本机脚本豁免);`/api/workflow/*` 仍 GET-only。
+- LLM 后端门禁:`CONSOLE_LLM_BACKEND` 未配置 → 503 拒绝启动(不静默 Stub);
+  `stub` 需 `CONSOLE_ALLOW_STUB=true`。
+- 每任务独立草稿目录(`AUTO_VIDEO_EDITOR_DRAFT_DIR=outputs/<thread_id>/drafts`),
+  并发上限 `CONSOLE_MAX_CONCURRENT_RUNS`(默认 2)。
+- 恢复语义:console 创建的运行(入口 A 同款)由 `scripts/resume_workflow.py` 恢复;
+  监控页/console 的恢复按钮只提供指引,不由监控 API 执行。
+
 ## 3. 运行测试
 
 ```powershell
