@@ -222,6 +222,7 @@
       <div class="params">
         <label>搜索(thread_id / 状态 / 时间)<input id="historySearch" spellcheck="false" style="width:220px" /></label>
         <button class="btn" id="btnHistoryRefresh">刷新</button>
+        <button class="btn" id="btnCleanCache" title="清除可再生缓存(临时目录 / __pycache__ / 日志 / 剪映草稿备份等)。不影响 outputs/ 成片、任务记录与剪映 User Data\Cache\Log。">清除缓存</button>
       </div>
       <table id="historyTable" style="margin-top:6px">
         <thead><tr><th>thread_id</th><th style="width:140px">创建时间</th><th style="width:110px">状态</th><th style="width:120px">操作</th></tr></thead>
@@ -266,6 +267,7 @@
     const btnResume = $("btnResume"), resumeErr = $("resumeErr");
     const evTable = $("evTable"), evBody = $("evBody"), evEmpty = $("evEmpty"), monitorLink = $("monitorLink");
     const historySearch = $("historySearch"), btnHistoryRefresh = $("btnHistoryRefresh");
+    const btnCleanCache = $("btnCleanCache");
     const historyBody = $("historyBody");
 
     let limits = { ...DEFAULT_LIMITS };
@@ -811,6 +813,29 @@
     }
     historySearch.addEventListener("input", renderHistory);
     btnHistoryRefresh.addEventListener("click", loadHistory);
+
+    // ------------------------------------------------------------------
+    // 2026-11-06:清除可再生缓存(维护入口;服务端有冷却限流与活跃任务 409)
+    // ------------------------------------------------------------------
+    btnCleanCache.addEventListener("click", async () => {
+      if (btnCleanCache.disabled) return;
+      if (!window.confirm(
+        "确认清除可再生缓存?(临时目录 / __pycache__ / 日志 / 剪映草稿备份等;"
+        + "不影响 outputs/ 成片与任务记录)"
+      )) return;
+      btnCleanCache.disabled = true;
+      try {
+        const data = await postJson(CONSOLE_API_PATHS.clearCache, {});
+        const n = Number(data.cleaned_count || 0);
+        const errs = Array.isArray(data.errors) ? data.errors.length : 0;
+        window.alert(errs ? `已清理 ${n} 个路径,${errs} 项失败(多为被占用的日志/缓存,可稍后再试)` : `已清理 ${n} 个缓存路径`);
+        loadHistory();
+      } catch (err) {
+        window.alert(`清除缓存失败:${err && err.message ? err.message : ""}`);
+      } finally {
+        btnCleanCache.disabled = false;
+      }
+    });
   </script>
 </body>
 </html>

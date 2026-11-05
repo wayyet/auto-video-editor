@@ -357,6 +357,14 @@ python -m agent_gate resume --thread-id drive-20261105-001 --outputs-root output
   并发上限 `CONSOLE_MAX_CONCURRENT_RUNS`(默认 2)。
 - 恢复语义:console 创建的运行(入口 A 同款)由 `scripts/resume_workflow.py` 恢复;
   监控页/console 的恢复按钮只提供指引,不由监控 API 执行。
+- 清除缓存:「历史任务」区「清除缓存」按钮 → `POST /api/console/cache/clear`,
+  清理可再生缓存(系统临时目录 / 源码 `__pycache__` / `logs/*.log` /
+  `runtime/initial_state_*.json` / 剪映草稿回收站与备份;清单见 `config.py`
+  缓存段,路径按仓库位置动态解析)。三道保护:CSRF 门禁、冷却限流
+  (`CONSOLE_CACHE_CLEAR_COOLDOWN_SEC`,默认 30s,超频 429)、本实例有活跃
+  运行任务时 409 拒绝。禁删:剪映 `User Data\Cache`、`User Data\Log`、
+  `outputs/` 成片、`.storyline/models`(2026-11-04 R-10 删除旧 clean-cache
+  端点后,清理能力以此手动入口形式回归)。
 
 ## 3. 运行测试
 
@@ -645,7 +653,7 @@ PostgreSQL 统一改造方案(阶段 A / B)新增的应用层数据访问层。*
 
 ### 4.10 2026-10 接入原"不可达节点"(三个开关)
 
-原先注册了、但从 START 永远走不到的 6 个节点,其中 **5 个已接入主图**;`clean_cache` **不接边**,只由 Web「清理缓存」按钮手动触发。**每个节点各自挂在与它最相关的现有节点旁边,不集中放在同一处。**
+原先注册了、但从 START 永远走不到的 6 个节点,其中 **5 个已接入主图**;`clean_cache` 当初**不接边**、只由 Web「清理缓存」按钮手动触发(现已整体删除,见下)。**每个节点各自挂在与它最相关的现有节点旁边,不集中放在同一处。**
 每条旁支由一个环境开关控制,**默认全开**。三个开关都设为 `0` 时,图的执行轨迹与接入前完全一致
 (`tests/integration/test_unreachable_nodes_wiring.py` 里有黄金轨迹锁定)。
 
@@ -660,7 +668,9 @@ PostgreSQL 统一改造方案(阶段 A / B)新增的应用层数据访问层。*
 
 备注:
 
-- `clean_cache` **已删除**(2026-11-04 阶段3):清理缓存端点与节点不复存在;如需清理能力,另做独立 CLI 设计。
+- `clean_cache` **已删除**(2026-11-04 阶段3):清理缓存节点与旧 clean-cache 端点不复存在;
+  清理能力已于 2026-11-06 以创建台手动入口形式回归(「清除缓存」按钮 →
+  `POST /api/console/cache/clear` → `web/cache_cleaner.py`,仍不接图)。
 - 网页话题:标题作为"外部不可信参考"软注入 `storyline_generate_script` 的 `overall`;失败 / 无结果不影响主线。
 - ASR:只回填 `Clip.transcript`,不改镜头和时长;默认 `STORYLINE_ASR_MODE=stub` 时转写为空,无可见变化。
 - ASR 已知限制(接入前就存在,本次没改):配了 `STORYLINE_PEXELS_API_KEY` 时,`storyline_search_media` 会把 `storyline_media_artifact` 整个换成搜索结果清单,

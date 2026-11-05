@@ -15,8 +15,11 @@ PostgreSQL 统一改造(方案 §4.1 / 阶段 C):
 
 from __future__ import annotations
 
+import fnmatch
 import os
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 
 # ---------------------------------------------------------------------------
@@ -39,9 +42,10 @@ from pathlib import Path
 # 第三个开关(STORYLINE_ENABLE_AI_TRANSITION)在**建图时**读取:它决定图里接不接那两个节点
 #   (屏障要随之改变),所以修改后必须重启进程。
 #
-# ⚠️ 没有"清缓存"开关:``clean_cache`` 节点**不接图**(保留注册,零条边),
-#    只由 Web UI「清理缓存」按钮经 ``POST /api/system/clean-cache`` 显式触发,
-#    任何 ``graph.invoke()`` 都不会自动跑它。
+# ⚠️ 没有"清缓存"开关:``clean_cache`` 节点已整体移除(2026-11-04 R-10,不接图);
+#    清理能力以创建台手动入口形式回归 —— Web UI「清除缓存」按钮经
+#    ``POST /api/console/cache/clear`` 调 ``web/cache_cleaner.py`` 显式触发,
+#    任何 ``graph.invoke()`` 都不会自动清理缓存。
 
 # 1) auto 模式:素材加载后并行搜网页话题(storyline_search_web_topic),
 #    结果以"参考标题"形式软注入文案节点的 overall;失败/无结果不影响主线。
@@ -398,3 +402,182 @@ CONSOLE_MAX_CONCURRENT_RUNS: int = _console_env_int("CONSOLE_MAX_CONCURRENT_RUNS
 #: 运行超时收割(秒;0 = 不启用,阶段 5)。惰性执行:由创建/恢复/查询路径触发;
 #: 超时按硬失败处理(树杀 + console_run.json 置 failed)。
 CONSOLE_RUN_TIMEOUT_SEC: float = _console_env_float("CONSOLE_RUN_TIMEOUT_SEC", 0.0)
+
+#: 「清除缓存」按钮的冷却限流(秒;0 = 不限流)。防止误连点造成破坏性 IO 风暴。
+CONSOLE_CACHE_CLEAR_COOLDOWN_SEC: float = _console_env_float(
+    "CONSOLE_CACHE_CLEAR_COOLDOWN_SEC", 30.0
+)
+
+
+# ---------------------------------------------------------------------------
+# 可再生缓存清理清单(创建台「清除缓存」按钮手动触发;不接图)
+# ---------------------------------------------------------------------------
+# 移植自 2026-11-04 R-10 移除前的 config 清单(worktree baseline-cde 快照),
+# 对齐技能 kuaishou-clean-cache「一类·常规再生缓存」。与旧版的关键差异:
+# 路径不再硬编码盘符(仓库已从 E 盘迁至 OneDrive),改用 ``{repo_root}`` /
+# ``{kuaishou_root}`` 占位符在 ``resolved_cache_paths()`` 调用时动态展开,
+# 另支持 ``%ENV%`` 环境变量展开。不存在的路径静默跳过。
+#
+# 关键约束(技能三类·禁止删除,以下路径绝不进入本清单):
+# - 剪映 ``%LOCALAPPDATA%\JianyingPro\User Data\Cache`` —— 已注入的 VIP 转场/
+#   特效/花字/贴纸需重新联网下载才能渲染,用户 2026-07-04 指定禁删。
+# - 剪映 ``%LOCALAPPDATA%\JianyingPro\User Data\Log`` —— 用户 2026-07-04 指定禁删。
+# - ``outputs/`` 成片、任务目录、``.storyline/models``、各 venv、草稿本体。
+#
+# 双层结构:
+# - ``CACHE_PATHS_TO_CLEAN``:简单路径(直接 Path)。
+# - ``CACHE_GLOB_SPECS``:递归/通配条目(``__pycache__``、日志、剪映草稿备份)。
+
+#: 仓库根(本文件所在目录)与 kuaishou 同级根,供清单条目动态定位
+REPO_ROOT: Path = Path(__file__).resolve().parent
+KUAISHOU_ROOT: Path = REPO_ROOT.parent
+
+CACHE_PATHS_TO_CLEAN: list[str] = [
+    # 系统级临时目录(低风险)
+    r"%LOCALAPPDATA%\Temp\OpenStoryline",
+    r"%TEMP%\jianying_workflow_tmp",
+    # 剪映草稿回收站(技能一类 §2.3)
+    r"%LOCALAPPDATA%\JianyingPro\User Data\Projects\com.lveditor.draft\.recycle_bin",
+    # 当前仓库自身
+    r"{repo_root}\.pytest_cache",
+    # kuaishou 同级:剪映程序日志 + 剪艾 agent boot 日志
+    r"{kuaishou_root}\JianyingPro\5.9.0.11632\log",
+    r"{kuaishou_root}\剪艾（剪辑agent）\win-unpacked\boot.log",
+]
+
+
+@dataclass(frozen=True)
+class CacheGlobSpec:
+    """一条递归/通配清理条目。"""
+
+    root: str  # 支持占位符与环境变量,展开后必须存在(或本轮结果为空)
+    kind: Literal["dir_recurse", "file_recurse", "dir_children", "file_pattern"]
+    pattern: str  # rglob/glob/iterdir 参数
+    exclude_substr: tuple[str, ...] = ()  # 路径黑名单(命中即丢弃)
+    description: str = ""
+
+
+CACHE_GLOB_SPECS: list[CacheGlobSpec] = [
+    # 源码 __pycache__ —— 下探剪枝跳过:venv(.venv / .venv-openstoryline)、
+    # .git、.worktrees(其他检出副本)、.storyline(models 禁删),以及
+    # outputs/drafts/inputs 等纯内容目录(禁删成片/草稿素材,且体量大,
+    # 遍历是主要耗时;新增大体量内容目录时须追加到本黑名单)。
+    # 黑名单目录整棵不下沉。
+    CacheGlobSpec(
+        root="{repo_root}",
+        kind="dir_recurse",
+        pattern="__pycache__",
+        exclude_substr=(
+            "\\venv\\",
+            "\\.venv\\",
+            "\\.venv-openstoryline\\",
+            "\\.git\\",
+            "\\.worktrees\\",
+            "\\.storyline\\",
+            "\\.video_agent\\",
+            "\\.docker-proxy\\",
+            "\\.zcode\\",
+            "\\.agents\\",
+            "\\outputs\\",
+            "\\drafts\\",
+            "\\inputs\\",
+            "\\out\\",
+            "\\assets\\",
+        ),
+        description="源码 __pycache__ (排除 venv/.git/内容目录)",
+    ),
+    # 仓库 logs/*.log(start/stop/openstoryline/_sanity 日志)
+    CacheGlobSpec(
+        root="{repo_root}\\logs",
+        kind="file_recurse",
+        pattern="*.log",
+        description="运行日志 *.log",
+    ),
+    # start_production 生成的 initial_state
+    CacheGlobSpec(
+        root="{repo_root}\\runtime",
+        kind="file_pattern",
+        pattern="initial_state_*.json",
+        description="initial_state 快照",
+    ),
+    # 剪映草稿注入备份
+    CacheGlobSpec(
+        root=r"%LOCALAPPDATA%\JianyingPro\User Data\Projects\com.lveditor.draft",
+        kind="file_recurse",
+        pattern="*.bak",
+        description="剪映草稿 .bak 备份",
+    ),
+    CacheGlobSpec(
+        root=r"%LOCALAPPDATA%\JianyingPro\User Data\Projects\com.lveditor.draft",
+        kind="dir_recurse",
+        pattern=".backup",
+        description="剪映草稿 .backup 目录",
+    ),
+]
+
+
+def _expand_cache_raw(raw: str) -> Path:
+    """把清单条目展开为 Path:先替换仓库锚点占位符,再展开环境变量。"""
+    return Path(
+        os.path.expandvars(
+            raw.format(repo_root=str(REPO_ROOT), kuaishou_root=str(KUAISHOU_ROOT))
+        )
+    )
+
+
+def _expand_spec(spec: CacheGlobSpec) -> list[Path]:
+    """把一条 ``CacheGlobSpec`` 展开为扁平 ``list[Path]``。
+
+    展开规则:
+    - ``root`` 不存在 → 返回 ``[]``(静默跳过,不抛异常)。
+    - ``dir_recurse``/``file_recurse``:用 ``os.walk`` 递归,**黑名单目录整棵
+      剪枝不下沉**(旧实现 rglob 后过滤,会把 venv/.git 全树扫一遍,OneDrive
+      下单次展开可达 10s;剪枝后亚秒级)。
+    - ``dir_children``:对 ``root.iterdir()`` 取 ``is_dir()``,应用过滤。
+    - ``file_pattern``:对 ``root.glob(pattern)`` 取 ``is_file()``,应用过滤。
+    """
+    root = _expand_cache_raw(spec.root)
+    if not root.exists():
+        return []
+
+    def keep(p: Path) -> bool:
+        s = str(p)
+        return not any(token in s for token in spec.exclude_substr)
+
+    if spec.kind in ("dir_recurse", "file_recurse"):
+        want_dirs = spec.kind == "dir_recurse"
+        out: list[Path] = []
+        for dirpath, dirnames, filenames in os.walk(root):
+            # 剪枝:命中黑名单的子目录整棵跳过(补尾部 sep,让目录名本身也能
+            # 命中形如 ``\\.venv\\`` 的 token);walk 内原地改 dirnames 生效。
+            dirnames[:] = [
+                d for d in dirnames
+                if not any(token in str(Path(dirpath) / d) + os.sep for token in spec.exclude_substr)
+            ]
+            if want_dirs:
+                out.extend(Path(dirpath) / d for d in dirnames if fnmatch.fnmatch(d, spec.pattern))
+            else:
+                out.extend(Path(dirpath) / f for f in fnmatch.filter(filenames, spec.pattern))
+        return out
+    if spec.kind == "dir_children":
+        return [p for p in root.iterdir() if p.is_dir() and keep(p)]
+    if spec.kind == "file_pattern":
+        return [p for p in root.glob(spec.pattern) if p.is_file() and keep(p)]
+    raise ValueError(f"Unknown CacheGlobSpec.kind: {spec.kind!r}")
+
+
+def resolved_cache_paths() -> list[Path]:
+    """把 ``CACHE_PATHS_TO_CLEAN`` + ``CACHE_GLOB_SPECS`` 扁平化为 ``list[Path]``。
+
+    - 简单路径:展开占位符/环境变量后,只保留当下磁盘上存在的 ``Path``。
+    - 递归/通配:按 ``_expand_spec`` 展开,root 不存在则返回空项。
+    - 调用时才展开(``rglob`` 等),保证反映当下文件系统状态。
+    """
+    out: list[Path] = []
+    for raw in CACHE_PATHS_TO_CLEAN:
+        p = _expand_cache_raw(raw)
+        if p.exists():
+            out.append(p)
+    for spec in CACHE_GLOB_SPECS:
+        out.extend(_expand_spec(spec))
+    return out

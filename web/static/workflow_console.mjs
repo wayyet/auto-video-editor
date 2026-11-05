@@ -39,6 +39,8 @@ export const CONSOLE_API_PATHS = Object.freeze({
   runDetail: (threadId) => `/api/console/runs/${encodeURIComponent(threadId)}`,
   resumeRun: (threadId) => `/api/console/runs/${encodeURIComponent(threadId)}/resume`,
   cancelRun: (threadId) => `/api/console/runs/${encodeURIComponent(threadId)}/cancel`,
+  // 2026-11-06:清除可再生缓存(维护入口)
+  clearCache: "/api/console/cache/clear",
   // 只读探针:人工关卡恢复指引
   resumeStatus: (threadId) => `/api/workflow/runs/${encodeURIComponent(threadId)}/resume-status`,
   // 监控页跳转(创建成功后"查看完整监控")

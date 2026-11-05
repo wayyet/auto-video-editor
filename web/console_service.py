@@ -272,6 +272,18 @@ def reap_now() -> None:
         _prune_active_procs()
 
 
+def active_thread_ids() -> list[str]:
+    """本实例仍在册的活跃 thread_id 列表(先收割再读,调用方无需先 reap_now)。
+
+    与 ``cancel_run`` 同一限制:只覆盖**本服务实例**管理的子进程;
+    由入口 A(scripts/run_workflow.py 直启)跑的任务不在册,缓存清理等
+    调用方不得据此认定"全系统无运行中任务"。
+    """
+    with _ACTIVE_LOCK:
+        _prune_active_procs()
+        return list(_ACTIVE_PROCS.keys())
+
+
 def _build_launch_env(task_dir: Path) -> dict[str, str]:
     """子进程 env:继承受控环境 + 独立草稿目录 + production(计划 §7.4)。"""
     env = dict(os.environ)

@@ -21,6 +21,11 @@
 - ``GET  /api/console/runs/{thread_id}``     单条详情;
 - ``POST /api/console/runs/{thread_id}/resume`` 人工关卡恢复(复用 resume_workflow.py);
 - ``POST /api/console/runs/{thread_id}/cancel`` 取消运行(仅限本实例在册进程)。
+
+2026-11-06 补充(维护入口):
+- ``POST /api/console/cache/clear``          清除可再生缓存(清理清单见 config.py
+  缓存段;冷却限流 + 活跃任务 409;R-10 移除旧 /api/system/clean-cache 后,
+  清理能力以此手动入口形式回归)。
 """
 
 from __future__ import annotations
@@ -35,7 +40,7 @@ from pydantic import BaseModel
 
 import config  # 运行时读 config.CONSOLE_*(可 monkeypatch),不在 import 期固化值
 from web.api_workflow import _verify_same_origin
-from web import console_service
+from web import cache_cleaner, console_service
 from web.console_service import ConsoleLaunchError, prepare_run, start_run
 from web.console_uploads import ALLOWED_VIDEO_EXTS, ConsoleUploadError
 
@@ -302,5 +307,60 @@ def cancel_run(request: Request, thread_id: str) -> JSONResponse:
             "ok": True,
             "thread_id": thread_id,
             "state": record.get("status", "cancelled"),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-06 补充:清除可再生缓存(维护入口)
+# ---------------------------------------------------------------------------
+
+#: 上次成功清理时刻(monotonic 基准);None = 本进程尚未清理过,不限流
+_last_cache_clear: Optional[float] = None
+
+
+@router.post("/cache/clear")
+def clear_cache(request: Request) -> JSONResponse:
+    """清除可再生缓存(创建台「清除缓存」按钮;清单见 config.py 缓存段)。
+
+    破坏性 IO,三道保护:
+    - 同源 + CSRF 门禁(与 cancel 同款);
+    - 冷却限流 ``CONSOLE_CACHE_CLEAR_COOLDOWN_SEC``(默认 30s,防误连点风暴;
+      旧版 agent_fastapi 双桶限流的轻量替代);
+    - 本实例有活跃运行子进程时 409(避免清掉运行中任务正在读写的缓存)。
+    单路径删除失败不中断,失败明细随响应返回。
+    """
+    global _last_cache_clear
+    _verify_same_origin(request)
+    _enforce_csrf(request)
+
+    cooldown = float(getattr(config, "CONSOLE_CACHE_CLEAR_COOLDOWN_SEC", 0.0) or 0.0)
+    if cooldown > 0 and _last_cache_clear is not None:
+        remaining = cooldown - (time.monotonic() - _last_cache_clear)
+        if remaining > 0:
+            raise HTTPException(
+                status_code=429,
+                detail=f"清除缓存过于频繁,请 {remaining:.0f} 秒后再试",
+            )
+
+    active = console_service.active_thread_ids()
+    if active:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"有 {len(active)} 个运行中的任务({', '.join(active)}),"
+                "请先取消或等待完成后再清理缓存"
+            ),
+        )
+
+    result = cache_cleaner.clean_cache()
+    _last_cache_clear = time.monotonic()
+    return JSONResponse(
+        status_code=200,
+        content={
+            "ok": True,
+            "cleaned_count": len(result["cleaned_paths"]),
+            "cleaned_paths": result["cleaned_paths"],
+            "errors": result["errors"],
         },
     )
