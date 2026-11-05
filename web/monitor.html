@@ -13,55 +13,93 @@
       --st-retry:#f97316; --st-fail:#ef4444;
       --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       --sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      /* 硬编码深色收敛(主题切换用,命名对齐 node_map.html) */
+      --topbar-bg: linear-gradient(to bottom, #121212, #0f0f0f);
+      --input-bg:#0f0f0f;
+      --chip-bg:#141414;
+      --hover-border:#3a3a3a;
+      --hover-bg:#141414;
+      --table-row-border:#242424;
+      --link-text:#93c5fd;
+      --err-text:#fca5a5;
+      --chip-run-text:#93c5fd;
+      --chip-wait-text:#fcd34d;
+      --chip-done-text:#86efac;
+      --chip-fail-text:#fca5a5;
+    }
+    /* 浅色主题:html[data-theme="light"] 时整体覆盖(默认深色保持现状) */
+    html[data-theme="light"]{
+      --bg:#ffffff; --panel:#ffffff; --text:#1a1a1a; --muted:#525252;
+      --border:#d4d4d4;
+      --topbar-bg: linear-gradient(to bottom, #ffffff, #fafafa);
+      --input-bg:#ffffff;
+      --chip-bg:#f5f5f5;
+      --hover-border:#a3a3a3;
+      --hover-bg:#f0f0f0;
+      --table-row-border:#e5e5e5;
+      --link-text:#1d4ed8;
+      --err-text:#b91c1c;
+      --chip-run-text:#1d4ed8;
+      --chip-wait-text:#92400e;
+      --chip-done-text:#15803d;
+      --chip-fail-text:#b91c1c;
     }
     *{ box-sizing:border-box; }
     body{ margin:0; background:var(--bg); color:var(--text); font-family:var(--sans); font-size:13px; }
     #topbar{
       height:52px; display:flex; align-items:center; gap:10px; padding:0 14px;
-      border-bottom:1px solid var(--border); background:linear-gradient(to bottom,#121212,#0f0f0f);
+      border-bottom:1px solid var(--border); background:var(--topbar-bg);
     }
     #topbar h1{ font-size:14px; margin:0 10px 0 0; font-weight:650; white-space:nowrap; }
-    #topbar a{ color:#93c5fd; font-size:12px; text-decoration:none; border:1px solid var(--border); border-radius:8px; padding:5px 8px; }
+    #topbar a{ color:var(--link-text); font-size:12px; text-decoration:none; border:1px solid var(--border); border-radius:8px; padding:5px 8px; }
     .btn{
       appearance:none; background:transparent; color:var(--text); border:1px solid var(--border);
       border-radius:8px; padding:6px 10px; font-size:12px; cursor:pointer;
     }
-    .btn:hover{ border-color:#3a3a3a; background:#141414; }
+    .btn:hover{ border-color:var(--hover-border); background:var(--hover-bg); }
     #threadInput{
-      background:#0f0f0f; border:1px solid var(--border); color:var(--text);
+      background:var(--input-bg); border:1px solid var(--border); color:var(--text);
       border-radius:8px; padding:6px 8px; font-size:12px; font-family:var(--mono); width:240px;
     }
     #chip{
       display:inline-block; padding:3px 9px; border-radius:999px; border:1px solid var(--border);
-      background:#141414; font-family:var(--mono); font-size:11px; color:var(--muted);
+      background:var(--chip-bg); font-family:var(--mono); font-size:11px; color:var(--muted);
     }
-    #chip.s-running{ color:#93c5fd; border-color:var(--st-run); }
-    #chip.s-waiting_human{ color:#fcd34d; border-color:var(--st-wait); }
-    #chip.s-completed{ color:#86efac; border-color:var(--st-done); }
-    #chip.s-failed{ color:#fca5a5; border-color:var(--st-fail); }
+    #chip.s-running{ color:var(--chip-run-text); border-color:var(--st-run); }
+    #chip.s-waiting_human{ color:var(--chip-wait-text); border-color:var(--st-wait); }
+    #chip.s-completed{ color:var(--chip-done-text); border-color:var(--st-done); }
+    #chip.s-failed{ color:var(--chip-fail-text); border-color:var(--st-fail); }
     #counts,#meta{ font-family:var(--mono); font-size:11px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    #meta.err{ color:#fca5a5; }
+    #meta.err{ color:var(--err-text); }
     #layout{ display:flex; height:calc(100vh - 53px); }
     #events{ flex:1.4; overflow:auto; border-right:1px solid var(--border); }
     #nodes{ flex:1; overflow:auto; padding:10px; }
     h2{ font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); margin:10px 10px 6px; font-weight:650; }
     table{ width:calc(100% - 20px); margin:0 10px 10px; border-collapse:collapse; font-family:var(--mono); font-size:11px; }
     th{ text-align:left; color:var(--muted); border-bottom:1px solid var(--border); padding:5px 8px; position:sticky; top:0; background:var(--bg); }
-    td{ border-bottom:1px solid #242424; padding:5px 8px; vertical-align:top; word-break:break-all; }
+    td{ border-bottom:1px solid var(--table-row-border); padding:5px 8px; vertical-align:top; word-break:break-all; }
     td.ev-type{ white-space:nowrap; font-weight:600; }
-    .t-run\.started,.t-node\.succeeded,.t-run\.completed{ color:#86efac; }
-    .t-run\.failed,.t-node\.failed{ color:#fca5a5; }
-    .t-node\.started,.t-node\.resumed,.t-node\.retrying,.t-node\.progress,.t-run\.resumed{ color:#93c5fd; }
-    .t-run\.interrupted,.t-node\.waiting_input{ color:#fcd34d; }
+    .t-run\.started,.t-node\.succeeded,.t-run\.completed{ color:var(--chip-done-text); }
+    .t-run\.failed,.t-node\.failed{ color:var(--chip-fail-text); }
+    .t-node\.started,.t-node\.resumed,.t-node\.retrying,.t-node\.progress,.t-run\.resumed{ color:var(--chip-run-text); }
+    .t-run\.interrupted,.t-node\.waiting_input{ color:var(--chip-wait-text); }
     .st{ display:inline-block; padding:1px 7px; border-radius:999px; border:1px solid var(--border); font-size:10px; }
-    .st.running{ color:#93c5fd; border-color:var(--st-run); }
-    .st.done{ color:#86efac; border-color:var(--st-done); }
-    .st.waiting{ color:#fcd34d; border-color:var(--st-wait); }
-    .st.retrying{ color:#fdba74; border-color:var(--st-retry); }
-    .st.failed{ color:#fca5a5; border-color:var(--st-fail); }
+    .st.running{ color:var(--chip-run-text); border-color:var(--st-run); }
+    .st.done{ color:var(--chip-done-text); border-color:var(--st-done); }
+    .st.waiting{ color:var(--chip-wait-text); border-color:var(--st-wait); }
+    .st.retrying{ color:var(--chip-wait-text); border-color:var(--st-retry); }
+    .st.failed{ color:var(--chip-fail-text); border-color:var(--st-fail); }
     .hint{ color:var(--muted); font-size:11px; margin:8px 10px; }
     #nodeEmpty{ color:var(--muted); font-style:italic; font-size:11px; margin:8px 10px; }
   </style>
+  <script>
+    /* 主题预置:首帧前应用上次选择的背景主题,避免闪烁 */
+    try{
+      if(localStorage.getItem("wf_monitor_theme") === "light"){
+        document.documentElement.dataset.theme = "light";
+      }
+    }catch(e){}
+  </script>
 </head>
 <body>
   <div id="topbar">
@@ -73,6 +111,7 @@
     <span id="counts"></span>
     <span id="meta"></span>
     <a href="/node-map" style="margin-left:auto">节点图视图 →</a>
+    <button class="btn" id="btnTheme" title="切换背景颜色(白/黑)">背景:白色</button>
   </div>
   <div id="layout">
     <div id="events">
@@ -221,6 +260,20 @@
       setChip("idle", "已断开");
     });
     threadInput.addEventListener("keydown", (e) => { if (e.key === "Enter") subscribe(); });
+
+    // 背景主题切换:黑色(默认) <-> 白色,经 localStorage 记忆;按钮文案显示点击后切到的目标主题
+    const btnTheme = $("btnTheme");
+    function applyThemeButton(){
+      btnTheme.textContent = document.documentElement.dataset.theme === "light" ? "背景:黑色" : "背景:白色";
+    }
+    applyThemeButton();
+    btnTheme.addEventListener("click", () => {
+      const toLight = document.documentElement.dataset.theme !== "light";
+      if(toLight){ document.documentElement.dataset.theme = "light"; }
+      else{ delete document.documentElement.dataset.theme; }
+      try{ localStorage.setItem("wf_monitor_theme", toLight ? "light" : "dark"); }catch(e){}
+      applyThemeButton();
+    });
   </script>
 </body>
 </html>
