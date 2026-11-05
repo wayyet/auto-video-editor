@@ -1,0 +1,94 @@
+"""创建台 initial state 构建器(第二期阶段 1)。
+
+契约(冻结):docs/第二期开发/auto-video-editor_工作流创建台_阶段0_基线与契约冻结_20261105.md §3。
+
+关键纪律:
+- 键集合**固定**为下方 ``build_initial_state`` 写死的键 ——
+  ``scripts/run_workflow.py --initial-state-json`` 对 JSON 无字段白名单
+  (整体透传进 WorkflowState),所以白名单责任在本创建台,不透传任何额外键;
+- 提示词只映射 ``storyline_targets.user_request / script_request``,
+  **绝不写 ``query``**(graph.py ``_web_topic_branch_enabled`` 读它,误写会
+  触发网页话题搜索分支);
+- 提示词不进监控事件 payload(``monitoring/workflow_runner.py`` 的
+  ``STATE_SUMMARY_KEYS`` 白名单本就不含它)。
+"""
+
+from __future__ import annotations
+
+import json
+import uuid
+from pathlib import Path
+
+#: 服务端生成的 thread_id 形状(与 web/console_uploads.py 保持同一规则)
+from web.console_uploads import CONSOLE_THREAD_ID_RE
+
+
+def new_thread_id() -> str:
+    """生成 ``console-<12hex>`` 形式的唯一任务 ID(服务端生成,浏览器不可指定)。"""
+    return f"console-{uuid.uuid4().hex[:12]}"
+
+
+def is_valid_thread_id(thread_id: str) -> bool:
+    return bool(CONSOLE_THREAD_ID_RE.match(str(thread_id or "").strip()))
+
+
+def build_initial_state(
+    *,
+    thread_id: str,
+    video_paths: list[str],
+    prompt: str,
+    target_duration_ms: int,
+    ratio: str,
+    lang: str,
+    outputs_root: Path,
+) -> dict:
+    """构建冻结契约的初始 WorkflowState。
+
+    Args:
+        thread_id: ``console-<12hex>``。
+        video_paths: 已落盘视频的**绝对路径**列表(由 console_uploads 返回),
+            非空;第一个同时写入 ``video_input_path``(兼容单视频消费者)。
+        prompt: 用户提示词(strip 后非空;长度上限由 API 层校验)。
+        target_duration_ms / ratio / lang: 结构化参数(API 层已校验)。
+        outputs_root: 任务根目录;``storyline_outputs_root`` 指向任务目录本身,
+            工作流产物按 thread_id 隔离。
+
+    Returns:
+        只含冻结键集合的 dict(可直接 json.dumps 落盘)。
+    """
+    if not is_valid_thread_id(thread_id):
+        raise ValueError(f"thread_id 形状非法: {thread_id!r}")
+    if not video_paths:
+        raise ValueError("video_paths 不能为空")
+    if not str(prompt or "").strip():
+        raise ValueError("prompt 不能为空")
+
+    paths = [str(Path(p).resolve()) for p in video_paths]
+    task_dir = str((Path(outputs_root) / thread_id).resolve())
+    return {
+        "session_id": thread_id,
+        "video_input_path": paths[0],
+        "video_input_paths": paths,
+        "storyline_outputs_root": task_dir,
+        "storyline_targets": {
+            "user_request": prompt,
+            "script_request": prompt,
+            "target_duration_ms": int(target_duration_ms),
+            "ratio": str(ratio),
+            "lang": str(lang),
+        },
+        "error_log": [],
+    }
+
+
+def write_initial_state_json(task_dir: Path, state: dict) -> Path:
+    """把 initial state 写到 ``<task_dir>/initial_state.json``(UTF-8 无 BOM)。
+
+    与 agent_gate/_write_initial_state、start_production.ps1 Phase 0 的落盘
+    约定一致(UTF-8 编码、ensure_ascii=False 保中文可读)。
+    """
+    path = Path(task_dir) / "initial_state.json"
+    path.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return path

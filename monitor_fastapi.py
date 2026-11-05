@@ -18,6 +18,8 @@
 - ``/node_map``             node_map 静态资源(含 workflow.json 子流程视图)
 - ``/static``               web/static(workflow_monitor.mjs 等,页面共用)
 - ``/api/workflow/*``       只读监控 API(web/api_workflow.py router)
+- ``/api/console/*``        创建台写 API(web/api_console.py router;第二期阶段 1:
+                            POST /runs 上传+State 构建,阶段 2 起含工作流启动)
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from web.api_console import router as console_router
 from web.api_workflow import _REPO_ROOT, router
 
 _WEB_DIR = _REPO_ROOT / "web"
@@ -69,6 +72,8 @@ async def node_map():
 
 
 app.include_router(router)
+# 创建台写 API(第二期阶段 1):与上方只读 router 的职责边界见 web/api_console.py 模块注释
+app.include_router(console_router)
 
 if _NODE_MAP_DIR.is_dir():
     app.mount("/node_map", StaticFiles(directory=str(_NODE_MAP_DIR)), name="node_map")

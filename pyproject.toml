@@ -25,6 +25,8 @@ dependencies = [
     # 独立监控服务 monitor_fastapi.py(单流水线架构 2026-11-04 阶段1;只读监控)
     "fastapi>=0.110,<1",
     "uvicorn[standard]>=0.27,<1",
+    # 工作流创建台 /api/console/runs multipart 上传解析(第二期阶段 1)
+    "python-multipart>=0.0.20,<0.1",
     # 禁止引入:torch / torchaudio / moviepy(ADR-001 进程隔离,不入主环境)
     # 注:`mcp` 仍由 `langgraph-sdk==0.4.4` 间接传递,主环境不再主动声明。
 ]

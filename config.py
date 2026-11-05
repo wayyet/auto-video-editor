@@ -326,3 +326,71 @@ def make_checkpointer(backend: str = "memory", thread_id: str = "default"):
         f"Unknown checkpointer backend: {backend!r} "
         "(可用: 'memory';生产用 graph.get_checkpointer())"
     )
+
+
+# ---------------------------------------------------------------------------
+# 工作流创建台 Console 配置(第二期 /console,阶段 0 契约冻结)
+# ---------------------------------------------------------------------------
+# 契约文档:docs/第二期开发/auto-video-editor_工作流创建台_阶段0_基线与契约冻结_20261105.md
+# 读取纪律:web/console_* 模块在**函数运行时**读这些常量(与 STORYLINE_ENABLE_* 同风格),
+# 单测用 monkeypatch.setattr(config, "CONSOLE_XXX", ...) 注入,不在 import 期固化。
+# 空值防御(2026-10-31 worker `no password supplied` 故障同款):env 变量存在但为
+# 空串/纯空白时一律回退默认值,避免"没注入成功"劣化为"拿到空值"。
+
+
+def _console_env(name: str, default: str) -> str:
+    """读 env;空串/纯空白回退默认值。"""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip()
+
+
+def _console_env_int(name: str, default: int) -> int:
+    try:
+        return int(_console_env(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _console_env_float(name: str, default: float) -> float:
+    try:
+        return float(_console_env(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _console_env_bool(name: str, default: bool) -> bool:
+    raw = _console_env(name, "1" if default else "0").lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+# 任务根目录:outputs/<thread_id>/…(已在 .gitignore:38)。默认仓库根下 outputs/。
+CONSOLE_OUTPUTS_ROOT: Path = Path(
+    _console_env("CONSOLE_OUTPUTS_ROOT", str(Path(__file__).resolve().parent / "outputs"))
+)
+
+#: 单次上传视频数量上限
+CONSOLE_MAX_VIDEOS: int = _console_env_int("CONSOLE_MAX_VIDEOS", 10)
+
+#: 单个视频文件大小上限(默认 2 GiB)
+CONSOLE_MAX_VIDEO_BYTES: int = _console_env_int("CONSOLE_MAX_VIDEO_BYTES", 2 * 1024**3)
+
+#: 用户提示词长度上限(strip 后字符数)
+CONSOLE_PROMPT_MAX_CHARS: int = _console_env_int("CONSOLE_PROMPT_MAX_CHARS", 4000)
+
+#: ffprobe 视频探测超时(秒)
+CONSOLE_FFPROBE_TIMEOUT_SEC: float = _console_env_float("CONSOLE_FFPROBE_TIMEOUT_SEC", 30.0)
+
+#: 目标时长默认值/上限(毫秒);上限 10 分钟,防御性配置
+CONSOLE_TARGET_DURATION_MS_DEFAULT: int = _console_env_int("CONSOLE_TARGET_DURATION_MS_DEFAULT", 35000)
+CONSOLE_TARGET_DURATION_MS_MAX: int = _console_env_int("CONSOLE_TARGET_DURATION_MS_MAX", 600000)
+
+#: LLM 后端(阶段 2 起消费):空 = 未配置 → 创建台拒绝启动(不静默 Stub)。
+CONSOLE_LLM_BACKEND: str = _console_env("CONSOLE_LLM_BACKEND", "")
+
+#: 是否放行 stub 后端(生产必须 false;开发/测试显式设 true)
+CONSOLE_ALLOW_STUB: bool = _console_env_bool("CONSOLE_ALLOW_STUB", False)
+
+#: 活跃工作流子进程上限(阶段 2 起消费;超限 409)
+CONSOLE_MAX_CONCURRENT_RUNS: int = _console_env_int("CONSOLE_MAX_CONCURRENT_RUNS", 2)

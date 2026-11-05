@@ -76,5 +76,8 @@ zstandard==0.25.0
 
 # 独立监控服务 monitor_fastapi.py(单流水线架构 2026-11-04 阶段1):
 # 只读监控(快照 / SSE / node-map)宿主进主 .venv;版本为当前环境实测锁定。
+# python-multipart:工作流创建台 /api/console/runs 的 multipart 上传解析
+# (第二期阶段 1;FastAPI File/Form 必需,当前环境实测 0.0.32)。
 fastapi==0.162.0
 uvicorn[standard]==0.54.0
+python-multipart==0.0.32
