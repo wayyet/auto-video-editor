@@ -34,7 +34,12 @@ export const CONSOLE_API_PATHS = Object.freeze({
   config: "/api/console/config",
   csrf: "/api/console/csrf",
   createRun: "/api/console/runs",
-  // 只读探针:人工关卡恢复指引(动作按钮属阶段 5)
+  // 阶段 5:历史 / 详情 / 恢复 / 取消
+  listRuns: "/api/console/runs",
+  runDetail: (threadId) => `/api/console/runs/${encodeURIComponent(threadId)}`,
+  resumeRun: (threadId) => `/api/console/runs/${encodeURIComponent(threadId)}/resume`,
+  cancelRun: (threadId) => `/api/console/runs/${encodeURIComponent(threadId)}/cancel`,
+  // 只读探针:人工关卡恢复指引
   resumeStatus: (threadId) => `/api/workflow/runs/${encodeURIComponent(threadId)}/resume-status`,
   // 监控页跳转(创建成功后"查看完整监控")
   monitorPage: (threadId) => `/?thread_id=${encodeURIComponent(threadId)}`,
@@ -277,4 +282,79 @@ export function formatDuration(ms) {
   const v = Number(ms);
   if (!Number.isFinite(v) || v <= 0) return "—";
   return `${(v / 1000).toFixed(1)}s`;
+}
+
+// ---------------------------------------------------------------------------
+// 阶段 5:历史列表 / 恢复 / 取消(纯逻辑)
+// ---------------------------------------------------------------------------
+
+/** 调和状态 → 中文展示词(waiting_human 属正常态,不译成失败)。 */
+export const HISTORY_STATE_LABEL = Object.freeze({
+  prepared: "已就绪未启动",
+  starting: "启动中",
+  running: "运行中",
+  waiting_human: "等待人工关卡",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+  unknown: "未知(进程已退出且无事件)",
+});
+
+/** 恢复动作只对等待人工关卡的运行开放。 */
+export function canResume(state) {
+  return state === "waiting_human";
+}
+
+/** 取消只对"服务端还能管到的活跃运行"开放(unknown/终态一律不可)。 */
+export function canCancel(state) {
+  return state === "running" || state === "starting";
+}
+
+/**
+ * 历史列表客户端过滤(任务搜索,阶段 5):query 按 thread_id / 状态 /
+ * 状态中文词 / 创建时间 做大小写不敏感的子串匹配。
+ */
+export function filterHistoryRows(rows, query) {
+  const q = String(query || "").trim().toLowerCase();
+  const list = Array.isArray(rows) ? rows : [];
+  if (!q) return list.slice();
+  return list.filter((r) => {
+    const haystack = [
+      r && r.thread_id,
+      r && r.state,
+      HISTORY_STATE_LABEL[r && r.state],
+      r && r.created_at,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(q);
+  });
+}
+
+/**
+ * 恢复值解析(与 scripts/resume_workflow.parse_resume_value 同语义):
+ * 优先 JSON;失败回退 true/false 字面量;再回退原始字符串。
+ * 返回 {ok, value, error} —— 不抛异常,交由调用方展示。
+ */
+export function parseResumeValue(raw) {
+  const text = String(raw ?? "").trim();
+  if (!text) return { ok: true, value: true, error: "" }; // 空 = 默认 true
+  try {
+    return { ok: true, value: JSON.parse(text), error: "" };
+  } catch (e) {
+    const lowered = text.toLowerCase();
+    if (lowered === "true") return { ok: true, value: true, error: "" };
+    if (lowered === "false") return { ok: true, value: false, error: "" };
+    return { ok: false, value: null, error: "恢复值须为合法 JSON(如 true 或 {\"answer\":\"ok\"})" };
+  }
+}
+
+/**
+ * 单行历史 → 操作提示(哪个动作可用;服务端仍是权威,这里只做即时反馈)。
+ * 返回 { resume: bool, cancel: bool }。
+ */
+export function historyActions(row) {
+  const state = row && row.state;
+  return { resume: canResume(state), cancel: canCancel(state) };
 }

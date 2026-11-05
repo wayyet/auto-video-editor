@@ -108,7 +108,34 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="跳过 checkpoint 表创建(默认会确保 schema 存在)",
     )
+    p.add_argument(
+        "--llm-backend",
+        choices=("stub", "claude-cli", "mcode-cli"),
+        default=None,
+        help=(
+            "可选:恢复执行前把指定 LLM 后端注入 storyline_capabilities 默认 client"
+            "(第二期创建台恢复用,与 run_workflow --llm-backend 对齐)。"
+            "不传 = 完全保持既有行为(懒加载 StubLLMClient)。"
+        ),
+    )
     return p.parse_args()
+
+
+def _apply_llm_backend(backend: Optional[str]) -> None:
+    """恢复执行前注入 LLM 后端(与 run_workflow.py 同款;第二期阶段 5)。
+
+    不传时**不注入** —— 旧 CLI 行为完全不变。此前 resume 入口没有注入通道,
+    生产环境恢复的运行会静默回落 Stub,故与 run_workflow 对齐补齐。
+    gate 后端需要 mailbox,不在本入口的选择集内(agent_gate CLI 自行处理)。
+    """
+    if not backend:
+        return
+    from agent_gate.factory import build_client
+    from storyline_capabilities.vlm_client import set_default_client
+
+    client = build_client(backend)
+    set_default_client(client)
+    print(f"[llm] 已注入 LLM 后端: {backend}", file=sys.stderr)
 
 
 def parse_resume_value(raw: str) -> Any:
@@ -253,7 +280,14 @@ def _print_event(event: dict) -> None:
 
 
 async def _resume_async(args: argparse.Namespace) -> int:
-    """恢复路径:校验挂起 → Command(resume) → run_with_events(§4.2 任务 4/5)。"""
+    """恢复入口:LLM 后端注入先行(与 run_workflow 同序:注入在图执行前),
+    再进入恢复主体(与 run_workflow 的 _main_async → _invoke_async 同款分层)。"""
+    _apply_llm_backend(args.llm_backend)
+    return await _resume_async_impl(args)
+
+
+async def _resume_async_impl(args: argparse.Namespace) -> int:
+    """恢复主体:校验挂起 → Command(resume) → run_with_events(§4.2 任务 4/5)。"""
     from graph import build_graph, get_checkpointer, normalize_thread_id
 
     thread_id = normalize_thread_id(args.thread_id)

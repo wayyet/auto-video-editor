@@ -15,19 +15,27 @@
 - ``GET /api/console/csrf``    发放 CSRF token(仅同源可取);
 - 写接口 CSRF 门禁:带 ``Origin`` 头(浏览器)必须携带有效 ``X-CSRF-Token``;
   无 Origin 的本机脚本/curl 豁免,保持既有 API 兼容。
+
+阶段 5 补充(核心四项增强):
+- ``GET  /api/console/runs``                 历史列表(状态调和,事件库为事实来源);
+- ``GET  /api/console/runs/{thread_id}``     单条详情;
+- ``POST /api/console/runs/{thread_id}/resume`` 人工关卡恢复(复用 resume_workflow.py);
+- ``POST /api/console/runs/{thread_id}/cancel`` 取消运行(仅限本实例在册进程)。
 """
 
 from __future__ import annotations
 
 import secrets
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 import config  # 运行时读 config.CONSOLE_*(可 monkeypatch),不在 import 期固化值
 from web.api_workflow import _verify_same_origin
+from web import console_service
 from web.console_service import ConsoleLaunchError, prepare_run, start_run
 from web.console_uploads import ALLOWED_VIDEO_EXTS, ConsoleUploadError
 
@@ -36,6 +44,15 @@ router = APIRouter(prefix="/api/console")
 #: 契约冻结的可选值(阶段 0 文档 §2.1)
 ALLOWED_RATIOS: tuple[str, ...] = ("9:16", "16:9", "4:3")
 ALLOWED_LANGS: tuple[str, ...] = ("zh", "en")
+
+
+class ResumeBody(BaseModel):
+    """POST /runs/{tid}/resume 请求体(阶段 5)。"""
+
+    #: 关卡标识(①/②/③ 或 interrupt id);省略时仅当恰好一个挂起关卡可自动匹配
+    checkpoint: Optional[str] = None
+    #: 放行值(JSON 语义,默认 true;交 resume_workflow.py --value)
+    value: Any = True
 
 # ---------------------------------------------------------------------------
 # CSRF(阶段 3;阶段 0 文档 §2.4 预留项)
@@ -202,5 +219,88 @@ def create_run(
             "thread_id": thread_id,
             "state": record.get("status", "starting"),
             **_response_urls(thread_id),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# 阶段 5:历史列表 / 详情 / 人工关卡恢复 / 取消
+# ---------------------------------------------------------------------------
+
+def _launch_error(e: ConsoleLaunchError) -> HTTPException:
+    return HTTPException(status_code=e.status_code, detail=str(e))
+
+
+def _upload_error(e: ConsoleUploadError) -> HTTPException:
+    return HTTPException(status_code=e.status_code, detail=str(e))
+
+
+@router.get("/runs")
+def list_runs(request: Request, limit: int = 50) -> dict:
+    """历史列表(阶段 5):扫描任务目录 + 状态调和;顺带触发超时收割。"""
+    _verify_same_origin(request)
+    console_service.reap_now()
+    return {"ok": True, "runs": console_service.list_console_runs(limit=limit)}
+
+
+@router.get("/runs/{thread_id}")
+def run_detail(request: Request, thread_id: str) -> dict:
+    """单条详情(record + 调和态);不存在 404。"""
+    _verify_same_origin(request)
+    console_service.reap_now()
+    try:
+        data = console_service.get_console_run(thread_id)
+    except ConsoleLaunchError as e:
+        raise _launch_error(e) from e
+    except ConsoleUploadError as e:
+        raise _upload_error(e) from e
+    return {"ok": True, **data}
+
+
+@router.post("/runs/{thread_id}/resume")
+def resume_run(request: Request, thread_id: str, body: ResumeBody) -> JSONResponse:
+    """人工关卡恢复(阶段 5):复用 ``scripts/resume_workflow.py``,202 即返回。
+
+    前置:事件库派生状态必须 waiting_human(否则 409);恢复语义与入口 A 一致
+    (ADR-2026-11-04),事件仍由统一 runner 落库,既有 SSE 按游标继续补发。
+    """
+    _verify_same_origin(request)
+    _enforce_csrf(request)
+    try:
+        console_service.resume_run(
+            thread_id, checkpoint=body.checkpoint, value=body.value
+        )
+    except ConsoleLaunchError as e:
+        raise _launch_error(e) from e
+    except ConsoleUploadError as e:
+        raise _upload_error(e) from e
+    return JSONResponse(
+        status_code=202,
+        content={
+            "ok": True,
+            "thread_id": thread_id,
+            "state": "resuming",
+            "events_url": f"/api/workflow/runs/{thread_id}/events",
+        },
+    )
+
+
+@router.post("/runs/{thread_id}/cancel")
+def cancel_run(request: Request, thread_id: str) -> JSONResponse:
+    """取消运行(阶段 5):仅限本服务实例在册的活跃进程(防 PID 复用误杀)。"""
+    _verify_same_origin(request)
+    _enforce_csrf(request)
+    try:
+        record = console_service.cancel_run(thread_id)
+    except ConsoleLaunchError as e:
+        raise _launch_error(e) from e
+    except ConsoleUploadError as e:
+        raise _upload_error(e) from e
+    return JSONResponse(
+        status_code=200,
+        content={
+            "ok": True,
+            "thread_id": thread_id,
+            "state": record.get("status", "cancelled"),
         },
     )

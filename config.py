@@ -394,3 +394,7 @@ CONSOLE_ALLOW_STUB: bool = _console_env_bool("CONSOLE_ALLOW_STUB", False)
 
 #: 活跃工作流子进程上限(阶段 2 起消费;超限 409)
 CONSOLE_MAX_CONCURRENT_RUNS: int = _console_env_int("CONSOLE_MAX_CONCURRENT_RUNS", 2)
+
+#: 运行超时收割(秒;0 = 不启用,阶段 5)。惰性执行:由创建/恢复/查询路径触发;
+#: 超时按硬失败处理(树杀 + console_run.json 置 failed)。
+CONSOLE_RUN_TIMEOUT_SEC: float = _console_env_float("CONSOLE_RUN_TIMEOUT_SEC", 0.0)

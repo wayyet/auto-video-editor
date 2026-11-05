@@ -195,11 +195,20 @@
       <div id="threadLine">Thread ID:—</div>
       <div id="runMeta">执行状态:尚未启动</div>
       <div id="counts"></div>
+      <button class="btn" id="btnCancel" style="display:none; margin-top:6px" title="终止本服务实例管理的运行子进程">取消运行</button>
 
       <h2>已导入视频</h2>
       <ul id="videoSummary" style="list-style:none; margin:4px 0; padding:0"><li class="hint">—</li></ul>
 
-      <div id="resumeBox"></div>
+      <div id="resumeBox">
+        <div id="resumeText"></div>
+        <div class="params" style="margin-top:8px">
+          <label>关卡(留空=唯一挂起时自动匹配)<input id="resumeCheckpoint" spellcheck="false" placeholder="① / ② / ③" /></label>
+          <label>放行值(JSON,默认 true)<input id="resumeValue" spellcheck="false" value="true" /></label>
+          <button class="btn primary" id="btnResume">确认恢复</button>
+        </div>
+        <div class="hint" id="resumeErr"></div>
+      </div>
 
       <h2>执行事件</h2>
       <div class="hint" id="evEmpty">等待工作流启动…(创建成功后自动订阅 SSE)</div>
@@ -208,6 +217,16 @@
         <tbody id="evBody"></tbody>
       </table>
       <p style="margin-top:10px"><a id="monitorLink" class="ok-text" style="display:none" target="_blank" rel="noopener">查看完整监控 →</a></p>
+
+      <h2>历史任务</h2>
+      <div class="params">
+        <label>搜索(thread_id / 状态 / 时间)<input id="historySearch" spellcheck="false" style="width:220px" /></label>
+        <button class="btn" id="btnHistoryRefresh">刷新</button>
+      </div>
+      <table id="historyTable" style="margin-top:6px">
+        <thead><tr><th>thread_id</th><th style="width:140px">创建时间</th><th style="width:110px">状态</th><th style="width:120px">操作</th></tr></thead>
+        <tbody id="historyBody"><tr><td colspan="4" class="hint">—</td></tr></tbody>
+      </table>
     </div>
   </div>
 
@@ -217,6 +236,7 @@
       validateNewFiles, addFiles, removeFile, validateParams, hasErrors, canSubmit,
       createConsoleState, beginUpload, updateProgress, acceptCreated, failSubmission,
       buildCreateFormData, friendlyError, formatBytes, formatDuration, DEFAULT_LIMITS,
+      HISTORY_STATE_LABEL, canResume, canCancel, filterHistoryRows, parseResumeValue,
     } from "/static/workflow_console.mjs";
 
     const EVENT_TYPES = [
@@ -239,8 +259,14 @@
     const durationInput = $("durationInput"), ratioSelect = $("ratioSelect"), langSelect = $("langSelect");
     const btnCreate = $("btnCreate"), formMeta = $("formMeta");
     const progressWrap = $("progressWrap"), progressBar = $("progressBar"), progressText = $("progressText");
-    const threadLine = $("threadLine"), videoSummary = $("videoSummary"), resumeBox = $("resumeBox");
+    const threadLine = $("threadLine"), videoSummary = $("videoSummary");
+    const btnCancel = $("btnCancel");
+    const resumeBox = $("resumeBox"), resumeText = $("resumeText");
+    const resumeCheckpoint = $("resumeCheckpoint"), resumeValue = $("resumeValue");
+    const btnResume = $("btnResume"), resumeErr = $("resumeErr");
     const evTable = $("evTable"), evBody = $("evBody"), evEmpty = $("evEmpty"), monitorLink = $("monitorLink");
+    const historySearch = $("historySearch"), btnHistoryRefresh = $("btnHistoryRefresh");
+    const historyBody = $("historyBody");
 
     let limits = { ...DEFAULT_LIMITS };
     let consoleState = createConsoleState();
@@ -249,6 +275,7 @@
     let source = null;
     let csrfToken = null;
     let resumeGuidanceShown = false;
+    let historyRows = [];
 
     // ------------------------------------------------------------------
     // 服务端限制(config 端点;失败回退内置默认值)
@@ -285,6 +312,7 @@
       renderPromptCount();
       rebuildSelect(ratioSelect, limits.ratios);
       rebuildSelect(langSelect, limits.langs, { zh: "中文", en: "英文" });
+      loadHistory();  // 页面就绪即展示历史(阶段 5)
     }
 
     function rebuildSelect(sel, values, labels) {
@@ -402,6 +430,8 @@
       const c = computeCounts(monitor);
       countsEl.textContent = Object.keys(monitor.nodes).length
         ? `完成 ${c.done} · 执行中 ${c.running} · 等待 ${c.waiting} · 失败 ${c.failed}` : "";
+      // 取消只对服务端还能管到的活跃运行开放(终态/未知一律隐藏)
+      btnCancel.style.display = liveThreadId && canCancel(st) ? "" : "none";
     }
     function renderAll() {
       renderFileList();
@@ -537,20 +567,24 @@
         }
       }
     });
-    function onCreated(resp) {
-      acceptCreated(consoleState, resp);
-      const tid = resp.thread_id || "";
+    function subscribeToThread(tid, eventsUrl) {
       liveThreadId = tid;
       threadLine.textContent = `Thread ID:${tid}`;
       monitorLink.href = CONSOLE_API_PATHS.monitorPage(tid);
       monitorLink.style.display = "";
       try { localStorage.setItem("wf_monitor_thread", tid); } catch (e) {}
       // 契约冻结:202 必含 events_url;兜底构造与 /api/workflow 契约一致
-      startLive(tid, resp.events_url || `/api/workflow/runs/${encodeURIComponent(tid)}/events`);
+      startLive(tid, eventsUrl || `/api/workflow/runs/${encodeURIComponent(tid)}/events`);
+    }
+    function onCreated(resp) {
+      acceptCreated(consoleState, resp);
+      const tid = resp.thread_id || "";
+      subscribeToThread(tid, resp.events_url);
       renderFormMeta(`已创建 ${tid},正在订阅执行事件…可继续创建下一个任务。`);
       // 表单复位为空闲,允许创建下一个任务;右栏保持当前运行的实时视图
       consoleState = createConsoleState();
       renderAll();
+      loadHistory();
     }
 
     // ------------------------------------------------------------------
@@ -622,30 +656,161 @@
       if (!applied) return;
       runMeta.classList.remove("err-text");
       renderRunView();
-      if (monitor.run.state === "waiting_human" && !resumeGuidanceShown) {
+      const st = monitor.run.state;
+      if (st === "waiting_human" && !resumeGuidanceShown) {
         resumeGuidanceShown = true;
-        showResumeGuidance();
-      } else if (monitor.run.state === "running" && resumeGuidanceShown) {
+        showResumePanel();
+      } else if (st === "running" && resumeGuidanceShown) {
         resumeGuidanceShown = false;
         resumeBox.classList.remove("active");
+      } else if (st === "completed" || st === "failed") {
+        resumeBox.classList.remove("active");
+        loadHistory();
       }
     }
-    async function showResumeGuidance() {
+
+    // ------------------------------------------------------------------
+    // 阶段 5:人工关卡恢复面板
+    // ------------------------------------------------------------------
+    async function showResumePanel() {
       const tid = liveThreadId;
       if (!tid) return;
-      resumeBox.textContent = "工作流已暂停在人工关卡,等待人工处理(属正常状态,不是失败)。";
+      resumeText.textContent = "工作流已暂停在人工关卡,等待人工处理(正常状态,不是失败)。";
+      resumeErr.textContent = "";
       resumeBox.classList.add("active");
       try {
         const r = await fetch(CONSOLE_API_PATHS.resumeStatus(tid), { headers: { Accept: "application/json" } });
         if (r.ok) {
           const data = await r.json();
           const node = data.last_event && data.last_event.node_id ? `(${data.last_event.node_id})` : "";
-          resumeBox.textContent =
+          resumeText.textContent =
             `工作流已暂停在人工关卡${node},等待人工处理(正常状态,不是失败)。` +
-            `恢复请按监控页/CLI 指引执行:` + String(data.resume_via || "").slice(0, 220);
+            `确认后由服务端以 scripts/resume_workflow.py 恢复(入口 A 同款语义)。`;
         }
-      } catch (e) { /* 指引获取失败不影响状态显示 */ }
+      } catch (e) { /* 指引获取失败不影响面板可用性 */ }
     }
+    async function postJson(url, body) {
+      const token = await ensureCsrf();
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": token, Accept: "application/json" },
+        body: JSON.stringify(body || {}),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw friendlyError(r.status, String(data.detail || r.statusText || ""));
+      return data;
+    }
+    btnResume.addEventListener("click", async () => {
+      const tid = liveThreadId;
+      if (!tid) return;
+      const parsed = parseResumeValue(resumeValue.value);
+      if (!parsed.ok) { resumeErr.textContent = parsed.error; return; }
+      btnResume.disabled = true;
+      resumeErr.textContent = "";
+      try {
+        await postJson(CONSOLE_API_PATHS.resumeRun(tid), {
+          checkpoint: resumeCheckpoint.value.trim() || null,
+          value: parsed.value,
+        });
+        resumeBox.classList.remove("active");
+        resumeGuidanceShown = false;
+        runMeta.textContent = "执行状态:恢复已提交,等待执行事件…";
+        loadHistory();
+      } catch (err) {
+        resumeErr.textContent = err && err.message ? err.message : "恢复提交失败";
+      } finally {
+        btnResume.disabled = false;
+      }
+    });
+
+    // ------------------------------------------------------------------
+    // 阶段 5:取消运行(仅服务端在册进程;服务端是权威)
+    // ------------------------------------------------------------------
+    btnCancel.addEventListener("click", async () => {
+      const tid = liveThreadId;
+      if (!tid) return;
+      if (!window.confirm(`确认取消运行 ${tid}?子进程将被终止,任务记录标记为已取消。`)) return;
+      btnCancel.disabled = true;
+      try {
+        await postJson(CONSOLE_API_PATHS.cancelRun(tid));
+        setChip("failed", "已取消");
+        runMeta.textContent = "执行状态:已取消(子进程已终止)";
+        monitor.run.state = "failed"; // 停止等事件;终态以取消记录为准
+      } catch (err) {
+        runMeta.textContent = `执行状态:取消失败 —— ${err && err.message ? err.message : ""}`;
+      } finally {
+        btnCancel.disabled = false;
+        loadHistory();
+      }
+    });
+
+    // ------------------------------------------------------------------
+    // 阶段 5:历史任务列表(状态经服务端调和;搜索为客户端过滤)
+    // ------------------------------------------------------------------
+    async function loadHistory() {
+      try {
+        const r = await fetch(`${CONSOLE_API_PATHS.listRuns}?limit=50`, { headers: { Accept: "application/json" } });
+        if (!r.ok) return;
+        const data = await r.json();
+        historyRows = Array.isArray(data.runs) ? data.runs : [];
+      } catch (e) { return; }
+      renderHistory();
+    }
+    function renderHistory() {
+      const rows = filterHistoryRows(historyRows, historySearch.value);
+      historyBody.innerHTML = "";
+      if (!rows.length) {
+        historyBody.innerHTML = `<tr><td colspan="4" class="hint">${historyRows.length ? "无匹配任务" : "暂无任务"}</td></tr>`;
+        return;
+      }
+      for (const row of rows) {
+        const tr = document.createElement("tr");
+        const label = HISTORY_STATE_LABEL[row.state] || row.state || "—";
+        const created = typeof row.created_at === "string" ? row.created_at.replace("T", " ").slice(0, 19) : "—";
+        tr.innerHTML =
+          `<td>${escapeHtml(row.thread_id || "—")}</td>` +
+          `<td>${escapeHtml(created)}</td>` +
+          `<td>${escapeHtml(label)}</td>`;
+        const tdOp = document.createElement("td");
+        const actions = [];
+        const mkBtn = (text, fn) => {
+          const b = document.createElement("button");
+          b.className = "btn";
+          b.style.padding = "2px 8px";
+          b.textContent = text;
+          b.addEventListener("click", fn);
+          return b;
+        };
+        actions.push(mkBtn("查看", () => subscribeToThread(row.thread_id)));
+        if (canResume(row.state)) {
+          actions.push(mkBtn("恢复", async () => {
+            subscribeToThread(row.thread_id);
+            resumeCheckpoint.value = "";
+            await showResumePanel();
+          }));
+        }
+        if (canCancel(row.state)) {
+          actions.push(mkBtn("取消", async () => {
+            if (!window.confirm(`确认取消运行 ${row.thread_id}?`)) return;
+            try {
+              await postJson(CONSOLE_API_PATHS.cancelRun(row.thread_id), {});
+              loadHistory();
+              if (liveThreadId === row.thread_id) {
+                setChip("failed", "已取消");
+                runMeta.textContent = "执行状态:已取消(子进程已终止)";
+              }
+            } catch (err) {
+              window.alert(`取消失败:${err && err.message ? err.message : ""}`);
+            }
+          }));
+        }
+        for (const b of actions) { tdOp.appendChild(b); tdOp.appendChild(document.createTextNode(" ")); }
+        tr.appendChild(tdOp);
+        historyBody.appendChild(tr);
+      }
+    }
+    historySearch.addEventListener("input", renderHistory);
+    btnHistoryRefresh.addEventListener("click", loadHistory);
   </script>
 </body>
 </html>

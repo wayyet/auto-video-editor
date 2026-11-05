@@ -11,10 +11,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  CONSOLE_API_PATHS, DEFAULT_LIMITS, addFiles, applyEvent, beginUpload,
-  buildCreateFormData, canSubmit, createConsoleState, createMonitorState,
-  failSubmission, formatBytes, formatDuration, friendlyError, makeFileEntry,
-  removeFile, updateProgress, acceptCreated, validateNewFiles, validateParams,
+  CONSOLE_API_PATHS, DEFAULT_LIMITS, HISTORY_STATE_LABEL, acceptCreated, addFiles,
+  applyEvent, beginUpload, buildCreateFormData, canCancel, canResume, canSubmit,
+  createConsoleState, createMonitorState, failSubmission, filterHistoryRows,
+  formatBytes, formatDuration, friendlyError, historyActions, makeFileEntry,
+  parseResumeValue, removeFile, updateProgress, validateNewFiles, validateParams,
   hasErrors,
 } from "../static/workflow_console.mjs";
 
@@ -208,4 +209,79 @@ test("re-export 连通:applyEvent 可归约 run.started(与监控同一套 reduc
   });
   assert.equal(applied, true);
   assert.equal(monitor.run.state, "running");
+});
+
+// ---------------------------------------------------------------------------
+// 阶段 5:历史 / 恢复 / 取消(纯逻辑)
+// ---------------------------------------------------------------------------
+
+test("CONSOLE_API_PATHS 阶段 5 路径与后端路由契约一致", () => {
+  const tid = "console-abcdef123456";
+  assert.equal(CONSOLE_API_PATHS.listRuns, "/api/console/runs");
+  assert.equal(CONSOLE_API_PATHS.runDetail(tid), "/api/console/runs/console-abcdef123456");
+  assert.equal(
+    CONSOLE_API_PATHS.resumeRun(tid),
+    "/api/console/runs/console-abcdef123456/resume",
+  );
+  assert.equal(
+    CONSOLE_API_PATHS.cancelRun(tid),
+    "/api/console/runs/console-abcdef123456/cancel",
+  );
+});
+
+test("canResume / canCancel 状态门禁(waiting_human 是唯一可恢复态)", () => {
+  assert.equal(canResume("waiting_human"), true);
+  for (const s of ["prepared", "starting", "running", "completed", "failed", "cancelled", "unknown"]) {
+    assert.equal(canResume(s), false, s);
+  }
+  assert.equal(canCancel("running"), true);
+  assert.equal(canCancel("starting"), true);
+  for (const s of ["prepared", "waiting_human", "completed", "failed", "cancelled", "unknown"]) {
+    assert.equal(canCancel(s), false, s);
+  }
+});
+
+test("historyActions 按状态给操作提示", () => {
+  assert.deepEqual(historyActions({ state: "waiting_human" }), { resume: true, cancel: false });
+  assert.deepEqual(historyActions({ state: "running" }), { resume: false, cancel: true });
+  assert.deepEqual(historyActions({ state: "completed" }), { resume: false, cancel: false });
+  assert.deepEqual(historyActions(null), { resume: false, cancel: false });
+});
+
+test("filterHistoryRows:空查询原样返回;按 thread_id/状态/中文词/时间过滤", () => {
+  const rows = [
+    { thread_id: "console-aaaaaaaaaaaa", state: "completed", created_at: "2026-12-01T00:00:00+00:00" },
+    { thread_id: "console-bbbbbbbbbbbb", state: "running", created_at: "2026-12-02T00:00:00+00:00" },
+    { thread_id: "console-cccccccccccc", state: "waiting_human", created_at: "2026-12-03T00:00:00+00:00" },
+  ];
+  assert.equal(filterHistoryRows(rows, "").length, 3);
+  assert.equal(filterHistoryRows(rows, "bbbb").length, 1);
+  assert.equal(filterHistoryRows(rows, "RUNNING").length, 1); // 大小写不敏感
+  assert.equal(filterHistoryRows(rows, "等待人工").length, 1); // 中文状态词
+  assert.equal(filterHistoryRows(rows, "12-02").length, 1); // 创建时间
+  assert.equal(filterHistoryRows(rows, "不存在的关键字").length, 0);
+  assert.deepEqual(filterHistoryRows(null, "x"), []);
+  // 不修改原数组
+  assert.equal(rows.length, 3);
+});
+
+test("HISTORY_STATE_LABEL 覆盖全部调和态且 waiting_human 不译作失败", () => {
+  for (const s of ["prepared", "starting", "running", "waiting_human",
+    "completed", "failed", "cancelled", "unknown"]) {
+    assert.ok(HISTORY_STATE_LABEL[s], s);
+  }
+  assert.equal(HISTORY_STATE_LABEL.waiting_human, "等待人工关卡");
+});
+
+test("parseResumeValue:JSON 优先 → true/false 字面量 → 非法报错;空 = 默认 true", () => {
+  assert.deepEqual(parseResumeValue(""), { ok: true, value: true, error: "" });
+  assert.deepEqual(parseResumeValue("true"), { ok: true, value: true, error: "" });
+  assert.deepEqual(parseResumeValue("false"), { ok: true, value: false, error: "" });
+  assert.deepEqual(parseResumeValue('{"answer":"ok"}'), { ok: true, value: { answer: "ok" }, error: "" });
+  assert.deepEqual(parseResumeValue("42"), { ok: true, value: 42, error: "" });
+  assert.equal(parseResumeValue(" 42 ").value, 42); // 容忍首尾空白
+  const bad = parseResumeValue("继续");
+  assert.equal(bad.ok, false);
+  assert.match(bad.error, /JSON/);
+  assert.equal(parseResumeValue("继续").value, null);
 });
