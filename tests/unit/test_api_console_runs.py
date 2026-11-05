@@ -19,10 +19,20 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import config  # noqa: E402
+import web.console_service as console_service  # noqa: E402
 from monitor_fastapi import app  # noqa: E402
 from web.console_uploads import ConsoleUploadError  # noqa: E402
 
 client = TestClient(app)
+
+
+class _FakeProc:
+    def __init__(self, pid: int = 4321):
+        self.pid = pid
+        self._rc = None
+
+    def poll(self):
+        return self._rc
 
 
 def _ok_probe(path):
@@ -31,10 +41,17 @@ def _ok_probe(path):
 
 @pytest.fixture()
 def console_env(tmp_path, monkeypatch):
-    """隔离 outputs 根目录 + 探测函数(不依赖真实 ffprobe)。"""
+    """隔离 outputs 根目录 + 探测函数 + 启动接缝(PG/Popen 全部假实现)。"""
     monkeypatch.setattr(config, "CONSOLE_OUTPUTS_ROOT", tmp_path)
+    monkeypatch.setattr(config, "CONSOLE_LLM_BACKEND", "stub")
+    monkeypatch.setattr(config, "CONSOLE_ALLOW_STUB", True)
     monkeypatch.setattr("web.console_uploads.probe_video_file", _ok_probe)
-    return tmp_path
+    monkeypatch.setattr("web.console_service._check_postgres", lambda: None)
+    monkeypatch.setattr(
+        "web.console_service._default_popen", lambda: (lambda a, **k: _FakeProc(4321))
+    )
+    yield tmp_path
+    console_service._ACTIVE_PROCS.clear()
 
 
 def _files(*specs):
@@ -45,7 +62,7 @@ def _files(*specs):
 
 
 class TestHappyPath:
-    def test_single_video_202_prepared(self, console_env):
+    def test_single_video_202_starting(self, console_env):
         resp = client.post(
             "/api/console/runs",
             data={"prompt": "剪一条 30 秒旅行回顾短片"},
@@ -54,7 +71,7 @@ class TestHappyPath:
         assert resp.status_code == 202, resp.text
         body = resp.json()
         assert body["ok"] is True
-        assert body["state"] == "prepared"
+        assert body["state"] == "starting"  # 阶段 2:子进程已创建,不等待执行
         tid = body["thread_id"]
         assert tid.startswith("console-") and len(tid) == len("console-") + 12
         assert body["monitor_url"] == f"/?thread_id={tid}"
@@ -63,7 +80,11 @@ class TestHappyPath:
         task_dir = console_env / tid
         assert (task_dir / "inputs" / "0001.mp4").read_bytes() == b"video-bytes"
         assert (task_dir / "initial_state.json").exists()
-        assert (task_dir / "console_run.json").exists()
+        assert (task_dir / "console_run.log").exists()
+        record = json.loads((task_dir / "console_run.json").read_text("utf-8"))
+        assert record["status"] == "starting"
+        assert record["pid"] == 4321
+        assert record["llm_backend"] == "stub"
 
     def test_multi_video_202(self, console_env):
         resp = client.post(
@@ -76,6 +97,25 @@ class TestHappyPath:
         tid = resp.json()["thread_id"]
         assert (console_env / tid / "inputs" / "0001.mp4").exists()
         assert (console_env / tid / "inputs" / "0002.mov").exists()
+
+    def test_prompt_never_in_argv(self, console_env):
+        """提示词只进 initial_state.json,绝不进命令行(计划 §7.3)。"""
+        resp = client.post(
+            "/api/console/runs",
+            data={"prompt": "绝密提示词内容XYZ"},
+            files=_files(("a.mp4", b"x")),
+        )
+        assert resp.status_code == 202
+        tid = resp.json()["thread_id"]
+        record = json.loads(
+            (console_env / tid / "console_run.json").read_text("utf-8")
+        )
+        argv = record.get("argv") or []
+        assert all("绝密提示词内容XYZ" not in a for a in argv)
+        state = json.loads(
+            (console_env / tid / "initial_state.json").read_text("utf-8")
+        )
+        assert state["storyline_targets"]["user_request"] == "绝密提示词内容XYZ"
 
     def test_no_files_outside_task_dir(self, console_env):
         resp = client.post(

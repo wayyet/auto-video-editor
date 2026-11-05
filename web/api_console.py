@@ -1,14 +1,14 @@
-"""创建台写 API(第二期阶段 1:上传 + State 构建;阶段 2 起含启动)。
+"""创建台写 API(第二期:上传 + State 构建 + 子进程启动)。
 
 职责边界:
 - 本模块是仓库里**唯一**允许"创建工作流运行"的 Web 入口;
 - ``web/api_workflow.py`` 的 ``/api/workflow/*`` 保持 GET-only 只读,
   两者的边界由阶段 0 契约文档冻结,不得互相混入对方职责;
-- 阶段 1 的 ``POST /runs`` 只做"校验 → 落盘 → initial state",**绝不启动
-  工作流、绝不触碰 PostgreSQL**(阶段 2 起由 console_service 接管启动)。
+- 流程(计划 §7.2):校验 → 落盘 → initial state → PG 预检 → LLM 后端门禁
+  → Popen 启动既有 ``scripts/run_workflow.py`` → 202 返回,不等待执行结束。
 
-错误码契约(阶段 0 文档 §2.3):400 参数 / 403 Origin / 413 超限 /
-415 格式或内容 / 409 并发(阶段 2) / 503 PG 或模型未就绪(阶段 2) / 500。
+错误码契约(阶段 0 文档 §2.3):400 参数 / 403 Origin / 409 并发或重复 /
+413 超限 / 415 格式或内容 / 503 PG 或模型未就绪 / 500。
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse
 
 import config  # 运行时读 config.CONSOLE_*(可 monkeypatch),不在 import 期固化值
 from web.api_workflow import _verify_same_origin
-from web.console_service import prepare_run
+from web.console_service import ConsoleLaunchError, prepare_run, start_run
 from web.console_uploads import ConsoleUploadError
 
 router = APIRouter(prefix="/api/console")
@@ -44,7 +44,7 @@ def _bad_request(detail: str) -> HTTPException:
 
 
 @router.post("/runs")
-async def create_run(
+def create_run(
     request: Request,
     prompt: str = Form(""),
     videos: list[UploadFile] = File(default=[]),
@@ -52,10 +52,11 @@ async def create_run(
     ratio: str = Form("9:16"),
     lang: str = Form("zh"),
 ) -> JSONResponse:
-    """创建一次工作流任务(阶段 1:仅准备;不启动、不建 checkpoint)。
+    """创建并启动一次工作流任务(第二期阶段 2 语义)。
 
-    成功返回 202 与 thread_id;`state` 恒为 "prepared"(阶段 2 起才会出现
-    "starting")。LLM 后端等运行环境只由服务端配置决定,不接受浏览器字段。
+    成功返回 202 与 thread_id,`state="starting"`(子进程已创建,执行不等待);
+    同步 def 由 FastAPI 放线程池跑,落盘/Popen/PG 预检不阻塞事件循环。
+    LLM 后端等运行环境只由服务端配置决定,不接受浏览器字段。
     """
     # 第二道防线:跨源浏览器请求直接拒绝(curl/同源不带 Origin 时放行)
     _verify_same_origin(request)
@@ -86,7 +87,7 @@ async def create_run(
     if lang not in ALLOWED_LANGS:
         raise _bad_request(f"lang 非法: {lang!r}(允许: {', '.join(ALLOWED_LANGS)})")
 
-    # --- 落盘 + 构建 State(不含任何启动语义) ---
+    # --- 落盘 + 构建 State(阶段 1;失败整体回滚任务目录) ---
     try:
         result = prepare_run(
             prompt=prompt_clean,
@@ -98,13 +99,19 @@ async def create_run(
     except ConsoleUploadError as e:
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e
 
+    # --- 启动子进程(阶段 2;失败保留任务目录供排障,不伪成功) ---
+    try:
+        record = start_run(result["task_dir"])
+    except ConsoleLaunchError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
+
     thread_id = result["thread_id"]
     return JSONResponse(
         status_code=202,
         content={
             "ok": True,
             "thread_id": thread_id,
-            "state": "prepared",
+            "state": record.get("status", "starting"),
             **_response_urls(thread_id),
         },
     )

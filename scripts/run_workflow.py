@@ -98,7 +98,34 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="跳过 checkpoint 表创建(默认会确保 schema 存在)",
     )
+    p.add_argument(
+        "--llm-backend",
+        choices=("stub", "claude-cli", "mcode-cli"),
+        default=None,
+        help=(
+            "可选:执行前把指定 LLM 后端注入 storyline_capabilities 默认 client"
+            "(第二期创建台用)。不传 = 完全保持既有行为(懒加载 StubLLMClient)。"
+        ),
+    )
     return p.parse_args()
+
+
+def _apply_llm_backend(backend: Optional[str]) -> None:
+    """把指定后端注入为 storyline_capabilities 的默认 client(第二期阶段 2)。
+
+    复用既有装配:``agent_gate.factory.build_client`` →
+    ``storyline_capabilities.vlm_client.set_default_client``(计划 §8.2)。
+    ``backend`` 为空时**不注入** —— 旧 CLI 行为完全不变(懒加载 Stub)。
+    gate 后端需要 mailbox,不在本入口的选择集内(agent_gate CLI 自行处理)。
+    """
+    if not backend:
+        return
+    from agent_gate.factory import build_client
+    from storyline_capabilities.vlm_client import set_default_client
+
+    client = build_client(backend)
+    set_default_client(client)
+    print(f"[llm] 已注入 LLM 后端: {backend}", file=sys.stderr)
 
 
 def _maybe_preflight(args: argparse.Namespace) -> int:
@@ -275,6 +302,10 @@ async def _main_async(args: argparse.Namespace) -> int:
     rc = _maybe_preflight(args)
     if rc != 0:
         return rc
+
+    # 第二期阶段 2:显式给了 --llm-backend 时,在执行图**之前**注入 LLM 后端,
+    # 保证首节点(storyline_load_media 之后的 LLM 节点)就用上真实模型。
+    _apply_llm_backend(getattr(args, "llm_backend", None))
 
     # PostgreSQL 统一改造(方案 §4.3):SQLite 分支已删除 ——
     # 无论 WORKFLOW_ENV 是什么,都走 Postgres 异步路径。
