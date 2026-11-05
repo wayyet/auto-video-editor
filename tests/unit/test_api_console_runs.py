@@ -1,9 +1,11 @@
-"""POST /api/console/runs API 测试(第二期阶段 1)。
+"""POST /api/console/runs API 测试(第二期阶段 1;阶段 3 扩充 CSRF/config/State 映射)。
 
 覆盖计划 §11 阶段 1 验收 + 测试矩阵:
 - 单视频/多视频 happy path(202 + prepared + 三个 URL);
 - 参数校验 400;扩展名 415;超限 413;Origin 403;
-- 任务目录外无文件;不启动工作流(响应 state 恒为 prepared,阶段 2 前无启动语义)。
+- 任务目录外无文件;不启动工作流(响应 state 恒为 prepared,阶段 2 前无启动语义);
+- 阶段 3:CSRF 门禁(带 Origin 必须携带 token)、GET /config 限制下发、
+  提示词 → storyline_targets 的 API 级映射断言。
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import config  # noqa: E402
+import web.api_console as api_console  # noqa: E402
 import web.console_service as console_service  # noqa: E402
 from monitor_fastapi import app  # noqa: E402
 from web.console_uploads import ConsoleUploadError  # noqa: E402
@@ -52,6 +55,14 @@ def console_env(tmp_path, monkeypatch):
     )
     yield tmp_path
     console_service._ACTIVE_PROCS.clear()
+    api_console._CSRF_TOKENS.clear()
+
+
+def _csrf_token() -> str:
+    """同源取一个 CSRF token(阶段 3 起,带 Origin 的浏览器写请求必须携带)。"""
+    resp = client.get("/api/console/csrf")
+    assert resp.status_code == 200, resp.text
+    return resp.json()["token"]
 
 
 def _files(*specs):
@@ -243,12 +254,146 @@ class TestOriginGuard:
         assert list(console_env.iterdir()) == []
 
     def test_local_origin_accepted(self, console_env):
+        """阶段 3 起同源浏览器请求须携带有效 CSRF token。"""
+        token = _csrf_token()
+        resp = client.post(
+            "/api/console/runs",
+            data={"prompt": "p"}, files=_files(("a.mp4", b"x")),
+            headers={"Origin": "http://127.0.0.1:7860", "X-CSRF-Token": token},
+        )
+        assert resp.status_code == 202
+
+
+class TestCsrfGate:
+    """阶段 3 CSRF 门禁:带 Origin 的写请求必须携带 GET /api/console/csrf 签发的 token;
+    无 Origin 的本机脚本/curl 豁免(既有 API 兼容)。"""
+
+    def test_csrf_endpoint_issues_token(self):
+        resp = client.get("/api/console/csrf")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert isinstance(body["token"], str) and len(body["token"]) >= 32
+        assert body["ttl_seconds"] == api_console.CSRF_TOKEN_TTL_SEC
+
+    def test_origin_without_token_403(self, console_env):
         resp = client.post(
             "/api/console/runs",
             data={"prompt": "p"}, files=_files(("a.mp4", b"x")),
             headers={"Origin": "http://127.0.0.1:7860"},
         )
+        assert resp.status_code == 403
+        assert "CSRF" in resp.json()["detail"]
+
+    def test_origin_with_invalid_token_403(self, console_env):
+        resp = client.post(
+            "/api/console/runs",
+            data={"prompt": "p"}, files=_files(("a.mp4", b"x")),
+            headers={"Origin": "http://127.0.0.1:7860", "X-CSRF-Token": "bogus-token"},
+        )
+        assert resp.status_code == 403
+
+    def test_expired_token_403(self, console_env):
+        token = _csrf_token()
+        # 直接把过期时间拨到过去,模拟 TTL 到期
+        api_console._CSRF_TOKENS[token] = 0.0
+        resp = client.post(
+            "/api/console/runs",
+            data={"prompt": "p"}, files=_files(("a.mp4", b"x")),
+            headers={"Origin": "http://127.0.0.1:7860", "X-CSRF-Token": token},
+        )
+        assert resp.status_code == 403
+
+    def test_token_reusable_within_ttl(self, console_env):
+        token = _csrf_token()
+        for _ in range(2):
+            resp = client.post(
+                "/api/console/runs",
+                data={"prompt": "p"}, files=_files(("a.mp4", b"x")),
+                headers={"Origin": "http://127.0.0.1:7860", "X-CSRF-Token": token},
+            )
+            assert resp.status_code == 202
+
+    def test_no_origin_exempt(self, console_env):
+        """无 Origin = 非浏览器客户端,不要求 token(兼容既有脚本)。"""
+        resp = client.post(
+            "/api/console/runs", data={"prompt": "p"}, files=_files(("a.mp4", b"x"))
+        )
         assert resp.status_code == 202
+
+    def test_csrf_endpoint_cross_origin_403(self):
+        resp = client.get("/api/console/csrf", headers={"Origin": "http://evil.example.com"})
+        assert resp.status_code == 403
+
+
+class TestConsoleConfig:
+    """阶段 3:GET /api/console/config 下发表单限制与默认值(不含敏感项)。"""
+
+    def test_config_shape_and_defaults(self, console_env):
+        resp = client.get("/api/console/config")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["max_videos"] == config.CONSOLE_MAX_VIDEOS
+        assert body["max_video_bytes"] == config.CONSOLE_MAX_VIDEO_BYTES
+        assert body["prompt_max_chars"] == config.CONSOLE_PROMPT_MAX_CHARS
+        assert body["target_duration_ms_default"] == config.CONSOLE_TARGET_DURATION_MS_DEFAULT
+        assert body["target_duration_ms_max"] == config.CONSOLE_TARGET_DURATION_MS_MAX
+        assert body["allowed_video_exts"] == [".mov", ".mp4"]  # sorted,输出稳定
+        assert body["ratios"] == ["9:16", "16:9", "4:3"]
+        assert body["langs"] == ["zh", "en"]
+
+    def test_config_reflects_env_override(self, console_env, monkeypatch):
+        monkeypatch.setattr(config, "CONSOLE_MAX_VIDEOS", 3)
+        monkeypatch.setattr(config, "CONSOLE_PROMPT_MAX_CHARS", 77)
+        body = client.get("/api/console/config").json()
+        assert body["max_videos"] == 3
+        assert body["prompt_max_chars"] == 77
+
+    def test_config_no_sensitive_keys(self, console_env):
+        body = client.get("/api/console/config").json()
+        joined = json.dumps(body)
+        assert "llm" not in joined.lower()
+        assert "backend" not in joined.lower()
+        assert "postgres" not in joined.lower()
+
+    def test_config_cross_origin_403(self):
+        resp = client.get("/api/console/config", headers={"Origin": "http://evil.example.com"})
+        assert resp.status_code == 403
+
+
+class TestConcurrency409:
+    """阶段 4 矩阵「多个任务并发」的 API 级断言(服务级见 test_console_service_launch)。"""
+
+    def test_second_run_rejected_when_limit_reached(self, console_env, monkeypatch):
+        monkeypatch.setattr(config, "CONSOLE_MAX_CONCURRENT_RUNS", 1)
+        r1 = client.post("/api/console/runs", data={"prompt": "p"},
+                         files=_files(("a.mp4", b"x")))
+        assert r1.status_code == 202
+        r2 = client.post("/api/console/runs", data={"prompt": "q"},
+                         files=_files(("b.mp4", b"y")))
+        assert r2.status_code == 409
+        assert "上限" in r2.json()["detail"]
+
+
+class TestPromptStateMapping:
+    """阶段 4 矩阵「提示词 State 映射」的 API 级断言(阶段 3 随前端补齐)。"""
+
+    def test_prompt_maps_to_state_targets(self, console_env):
+        prompt = "节奏明快的旅行回顾短片,字幕简体中文"
+        resp = client.post("/api/console/runs", data={"prompt": prompt},
+                           files=_files(("a.mp4", b"x"), ("b.mov", b"y")))
+        assert resp.status_code == 202
+        tid = resp.json()["thread_id"]
+        state = json.loads((console_env / tid / "initial_state.json").read_text("utf-8"))
+        assert state["session_id"] == tid
+        assert state["storyline_targets"]["user_request"] == prompt
+        assert state["storyline_targets"]["script_request"] == prompt
+        assert "query" not in state["storyline_targets"]  # 不得误触发网页话题分支
+        assert state["video_input_path"].endswith("0001.mp4")
+        assert len(state["video_input_paths"]) == 2
+        assert state["storyline_outputs_root"] == str(console_env / tid)
+        assert state["error_log"] == []
 
 
 class TestReadOnlyBoundary:
@@ -263,9 +408,9 @@ class TestReadOnlyBoundary:
         assert all(m != ("POST",) for _, m in methods)
 
     def test_console_route_registered(self):
-        """console router 声明了 POST /runs(挂载生效由上方 TestClient 用例证明;
-        FastAPI 0.162 include_router 惰性挂载,app.routes 里看不到 router 路径,
-        检查口径与 tests/unit/test_api_workflow_readonly.py 一致)。"""
+        """console router 声明了写入口与阶段 3 前端支撑 GET(挂载生效由上方
+        TestClient 用例证明;FastAPI 0.162 include_router 惰性挂载,app.routes
+        里看不到 router 路径,检查口径与 tests/unit/test_api_workflow_readonly.py 一致)。"""
         from web.api_console import router as console_router
 
         console_routes = {
@@ -273,3 +418,5 @@ class TestReadOnlyBoundary:
             for r in console_router.routes
         }
         assert ("/api/console/runs", ("POST",)) in console_routes
+        assert ("/api/console/config", ("GET",)) in console_routes
+        assert ("/api/console/csrf", ("GET",)) in console_routes

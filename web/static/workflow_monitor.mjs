@@ -52,7 +52,7 @@ const LAST_EVENT_RUN_STATE = Object.freeze({
   "node.progress": "running",
 });
 
-/** API 路径(阶段4 端点;只读,启动走 POST /runs —— 订阅绝不触发执行)。 */
+/** API 路径(只读监控 API;工作流启动走 POST /api/console/runs —— 订阅绝不触发执行)。 */
 export const API_PATHS = Object.freeze({
   graph: "/api/workflow/graph",
   runs: "/api/workflow/runs",

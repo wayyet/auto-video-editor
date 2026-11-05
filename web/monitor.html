@@ -110,7 +110,8 @@
     <span id="chip">未连接</span>
     <span id="counts"></span>
     <span id="meta"></span>
-    <a href="/node-map" style="margin-left:auto">节点图视图 →</a>
+    <a href="/console" style="margin-left:auto">创建任务 →</a>
+    <a href="/node-map">节点图视图 →</a>
     <button class="btn" id="btnTheme" title="切换背景颜色(白/黑)">背景:白色</button>
   </div>
   <div id="layout">
@@ -162,6 +163,17 @@
     let source = null;
 
     try { threadInput.value = localStorage.getItem("wf_monitor_thread") || ""; } catch (e) {}
+
+    // 阶段 3:支持 /?thread_id=<id> 初始化输入框并自动订阅(创建台创建成功后跳转而来)。
+    // 参数保留在 URL 中:刷新后仍按该 thread_id 重连,配合 Last-Event-ID 继续补发。
+    // 无参数时保持现状(localStorage 回退 + 手工订阅)。
+    {
+      const urlTid = new URLSearchParams(location.search).get("thread_id");
+      if (urlTid && urlTid.trim()) {
+        threadInput.value = urlTid.trim();
+        subscribe();
+      }
+    }
 
     function setChip(stateKey, extra) {
       chip.className = "s-" + (stateKey || "");

@@ -14,12 +14,13 @@
 路由
 ----
 - ``GET /``                 监控首页(web/monitor.html;SSE 事件流 + 节点状态)
+- ``GET /console``          工作流创建台(web/console.html;第二期阶段 3)
 - ``GET /node-map``         工作流节点图页(web/node_map/node_map.html)
 - ``/node_map``             node_map 静态资源(含 workflow.json 子流程视图)
 - ``/static``               web/static(workflow_monitor.mjs 等,页面共用)
 - ``/api/workflow/*``       只读监控 API(web/api_workflow.py router)
-- ``/api/console/*``        创建台写 API(web/api_console.py router;第二期阶段 1:
-                            POST /runs 上传+State 构建,阶段 2 起含工作流启动)
+- ``/api/console/*``        创建台 API(web/api_console.py router;阶段 1-2 写入口,
+                            阶段 3 起含前端配置/CSRF 支撑)
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ from web.api_workflow import _REPO_ROOT, router
 
 _WEB_DIR = _REPO_ROOT / "web"
 _MONITOR_HTML = _WEB_DIR / "monitor.html"
+_CONSOLE_HTML = _WEB_DIR / "console.html"
 _NODE_MAP_DIR = _WEB_DIR / "node_map"
 _NODE_MAP_HTML = _NODE_MAP_DIR / "node_map.html"
 _STATIC_DIR = _WEB_DIR / "static"
@@ -57,6 +59,18 @@ async def index():
             status_code=404,
         )
     return FileResponse(_MONITOR_HTML, media_type="text/html")
+
+
+@app.get("/console", include_in_schema=False)
+async def console_page():
+    """工作流创建台(上传视频 + 提示词 + 参数 → 创建运行 → 页面内 SSE 实时状态)。"""
+    if not _CONSOLE_HTML.exists():
+        return Response(
+            "console.html not found. Put it under ./web/console.html",
+            media_type="text/plain",
+            status_code=404,
+        )
+    return FileResponse(_CONSOLE_HTML, media_type="text/html")
 
 
 @app.get("/node-map", include_in_schema=False)

@@ -1,0 +1,651 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Workflow Console</title>
+  <style>
+    /* 工作流创建台(第二期阶段 3,无后缀版计划 §11 阶段 3)。
+       左栏:提示词 + 视频导入 + 参数 → POST /api/console/runs 创建运行;
+       右栏:本次运行状态 + SSE 事件(复用 /api/workflow/* 只读事件流)。
+       CSS 变量与 web/monitor.html 同一套(含浅色主题记忆)。 */
+    :root{
+      --bg:#0f0f0f; --panel:#171717; --text:#eaeaea; --muted:#b5b5b5;
+      --border:#2c2c2c; --st-run:#3b82f6; --st-done:#22c55e; --st-wait:#d97706;
+      --st-retry:#f97316; --st-fail:#ef4444;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --topbar-bg: linear-gradient(to bottom, #121212, #0f0f0f);
+      --input-bg:#0f0f0f;
+      --chip-bg:#141414;
+      --hover-border:#3a3a3a;
+      --hover-bg:#141414;
+      --table-row-border:#242424;
+      --link-text:#93c5fd;
+      --err-text:#fca5a5;
+      --ok-text:#86efac;
+      --chip-run-text:#93c5fd;
+      --chip-wait-text:#fcd34d;
+      --chip-done-text:#86efac;
+      --chip-fail-text:#fca5a5;
+    }
+    html[data-theme="light"]{
+      --bg:#ffffff; --panel:#ffffff; --text:#1a1a1a; --muted:#525252;
+      --border:#d4d4d4;
+      --topbar-bg: linear-gradient(to bottom, #ffffff, #fafafa);
+      --input-bg:#ffffff;
+      --chip-bg:#f5f5f5;
+      --hover-border:#a3a3a3;
+      --hover-bg:#f0f0f0;
+      --table-row-border:#e5e5e5;
+      --link-text:#1d4ed8;
+      --err-text:#b91c1c;
+      --ok-text:#15803d;
+      --chip-run-text:#1d4ed8;
+      --chip-wait-text:#92400e;
+      --chip-done-text:#15803d;
+      --chip-fail-text:#b91c1c;
+    }
+    *{ box-sizing:border-box; }
+    body{ margin:0; background:var(--bg); color:var(--text); font-family:var(--sans); font-size:13px; }
+    #topbar{
+      height:52px; display:flex; align-items:center; gap:10px; padding:0 14px;
+      border-bottom:1px solid var(--border); background:var(--topbar-bg);
+    }
+    #topbar h1{ font-size:14px; margin:0 10px 0 0; font-weight:650; white-space:nowrap; }
+    #topbar a{ color:var(--link-text); font-size:12px; text-decoration:none; border:1px solid var(--border); border-radius:8px; padding:5px 8px; }
+    .btn{
+      appearance:none; background:transparent; color:var(--text); border:1px solid var(--border);
+      border-radius:8px; padding:6px 10px; font-size:12px; cursor:pointer;
+    }
+    .btn:hover:not(:disabled){ border-color:var(--hover-border); background:var(--hover-bg); }
+    .btn:disabled{ opacity:.45; cursor:not-allowed; }
+    .btn.primary{ border-color:var(--st-run); color:var(--chip-run-text); font-weight:600; }
+    #chip{
+      display:inline-block; padding:3px 9px; border-radius:999px; border:1px solid var(--border);
+      background:var(--chip-bg); font-family:var(--mono); font-size:11px; color:var(--muted);
+    }
+    #chip.s-running{ color:var(--chip-run-text); border-color:var(--st-run); }
+    #chip.s-waiting_human{ color:var(--chip-wait-text); border-color:var(--st-wait); }
+    #chip.s-completed{ color:var(--chip-done-text); border-color:var(--st-done); }
+    #chip.s-failed{ color:var(--chip-fail-text); border-color:var(--st-fail); }
+    #layout{ display:flex; height:calc(100vh - 53px); }
+    #form{ flex:1.15; overflow:auto; border-right:1px solid var(--border); padding:0 14px 20px; }
+    #panel{ flex:1; overflow:auto; padding:0 14px 20px; }
+    h2{ font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); margin:16px 0 6px; font-weight:650; }
+    .hint{ color:var(--muted); font-size:11px; margin:6px 0; }
+    .err-text{ color:var(--err-text); }
+    .ok-text{ color:var(--ok-text); }
+    #promptInput{
+      width:100%; min-height:110px; resize:vertical;
+      background:var(--input-bg); border:1px solid var(--border); color:var(--text);
+      border-radius:8px; padding:8px 10px; font-size:13px; font-family:var(--sans); line-height:1.5;
+    }
+    #dropZone{
+      border:1px dashed var(--border); border-radius:10px; padding:18px 12px; text-align:center;
+      color:var(--muted); font-size:12px; cursor:pointer; user-select:none;
+    }
+    #dropZone:hover, #dropZone.dragover{ border-color:var(--st-run); color:var(--text); background:var(--hover-bg); }
+    table{ width:100%; margin:6px 0; border-collapse:collapse; font-family:var(--mono); font-size:11px; }
+    th{ text-align:left; color:var(--muted); border-bottom:1px solid var(--border); padding:5px 8px; }
+    td{ border-bottom:1px solid var(--table-row-border); padding:5px 8px; vertical-align:top; word-break:break-all; }
+    td.ev-type{ white-space:nowrap; font-weight:600; }
+    .t-run\.started,.t-node\.succeeded,.t-run\.completed{ color:var(--chip-done-text); }
+    .t-run\.failed,.t-node\.failed{ color:var(--chip-fail-text); }
+    .t-node\.started,.t-node\.resumed,.t-node\.retrying,.t-node\.progress,.t-run\.resumed{ color:var(--chip-run-text); }
+    .t-run\.interrupted,.t-node\.waiting_input{ color:var(--chip-wait-text); }
+    .row-remove{ background:transparent; border:none; color:var(--err-text); cursor:pointer; font-size:13px; padding:0 4px; }
+    .params{ display:flex; gap:14px; flex-wrap:wrap; align-items:flex-end; }
+    .params label{ display:flex; flex-direction:column; gap:4px; font-size:11px; color:var(--muted); }
+    .params select, .params input{
+      background:var(--input-bg); border:1px solid var(--border); color:var(--text);
+      border-radius:8px; padding:6px 8px; font-size:12px; font-family:var(--mono);
+    }
+    .params input{ width:110px; }
+    #btnCreate{ margin-top:12px; padding:8px 18px; font-size:13px; }
+    #formMeta, #runMeta{ font-family:var(--mono); font-size:11px; color:var(--muted); margin-top:8px; white-space:pre-wrap; }
+    #progressWrap{ display:none; margin-top:10px; }
+    #progressWrap.active{ display:block; }
+    #progressOuter{ height:8px; border:1px solid var(--border); border-radius:999px; overflow:hidden; background:var(--input-bg); }
+    #progressBar{ height:100%; width:0%; background:var(--st-run); transition:width .15s linear; }
+    #progressText{ font-family:var(--mono); font-size:11px; color:var(--muted); margin-top:4px; }
+    #fileErrors li{ color:var(--err-text); font-size:11px; margin:2px 0; }
+    #resumeBox{
+      display:none; border:1px solid var(--st-wait); border-radius:10px; padding:10px 12px; margin:8px 0;
+      font-size:12px; color:var(--chip-wait-text);
+    }
+    #resumeBox.active{ display:block; }
+    #threadLine{ font-family:var(--mono); font-size:12px; margin:6px 0; word-break:break-all; }
+    #videoSummary li{ font-family:var(--mono); font-size:11px; margin:2px 0; word-break:break-all; }
+    #counts{ font-family:var(--mono); font-size:11px; color:var(--muted); margin:4px 0; }
+    .st{ display:inline-block; padding:1px 7px; border-radius:999px; border:1px solid var(--border); font-size:10px; }
+    .st.running{ color:var(--chip-run-text); border-color:var(--st-run); }
+    .st.done{ color:var(--chip-done-text); border-color:var(--st-done); }
+    .st.waiting{ color:var(--chip-wait-text); border-color:var(--st-wait); }
+    .st.retrying{ color:var(--chip-wait-text); border-color:var(--st-retry); }
+    .st.failed{ color:var(--chip-fail-text); border-color:var(--st-fail); }
+  </style>
+  <script>
+    /* 主题预置:与监控页共用 wf_monitor_theme 记忆,首帧前应用避免闪烁 */
+    try{
+      if(localStorage.getItem("wf_monitor_theme") === "light"){
+        document.documentElement.dataset.theme = "light";
+      }
+    }catch(e){}
+  </script>
+</head>
+<body>
+  <div id="topbar">
+    <h1>工作流创建台</h1>
+    <span id="chip">等待创建</span>
+    <span style="flex:1"></span>
+    <a href="/" target="_blank" rel="noopener">监控首页 →</a>
+    <a href="/node-map" target="_blank" rel="noopener">节点拓扑 →</a>
+  </div>
+  <div id="layout">
+    <div id="form">
+      <h2>01 · 输入剪辑要求</h2>
+      <textarea id="promptInput" spellcheck="false"
+        placeholder="例:请把导入的视频剪辑成一条约 35 秒的旅行回顾短片,节奏明快,优先保留自然风光与有辨识度的场景,字幕使用简体中文。"></textarea>
+      <div class="hint" id="promptCount">0 / 4000</div>
+
+      <h2>02 · 导入视频</h2>
+      <div id="dropZone">拖入视频,或点击选择文件(支持多选 MP4 / MOV)</div>
+      <input id="fileInput" type="file" accept=".mp4,.mov" multiple style="display:none" />
+      <div class="hint" id="fileMeta">尚未选择视频</div>
+      <table id="fileTable" style="display:none">
+        <thead><tr><th>名称</th><th style="width:80px">大小</th><th style="width:56px">格式</th><th style="width:70px">时长</th><th style="width:36px"></th></tr></thead>
+        <tbody id="fileBody"></tbody>
+      </table>
+      <ul id="fileErrors" style="list-style:none; margin:4px 0; padding:0"></ul>
+
+      <h2>03 · 剪辑参数</h2>
+      <div class="params">
+        <label>目标时长(秒)<input id="durationInput" type="number" min="1" step="1" value="35" /></label>
+        <label>画幅比例
+          <select id="ratioSelect">
+            <option value="9:16">9:16(竖屏)</option>
+            <option value="16:9">16:9(横屏)</option>
+            <option value="4:3">4:3</option>
+          </select>
+        </label>
+        <label>输出语言
+          <select id="langSelect">
+            <option value="zh">中文</option>
+            <option value="en">英文</option>
+          </select>
+        </label>
+      </div>
+      <button class="btn primary" id="btnCreate">创建并运行工作流</button>
+      <div id="formMeta">创建后自动在本页订阅执行事件;提示词不会进入监控事件日志。</div>
+      <div id="progressWrap">
+        <div id="progressOuter"><div id="progressBar"></div></div>
+        <div id="progressText">0%</div>
+      </div>
+
+      <h2>说明</h2>
+      <div class="hint">
+        创建台只负责创建运行;订阅、断开与刷新均为只读 GET,不会重复启动工作流。
+        执行的完整节点轨迹请在监控首页查看;等待人工关卡属正常状态,恢复操作见监控页指引。
+      </div>
+    </div>
+
+    <div id="panel">
+      <h2>本次工作流</h2>
+      <div id="threadLine">Thread ID:—</div>
+      <div id="runMeta">执行状态:尚未启动</div>
+      <div id="counts"></div>
+
+      <h2>已导入视频</h2>
+      <ul id="videoSummary" style="list-style:none; margin:4px 0; padding:0"><li class="hint">—</li></ul>
+
+      <div id="resumeBox"></div>
+
+      <h2>执行事件</h2>
+      <div class="hint" id="evEmpty">等待工作流启动…(创建成功后自动订阅 SSE)</div>
+      <table id="evTable" style="display:none">
+        <thead><tr><th style="width:64px">id</th><th style="width:130px">时间</th><th style="width:150px">事件</th><th>节点 / 详情</th></tr></thead>
+        <tbody id="evBody"></tbody>
+      </table>
+      <p style="margin-top:10px"><a id="monitorLink" class="ok-text" style="display:none" target="_blank" rel="noopener">查看完整监控 →</a></p>
+    </div>
+  </div>
+
+  <script type="module">
+    import {
+      CONSOLE_API_PATHS, applyEvent, createMonitorState, computeCounts,
+      validateNewFiles, addFiles, removeFile, validateParams, hasErrors, canSubmit,
+      createConsoleState, beginUpload, updateProgress, acceptCreated, failSubmission,
+      buildCreateFormData, friendlyError, formatBytes, formatDuration, DEFAULT_LIMITS,
+    } from "/static/workflow_console.mjs";
+
+    const EVENT_TYPES = [
+      "snapshot", "store_error",
+      "run.started", "run.resumed", "run.interrupted", "run.completed", "run.failed",
+      "node.started", "node.succeeded", "node.failed", "node.waiting_input",
+      "node.resumed", "node.retrying", "node.progress", "branch.selected",
+    ];
+    const STATE_LABEL = {
+      no_events: "无事件", idle: "空闲", running: "运行中",
+      waiting_human: "等待人工关卡", completed: "已完成", failed: "失败",
+    };
+    const MAX_ROWS = 500;
+
+    const $ = (id) => document.getElementById(id);
+    const chip = $("chip"), runMeta = $("runMeta"), countsEl = $("counts");
+    const promptInput = $("promptInput"), promptCount = $("promptCount");
+    const dropZone = $("dropZone"), fileInput = $("fileInput"), fileMeta = $("fileMeta");
+    const fileTable = $("fileTable"), fileBody = $("fileBody"), fileErrors = $("fileErrors");
+    const durationInput = $("durationInput"), ratioSelect = $("ratioSelect"), langSelect = $("langSelect");
+    const btnCreate = $("btnCreate"), formMeta = $("formMeta");
+    const progressWrap = $("progressWrap"), progressBar = $("progressBar"), progressText = $("progressText");
+    const threadLine = $("threadLine"), videoSummary = $("videoSummary"), resumeBox = $("resumeBox");
+    const evTable = $("evTable"), evBody = $("evBody"), evEmpty = $("evEmpty"), monitorLink = $("monitorLink");
+
+    let limits = { ...DEFAULT_LIMITS };
+    let consoleState = createConsoleState();
+    let liveThreadId = null;  // 当前订阅的运行(表单复位后仍保持右栏实时视图)
+    let monitor = createMonitorState();
+    let source = null;
+    let csrfToken = null;
+    let resumeGuidanceShown = false;
+
+    // ------------------------------------------------------------------
+    // 服务端限制(config 端点;失败回退内置默认值)
+    // ------------------------------------------------------------------
+    (async () => {
+      try {
+        const r = await fetch(CONSOLE_API_PATHS.config, { headers: { Accept: "application/json" } });
+        if (r.ok) {
+          const cfg = await r.json();
+          limits = {
+            max_videos: Number(cfg.max_videos) || DEFAULT_LIMITS.max_videos,
+            max_video_bytes: Number(cfg.max_video_bytes) || DEFAULT_LIMITS.max_video_bytes,
+            prompt_max_chars: Number(cfg.prompt_max_chars) || DEFAULT_LIMITS.prompt_max_chars,
+            target_duration_ms_default: Number(cfg.target_duration_ms_default) || DEFAULT_LIMITS.target_duration_ms_default,
+            target_duration_ms_max: Number(cfg.target_duration_ms_max) || DEFAULT_LIMITS.target_duration_ms_max,
+            allowed_video_exts: Array.isArray(cfg.allowed_video_exts) && cfg.allowed_video_exts.length
+              ? cfg.allowed_video_exts : DEFAULT_LIMITS.allowed_video_exts,
+            ratios: Array.isArray(cfg.ratios) && cfg.ratios.length ? cfg.ratios : DEFAULT_LIMITS.ratios,
+            langs: Array.isArray(cfg.langs) && cfg.langs.length ? cfg.langs : DEFAULT_LIMITS.langs,
+          };
+        }
+      } catch (e) {
+        renderFormMeta("无法读取服务端限制(/api/console/config),已使用内置默认值。", true);
+      }
+      applyLimitsToForm();
+    })();
+
+    function applyLimitsToForm() {
+      promptInput.maxLength = limits.prompt_max_chars;
+      fileInput.accept = limits.allowed_video_exts.join(",");
+      const defSec = Math.round(limits.target_duration_ms_default / 1000);
+      durationInput.value = String(defSec);
+      durationInput.max = String(Math.round(limits.target_duration_ms_max / 1000));
+      renderPromptCount();
+      rebuildSelect(ratioSelect, limits.ratios);
+      rebuildSelect(langSelect, limits.langs, { zh: "中文", en: "英文" });
+    }
+
+    function rebuildSelect(sel, values, labels) {
+      const current = sel.value;
+      sel.innerHTML = "";
+      for (const v of values) {
+        const opt = document.createElement("option");
+        opt.value = v;
+        opt.textContent = (labels && labels[v]) || v;
+        sel.appendChild(opt);
+      }
+      if (values.includes(current)) sel.value = current;
+    }
+
+    // ------------------------------------------------------------------
+    // 表单渲染
+    // ------------------------------------------------------------------
+    function renderPromptCount() {
+      promptCount.textContent = `${promptInput.value.length} / ${limits.prompt_max_chars}`;
+    }
+    function renderFormMeta(text, isErr) {
+      formMeta.textContent = text || "";
+      formMeta.classList.toggle("err-text", !!isErr);
+      formMeta.classList.toggle("ok-text", !isErr && /已创建/.test(text || ""));
+    }
+    function renderFileErrors(errors) {
+      fileErrors.innerHTML = "";
+      for (const msg of errors || []) {
+        const li = document.createElement("li");
+        li.textContent = msg;
+        fileErrors.appendChild(li);
+      }
+    }
+    function renderFileList() {
+      const files = consoleState.files;
+      fileTable.style.display = files.length ? "" : "none";
+      fileBody.innerHTML = "";
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        const tr = document.createElement("tr");
+        tr.innerHTML =
+          `<td>${escapeHtml(f.name)}</td>` +
+          `<td>${formatBytes(f.size)}</td>` +
+          `<td>${escapeHtml((f.ext || "").replace(".", "").toUpperCase() || "—")}</td>` +
+          `<td>${formatDuration(f.durationMs)}</td>`;
+        const td = document.createElement("td");
+        const btn = document.createElement("button");
+        btn.className = "row-remove";
+        btn.title = "移除";
+        btn.textContent = "×";
+        btn.disabled = consoleState.phase !== "idle";
+        btn.addEventListener("click", () => {
+          removeFile(consoleState, i);
+          renderFileList();
+        });
+        td.appendChild(btn);
+        tr.appendChild(td);
+        fileBody.appendChild(tr);
+      }
+      fileMeta.textContent = files.length
+        ? `已选择 ${files.length} 个视频 · 共 ${formatBytes(files.reduce((s, f) => s + f.size, 0))}`
+        : "尚未选择视频";
+      renderVideoSummary();
+    }
+    function renderVideoSummary() {
+      videoSummary.innerHTML = "";
+      const files = consoleState.files;
+      if (!files.length) {
+        const li = document.createElement("li");
+        li.className = "hint";
+        li.textContent = "—";
+        videoSummary.appendChild(li);
+        return;
+      }
+      for (const f of files) {
+        const li = document.createElement("li");
+        li.textContent = `${f.name}(${formatBytes(f.size)})`;
+        videoSummary.appendChild(li);
+      }
+    }
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+      }[c]));
+    }
+    function renderProgress() {
+      const { loaded, total } = consoleState.progress;
+      const pct = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+      progressBar.style.width = `${pct}%`;
+      progressText.textContent = `${pct}%(${formatBytes(loaded)} / ${formatBytes(total)})`;
+    }
+    function renderSubmitControls() {
+      const params = readParams();
+      const busy = consoleState.phase === "uploading";
+      btnCreate.disabled = busy || !canSubmit(consoleState, params, limits);
+      progressWrap.classList.toggle("active", busy);
+      if (!busy) renderProgress();
+    }
+    function setChip(stateKey, extra) {
+      chip.className = "s-" + (stateKey || "");
+      chip.textContent = (STATE_LABEL[stateKey] || stateKey || "未连接") + (extra ? ` · ${extra}` : "");
+    }
+    function renderRunView() {
+      const st = monitor.run.state;
+      if (consoleState.phase === "uploading") {
+        setChip("running", "上传中…");
+        runMeta.textContent = "执行状态:正在上传视频…";
+      } else if (liveThreadId) {
+        setChip(st, monitor.cursor ? `#${monitor.cursor}` : "");
+        runMeta.textContent = `执行状态:${STATE_LABEL[st] || st}`;
+      } else {
+        setChip("idle", "等待创建");
+        runMeta.textContent = "执行状态:尚未启动";
+      }
+      const c = computeCounts(monitor);
+      countsEl.textContent = Object.keys(monitor.nodes).length
+        ? `完成 ${c.done} · 执行中 ${c.running} · 等待 ${c.waiting} · 失败 ${c.failed}` : "";
+    }
+    function renderAll() {
+      renderFileList();
+      renderRunView();
+      renderSubmitControls();
+    }
+
+    // ------------------------------------------------------------------
+    // 文件选择 / 拖放 / 时长探测(best-effort,服务端 ffprobe 兜底)
+    // ------------------------------------------------------------------
+    dropZone.addEventListener("click", () => fileInput.click());
+    dropZone.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.classList.add("dragover"); });
+    dropZone.addEventListener("dragleave", () => dropZone.classList.remove("dragover"));
+    dropZone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      dropZone.classList.remove("dragover");
+      handleFiles(e.dataTransfer.files);
+    });
+    fileInput.addEventListener("change", () => { handleFiles(fileInput.files); fileInput.value = ""; });
+    promptInput.addEventListener("input", () => { renderPromptCount(); renderSubmitControls(); });
+    for (const el of [durationInput, ratioSelect, langSelect]) {
+      el.addEventListener("change", renderSubmitControls);
+    }
+
+    function handleFiles(fileList) {
+      const { accepted, errors } = validateNewFiles(fileList, consoleState.files.length, limits);
+      renderFileErrors(errors);
+      const added = addFiles(consoleState, accepted);
+      if (added > 0) {
+        for (const entry of accepted) probeDuration(entry);
+        renderAll();
+      }
+    }
+    function probeDuration(entry) {
+      let url = null;
+      try {
+        url = URL.createObjectURL(entry.file);
+        const v = document.createElement("video");
+        v.preload = "metadata";
+        let done = false;
+        const finish = (ms) => {
+          if (done) return;
+          done = true;
+          entry.durationMs = Number.isFinite(ms) && ms > 0 ? Math.round(ms * 1000) : null;
+          URL.revokeObjectURL(url);
+          renderFileList();
+        };
+        v.onloadedmetadata = () => finish(v.duration);
+        v.onerror = () => finish(null);
+        setTimeout(() => finish(null), 10000);
+        v.src = url;
+      } catch (e) { if (url) URL.revokeObjectURL(url); }
+    }
+
+    // ------------------------------------------------------------------
+    // 创建提交(XHR 以支持上传进度;CSRF token 同源获取)
+    // ------------------------------------------------------------------
+    function readParams() {
+      return {
+        prompt: promptInput.value,
+        target_duration_ms: Math.round(Number(durationInput.value || 0) * 1000),
+        ratio: ratioSelect.value,
+        lang: langSelect.value,
+      };
+    }
+    async function ensureCsrf() {
+      if (csrfToken) return csrfToken;
+      const r = await fetch(CONSOLE_API_PATHS.csrf, { headers: { Accept: "application/json" } });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        throw { status: r.status, detail: String(data.detail || "无法获取 CSRF token") };
+      }
+      const data = await r.json();
+      csrfToken = data.token;
+      return csrfToken;
+    }
+    function uploadWithProgress(formData, token) {
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", CONSOLE_API_PATHS.createRun);
+        xhr.responseType = "json";
+        xhr.setRequestHeader("X-CSRF-Token", token);
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            updateProgress(consoleState, e.loaded, e.total);
+            renderProgress();
+          }
+        };
+        xhr.onload = () => {
+          if (xhr.status === 202) resolve(xhr.response || {});
+          else reject({
+            status: xhr.status,
+            detail: (xhr.response && xhr.response.detail) || xhr.statusText || "",
+          });
+        };
+        xhr.onerror = () => reject({ status: 0, detail: "网络错误或服务不可达" });
+        xhr.send(formData);
+      });
+    }
+    btnCreate.addEventListener("click", async () => {
+      const params = readParams();
+      if (!canSubmit(consoleState, params, limits)) {
+        const errs = validateParams(params, limits);
+        const first = [errs.prompt, errs.duration, errs.ratio, errs.lang].find(Boolean)
+          || (consoleState.files.length ? "" : "请至少导入一个视频");
+        renderFormMeta(first || "无法提交", true);
+        return;
+      }
+      const totalBytes = consoleState.files.reduce((s, f) => s + f.size, 0);
+      beginUpload(consoleState, totalBytes);
+      renderAll();
+      renderFormMeta("正在上传并创建运行…");
+      let attempt = 0;
+      for (;;) {
+        try {
+          const token = await ensureCsrf();
+          const resp = await uploadWithProgress(buildCreateFormData(consoleState, params), token);
+          onCreated(resp);
+          return;
+        } catch (err) {
+          const status = err && err.status;
+          if (status === 403 && attempt === 0) {
+            // token 可能因服务重启失效:重取一次再试
+            attempt = 1;
+            csrfToken = null;
+            continue;
+          }
+          csrfToken = null;
+          failSubmission(consoleState, friendlyError(status, err && err.detail));
+          renderAll();
+          renderFormMeta(consoleState.error.message, true);
+          return;
+        }
+      }
+    });
+    function onCreated(resp) {
+      acceptCreated(consoleState, resp);
+      const tid = resp.thread_id || "";
+      liveThreadId = tid;
+      threadLine.textContent = `Thread ID:${tid}`;
+      monitorLink.href = CONSOLE_API_PATHS.monitorPage(tid);
+      monitorLink.style.display = "";
+      try { localStorage.setItem("wf_monitor_thread", tid); } catch (e) {}
+      // 契约冻结:202 必含 events_url;兜底构造与 /api/workflow 契约一致
+      startLive(tid, resp.events_url || `/api/workflow/runs/${encodeURIComponent(tid)}/events`);
+      renderFormMeta(`已创建 ${tid},正在订阅执行事件…可继续创建下一个任务。`);
+      // 表单复位为空闲,允许创建下一个任务;右栏保持当前运行的实时视图
+      consoleState = createConsoleState();
+      renderAll();
+    }
+
+    // ------------------------------------------------------------------
+    // SSE 订阅(复用监控页同一套事件协议与 reducer)
+    // ------------------------------------------------------------------
+    function startLive(threadId, eventsUrl) {
+      if (source) source.close();
+      liveThreadId = threadId;
+      monitor = createMonitorState();
+      resumeGuidanceShown = false;
+      resumeBox.classList.remove("active");
+      runMeta.classList.remove("err-text");
+      evBody.innerHTML = "";
+      evTable.style.display = "";
+      evEmpty.style.display = "none";
+      renderRunView();
+      source = new EventSource(eventsUrl);
+      for (const t of EVENT_TYPES) source.addEventListener(t, handleEvent);
+      source.onopen = () => { setChip(monitor.run.state || "running", "已连接"); renderRunView(); };
+      source.onerror = () => { setChip(monitor.run.state || "idle", "重连中…"); };
+    }
+    function fmtTime(ev) {
+      const t = ev.occurred_at || "";
+      return typeof t === "string" ? t.replace("T", " ").slice(0, 19) : "";
+    }
+    function detailOf(ev) {
+      const keys = ["error", "detail", "summary", "label", "reason"];
+      const parts = [];
+      if (ev.node_id) parts.push(ev.node_id);
+      for (const k of keys) {
+        if (ev[k] !== undefined && ev[k] !== null && ev[k] !== "") {
+          parts.push(`${k}=${typeof ev[k] === "object" ? JSON.stringify(ev[k]) : ev[k]}`);
+        }
+      }
+      return parts.join("  ");
+    }
+    function appendEventRow(ev) {
+      const tr = document.createElement("tr");
+      const type = String(ev.event_type || "");
+      tr.innerHTML =
+        `<td>${ev.id ?? "-"}</td>` +
+        `<td>${fmtTime(ev)}</td>` +
+        `<td class="ev-type t-${type.replaceAll(".", "\\.")}">${type}</td>` +
+        `<td>${escapeHtml(detailOf(ev))}</td>`;
+      evBody.appendChild(tr);
+      while (evBody.rows.length > MAX_ROWS) evBody.deleteRow(0);
+    }
+    function handleEvent(esEvent) {
+      let data = {};
+      try { data = JSON.parse(esEvent.data); } catch (e) { return; }
+      const event = {
+        id: esEvent.lastEventId ? Number(esEvent.lastEventId) : null,
+        event_type: esEvent.type,
+        ...data,
+      };
+      if (esEvent.type === "snapshot") {
+        // 快照帧:仅指示连接健康;状态以事件归约为准(无事件绝不解释为成功)
+        runMeta.textContent = `执行状态:${STATE_LABEL[monitor.run.state] || "运行中"}(历史事件 ${data.event_count ?? "?"} 条)`;
+        return;
+      }
+      if (esEvent.type === "store_error") {
+        setChip("failed", "事件存储不可用");
+        runMeta.textContent = `执行状态:事件存储不可用 —— ${String(data.detail || "").slice(0, 200)}`;
+        runMeta.classList.add("err-text");
+        return;
+      }
+      appendEventRow(event);
+      const { applied } = applyEvent(monitor, event);
+      if (!applied) return;
+      runMeta.classList.remove("err-text");
+      renderRunView();
+      if (monitor.run.state === "waiting_human" && !resumeGuidanceShown) {
+        resumeGuidanceShown = true;
+        showResumeGuidance();
+      } else if (monitor.run.state === "running" && resumeGuidanceShown) {
+        resumeGuidanceShown = false;
+        resumeBox.classList.remove("active");
+      }
+    }
+    async function showResumeGuidance() {
+      const tid = liveThreadId;
+      if (!tid) return;
+      resumeBox.textContent = "工作流已暂停在人工关卡,等待人工处理(属正常状态,不是失败)。";
+      resumeBox.classList.add("active");
+      try {
+        const r = await fetch(CONSOLE_API_PATHS.resumeStatus(tid), { headers: { Accept: "application/json" } });
+        if (r.ok) {
+          const data = await r.json();
+          const node = data.last_event && data.last_event.node_id ? `(${data.last_event.node_id})` : "";
+          resumeBox.textContent =
+            `工作流已暂停在人工关卡${node},等待人工处理(正常状态,不是失败)。` +
+            `恢复请按监控页/CLI 指引执行:` + String(data.resume_via || "").slice(0, 220);
+        }
+      } catch (e) { /* 指引获取失败不影响状态显示 */ }
+    }
+  </script>
+</body>
+</html>

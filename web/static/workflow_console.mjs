@@ -1,0 +1,280 @@
+// /static/workflow_console.mjs
+//
+// 工作流创建台(/console)的**纯逻辑层**(第二期阶段 3,无后缀版计划 §11 阶段 3)。
+// 与 /static/workflow_monitor.mjs 同一惯例:不碰 DOM、不 fetch、不依赖浏览器全局,
+// Node 里可直接单测(web/tests/workflow_console.test.mjs);DOM/XHR 接线全部在
+// web/console.html 的模块脚本里完成。
+//
+// 职责:
+//   1. 表单文件列表的客户端预校验(扩展名/数量/大小)与增删;
+//   2. 提交参数校验 + multipart FormData 构建(字段名与 POST /api/console/runs 契约一致);
+//   3. 提交状态机(idle → uploading → live / 失败回 idle,可重试);
+//   4. 错误码 → 稳定可读提示(不显示堆栈与敏感路径,设计 §8.1);
+//   5. 复用监控 reducer:re-export workflow_monitor.mjs 的事件归约与 API 路径,
+//      创建成功后页面用同一套 applyEvent 消费既有 SSE。
+//
+// 边界:SSE 订阅/进度条/时长探测(video 元素)属浏览器行为,由页面脚本注入;
+// 运行状态(running/waiting_human/completed/failed)一律来自事件归约,本模块不猜测。
+
+import {
+  API_PATHS, applyEvent, createMonitorState, computeCounts, deriveRunState,
+  NODE_STATUS, RUN_STATE,
+} from "./workflow_monitor.mjs";
+
+export {
+  API_PATHS, applyEvent, createMonitorState, computeCounts, deriveRunState,
+  NODE_STATUS, RUN_STATE,
+};
+
+// ---------------------------------------------------------------------------
+// Console API 路径(与 web/api_console.py 路由一一对应)
+// ---------------------------------------------------------------------------
+
+export const CONSOLE_API_PATHS = Object.freeze({
+  config: "/api/console/config",
+  csrf: "/api/console/csrf",
+  createRun: "/api/console/runs",
+  // 只读探针:人工关卡恢复指引(动作按钮属阶段 5)
+  resumeStatus: (threadId) => `/api/workflow/runs/${encodeURIComponent(threadId)}/resume-status`,
+  // 监控页跳转(创建成功后"查看完整监控")
+  monitorPage: (threadId) => `/?thread_id=${encodeURIComponent(threadId)}`,
+});
+
+// ---------------------------------------------------------------------------
+// 客户端限制默认值(config 端点不可用时的兜底;与服务端 config.py 默认一致)
+// ---------------------------------------------------------------------------
+
+export const DEFAULT_LIMITS = Object.freeze({
+  max_videos: 10,
+  max_video_bytes: 2 * 1024 ** 3,
+  prompt_max_chars: 4000,
+  target_duration_ms_default: 35000,
+  target_duration_ms_max: 600000,
+  allowed_video_exts: [".mp4", ".mov"],
+  ratios: ["9:16", "16:9", "4:3"],
+  langs: ["zh", "en"],
+});
+
+// ---------------------------------------------------------------------------
+// 文件列表
+// ---------------------------------------------------------------------------
+
+/** 文件条目:{ name, size, ext, durationMs:null, file }。duration 由页面探测后回填。 */
+export function makeFileEntry(file) {
+  const name = String(file && file.name ? file.name : "");
+  const dot = name.lastIndexOf(".");
+  const ext = dot >= 0 ? name.slice(dot).toLowerCase() : "";
+  return {
+    name,
+    size: Number(file && file.size) || 0,
+    ext,
+    durationMs: null,
+    file,
+  };
+}
+
+function normalizeExt(ext) {
+  const e = String(ext || "").trim().toLowerCase();
+  if (!e) return "";
+  return e.startsWith(".") ? e : `.${e}`;
+}
+
+/**
+ * 新增文件的客户端预校验(服务端仍会全量校验,这里只做即时反馈)。
+ * 返回 { accepted: FileEntry[], errors: string[] }。
+ */
+export function validateNewFiles(fileList, currentCount, limits) {
+  const lim = { ...DEFAULT_LIMITS, ...(limits || {}) };
+  const allowed = new Set((lim.allowed_video_exts || []).map(normalizeExt));
+  const accepted = [];
+  const errors = [];
+  const files = Array.from(fileList || []);
+  for (const f of files) {
+    const entry = makeFileEntry(f);
+    if (currentCount + accepted.length >= lim.max_videos) {
+      errors.push(`视频数量超过上限(${lim.max_videos}个):已忽略 ${f.name}`);
+      continue;
+    }
+    if (!allowed.has(entry.ext)) {
+      errors.push(`格式不支持(${entry.ext || "无扩展名"}):${f.name}`);
+      continue;
+    }
+    if (entry.size <= 0) {
+      errors.push(`空文件:${f.name}`);
+      continue;
+    }
+    if (entry.size > lim.max_video_bytes) {
+      errors.push(`超过单文件大小上限(${formatBytes(lim.max_video_bytes)}):${f.name}`);
+      continue;
+    }
+    accepted.push(entry);
+  }
+  return { accepted, errors };
+}
+
+/** 按 name+size+lastModified 去重后追加(拖放重复投放同一文件时幂等)。 */
+export function addFiles(state, entries) {
+  const seen = new Set(state.files.map((f) => `${f.name}::${f.size}::${f.file && f.file.lastModified}`));
+  let added = 0;
+  for (const entry of entries || []) {
+    const key = `${entry.name}::${entry.size}::${entry.file && entry.file.lastModified}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    state.files.push(entry);
+    added += 1;
+  }
+  return added;
+}
+
+export function removeFile(state, index) {
+  if (index < 0 || index >= state.files.length) return false;
+  state.files.splice(index, 1);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// 参数与提交校验
+// ---------------------------------------------------------------------------
+
+/**
+ * 校验提交参数;返回错误对象 { prompt, duration, ratio, lang },全空表示通过。
+ * params: { prompt, target_duration_ms, ratio, lang }
+ */
+export function validateParams(params, limits) {
+  const lim = { ...DEFAULT_LIMITS, ...(limits || {}) };
+  const errors = { prompt: "", duration: "", ratio: "", lang: "" };
+  const prompt = String((params && params.prompt) || "").trim();
+  if (!prompt) errors.prompt = "请输入剪辑提示词";
+  else if (prompt.length > lim.prompt_max_chars) {
+    errors.prompt = `提示词过长(>${lim.prompt_max_chars} 字符)`;
+  }
+  const dur = Number(params && params.target_duration_ms);
+  if (!Number.isInteger(dur) || dur <= 0 || dur > lim.target_duration_ms_max) {
+    errors.duration = `目标时长须为 0 < 值 ≤ ${Math.round(lim.target_duration_ms_max / 1000)} 秒`;
+  }
+  if (!(lim.ratios || []).includes(params && params.ratio)) errors.ratio = "画幅比例非法";
+  if (!(lim.langs || []).includes(params && params.lang)) errors.lang = "输出语言非法";
+  return errors;
+}
+
+export function hasErrors(errors) {
+  return Object.values(errors || {}).some(Boolean);
+}
+
+/** 是否可提交:空闲态 + 至少一个视频 + 参数全部合法。 */
+export function canSubmit(state, params, limits) {
+  if (!state || state.phase !== "idle") return false;
+  if (!state.files.length) return false;
+  return !hasErrors(validateParams(params, limits));
+}
+
+// ---------------------------------------------------------------------------
+// 提交状态机
+// ---------------------------------------------------------------------------
+
+/**
+ * phase 取值(设计 §3.3 前四态;running/waiting_human/... 由 SSE 事件归约给出,
+ * 存于监控 state.run.state,不进入本状态机):
+ *   idle       等待输入(可提交)
+ *   uploading  正在上传(进度条活跃,禁止重复提交)
+ *   live       已创建(thread_id 就绪,SSE 订阅中)
+ */
+export function createConsoleState() {
+  return {
+    phase: "idle",
+    files: [],
+    progress: { loaded: 0, total: 0 },
+    threadId: null,
+    error: null,
+  };
+}
+
+export function beginUpload(state, totalBytes) {
+  state.phase = "uploading";
+  state.error = null;
+  state.progress = { loaded: 0, total: Number(totalBytes) || 0 };
+  return state;
+}
+
+export function updateProgress(state, loaded, total) {
+  if (state.phase !== "uploading") return state;
+  state.progress = {
+    loaded: Number(loaded) || 0,
+    total: Number(total) || state.progress.total,
+  };
+  return state;
+}
+
+/** 202 响应体 {ok, thread_id, state, monitor_url, snapshot_url, events_url}。 */
+export function acceptCreated(state, resp) {
+  state.phase = "live";
+  state.error = null;
+  state.threadId = (resp && resp.thread_id) || null;
+  return state;
+}
+
+/** 提交失败:回到 idle 允许修改重试;error 为 friendlyError 结果。 */
+export function failSubmission(state, err) {
+  state.phase = "idle";
+  state.error = err || { code: 0, message: "创建失败", detail: "" };
+  return state;
+}
+
+// ---------------------------------------------------------------------------
+// FormData 构建(字段名与 POST /api/console/runs 冻结契约一致)
+// ---------------------------------------------------------------------------
+
+export function buildCreateFormData(state, params) {
+  const fd = new FormData();
+  fd.append("prompt", String((params && params.prompt) || "").trim());
+  for (const entry of state.files) {
+    fd.append("videos", entry.file, entry.name);
+  }
+  fd.append("target_duration_ms", String(Math.round(Number(params && params.target_duration_ms))));
+  fd.append("ratio", String((params && params.ratio) || ""));
+  fd.append("lang", String((params && params.lang) || ""));
+  return fd;
+}
+
+// ---------------------------------------------------------------------------
+// 错误提示与杂项
+// ---------------------------------------------------------------------------
+
+const ERROR_HINTS = Object.freeze({
+  400: "参数不合法,请检查提示词、视频与参数",
+  403: "来源或 CSRF 校验失败,请从本机 /console 页面重新提交",
+  409: "并发或重复请求冲突,请稍后再试",
+  413: "视频文件超过大小限制",
+  415: "视频格式或内容不支持(需真实可解码的 MP4/MOV)",
+  503: "PostgreSQL 或真实模型后端未就绪,请先完成服务端配置",
+  500: "服务端内部错误,请查看服务日志",
+});
+
+/** HTTP 状态 → {code, message, detail};detail 截断,不透出堆栈/敏感路径全文。 */
+export function friendlyError(status, detail) {
+  const code = Number(status) || 0;
+  const hint = ERROR_HINTS[code] || "创建失败,请稍后重试";
+  const d = typeof detail === "string" ? detail.slice(0, 200) : "";
+  return { code, message: d ? `${hint}:${d}` : hint, detail: d };
+}
+
+export function formatBytes(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v < 0) return "—";
+  if (v < 1024) return `${v} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let u = -1;
+  let x = v;
+  do {
+    x /= 1024;
+    u += 1;
+  } while (x >= 1024 && u < units.length - 1);
+  return `${x >= 100 ? x.toFixed(0) : x.toFixed(1)} ${units[u]}`;
+}
+
+/** 毫秒时长 → "12.3s";未知返回 "—"。 */
+export function formatDuration(ms) {
+  const v = Number(ms);
+  if (!Number.isFinite(v) || v <= 0) return "—";
+  return `${(v / 1000).toFixed(1)}s`;
+}
