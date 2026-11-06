@@ -1,3 +1,5 @@
+> ⚠️ **历史文档(2026-11-04 单流水线架构收敛后失效)**:本文档描述的旧网页聊天端驱动 mcode/zcode 链路(①对话回合循环)已删除;现行架构与 mcode 无人值守用法(`agent_gate drive`)见 `README.md` 与 `docs/integration/architecture_decision_record.md`。内容保留仅作历史记录。
+
 # 阶段 E 门禁解除与 zcode CLI 无头接口实测评估（2026-10-31）
 
 > 对应《OpenStoryline 接入 ZCode Agentic 执行设计》§4.2 / §10.6 / 附录 A.5。

@@ -1,3 +1,5 @@
+> ⚠️ **历史文档(2026-11-04 单流水线架构收敛后失效)**:本文档描述的旧网页聊天端驱动 mcode/zcode 链路(①对话回合循环)已删除;现行架构与 mcode 无人值守用法(`agent_gate drive`)见 `README.md` 与 `docs/integration/architecture_decision_record.md`。内容保留仅作历史记录。
+
 # ZCode Agentic 接入 · 阶段 C / D / E 执行记录
 
 > **执行日期**：2026-10-31

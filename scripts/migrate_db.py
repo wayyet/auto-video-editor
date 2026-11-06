@@ -3,6 +3,11 @@
 对 ``POSTGRES_URI`` 指向的库执行应用层迁移(``app_schema_migrations`` /
 ``chat_sessions`` / ``workflow_runs``)。
 
+legacy 注记(2026-11-04 单流水线收敛 阶段4):``chat_sessions`` /
+``workflow_chat_links`` 为 legacy 表 —— 应用层已停止读写,迁移 1-5 定义
+原样保留以保迁移台账一致(见 ``db/migrations.py`` 顶部与迁移 1/5 上方
+注释)。本脚本行为不变,照常幂等执行。
+
 LangGraph 自己的 4 张 checkpoint 表由 ``scripts/setup_postgres_schema.py``
 (``AsyncPostgresSaver.setup()``)负责,本脚本**不碰**。
 

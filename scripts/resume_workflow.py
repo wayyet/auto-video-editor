@@ -402,6 +402,16 @@ async def _main_async(args: argparse.Namespace) -> int:
         print("[resume] ✗ --thread-id 不能为空", file=sys.stderr)
         return EXIT_PREFLIGHT
 
+    # 附件评审 20261105 阶段3G / 决策 D3-A:与 run_workflow 同款入口 A 的
+    # LLM 后端提示(红线5"生产不得静默使用 stub")。显式给了 --llm-backend
+    # 则尊重调用方;否则提示假答案;若还设了 VIDEO_LLM_BACKEND(入口 A 不读
+    # 它)且非 stub,以退出码 2 拒跑。置于预检之前,拒跑时不做任何环境准备。
+    from scripts._entry_a_llm import llm_backend_notice
+
+    rc = llm_backend_notice(getattr(args, "llm_backend", None))
+    if rc != 0:
+        return rc
+
     rc = _maybe_preflight(args)
     if rc != 0:
         return rc

@@ -23,8 +23,9 @@ dependencies = [
     "Pillow>=10.0",                         # Week 4:封面 PNG 本地渲染(16:9 / 4:3)
     "pydantic>=2.0",                        # storyline/contract.py 用
     # 独立监控服务 monitor_fastapi.py(单流水线架构 2026-11-04 阶段1;只读监控)
-    "fastapi>=0.110,<1",
-    "uvicorn[standard]>=0.27,<1",
+    # fastapi/uvicorn 钉版与 requirements.txt 保持一致(附件评审 20261105 验收项:依赖清单一致)
+    "fastapi==0.162.0",
+    "uvicorn[standard]==0.54.0",
     # 工作流创建台 /api/console/runs multipart 上传解析(第二期阶段 1)
     "python-multipart>=0.0.20,<0.1",
     # 禁止引入:torch / torchaudio / moviepy(ADR-001 进程隔离,不入主环境)

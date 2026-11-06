@@ -219,7 +219,12 @@ _NODE_META: dict[str, dict[str, Any]] = {
     "join_before_delivery": {
         "name": "交付前 QA 闸门",
         "group": "fx_delivery",
-        "description": "交付前 QA;单前驱,不再承担 fan-in",
+        "description": "交付前 QA;单前驱,不再承担 fan-in;2026-11-07 起做双语深度 QA(draft_integrity)",
+    },
+    "export_final_video": {
+        "name": "最终 MP4 导出",
+        "group": "fx_delivery",
+        "description": "可选:FFmpeg 渲染中文主草稿为 MP4(阶段 6;默认关闭记 skipped)",
     },
     # ---- storyline(auto 链) ----
     "storyline_load_media": {
@@ -418,15 +423,6 @@ def _real_topology(compiled_graph: Any) -> tuple[list[str], set[tuple[str, str, 
     return node_ids, edges
 
 
-def _current_mode(config_module: Any) -> str:
-    """解析当前 STORYLINE_MODE。
-
-    阶段3 起 graph 直读 ``config.STORYLINE_MODE``(非 ``"auto"`` 时 import
-    期 fail-fast),本函数与构图时的读法一致:直接取 config 模块值。
-    """
-    return config_module.STORYLINE_MODE
-
-
 def _edge_label(src: str, dst: str) -> Optional[str]:
     """边的展示标签:注册表优先,未注册的边无标签。"""
     return _EDGE_LABELS.get((src, dst))
@@ -442,8 +438,8 @@ def build_graph_schema(compiled_graph: Any, config: Any = None) -> dict[str, Any
         compiled_graph: ``build_graph(...)`` 返回的 CompiledStateGraph;
             边真源取 ``compiled_graph.builder``(见模块 docstring 的画图伪边说明)。
         config: config 模块(monkeypatch 测试传模块对象);None 时 ``import config``。
-            只读 ``ASSEMBLY_QC_GATE_ENABLED`` 与 ``STORYLINE_MODE``(经
-            :func:`_current_mode`,与构图时的读法一致)。
+            只读 ``ASSEMBLY_QC_GATE_ENABLED``(``STORYLINE_MODE`` 已固定为
+            ``"auto"``,见 config import 期 fail-fast,此处不再读取)。
 
     Returns:
         dict: ``workflow_id / schema_version / mode / flags / nodes / edges``。
@@ -453,7 +449,10 @@ def build_graph_schema(compiled_graph: Any, config: Any = None) -> dict[str, Any
     else:
         config_module = config
 
-    mode = _current_mode(config_module)
+    # 单流水线收敛(阶段3R):STORYLINE_MODE 恒为 "auto"(config import 期
+    # fail-fast),mode 直接输出常量,不随 config 读法漂移;前端用它拼布局
+    # 缓存 key,值不变则缓存 key 稳定。
+    mode = "auto"
     qc_enabled = bool(getattr(config_module, QC_FLAG))
 
     node_ids, real_edges = _real_topology(compiled_graph)

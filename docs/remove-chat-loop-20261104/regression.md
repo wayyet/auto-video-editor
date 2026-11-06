@@ -72,3 +72,22 @@ JUnit 证据:`baseline-*.xml`(阶段0)与本目录 `stage3-*` / `stage4-*` / `st
 3. 一键启动的 Phase 3 验收、真机(剪映客户端)人工关卡操作与 `drive --agent mcode` 真实答题链路:留待操作员真机验收(计划 §7 验证 6)。
 4. agent_gate worker 节点级事件仍为运行级(README §10.2 既定口径,非本次范围)。
 5. `.venv-openstoryline/` 本地目录按计划保留,由操作员在回滚窗口结束后手动清理。
+
+## 8. 评审收尾核对(2026-11-07)
+
+按《docs/第二期开发/auto-video-editor_单流水线循环化_设计与执行计划_附件评审_20261105.md》逐项核对 main 当前态后的收尾修复(单 commit)。核对结论:该评审文档列出的阶段 3R/3G/3C/4/5/6 待修项**绝大多数已在此前提交落实**(阶段0-6 至 `aa1555a`;评审收尾 `eaf5c0b`/`ca37c18`;§4.6 两条残留扫描 83 条命中全部属豁免类别,零疑似残留)。本次补齐核对出的残留:
+
+| 项 | 判定 | 处理 |
+|---|---|---|
+| README §2.6 参数表默认值漂移(`-SourceVideo`/`-InputsDir` 仍写 FireRed/jianying-editor 旧路径) | 未修 | 已对齐 `start_production.ps1` 实际默认(`$PSScriptRoot` 锚定 `inputs\`) |
+| `scripts/migrate_db.py` docstring 缺 legacy 注记(评审阶段4任务6) | 未修 | 已补(chat_sessions/workflow_chat_links legacy 说明) |
+| `pyproject.toml` fastapi/uvicorn 用范围钉法,与 requirements.txt `==` 不一致(评审 §8「依赖一致」;§6 声称的"同步"与实态不符) | 未修 | 已统一为 `fastapi==0.162.0` / `uvicorn[standard]==0.54.0` |
+| docs/ 下 13 个 mcode/zcode 专属文档无历史头注(评审阶段5任务7) | 未修 | 已按 `README-OpenStoryline.md` 样式前置头注(docs/修正/ 8 篇 + docs/分析/ 5 篇) |
+| `monitoring/workflow_graph.py` `_current_mode` 未删、`mode` 经 config 读取(评审阶段3R任务5明细) | 部分修 | 已删;`mode` 输出常量 `"auto"`(输出值不变,SCHEMA_VERSION 不升,前端布局缓存 key 不受影响) |
+| 阶段3G 入口 A stub 提示(决策 D3-A,红线5) | 偏差·已补齐 | 新增 `scripts/_entry_a_llm.py` + `run_workflow.py`/`resume_workflow.py` 接入(stderr 提示;`VIDEO_LLM_BACKEND` 非 stub 且未显式 `--llm-backend` 时以退出码 2 拒跑)+ `tests/unit/test_entry_a_llm_notice.py` 4 用例;与既有的 Console `--llm-backend` 路线(`ee32878`)并存,显式传参时短路不打扰 |
+| 阶段3C 独立清理脚本(决策 D2-A) | 偏差·判定达成 | 未建 `scripts/clean_cache.py`;清理缓存已由 `/console` Web 入口落地(`5379f86`,冷却限流+活跃任务 409+专项测试),README 已指向;记录方案变更,不另建 CLI |
+| 评审文档本身未入库 | 未修 | 已入库并加 2026-11-07 核对注记 |
+
+**门禁(2026-11-07 实测,HEAD=`9940806`)**:S1 收集 1864 条 0 错误;`tests/unit` 全量 0 失败(exit 0);`test_graph_compiles` / 既有 `test_run_workflow_llm_backend` / `test_resume_workflow_llm_backend` 通过;前端 `node --test web/tests/*.test.mjs` 36/36;`VIDEO_LLM_BACKEND=claude-cli` 跑 `run_workflow.py` 实测退出码 2(提示在预检前,不触 PG);`build_graph_schema` 实测 `mode="auto"`、`schema_version=1` 不变;tomllib 实测钉版一致;`git diff --check` 干净。
+
+**已知存量失败(非本次引入,`git stash` 对照证实)**:`tests/integration/test_workflow_graph_schema.py::test_every_node_has_metadata[True/False]`(`export_final_video 缺描述`)——由并行进行中的未提交改动(未提交的 `graph.py` 接入 `export_final_video` 节点但 `_NODE_META` 尚未登记)造成,归该工作线收口,与本 commit 无关。

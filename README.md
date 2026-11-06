@@ -210,8 +210,8 @@ New-Item -ItemType Directory -Force -Path inputs | Out-Null
 |---|---|---|
 | `-ThreadId` | `video-001` | LangGraph `thread_id`,同时写入 `runtime\initial_state_<id>.json` 与 checkpoint 查询 |
 | `-PostgresUri` | `postgresql://postgres:devpass@localhost:5432/video_workflow` | 连接的唯一真相。`localhost:5432` → **本地托管**模式(起 `edb-postgres16` 容器 + 自动对齐角色/库);其它 host/端口 → **外部**模式(完全不碰本地容器) |
-| `-SourceVideo` | jianying-editor 演示素材路径 | 复制到 `-InputsDir` 的源视频 |
-| `-InputsDir` | `FireRed-OpenStoryline\inputs` | 素材目录 |
+| `-SourceVideo` | `<仓库根>\inputs\30s.mp4`(`$PSScriptRoot` 锚定) | 复制到 `-InputsDir` 的源视频 |
+| `-InputsDir` | `<仓库根>\inputs`(`$PSScriptRoot` 锚定) | 素材目录 |
 | `-InputsFileName` | `30s.mp4` | 素材文件名 |
 | `-SkipPhase3` | 关 | 跳过验收(checkpoints / heartbeat / outputs) |
 | `-WhatIf` | 关 | 只打印计划,**零副作用** |
