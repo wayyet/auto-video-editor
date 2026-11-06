@@ -365,7 +365,7 @@ async def _resume_async_impl(args: argparse.Namespace) -> int:
     return rc
 
 
-def _main_async(args: argparse.Namespace) -> int:
+async def _main_async(args: argparse.Namespace) -> int:
     if args.production:
         os.environ["WORKFLOW_ENV"] = "production"
     if not str(args.thread_id or "").strip():
@@ -375,13 +375,16 @@ def _main_async(args: argparse.Namespace) -> int:
     rc = _maybe_preflight(args)
     if rc != 0:
         return rc
-    return asyncio.run(_resume_async(args))
+    return await _resume_async(args)
 
 
 def main() -> int:
     args = _parse_args()
     try:
-        # Windows: psycopg async 需 SelectorEventLoop(与 run_workflow 同口径)
+        # Windows: psycopg async 需 SelectorEventLoop(与 run_workflow 同口径)。
+        # ⚠️ 全进程只允许这一层 asyncio.run —— 2026-11-06 阶段0 诊断发现旧版在
+        # 同步 _main_async 里又嵌套了一层 asyncio.run(默认 ProactorEventLoop),
+        # async psycopg 连接直接 InterfaceError,Windows 上 CLI 恢复必然失败。
         if sys.platform == "win32":
             import selectors
 
