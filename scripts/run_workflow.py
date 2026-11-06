@@ -196,6 +196,21 @@ def _default_initial_state(thread_id: str, video_input_paths: str = "") -> dict:
     return state
 
 
+def _pin_repo_relative_outputs_root(state: dict, thread_id: str) -> None:
+    """把 ``storyline_outputs_root`` 强制钉回当前仓库相对目录 outputs/<thread_id>。
+
+    背景(2026-11-06):E 盘旧仓库副本已废弃,但早期在该副本上运行留下的
+    checkpoint state 携带旧绝对路径(如 ``E:\\...\\auto-video-editor\\outputs\\...``),
+    而 ``nodes/storyline/_common.py::_resolve_outputs_root`` 优先采信 state 里的
+    显式值、``join_storyline`` 又只在字段缺失时才回写 —— 旧值随 checkpoint
+    续跑永远复活,assembly/render 全链输出写回废弃盘。
+    生产入口在此强制覆盖:输出一律落当前仓库 ``outputs/<thread_id>/``;覆盖值
+    随后随 checkpoint 持久化,旧路径从此不再生效。单测/集测直接构造 state
+    调节点,不经本入口,注入 tmp_path 的用法不受影响。
+    """
+    state["storyline_outputs_root"] = str(ROOT / "outputs" / thread_id)
+
+
 def _load_initial_state(args: argparse.Namespace) -> dict:
     """加载 initial state;``--initial-state-json`` 指向的文件缺失时自动生成。
 
@@ -207,11 +222,13 @@ def _load_initial_state(args: argparse.Namespace) -> dict:
     extra_paths = str(getattr(args, "video_input_paths", "") or "")
     if not args.initial_state_json:
         state = _default_initial_state(args.thread_id, extra_paths)
+        _pin_repo_relative_outputs_root(state, args.thread_id)
         return state
 
     path = args.initial_state_json
     if not path.exists():
         state = _default_initial_state(args.thread_id, extra_paths)
+        _pin_repo_relative_outputs_root(state, args.thread_id)
         print(
             f"[state] ⚠ 找不到 initial state 文件: {path}\n"
             f"[state]   已自动生成默认 initial state 并落盘"
@@ -237,6 +254,8 @@ def _load_initial_state(args: argparse.Namespace) -> dict:
         paths = [p.strip() for p in extra_paths.split(",") if p.strip()]
         state["video_input_paths"] = paths
         state["video_input_path"] = paths[0]
+    # E 盘旧仓库已废弃:无论 JSON 文件写了什么,输出根一律钉回当前仓库相对目录
+    _pin_repo_relative_outputs_root(state, args.thread_id)
     return state
 
 

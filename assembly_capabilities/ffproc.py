@@ -31,6 +31,14 @@ def run_proc(cmd: list[str], *args, timeout: float | None = None, **kwargs):
     kwargs.setdefault("stdin", subprocess.DEVNULL)
     if cmd and Path(cmd[0]).name == "ffmpeg" and "-nostdin" not in cmd:
         cmd = [cmd[0], "-nostdin", *cmd[1:]]
+    # 文本模式统一按 UTF-8 解码:ffmpeg/ffprobe 输出流是 UTF-8(Windows 下素材
+    # 路径含中文时 banner 会回显路径字节),而父进程不指定 encoding 时退回 ANSI
+    # 代码页(GBK),_readerthread 解到 0x80 这类连续字节直接崩、输出被静默截断。
+    # errors='replace' 兜底:个别非法字节不再杀死读取线程。
+    # 仅在调用方已要求文本模式时注入,避免把 image2pipe 这类 bytes 管道翻成 str。
+    if kwargs.get("text") or kwargs.get("universal_newlines"):
+        kwargs.setdefault("encoding", "utf-8")
+        kwargs.setdefault("errors", "replace")
     if timeout is None:
         timeout = DEFAULT_TIMEOUT
     return subprocess.run(cmd, *args, timeout=timeout, **kwargs)
@@ -93,9 +101,9 @@ def _ffmpeg_feature_text(kind: str) -> str:
         return ""
     if kind not in _FEATURE_CACHE:
         try:
-            proc = subprocess.run(
+            proc = run_proc(
                 [exe, "-hide_banner", f"-{kind}"],
-                capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, timeout=20,
             )
             _FEATURE_CACHE[kind] = (proc.stdout or "") + (proc.stderr or "")
         except Exception:  # noqa: BLE001

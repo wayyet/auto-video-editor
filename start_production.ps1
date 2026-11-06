@@ -196,15 +196,17 @@ function Test-TcpPortOpen {
 
 function Get-WebConfigFingerprint {
     # C-T2(执行设计 §6.6.C 第一阶段):本次启动期望的服务配置指纹。
-    # sha256("<PostgresUri>") 前 16 位十六进制(阶段5:STORYLINE_MODE 已删,
-    # 监控服务配置只随 Postgres DSN 变化)。
+    # sha256("<PostgresUri>|<LlmBackend>") 前 16 位十六进制。创建台 LLM 后端
+    # (CONSOLE_LLM_BACKEND)随本脚本注入监控服务进程环境并决定创建台行为,
+    # 必须与 Postgres DSN 一并纳入指纹 —— 否则改了后端仍被「指纹一致→复用」
+    # 误放行,旧进程带着缺失/过期的后端配置继续跑。
     # 单向哈希 —— 不泄密码;只用于比对「上次启动服务的配置」与「这次想用的配置」
     # 是否一致,解决「HTTP 200 健康证明不了配置正确」的复用误判(§4.2 P0)。
-    param([string]$Uri)
+    param([string]$Uri, [string]$LlmBackend)
 
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try {
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes("$Uri")
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes("$Uri|$LlmBackend")
         return ([System.BitConverter]::ToString($sha.ComputeHash($bytes)) -replace '-', '').ToLower().Substring(0, 16)
     } finally {
         $sha.Dispose()
@@ -321,10 +323,13 @@ foreach ($name in @(
     'AGENT_GATE_POSTGRES_URI',   # agent_gate 测试隔离变量,优先级高于 POSTGRES_URI;生产启动前备份并清除,防遗留值覆盖生产 DSN
     'APP_ENV',                   # 统一环境标识(B-T4);本脚本钉 production,resolver 据此拒绝测试库变量
     'AGENT_GATE_CKPT_BACKEND',   # agent_gate checkpoint 后端;本脚本钉 postgres(显式声明,防残留非法值)
+    'CONSOLE_LLM_BACKEND',       # 创建台 LLM 后端门禁(web/console_service.py);未设时下方默认钉 mcode-cli
+    'CONSOLE_ALLOW_STUB',        # stub 后端放行开关(仅开发/测试);备份/还原,生产不注入
     'STORYLINE_MODE',            # legacy:human 模式已删;仍备份+清除,防调用方残留值触发 config import 期 fail-fast
     'THREAD_ID',
     'PYTHONUNBUFFERED',
     'PYTHONIOENCODING',
+    'PYTHONUTF8',                # §6.6 中文路径标准处置:UTF-8 模式,subprocess text=True 按 UTF-8 解码(2026-11-06 ffprobe 空输出根因)
     'AUTO_VIDEO_EDITOR_PREFLIGHT_SKIP_POSTGRES_START'
 )) {
     $envBackup[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
@@ -340,12 +345,24 @@ Remove-Item Env:AGENT_GATE_POSTGRES_URI -ErrorAction SilentlyContinue
 $env:APP_ENV = 'production'
 # C-T1:钉住 checkpoint 后端为 postgres(显式声明,防残留的空值/非法值)。
 $env:AGENT_GATE_CKPT_BACKEND = 'postgres'
+# 创建台 LLM 后端门禁:web/console_service.py resolve_console_backend() 未配置
+# 即 503 拒绝启动(生产不静默回落 Stub;2026-11-06 创建台报障根因)。默认钉
+# mcode-cli(真实模型,每次调用拉起 `mcode exec`,与阶段4 真实模型 E2E 同款);
+# 调用方显式设过则尊重其值 —— 开发联调可设 stub,但须同时 CONSOLE_ALLOW_STUB=true
+# 才放行,否则创建台照样 503。
+if (-not $env:CONSOLE_LLM_BACKEND) { $env:CONSOLE_LLM_BACKEND = 'mcode-cli' }
 # STORYLINE_MODE 显式清除(human 模式已删;防调用方残留值让 config import 即报错)
 Remove-Item Env:STORYLINE_MODE -ErrorAction SilentlyContinue
 $env:THREAD_ID      = $ThreadId
 # Windows 下 python stdout 默认 GBK,PowerShell 按 UTF-8 解码 → 中文乱码。
 # 显式钉 UTF-8,让 Phase 2/Phase 3 的 Python 子进程输出在控制台和日志里都可读。
 $env:PYTHONIOENCODING = 'utf-8'
+# §6.6 中文路径乱码标准处置:UTF-8 模式。仓库路径含中文(…\开发代码\…),
+# ffprobe/fc-list 等子进程会把含中文的路径原样打进 stdout(UTF-8);不开
+# PYTHONUTF8 时 text=True 按 GBK 解码 → 读线程 UnicodeDecodeError → stdout
+# 变 None → 探针拿不到媒体信息(2026-11-06 assembly 空时间线根因)。
+# 与 agent_gate runner/cli_client 给 worker 注入的 PYTHONUTF8=1 保持一致。
+$env:PYTHONUTF8 = '1'
 # 强制 Python 不缓冲(便于 Web 日志实时落盘)
 $env:PYTHONUNBUFFERED = '1'
 # 外部 URI 模式:Python 侧预检也不该去起本地容器
@@ -353,7 +370,7 @@ if ($target.Kind -ne 'local-managed') {
     $env:AUTO_VIDEO_EDITOR_PREFLIGHT_SKIP_POSTGRES_START = '1'
     Write-Phase "  AUTO_VIDEO_EDITOR_PREFLIGHT_SKIP_POSTGRES_START=1(外部 Postgres 模式)"
 }
-Write-Phase ("注入环境变量(所有子进程启动之前;脚本结束时还原): POSTGRES_URI = {0}, APP_ENV = {1}, AGENT_GATE_CKPT_BACKEND = {2}, THREAD_ID = {3}, PYTHONIOENCODING = {4}(STORYLINE_MODE 已清除:human 模式已删)" -f $maskedUri, $env:APP_ENV, $env:AGENT_GATE_CKPT_BACKEND, $ThreadId, $env:PYTHONIOENCODING)
+Write-Phase ("注入环境变量(所有子进程启动之前;脚本结束时还原): POSTGRES_URI = {0}, APP_ENV = {1}, AGENT_GATE_CKPT_BACKEND = {2}, CONSOLE_LLM_BACKEND = {3}, THREAD_ID = {4}, PYTHONIOENCODING = {5}, PYTHONUTF8 = {6}(STORYLINE_MODE 已清除:human 模式已删)" -f $maskedUri, $env:APP_ENV, $env:AGENT_GATE_CKPT_BACKEND, $env:CONSOLE_LLM_BACKEND, $ThreadId, $env:PYTHONIOENCODING, $env:PYTHONUTF8)
 
 # ---------------------------------------------------------------
 # 顶部 banner
@@ -533,7 +550,7 @@ try {
     $webUrl      = "http://127.0.0.1:$MonitorPort/"
     $webPortOpen = Test-PortOpen $MonitorPort
     # C-T2:本次启动期望的配置指纹(启动/复用/重启时都写进 PID 文件,供下次比对)
-    $expectedFp = Get-WebConfigFingerprint -Uri $PostgresUri
+    $expectedFp = Get-WebConfigFingerprint -Uri $PostgresUri -LlmBackend $env:CONSOLE_LLM_BACKEND
 
     if ($webPortOpen) {
         if (-not (Test-WebHealthy -Url $webUrl -TimeoutSec 5)) {
