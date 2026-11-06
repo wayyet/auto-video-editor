@@ -37,6 +37,7 @@
     → node_12_human_add_bgm          ⏸ interrupt("②")
     → node_13_adjust_volume
     → join_before_delivery           (交付前 QA 闸门,单前驱,不再承担 fan-in)
+    → export_final_video             (可选 MP4 导出,阶段 6;默认关闭记 skipped)
     → END
 
 2026-11-04 单流水线架构收敛(阶段3,见《单流水线架构设计与分阶段执行计划
@@ -123,6 +124,7 @@ from nodes.node_15_localize_covers_en import node_15_localize_covers_en
 from nodes.node_16a_translate_and_check import node_16a_translate_and_check
 from nodes.node_checkpoint3_layout_review import node_checkpoint3_layout_review
 from nodes.node_17_inject_english_tts import node_17_inject_english_tts
+from nodes.node_18_export_video import export_final_video
 from nodes.node_fork_english_branch import fork_draft_for_english_branch
 from nodes.node_join_before_delivery import join_before_delivery
 from state import WorkflowState
@@ -531,6 +533,9 @@ def _build_state_graph():
     g.add_node("node_checkpoint3_layout_review", node_checkpoint3_layout_review)
     g.add_node("node_17_inject_english_tts", node_17_inject_english_tts)
     g.add_node("join_before_delivery", join_before_delivery)
+    # 2026-11-07 阶段 6:可选最终 MP4 导出(交付 QA 与导出分离;开关关闭时
+    # 节点显式记 skipped,不静默)。
+    g.add_node("export_final_video", export_final_video)
 
     # ---- auto 链 19 节点 + qa_gate + join_storyline(plan_v4 §2.2 / §2.3)----
     g.add_node("storyline_load_media", storyline_load_media_node)
@@ -659,8 +664,11 @@ def _build_state_graph():
     # 交付前 QA 闸门:单前驱,不再承担 fan-in
     g.add_edge("node_13_adjust_volume", "join_before_delivery")
 
-    # join → END
-    g.add_edge("join_before_delivery", END)
+    # join → 可选 MP4 导出(阶段 6)→ END
+    # 导出与发布/关卡/QA 分离(计划 §8 阶段 6);FINAL_EXPORT_ENABLED=False 时
+    # 节点显式记 final_export_status="skipped" 并上报 export.skipped,不渲染。
+    g.add_edge("join_before_delivery", "export_final_video")
+    g.add_edge("export_final_video", END)
 
     # ---- auto 链 19 节点图边(plan_v4 §2.2 / §5 阶段 0)----
     # 起点:START 已直连 storyline_load_media(2026-11-04 阶段3)。

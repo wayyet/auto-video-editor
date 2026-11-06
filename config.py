@@ -459,6 +459,52 @@ JY_RESUME_REQUIRE_CLOSED: bool = _console_env_bool("JY_RESUME_REQUIRE_CLOSED", T
 
 
 # ---------------------------------------------------------------------------
+# 最终 MP4 导出(2026-11-07 阶段 6:可选的最终视频导出能力)
+# ---------------------------------------------------------------------------
+# 计划 §8 阶段 6:渲染引擎定为 **FFmpeg**(决策:剪映客户端渲染需 GUI 自动化,
+# 不可脚本化且脆弱;FFmpeg 导出为"基础保真度"= 视频切割/拼接/变速/画布适配 +
+# 音轨混音(音量/loop)+ 字幕 drawtext 烧录;转场按硬切近似、贴纸/视频特效/
+# 花字样式不渲染 —— 差异作为 fidelity 明细写进导出报告与创建台事件,不是
+# 静默假成功)。读取纪律同 CONSOLE_*/JY_*:节点在函数运行时读,单测
+# monkeypatch.setattr(config, "FINAL_EXPORT_XXX", ...) 注入。
+
+#: 导出能力总开关(可选能力,默认**关**;设 1 开启后 join_before_delivery 之后
+#: 追加 export_final_video 节点渲染 MP4)。开关关闭时节点显式记
+#: final_export_status="skipped" 并上报 export.skipped 事件,不静默。
+FINAL_EXPORT_ENABLED: bool = _console_env_bool(
+    "AUTO_VIDEO_EDITOR_FINAL_EXPORT_ENABLED", False
+)
+
+#: 导出输出目录;空 = 任务产物根 ``outputs/<session_id>/export/``(跟随
+#: storyline_outputs_root 的 env 覆盖)。显式配置时必须是绝对目录。
+FINAL_EXPORT_DIR: str = _console_env("AUTO_VIDEO_EDITOR_FINAL_EXPORT_DIR", "")
+
+#: 视频编码参数(H.264 + AAC;yuv420p 保证播放器兼容;faststart 便于流式播放)
+FINAL_EXPORT_VIDEO_CODEC: str = _console_env(
+    "AUTO_VIDEO_EDITOR_FINAL_EXPORT_VIDEO_CODEC", "libx264"
+)
+FINAL_EXPORT_CRF: int = int(_console_env("AUTO_VIDEO_EDITOR_FINAL_EXPORT_CRF", "18"))
+FINAL_EXPORT_PRESET: str = _console_env(
+    "AUTO_VIDEO_EDITOR_FINAL_EXPORT_PRESET", "medium"
+)
+FINAL_EXPORT_FPS: int = int(_console_env("AUTO_VIDEO_EDITOR_FINAL_EXPORT_FPS", "30"))
+FINAL_EXPORT_AUDIO_CODEC: str = _console_env(
+    "AUTO_VIDEO_EDITOR_FINAL_EXPORT_AUDIO_CODEC", "aac"
+)
+FINAL_EXPORT_AUDIO_RATE: int = int(
+    _console_env("AUTO_VIDEO_EDITOR_FINAL_EXPORT_AUDIO_RATE", "48000")
+)
+FINAL_EXPORT_AUDIO_BITRATE: str = _console_env(
+    "AUTO_VIDEO_EDITOR_FINAL_EXPORT_AUDIO_BITRATE", "192k"
+)
+
+#: 导出校验的时长容差(秒):成片时长 vs 草稿 target_timerange 总和
+FINAL_EXPORT_DURATION_TOLERANCE_SEC: float = float(
+    _console_env("AUTO_VIDEO_EDITOR_FINAL_EXPORT_DURATION_TOLERANCE", "0.5")
+)
+
+
+# ---------------------------------------------------------------------------
 # 可再生缓存清理清单(创建台「清除缓存」按钮手动触发;不接图)
 # ---------------------------------------------------------------------------
 # 移植自 2026-11-04 R-10 移除前的 config 清单(worktree baseline-cde 快照),
