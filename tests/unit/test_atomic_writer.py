@@ -200,13 +200,17 @@ def test_safe_write_draft_happy_path(tmp_path: Path) -> None:
 
 
 def test_safe_write_draft_jianying_running_does_not_block(tmp_path: Path) -> None:
-    """剪映在跑 → 告警标记 jianying_running=True,但流程不阻断,仍正常写入。"""
+    """剪映在跑 + 显式关闭严格模式 → 告警标记 jianying_running=True,流程不阻断。
+
+    (阶段 3 起默认严格互斥会拒绝写入;本用例锁定"放行模式"的旧行为不回归。)
+    """
     draft_dir = tmp_path / "draft"
 
     result = safe_write_draft(
         draft_dir,
         {"a": 1},
         proc_checker=lambda: True,  # 模拟剪映在跑
+        strict_running=False,  # 放行模式(旧"告警不阻断"行为)
         snapshotter=lambda d: d / ".snapshots" / "t2" or (d / ".snapshots" / "t2").mkdir(parents=True) or d / ".snapshots" / "t2",
         verifier=lambda d: (True, "ok"),
     )
@@ -214,6 +218,21 @@ def test_safe_write_draft_jianying_running_does_not_block(tmp_path: Path) -> Non
     assert result["ok"] is True
     assert result["jianying_running"] is True
     assert (draft_dir / "draft_content.json").exists()
+
+
+def test_safe_write_draft_strict_mode_refuses_when_running(tmp_path: Path) -> None:
+    """阶段 3 严格互斥(默认):剪映在跑 → RuntimeError,目标目录不被写入。"""
+    draft_dir = tmp_path / "draft"
+
+    with pytest.raises(RuntimeError, match="写入互斥严格模式"):
+        safe_write_draft(
+            draft_dir,
+            {"a": 1},
+            proc_checker=lambda: True,  # 模拟剪映在跑
+        )
+    assert not (draft_dir / "draft_content.json").exists(), "拒绝写入时不得落盘"
+    # 未做快照(门禁在快照之前)
+    assert not (draft_dir / ".snapshots").exists()
 
 
 def test_safe_write_draft_verify_failure_triggers_restore_and_raises(tmp_path: Path) -> None:

@@ -36,7 +36,9 @@
 - ``1``  图执行异常(run_with_events 先发 ``run.failed`` 再抛出);
 - ``2``  pre-flight 失败 / 参数非法;
 - ``4``  该 thread 无挂起关卡可恢复;
-- ``5``  指定 checkpoint 与挂起关卡不匹配(或多重挂起未指定)。
+- ``5``  指定 checkpoint 与挂起关卡不匹配(或多重挂起未指定);
+- ``6``  恢复前文件安全门禁未通过(阶段 3:剪映未关闭 / 草稿缺失或损坏 /
+  目录被占用;stderr 附问题清单与人工修改后草稿的 SHA-256 审计值)。
 """
 
 from __future__ import annotations
@@ -66,6 +68,9 @@ EXIT_GRAPH_ERROR = 1
 EXIT_PREFLIGHT = 2
 EXIT_NOT_SUSPENDED = 4
 EXIT_CHECKPOINT_MISMATCH = 5
+#: 阶段 3(人工关卡与剪映草稿导入):恢复前文件安全门禁未通过
+#: (剪映未关闭 / 草稿缺失或损坏 / 目录被占用),详见 stderr 问题清单
+EXIT_RESUME_GUARD = 6
 
 
 def _parse_args() -> argparse.Namespace:
@@ -107,6 +112,14 @@ def _parse_args() -> argparse.Namespace:
         "--skip-preflight-schema-setup",
         action="store_true",
         help="跳过 checkpoint 表创建(默认会确保 schema 存在)",
+    )
+    p.add_argument(
+        "--allow-jianying-running",
+        action="store_true",
+        help=(
+            "放行「剪映仍在运行」的恢复前置检查(默认拒绝:恢复前必须保存并关闭剪映,"
+            "避免工作流写入与剪映自动保存竞争;仅开发/测试用)"
+        ),
     )
     p.add_argument(
         "--llm-backend",
@@ -335,6 +348,23 @@ async def _resume_async_impl(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return EXIT_OK
+
+        # 阶段 3(人工关卡与剪映草稿导入):恢复前文件安全门禁。
+        # dry-run 不受影响(只读);真实恢复前要求剪映已关闭 + 草稿可解析,
+        # 通过时把人工修改后草稿的 SHA-256 打到 stderr 供审计留档。
+        from draft_ops.draft_lock import assert_resume_ready
+
+        guard = assert_resume_ready(
+            (snapshot.values or {}).get("draft_path"),
+            require_jianying_closed=not args.allow_jianying_running,
+        )
+        for name, sha in (guard.get("hashes") or {}).items():
+            print(f"[resume] sha256[{name}]={sha}", file=sys.stderr)
+        if not guard["ok"]:
+            print("[resume] ✗ 恢复前检查未通过(退出码 6):", file=sys.stderr)
+            for p in guard["problems"]:
+                print(f"[resume]   - {p}", file=sys.stderr)
+            return EXIT_RESUME_GUARD
 
         value = parse_resume_value(args.value)
         resume_map = {matched["id"]: value}

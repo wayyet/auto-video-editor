@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+import config
+
 from nodes.node_13_adjust_volume import (
     _PLACEHOLDER_FADE_IN_KEY,
     _PLACEHOLDER_FADE_OUT_KEY,
@@ -99,13 +101,16 @@ def _state(draft_path: Path) -> dict:
 def test_adjust_volume_warns_when_jianying_running(
     draft_with_audio: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """剪映在跑 → status_log 出现与节点 08/09/10/11 同文案的告警,且只出现一次。
+    """剪映在跑 + 放行模式 → status_log 出现与节点 08/09/10/11 同文案的告警,且只出现一次。
 
+    阶段 3 起默认严格互斥会直接拒绝写入;本用例显式关闭严格模式,
+    锁定"放行模式"的旧行为(告警去重 + 照常写入)不回归。
     node_13 会连写两次(主音轨 + BGM),告警必须去重,否则一次节点执行刷两条。
     """
     monkeypatch.setattr(
         "draft_ops.safe_write_guard.check_jianying_not_running", lambda: True
     )
+    monkeypatch.setattr(config, "JY_WRITE_FAIL_ON_JIANYING_RUNNING", False)
 
     out = adjust_volume(_state(draft_with_audio))
 
@@ -119,6 +124,17 @@ def test_adjust_volume_warns_when_jianying_running(
     # 双写仍然发生(目录级,不是文件级)
     info_file = draft_with_audio.parent / "draft_info.json"
     assert info_file.exists(), "safe_write_draft 未做双写"
+
+
+def test_adjust_volume_strict_mode_refuses_when_jianying_running(
+    draft_with_audio: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """阶段 3 严格互斥(默认):剪映在跑 → 写入被拒(RuntimeError 冒泡,节点失败重试)。"""
+    monkeypatch.setattr(
+        "draft_ops.safe_write_guard.check_jianying_not_running", lambda: True
+    )
+    with pytest.raises(RuntimeError, match="写入互斥严格模式"):
+        adjust_volume(_state(draft_with_audio))
 
 
 def test_adjust_volume_no_warning_when_jianying_not_running(

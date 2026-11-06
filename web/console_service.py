@@ -599,6 +599,18 @@ def get_console_run(
     }
 
 
+def _resume_draft_guard(thread_id: str) -> dict[str, Any]:
+    """恢复前文件安全门禁(阶段 3;独立出口便于单测注入)。
+
+    剪映必须已关闭 + 草稿存在/JSON 可解析/mtime 合理;返回
+    ``{"ok", "problems", "hashes"}``(hashes 为人工修改后草稿的 SHA-256 审计值)。
+    取数层 ``web.gate_state`` 延迟 import,避免模块级循环依赖。
+    """
+    from web.gate_state import resume_guard
+
+    return resume_guard(thread_id)
+
+
 def resume_run(
     thread_id: str,
     *,
@@ -607,6 +619,7 @@ def resume_run(
     popen: Callable[..., Any] | None = None,
     pg_check: Callable[[], None] | None = None,
     venv_python: str | None = None,
+    draft_guard: Callable[[str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """人工关卡恢复(阶段 5):复用 ``scripts/resume_workflow.py`` 适配器。
 
@@ -614,18 +627,25 @@ def resume_run(
     (``run_workflow.py`` 启动)只能由该 CLI 恢复;本函数只是把它的启动
     收进同一套 Popen 纪律(argv 数组 / shell=False / 独立进程组 / 日志追加)。
 
+    阶段 3(人工关卡与剪映草稿导入):Popen 之前执行恢复前文件安全门禁
+    (:func:`_resume_draft_guard`)—— 剪映未关闭 / 草稿缺失或损坏 → 409 拒绝,
+    不盲发 Command(resume);通过时把人工修改后草稿的 SHA-256 写进
+    ``console_run.json`` 的本次 resume 记录(审计)。
+
     Args:
         thread_id: 目标任务(事件库派生状态必须 waiting_human,否则 409)。
         checkpoint: 关卡标识(①/②/③ 或 interrupt id);省略时仅当
             "恰好一个挂起关卡"可自动匹配(否则子进程退出码 5,日志可查)。
         value: 放行值(JSON 语义;经 json.dumps 后交 --value)。
+        draft_guard: 门禁函数(缺省 :func:`_resume_draft_guard`;单测注入)。
 
     Raises:
-        ConsoleLaunchError: 404(任务不存在)/ 409(非等待态/并发满/已在运行)/
-            503(PG)/ 500(Popen 失败)。
+        ConsoleLaunchError: 404(任务不存在)/ 409(非等待态/并发满/已在运行/
+            门禁不过)/ 503(PG)/ 500(Popen 失败)。
     """
     spawn = popen if popen is not None else _default_popen()
     check_pg = pg_check if pg_check is not None else _check_postgres
+    guard = draft_guard if draft_guard is not None else _resume_draft_guard
     validate_thread_id(thread_id)
     task_dir = _task_dir_for(thread_id)
     record_path = console_run_json_path(task_dir)
@@ -640,6 +660,14 @@ def resume_run(
     if state != "waiting_human":
         raise ConsoleLaunchError(
             f"任务 {thread_id} 未处于人工等待状态(当前: {state}),不可恢复",
+            status_code=409,
+        )
+
+    # 阶段 3:恢复前文件安全门禁(剪映未关闭 / 草稿缺失损坏 → 409,不盲发 resume)
+    guard_result = guard(thread_id)
+    if not guard_result.get("ok"):
+        raise ConsoleLaunchError(
+            "恢复前检查未通过:" + ";".join(guard_result.get("problems") or []),
             status_code=409,
         )
 
@@ -697,7 +725,15 @@ def resume_run(
         raise ConsoleLaunchError(f"恢复进程启动失败: {e}", status_code=500) from e
 
     resumes = list(record.get("resumes") or [])
-    resumes.append({"at": _now_iso(), "checkpoint": checkpoint, "value": value})
+    resumes.append(
+        {
+            "at": _now_iso(),
+            "checkpoint": checkpoint,
+            "value": value,
+            # 阶段 3 审计:恢复时人工修改后草稿的 SHA-256
+            "draft_sha256": guard_result.get("hashes") or {},
+        }
+    )
     record["resumes"] = resumes
     record["status"] = "starting"  # 运行继续;终态由事件库调和给出
     _write_run_json(task_dir, record)

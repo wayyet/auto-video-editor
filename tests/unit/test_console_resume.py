@@ -65,6 +65,12 @@ def waiting_env(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CONSOLE_ALLOW_STUB", True)
     monkeypatch.setattr(cs, "_latest_snapshot", _waiting_snapshot)
     monkeypatch.setattr(cs, "_pid_alive", lambda pid: None)
+    # 阶段 3 恢复门禁:本文件聚焦启动/Popen 语义,门禁统一注入放行
+    # (门禁本体行为见 test_console_resume_guard.py / test_draft_lock.py)
+    monkeypatch.setattr(
+        cs, "_resume_draft_guard",
+        lambda tid: {"ok": True, "problems": [], "hashes": {}},
+    )
     result = prepare_run(
         prompt="剪一条短片", uploads=[_upload("a.mp4", b"abc")],
         target_duration_ms=30000, ratio="9:16", lang="zh",
@@ -109,8 +115,10 @@ class TestResumeRunService:
 
         assert result["thread_id"] in cs._ACTIVE_PROCS
         assert result["thread_id"] in cs._STARTED_AT
+        # 阶段 3:resume 记录带 draft_sha256 审计字段(门禁注入放行时为空 dict)
         assert record["resumes"] == [{"at": record["resumes"][0]["at"],
-                                      "checkpoint": None, "value": True}]
+                                      "checkpoint": None, "value": True,
+                                      "draft_sha256": {}}]
         assert record["status"] == "starting"
 
     def test_with_checkpoint_flag(self, waiting_env, monkeypatch):

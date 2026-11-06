@@ -442,6 +442,21 @@ JY_PUBLISH_FAIL_ON_JIANYING_RUNNING: bool = _console_env_bool(
     "JY_PUBLISH_FAIL_ON_JIANYING_RUNNING", True
 )
 
+# ---------------------------------------------------------------------------
+# 剪映写入互斥(2026-11-06 阶段 3:人工编辑与工作流恢复的文件安全)
+# ---------------------------------------------------------------------------
+#: 工作流节点写草稿(safe_write_draft)时检测到剪映在跑 → **失败**而不是告警
+#: 继续(计划 §8 阶段 3:"生产模式下……应暂停或失败,不应静默继续")。
+#: 剪映进程检测本身失败(工具缺失等)按"不在跑"处理,不会误伤。
+JY_WRITE_FAIL_ON_JIANYING_RUNNING: bool = _console_env_bool(
+    "JY_WRITE_FAIL_ON_JIANYING_RUNNING", True
+)
+
+#: 恢复人工关卡时要求剪映已关闭(恢复侧门禁;人工编辑期间允许剪映打开)。
+#: 恢复前同时校验草稿文件存在/JSON 可解析/mtime 合理,并对人工修改后的草稿
+#: 计算 SHA-256 写入任务 manifest(审计)。
+JY_RESUME_REQUIRE_CLOSED: bool = _console_env_bool("JY_RESUME_REQUIRE_CLOSED", True)
+
 
 # ---------------------------------------------------------------------------
 # 可再生缓存清理清单(创建台「清除缓存」按钮手动触发;不接图)

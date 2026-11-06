@@ -35,10 +35,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import secrets
-import selectors
 import subprocess
 import sys
 import time
@@ -55,7 +53,7 @@ from web.api_workflow import _verify_same_origin
 from web import cache_cleaner, console_service
 from web.console_service import ConsoleLaunchError, prepare_run, start_run
 from web.console_uploads import ALLOWED_VIDEO_EXTS, ConsoleUploadError, validate_thread_id
-from web.human_gate_payload import COMMON_RESUME_NOTE, build_gate_views
+from web.human_gate_payload import COMMON_RESUME_NOTE
 
 router = APIRouter(prefix="/api/console")
 
@@ -278,34 +276,12 @@ def run_detail(request: Request, thread_id: str) -> dict:
 def _fetch_gate_data_sync(thread_id: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """读 checkpoint:返回(挂起关卡展示载荷列表, state values)。
 
-    独立线程 + ``asyncio.run(loop_factory=SelectorEventLoop)``(Windows
-    uvicorn 主循环 Proactor 与 async psycopg 不兼容;与 resume_workflow.py
-    修复同款纪律)。只读 aget_state,不写库、不跑图。
+    实现收敛在 :mod:`web.gate_state`(阶段 3 起恢复门禁共用同一取数层);
+    这里保留同名薄封装,让本模块内 monkeypatch 接缝不变。
     """
-    from graph import build_graph, get_checkpointer, normalize_thread_id
-    from scripts.resume_workflow import describe_interrupts
+    from web.gate_state import fetch_gate_data
 
-    async def _inner():
-        tid = normalize_thread_id(thread_id)
-        async with get_checkpointer() as saver:
-            g = build_graph(
-                checkpointer=saver,
-                thread_id=tid,
-                start_heartbeat_thread=False,
-                run_preflight=False,
-            )
-            return await g.aget_state({"configurable": {"thread_id": tid}})
-
-    if sys.platform == "win32":
-        snap = asyncio.run(
-            _inner(),
-            loop_factory=lambda: asyncio.SelectorEventLoop(selectors.SelectSelector()),
-        )
-    else:
-        snap = asyncio.run(_inner())
-    interrupts = describe_interrupts(snap)
-    values = dict(snap.values or {})
-    return build_gate_views(interrupts, values), values
+    return fetch_gate_data(thread_id)
 
 
 def _fetch_gate_views_sync(thread_id: str) -> list[dict[str, Any]]:

@@ -166,12 +166,16 @@ def safe_write_draft(
     restorer: Restorer | None = None,
     verifier: Verifier | None = None,
     duration_updater: DurationUpdater | None = None,
+    strict_running: bool | None = None,
 ) -> dict[str, Any]:
     """Week 5 顶层写入入口:剪映 5.9+ 双写 + 校验 + 回退 + 时长索引同步。
 
-    流程(对齐计划 §2.1):
+    流程(对齐计划 §2.1;阶段 3 起第 1 步可配置为严格互斥):
         1. ``proc_checker`` — 剪映进程检测(默认 :func:`check_jianying_not_running`)。
-           **不**阻断;若返回 True,把告警字符串 append 到 ``status_log``(由调用方读取)。
+           ``strict_running``(缺省读 ``config.JY_WRITE_FAIL_ON_JIANYING_RUNNING``,
+           默认 True)为 True 且检测到剪映在跑 → **raise RuntimeError 拒绝写入**
+           (计划 §8 阶段 3:人工编辑与工作流写入互斥,不再"告警继续");
+           为 False 时保留旧行为:把告警字符串返回给调用方(``jianying_running``)。
         2. ``snapshotter`` — 整目录快照(默认 :func:`snapshot_before_edit`)。
            即使剪映在跑,也保证写入失败时能回退。
         3. ``atomic_write_draft_pair`` — 双写 content + info(各自独立 mkstemp)。
@@ -190,13 +194,16 @@ def safe_write_draft(
         restorer: 可注入的回退函数(``(draft_dir) -> used_snap_path``)。
         verifier: 可注入的校验函数(``(draft_dir) -> (ok, reason)``)。
         duration_updater: 可注入的时长索引更新函数。
+        strict_running: 剪映在跑时是否拒绝写入;``None`` = 运行时读
+            ``config.JY_WRITE_FAIL_ON_JIANYING_RUNNING``(默认 True)。
 
     Returns:
         字典 ``{"ok": bool, "snapshot": Path, "verified": bool, "reason": str,
         "duration_index": dict | None}``,便于上层写到 ``state``。
 
     Raises:
-        RuntimeError: verify 失败且已 restore 时携带 ``reason``。
+        RuntimeError: 严格互斥拒绝写入(剪映在跑),或 verify 失败且已 restore 时
+            携带 ``reason``。
         TypeError/OSError: 透传自 :func:`atomic_write_draft_pair`。
     """
     draft_dir = Path(draft_dir)
@@ -213,6 +220,21 @@ def safe_write_draft(
         duration_updater = _default_duration_updater
 
     jianying_running = bool(proc_checker())
+
+    # 阶段 3 严格互斥:剪映在跑时默认拒绝写入(人工编辑保护)
+    if jianying_running:
+        if strict_running is None:
+            import config
+
+            strict_running = bool(
+                getattr(config, "JY_WRITE_FAIL_ON_JIANYING_RUNNING", True)
+            )
+        if strict_running:
+            raise RuntimeError(
+                "检测到剪映客户端正在运行,已拒绝写入草稿(写入互斥严格模式:"
+                "JY_WRITE_FAIL_ON_JIANYING_RUNNING)。请先在剪映中保存并关闭草稿,"
+                "再让工作流继续;确需放行可设 JY_WRITE_FAIL_ON_JIANYING_RUNNING=0"
+            )
 
     snapshot_path = snapshotter(draft_dir)
 
