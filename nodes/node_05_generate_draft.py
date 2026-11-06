@@ -27,6 +27,7 @@ from config import (
 from assembly_capabilities.run_context import RunContext
 from draft_ops.atomic_writer import safe_write_draft
 from draft_ops.encryption_detector import DraftStatus, detect_draft_encryption
+from draft_ops.jianying_registry import compute_draft_duration_us
 from draft_ops.version_strategy import resolve_strategy
 from state import WorkflowState
 from storyline.contract import CanonicalTimeline, ContractInvalid
@@ -145,10 +146,49 @@ def generate_initial_jianying_draft(
     write_result = writer(draft_dir, draft_content)
     # writer 返回值可能是 dict(safe_write_draft)或 None(legacy atomic_write_draft),
     # 兼容两种形态。
+    log_tags = list(state.get("status_log", []) or [])
     if isinstance(write_result, dict) and write_result.get("jianying_running"):
-        log = list(state.get("status_log", []) or [])
-        log.append("[node_05] 剪映进程在跑,写入仍继续(告警不阻断)")
+        log_tags.append("[node_05] 剪映进程在跑,写入仍继续(告警不阻断)")
     draft_file = draft_dir / "draft_content.json"
+    _emit_monitor_event(
+        "draft.generated", detail={"draft_dir": str(draft_dir)}
+    )
+
+    # 4a. 阶段 1(人工关卡与剪映草稿导入):staging → 剪映草稿库发布注册。
+    # 计划 §8 阶段 1:发布成功后正式草稿路径回填 state.draft_path,并把
+    # _draft_dir_override 指到正式目录 —— 后续节点、snapshot②、英文分支 fork
+    # 全部跟随同一份权威草稿。发布失败**降级不阻断**(error_log 记录,继续用
+    # staging 草稿,与仓库"环境级失败降级纪律"一致)。
+    published_dir: str | None = None
+    publish_error: str | None = None
+    if config.JY_DRAFT_PUBLISH_ENABLED and job_id:
+        try:
+            from draft_ops.draft_publisher import publish_draft
+
+            publish_result = publish_draft(
+                draft_dir,
+                thread_id=str(job_id),
+                duration_us=compute_draft_duration_us(draft_content),
+            )
+            published_dir = str(publish_result["published_dir"])
+            draft_file = Path(publish_result["draft_content_path"])
+            log_tags.append(f"draft.published:{published_dir}")
+            _emit_monitor_event(
+                "draft.published",
+                detail={
+                    "source": str(draft_dir),
+                    "target": published_dir,
+                    "duration_us": publish_result.get("duration_us"),
+                    "reused": bool(publish_result.get("reused")),
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 — 发布是增强路径,任何失败都降级
+            publish_error = repr(exc)
+            errors.append(f"[node_05] 草稿发布失败,继续使用 staging 草稿: {exc}")
+            log_tags.append(f"draft.publish_failed:{publish_error[:200]}")
+            _emit_monitor_event(
+                "draft.publish_failed", detail={"reason": publish_error[:200]}
+            )
 
     # 5. 回填 manifest.draft_path(Phase 2 幂等键)
     if job_id:
@@ -178,14 +218,46 @@ def generate_initial_jianying_draft(
         )
         write_manifest(paths, manifest)
 
-    return {
+    out: dict = {
         **state,
         "draft_path": str(draft_file),
         "draft_encryption_status": status.value,
         "draft_version_strategy": strategy.value,
         "draft_source_normalized_path": normalized_path,
         "error_log": errors,
+        # delta 语义:state.status_log 是 _append_unique reducer,这里带的既有
+        # 条目会被去重(修复了改动前"剪映在跑"告警拼了 log 却从不返回的丢失问题)
+        "status_log": log_tags,
     }
+    if published_dir is not None:
+        # 后续节点经 resolve_draft_dir 读 override → 全链路改写正式草稿
+        out["_draft_dir_override"] = published_dir
+        out["draft_published_dir"] = published_dir
+    if publish_error is not None:
+        out["draft_publish_error"] = publish_error
+    return out
+
+
+def _emit_monitor_event(event: str, *, detail: dict | None = None) -> None:
+    """经 LangGraph custom stream 上报节点级观测事件(runner 归一为 node.progress)。
+
+    图运行时外调用 ``get_stream_writer()`` 会 RuntimeError —— 观测事件绝不影响
+    主流程,任何异常吞掉即可。
+    """
+    try:
+        from langgraph.config import get_stream_writer
+
+        writer = get_stream_writer()
+        if callable(writer):
+            writer(
+                {
+                    "monitor_event": "progress",
+                    "node_id": "generate_draft",
+                    "detail": {"event": event, **(detail or {})},
+                }
+            )
+    except Exception:  # noqa: BLE001 — 观测通道失败不阻断工作流
+        pass
 
 
 # ---------------------------------------------------------------------------

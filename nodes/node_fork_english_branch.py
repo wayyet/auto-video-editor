@@ -92,11 +92,44 @@ def fork_draft_for_english_branch(state: WorkflowState) -> dict:
 
     返回**只含变更字段**的 dict(避免 fan-in 时与其他分支并发写同一字段)。
     ``status_log`` 用 reducer 合并,见 state._append_unique。
+
+    阶段 1(人工关卡与剪映草稿导入):en_branch 目录随
+    ``_draft_dir_override`` 已落在剪映草稿库根下,这里补注册(draft_meta_info +
+    root_meta_info upsert,幂等),让英文草稿也能出现在剪映首页。注册失败只改
+    status_log 标记降级 —— fork 本体(复制)已成功,英文线照常工作。
     """
     fork_result = _fork(state)
     target = fork_result.get("draft_dir_en_branch")
 
+    fork_tag = f"node_fork_english_branch_done:{target}"
+    if target and Path(target).is_dir():
+        try:
+            import json as _json
+
+            import config
+
+            from draft_ops.jianying_registry import (
+                compute_draft_duration_us,
+                register_draft,
+            )
+
+            en_content = None
+            reg = None
+            if config.JY_DRAFT_PUBLISH_ENABLED:
+                en_content = _json.loads(
+                    (Path(target) / "draft_content.json").read_text(encoding="utf-8")
+                )
+                reg = register_draft(
+                    Path(target),
+                    thread_id=str(state.get("session_id") or "en_branch"),
+                    duration_us=compute_draft_duration_us(en_content),
+                )
+            if reg is not None:
+                fork_tag = f"{fork_tag}|en_branch_registered:{reg.get('draft_name')}"
+        except Exception as exc:  # noqa: BLE001 — 注册是增强路径,失败降级
+            fork_tag = f"{fork_tag}|en_branch_register_skipped:{exc!r}"[:220]
+
     return {
         "draft_dir_en_branch": fork_result.get("draft_dir_en_branch"),
-        "status_log": [f"node_fork_english_branch_done:{target}"],
+        "status_log": [fork_tag],
     }

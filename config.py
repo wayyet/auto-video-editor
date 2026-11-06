@@ -410,6 +410,40 @@ CONSOLE_CACHE_CLEAR_COOLDOWN_SEC: float = _console_env_float(
 
 
 # ---------------------------------------------------------------------------
+# 剪映草稿发布注册(2026-11-06 人工关卡与剪映草稿导入 阶段 1)
+# ---------------------------------------------------------------------------
+# 计划 §8 阶段 1:让工作流生成的草稿出现在剪映客户端首页,且后续节点与人工关卡
+# 读写同一份权威草稿。分层:
+#   staging(任务目录 drafts/)→ publish(draft_publisher)→ 正式草稿库(JIANYING_DRAFT_ROOT)
+# 读取纪律与 CONSOLE_* 相同:web/nodes 在**函数运行时**读这些常量,
+# 单测用 monkeypatch.setattr(config, "JY_XXX", ...) 注入,不在 import 期固化。
+
+#: 剪映客户端用户草稿库根目录(环境变量 ``JIANYING_DRAFT_ROOT`` 可覆盖)。
+#: 默认值 = 剪映 Windows 版标准草稿库;阶段 0 诊断确认本机该目录存在但为空
+#: (剪映 5.9.0.11632)。**不**把 JIANYING_VERSION="5.9.0" 当作"运行环境已验证"
+#: 的证据 —— 目录结构兼容性以阶段 5 实机验收为准。
+JIANYING_DRAFT_ROOT: Path = Path(
+    _console_env(
+        "JIANYING_DRAFT_ROOT",
+        os.path.expandvars(
+            r"%LOCALAPPDATA%\JianyingPro\User Data\Projects\com.lveditor.draft"
+        ),
+    )
+)
+
+#: 是否在 generate_draft 写完 staging 后发布到剪映草稿库(默认开;单测/离线
+#: 环境可设 0 关闭,关闭时行为与发布功能上线前完全一致)。
+JY_DRAFT_PUBLISH_ENABLED: bool = _console_env_bool("JY_DRAFT_PUBLISH_ENABLED", True)
+
+#: 发布/注册时检测到剪映进程在跑 → 拒绝发布(fail-closed)。发布目标是剪映
+#: 自己的用户草稿库,客户端打开期间写入正是计划 §8 阶段 3 要消灭的竞争场景;
+#: 发布侧先按严格模式实现,与阶段 3 的写入门禁同向。
+JY_PUBLISH_FAIL_ON_JIANYING_RUNNING: bool = _console_env_bool(
+    "JY_PUBLISH_FAIL_ON_JIANYING_RUNNING", True
+)
+
+
+# ---------------------------------------------------------------------------
 # 可再生缓存清理清单(创建台「清除缓存」按钮手动触发;不接图)
 # ---------------------------------------------------------------------------
 # 移植自 2026-11-04 R-10 移除前的 config 清单(worktree baseline-cde 快照),

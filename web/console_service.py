@@ -285,7 +285,13 @@ def active_thread_ids() -> list[str]:
 
 
 def _build_launch_env(task_dir: Path) -> dict[str, str]:
-    """子进程 env:继承受控环境 + 独立草稿目录 + production(计划 §7.4)。"""
+    """子进程 env:继承受控环境 + staging 草稿目录 + production(计划 §7.4)。
+
+    阶段 1(人工关卡与剪映草稿导入)起 ``AUTO_VIDEO_EDITOR_DRAFT_DIR`` 只指向
+    **staging**(任务目录 drafts/);node_05 写完 staging 后会发布注册到
+    ``config.JIANYING_DRAFT_ROOT`` 的正式目录并把后续节点切过去
+    (见 ``draft_ops/draft_publisher.py``)。outputs 目录仅负责 staging 与任务产物。
+    """
     env = dict(os.environ)
     env["AUTO_VIDEO_EDITOR_DRAFT_DIR"] = str((task_dir / "drafts").resolve())
     env["WORKFLOW_ENV"] = "production"

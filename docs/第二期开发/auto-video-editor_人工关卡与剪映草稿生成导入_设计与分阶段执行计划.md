@@ -496,16 +496,16 @@ sequenceDiagram
 
 任务：
 
-- [ ] 增加 `JIANYING_DRAFT_ROOT` 配置，支持环境变量覆盖。
-- [ ] 增加剪映版本和目录结构检测，不把 `JIANYING_VERSION = "5.9.0"` 当作实际运行环境已经验证的证据。
-- [ ] 使用本机剪映新建一个空白草稿，收集有效的 `draft_content.json`、`draft_info.json`、`draft_meta_info.json`、`root_meta_info.json` 和其他必要文件作为结构样本。
-- [ ] 实现草稿唯一目录命名，例如 `AutoVideo_<thread_id>`，防止不同任务覆盖。
-- [ ] 实现 `draft_publisher.py`：发布前校验、复制/写入、元数据补齐、根索引更新、发布后再读校验。
-- [ ] 明确 `draft_name`、`draft_id` 与目录名的映射规则，按真实剪映样本验证，不能凭字段名称猜测。
-- [ ] 发布成功后把正式草稿路径回填为 `state.draft_path`。
-- [ ] 英文分支目录也使用剪映可识别的正式草稿目录，并在 `draft_dir_en_branch` 保存其路径。
-- [ ] 创建台不再无条件把正式草稿目录设置为 `outputs/<thread_id>/drafts`；`outputs` 仅负责 staging 和任务产物。
-- [ ] 增加事件：`draft.generated`、`draft.published`、`draft.publish_failed`，记录源目录、目标目录和校验结果。
+- [x] 增加 `JIANYING_DRAFT_ROOT` 配置，支持环境变量覆盖。
+- [x] 增加剪映版本和目录结构检测，不把 `JIANYING_VERSION = "5.9.0"` 当作实际运行环境已经验证的证据。
+- [ ] 使用本机剪映新建一个空白草稿，收集有效的 `draft_content.json`、`draft_info.json`、`draft_meta_info.json`、`root_meta_info.json` 和其他必要文件作为结构样本。 <!-- 待实机:依赖操作员在剪映 GUI 新建样本;阶段 5 兜底 -->
+- [x] 实现草稿唯一目录命名，例如 `AutoVideo_<thread_id>`，防止不同任务覆盖。
+- [x] 实现 `draft_publisher.py`：发布前校验、复制/写入、元数据补齐、根索引更新、发布后再读校验。
+- [ ] 明确 `draft_name`、`draft_id` 与目录名的映射规则，按真实剪映样本验证，不能凭字段名称猜测。 <!-- 待实机:依赖操作员在剪映 GUI 新建样本;阶段 5 兜底 -->
+- [x] 发布成功后把正式草稿路径回填为 `state.draft_path`。
+- [x] 英文分支目录也使用剪映可识别的正式草稿目录，并在 `draft_dir_en_branch` 保存其路径。
+- [x] 创建台不再无条件把正式草稿目录设置为 `outputs/<thread_id>/drafts`；`outputs` 仅负责 staging 和任务产物。
+- [x] 增加事件：`draft.generated`、`draft.published`、`draft.publish_failed`，记录源目录、目标目录和校验结果。
 
 建议涉及文件：
 

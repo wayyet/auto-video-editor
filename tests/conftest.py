@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -11,6 +12,12 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+# 2026-11-06 阶段 1(人工关卡与剪映草稿导入):默认关闭"发布注册到剪映草稿库"。
+# 测试进程若带着 session_id 跑图(node_05 发布 / fork 注册),会把测试草稿写进
+# **本机真实剪映草稿库**(%LOCALAPPDATA%);发布注册属生产路径,测试一律显式
+# 开启(monkeypatch config 或设 JY_DRAFT_PUBLISH_ENABLED=1)。
+os.environ.setdefault("JY_DRAFT_PUBLISH_ENABLED", "0")
 
 
 @pytest.fixture

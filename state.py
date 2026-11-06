@@ -147,6 +147,13 @@ class WorkflowState(TypedDict, total=False):
     volume_adjusted: bool             # 步骤13 占位节点标记:Week 3 永远 False
     _draft_dir_override: str          # 内部:节点 5 wrapper 用,从 state 读 draft_dir(测试用)
 
+    # ===== 2026-11-06 阶段 1:剪映草稿发布注册(人工关卡与剪映草稿导入计划)=====
+    # 节点 5 发布成功后写:正式草稿目录(JIANYING_DRAFT_ROOT/AutoVideo_<tid>);
+    # 后续节点/snapshot②/英文分支 fork 经 _draft_dir_override 跟随同一份权威草稿。
+    draft_published_dir: NotRequired[Optional[str]]
+    # 节点 5 发布失败时写原因(降级:工作流继续用 staging 草稿,不阻断)
+    draft_publish_error: NotRequired[Optional[str]]
+
     # ===== Week 4 新增字段(对应原文档 3.1 节)=====
     # 节点 8 把 ASR 结果**同时**写进 state,供节点 16 翻译使用(不依赖 materials.texts)
     asr_segments_zh: list[SubtitleSegment]
