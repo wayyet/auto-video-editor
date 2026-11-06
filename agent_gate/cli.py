@@ -135,7 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("resume", help="【给人用】通过人工关卡后继续运行")
     _common(p)
     p.add_argument("--graph-factory", default=gf_default)
-    p.add_argument("--checkpoint", required=True, help="关卡标识,如 ① ② ③ ⓪")
+    p.add_argument("--checkpoint", required=True, help="关卡标识,如 ① ② ③")
     p.add_argument("--value", default="true", help="传给 interrupt 的值(JSON),默认 true")
     p.add_argument("--backend", default="gate", choices=["gate", "claude-cli", "mcode-cli", "stub"])
     p.add_argument("--force-no-tty", action="store_true",

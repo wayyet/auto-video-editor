@@ -1,9 +1,9 @@
 """Prompt 加载器 — Storyline 能力层统一资源入口。
 
 仓库提示词 Markdown 的唯一物理目录为 ``prompts/tasks/<kind>/<lang>/<part>.md``。
-本模块保留 Storyline 能力层的公开 API 和渲染策略；OpenStoryline vendored
-调用方继续使用 ``open_storyline.utils.prompts``。两套 Facade 的底层实现
-（路径解析 / UTF-8 读取 / 占位符替换 / 残留检测）收敛到
+本模块保留 Storyline 能力层的公开 API 和渲染策略（旧 OpenStoryline 侧 Facade
+``open_storyline.utils.prompts`` 已随 2026-11-04 单流水线架构收敛删除）。两套
+Facade 的底层实现（路径解析 / UTF-8 读取 / 占位符替换 / 残留检测）收敛到
 ``jy_common.prompt_core``（阶段 2B），本模块以宽松策略参数调用；
 缺失文件、占位符和缓存等既有语义不变。
 """

@@ -121,7 +121,8 @@ class PlanTimelineProData:
 
 
 def find_latest_session_dir(root: Path) -> Optional[Path]:
-    """在 ``<root>/`` 下找最新修改的子目录(UUID4 形式,agent_fastapi 产物命名)。"""
+    """在 ``<root>/`` 下找最新修改的子目录(UUID4 形式,旧聊天运行时 agent_fastapi
+    产物命名;该运行时已于 2026-11-04 删除,本函数现无运行时调用方)。"""
     if not root.exists():
         return None
     candidates = [p for p in root.iterdir() if p.is_dir()]

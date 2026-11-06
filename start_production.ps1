@@ -41,8 +41,9 @@
 [CmdletBinding()]
 param(
     [string]$ThreadId       = 'video-001',
-    [string]$SourceVideo    = 'E:\Documents\kuaishou\FireRed-OpenStoryline\.claude\skills\jianying-editor\assets\video.mp4',
-    [string]$InputsDir      = 'E:\Documents\kuaishou\FireRed-OpenStoryline\inputs',
+    # 默认素材/输入目录改为仓库内 inputs\(2026-11-04 单流水线收敛后不再指向 FireRed-OpenStoryline)
+    [string]$SourceVideo    = (Join-Path $PSScriptRoot 'inputs\30s.mp4'),
+    [string]$InputsDir      = (Join-Path $PSScriptRoot 'inputs'),
     [string]$InputsFileName = '30s.mp4',
     # Postgres 连接串(唯一真相)。localhost:5432 → 本地托管(起容器 + 对齐角色/库);
     # 其它 host/端口 → 外部模式(不碰本地容器)。
@@ -521,7 +522,7 @@ try {
     # 路径校验(主 venv 与入口文件)
     if (-not (Test-Path $VenvPy)) {
         Write-PhaseErr "找不到 $VenvPy"
-        Write-Phase "    请先跑 scripts\install.ps1 建主 .venv 并装依赖(含 fastapi/uvicorn)" 'Yellow'
+        Write-Phase "    请先建主 .venv 并装依赖: python -m venv .venv; .\.venv\Scripts\python.exe -m pip install -r requirements.txt(含 fastapi/uvicorn)" 'Yellow'
         exit 18
     }
     if (-not (Test-Path $MonitorScript)) {

@@ -6,8 +6,9 @@
   ``mcp_clients/openstoryline_client.py`` 的删除记录)。
 - 仅供人工核对「src/open_storyline/nodes/core_nodes/ 下节点接口」
   与 ``TOOL_REGISTRY`` 是否一致;新工具上下线时手工同步这里。
-- 真正部署时以仓库根 ``agent_fastapi.py`` 运行时 ``list_tools()`` 输出为准
-  (Phase 0 锁定必需工具清单已固化)。
+- 历史部署口径(已失效):曾以仓库根 ``agent_fastapi.py`` 运行时 ``list_tools()``
+  输出为准(Phase 0 锁定必需工具清单已固化)—— 该入口已随 2026-11-04 单流水线
+  架构收敛删除,本清单仅作静态记录。
 
 模块用途(历史):
 - 把 FireRed 的 MCP 工具清单(node_name / NodeMeta.name / require_prior_kind / 默认

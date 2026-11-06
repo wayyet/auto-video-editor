@@ -65,7 +65,9 @@ auto-video-editor/
 
 - Python 3.10+(本项目在 Python 3.13.11 实测通过)
 - Windows / macOS / Linux
-- 需可访问 `E:\Documents\kuaishou\langgraph-main` 源仓库(本机)
+- 依赖以 `requirements.txt`(公共 PyPI 钉版,含 `langgraph==1.2.9`)为准;无需本机
+  langgraph 源仓库。如需开发 langgraph 本体,可另用本机源仓库可编辑安装替代 ——
+  与钉版二选一,不要混装。
 
 ### 2.2 一键安装
 
@@ -74,10 +76,7 @@ cd C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\auto-video-editor
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install -e E:\Documents\kuaishou\langgraph-main\libs\langgraph `
-                      -e E:\Documents\kuaishou\langgraph-main\libs\checkpoint `
-                      -e E:\Documents\kuaishou\langgraph-main\libs\prebuilt `
-                      httpx pytest pytest-mock pytest-asyncio langgraph-checkpoint-postgres
+python -m pip install -r requirements.txt
 ```
 
 ### 2.3 验证安装
@@ -716,7 +715,7 @@ $env:STORYLINE_ENABLE_AI_TRANSITION = "0"
 
 - `docs/poc_report.md` — Week 2 阶段 E 第三方组件 PoC 评估报告
 - 实施计划:`《AI视频剪辑自动化工作流第3周详细实施计划.md》(同级目录)`
-- LangGraph 源码:`E:\Documents\kuaishou\langgraph-main`(本地 editable)
+- LangGraph 源码(可选,仅开发 langgraph 本体时使用):本机 `langgraph-main` 仓库;运行依赖以 `requirements.txt` 的 PyPI 钉版为准
 
 ## 9. 进一步阅读
 

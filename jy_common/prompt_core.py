@@ -14,11 +14,12 @@
 变量缺失 ``missing``        ``"raise"`` / ``"keep"``        OSL 抛 KeyError；SC 保留占位符原样
 ==========================  ==============================  ==============================
 
-运行环境说明（ADR-001）：``open_storyline`` 独立虚拟环境按仓库惯例以**仓库根
-为 cwd** 启动（``uvicorn agent_fastapi:app`` / ``python -m open_storyline.*``），
-``sys.path[0]`` 即仓库根，因此本模块在两个虚拟环境中都可导入；``src/`` 不在
-主项目运行时的 sys.path 上，故共享底层放在 ``jy_common`` 而非
-``src/open_storyline``。
+运行环境说明（ADR-001）：OpenStoryline 侧 Facade 与其独立虚拟环境已随
+2026-11-04 单流水线架构收敛删除（此前以仓库根为 cwd 启动
+``uvicorn agent_fastapi:app`` / ``python -m open_storyline.*``，``sys.path[0]``
+即仓库根）；严格语义策略现行无调用方，表中保留仅作语义记录与测试参数化。
+主项目运行时 ``sys.path[0]`` 为仓库根，``src/`` 不在其上，故共享底层放在
+``jy_common`` 而非原 ``src/open_storyline``。
 """
 
 from __future__ import annotations
