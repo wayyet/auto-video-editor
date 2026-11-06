@@ -224,6 +224,53 @@ def resolve_console_backend() -> str:
     return backend
 
 
+#: 创建台表单可显式指定的后端白名单;stub 永不可由浏览器指定(防静默 Stub)
+CONSOLE_FORM_BACKENDS: tuple[str, ...] = ("claude-cli", "mcode-cli")
+
+
+def resolve_launch_backend(requested: str | None) -> str:
+    """解析一次启动的生效后端:浏览器显式选择优先,否则回落 env 门禁。
+
+    - requested 非空:必须 ∈ ``CONSOLE_FORM_BACKENDS``,否则 400;显式选择
+      即生效(不要求 env 已配置 —— 显式真实后端不构成"静默使用 Stub")。
+    - requested 为空:走 :func:`resolve_console_backend`(env 门禁原样保留,
+      旧客户端/curl 不带字段时行为与历史版本完全一致)。
+    """
+    backend = str(requested or "").strip().lower()
+    if not backend:
+        return resolve_console_backend()
+    if backend not in CONSOLE_FORM_BACKENDS:
+        raise ConsoleLaunchError(
+            f"llm_backend 非法: {backend!r}(允许: {', '.join(CONSOLE_FORM_BACKENDS)})",
+            status_code=400,
+        )
+    return backend
+
+
+def resolve_record_backend(recorded: str | None) -> str:
+    """恢复路径解析后端:优先用运行记录里固化的值(同一运行必须同一后端)。
+
+    记录缺失/为空(旧任务)→ 回落 :func:`resolve_console_backend`(env 门禁);
+    记录里的 stub 仍需 ``CONSOLE_ALLOW_STUB`` 放行(创建时已放行,此处防御
+    配置漂移);非法值视为记录损坏 → 500。
+    """
+    backend = str(recorded or "").strip().lower()
+    if not backend:
+        return resolve_console_backend()
+    if backend not in CONSOLE_LAUNCH_BACKENDS:
+        raise ConsoleLaunchError(
+            f"运行记录 llm_backend 非法: {backend!r}"
+            f"(允许: {', '.join(CONSOLE_LAUNCH_BACKENDS)})",
+            status_code=500,
+        )
+    if backend == "stub" and not config.CONSOLE_ALLOW_STUB:
+        raise ConsoleLaunchError(
+            "运行记录后端为 stub,但 CONSOLE_ALLOW_STUB 未放行,拒绝恢复",
+            status_code=503,
+        )
+    return backend
+
+
 def _default_venv_python() -> str:
     """优先用仓库主 .venv 解释器(计划 §7.1);缺失时退回当前解释器。"""
     candidate = Path(__file__).resolve().parents[1] / ".venv" / "Scripts" / "python.exe"
@@ -301,6 +348,7 @@ def _build_launch_env(task_dir: Path) -> dict[str, str]:
 def start_run(
     task_dir: Path,
     *,
+    llm_backend: str | None = None,
     popen: Callable[..., Any] | None = None,
     pg_check: Callable[[], None] | None = None,
     venv_python: str | None = None,
@@ -310,6 +358,8 @@ def start_run(
     Args:
         task_dir: :func:`prepare_run` 生成的任务目录(console_run.json 必须存在
             且 ``status == "prepared"``)。
+        llm_backend: 浏览器显式选择的后端(仅 claude-cli/mcode-cli,API 层已
+            校验;空/None = 跟随服务端 CONSOLE_LLM_BACKEND 门禁)。
         popen: 进程创建函数(缺省 ``subprocess.Popen``;单测注入假实现)。
         pg_check: PG 预检函数(缺省 :func:`_check_postgres`;单测注入)。
         venv_python: 子进程解释器(缺省主 .venv)。
@@ -318,7 +368,8 @@ def start_run(
         更新后的运行记录(status="starting")。
 
     Raises:
-        ConsoleLaunchError: 409(重复启动/超并发)/ 503(PG 或后端门禁)/ 500(Popen 失败)。
+        ConsoleLaunchError: 400(llm_backend 非法)/ 409(重复启动/超并发)/
+            503(PG 或后端门禁)/ 500(Popen 失败)。
     """
     spawn = popen if popen is not None else _default_popen()
     check_pg = pg_check if pg_check is not None else _check_postgres
@@ -347,7 +398,7 @@ def start_run(
 
     # fail-closed 前置检查:任一不过就拒绝启动(不伪成功)
     check_pg()
-    backend = resolve_console_backend()
+    backend = resolve_launch_backend(llm_backend)
 
     # argv 数组 + shell=False(计划 §7.3);提示词在 initial_state.json 里,
     # 不进命令行;--skip-preflight 依据见阶段 0 契约文档 §6。
@@ -641,7 +692,8 @@ def resume_run(
 
     Raises:
         ConsoleLaunchError: 404(任务不存在)/ 409(非等待态/并发满/已在运行/
-            门禁不过)/ 503(PG)/ 500(Popen 失败)。
+            门禁不过)/ 503(PG 或记录 stub 未放行)/ 500(Popen 失败或记录
+            后端非法)。
     """
     spawn = popen if popen is not None else _default_popen()
     check_pg = pg_check if pg_check is not None else _check_postgres
@@ -684,8 +736,9 @@ def resume_run(
             )
 
     check_pg()
-    # 与 start_run 同一门禁:生产不静默 Stub;恢复的运行必须用同一真实后端
-    backend = resolve_console_backend()
+    # 恢复的运行必须用同一真实后端:优先取创建时固化的 record["llm_backend"];
+    # 记录缺失(旧任务)时回落 env 门禁(stub 仍需 CONSOLE_ALLOW_STUB 显式放行)
+    backend = resolve_record_backend(record.get("llm_backend"))
 
     repo_root = Path(__file__).resolve().parents[1]
     argv = [

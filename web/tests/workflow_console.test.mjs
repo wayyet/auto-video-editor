@@ -11,7 +11,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  CONSOLE_API_PATHS, DEFAULT_LIMITS, HISTORY_STATE_LABEL, acceptCreated, addFiles,
+  CONSOLE_API_PATHS, CONSOLE_BACKENDS, DEFAULT_LIMITS, HISTORY_STATE_LABEL, acceptCreated, addFiles,
   applyEvent, beginUpload, buildCreateFormData, canCancel, canResume, canSubmit,
   createConsoleState, createMonitorState, failSubmission, filterHistoryRows,
   formatBytes, formatDuration, friendlyError, historyActions, makeFileEntry,
@@ -154,6 +154,30 @@ test("buildCreateFormData 字段与冻结契约一致", () => {
   const videos = fd.getAll("videos");
   assert.equal(videos.length, 2);
   assert.deepEqual([...videos.map((f) => f.name)].sort(), ["a.mp4", "b.mov"]);
+});
+
+test("Agent 后端选择:CONSOLE_BACKENDS 冻结契约 + validateParams/buildCreateFormData", () => {
+  // 白名单与后端 CONSOLE_FORM_BACKENDS 一致(stub 永不可由浏览器指定)
+  assert.deepEqual([...CONSOLE_BACKENDS], ["claude-cli", "mcode-cli"]);
+
+  const base = { prompt: "p", target_duration_ms: 35000, ratio: "9:16", lang: "zh" };
+  // 缺省/空串 = 跟随服务端默认,合法
+  assert.equal(validateParams(base, SMALL_LIMITS).backend, "");
+  assert.equal(validateParams({ ...base, llm_backend: "" }, SMALL_LIMITS).backend, "");
+  // 白名单内合法
+  assert.equal(validateParams({ ...base, llm_backend: "claude-cli" }, SMALL_LIMITS).backend, "");
+  assert.equal(validateParams({ ...base, llm_backend: "mcode-cli" }, SMALL_LIMITS).backend, "");
+  // 白名单外(含 stub)报错
+  assert.match(validateParams({ ...base, llm_backend: "stub" }, SMALL_LIMITS).backend, /Agent/);
+  assert.match(validateParams({ ...base, llm_backend: "gpt-4" }, SMALL_LIMITS).backend, /Agent/);
+
+  // FormData:非空才追加(旧契约向后兼容:不带字段 = 服务端默认)
+  const state = createConsoleState();
+  addFiles(state, [makeFileEntry(new File([new Uint8Array([1])], "a.mp4", { lastModified: 1 }))]);
+  const fdWith = buildCreateFormData(state, { ...base, llm_backend: "claude-cli" });
+  assert.equal(fdWith.get("llm_backend"), "claude-cli");
+  const fdWithout = buildCreateFormData(state, base);
+  assert.equal(fdWithout.get("llm_backend"), null);
 });
 
 test("friendlyError:已知码给稳定提示,未知码兜底,detail 截断", () => {

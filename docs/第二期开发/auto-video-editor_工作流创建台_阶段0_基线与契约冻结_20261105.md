@@ -87,8 +87,13 @@ video_workflow_agent_gate_*)—— agent_gate 的 checkpointer 已统一为 Post
 | `target_duration_ms` | integer | 否 | 35000 | > 0 且 ≤ 600000 |
 | `ratio` | string | 否 | `9:16` | ∈ {9:16, 16:9, 4:3} |
 | `lang` | string | 否 | `zh` | ∈ {zh, en} |
+| `llm_backend` | string | 否 | 空(跟随服务端) | **2026-11-07 增补**:空 = 跟随服务端 `CONSOLE_LLM_BACKEND` 门禁;非空 ∈ {claude-cli, mcode-cli}(显式选择即生效,env 未配置也可启动);stub/gate 不可由浏览器指定 |
 
-LLM 后端由服务端环境决定，**不接受浏览器指定**。
+LLM 后端原为服务端环境决定、不接受浏览器指定;2026-11-07 起创建台页面
+新增"04 · 执行 Agent"下拉(claude-cli / mcode-cli),经 `llm_backend` 字段
+per-run 覆盖(`web/console_service.py:resolve_launch_backend`),生效值固化进
+`console_run.json` 的 `llm_backend`,恢复时优先沿用(`resolve_record_backend`,
+同一运行必须同一后端)。请求不带该字段时历史行为完全不变。
 
 ### 2.2 响应
 
@@ -109,7 +114,7 @@ LLM 后端由服务端环境决定，**不接受浏览器指定**。
 
 | HTTP | 场景 |
 |---|---|
-| 400 | 参数缺失/非法（prompt 空、ratio/lang 非法、target_duration_ms 越界、文件数 0） |
+| 400 | 参数缺失/非法（prompt 空、ratio/lang 非法、target_duration_ms 越界、文件数 0、llm_backend 不在表单白名单〔2026-11-07 增补〕） |
 | 403 | Origin 校验失败（同源校验，仿 `web/api_workflow.py:_verify_same_origin`） |
 | 409 | 活跃运行数超过 `CONSOLE_MAX_CONCURRENT_RUNS`（阶段 2 起） |
 | 413 | 单文件或总量超限 |

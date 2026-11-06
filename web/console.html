@@ -189,12 +189,24 @@
         历史任务与清除缓存已移至监控首页;执行的完整节点轨迹请在监控首页查看,
         等待人工关卡属正常状态,恢复操作见监控页指引。
       </div>
+
+      <h2>04 · 执行 Agent</h2>
+      <div class="params">
+        <label>Agent 智能体
+          <select id="backendSelect">
+            <option value="mcode-cli">mcode-cli</option>
+            <option value="claude-cli">claude-cli</option>
+          </select>
+        </label>
+      </div>
+      <div class="hint">选择驱动本次工作流执行的 Agent 智能体;默认跟随服务端配置(mcode-cli),选择记忆在本机,创建时随请求下发。</div>
     </div>
 
     <div id="panel">
       <h2>本次工作流</h2>
       <div id="threadLine">Thread ID:—</div>
       <div id="runMeta">执行状态:尚未启动</div>
+      <div id="agentLine" class="hint" style="display:none"></div>
       <div id="counts"></div>
       <button class="btn" id="btnCancel" style="display:none; margin-top:6px" title="终止本服务实例管理的运行子进程">取消运行</button>
 
@@ -251,9 +263,10 @@
     const dropZone = $("dropZone"), fileInput = $("fileInput"), fileMeta = $("fileMeta");
     const fileTable = $("fileTable"), fileBody = $("fileBody"), fileErrors = $("fileErrors");
     const durationInput = $("durationInput"), ratioSelect = $("ratioSelect"), langSelect = $("langSelect");
+    const backendSelect = $("backendSelect");
     const btnCreate = $("btnCreate"), formMeta = $("formMeta");
     const progressWrap = $("progressWrap"), progressBar = $("progressBar"), progressText = $("progressText");
-    const threadLine = $("threadLine"), videoSummary = $("videoSummary");
+    const threadLine = $("threadLine"), videoSummary = $("videoSummary"), agentLine = $("agentLine");
     const btnCancel = $("btnCancel");
     const resumeBox = $("resumeBox"), resumeText = $("resumeText");
     const resumeCheckpoint = $("resumeCheckpoint"), resumeValue = $("resumeValue");
@@ -268,6 +281,20 @@
     let source = null;
     let csrfToken = null;
     let resumeGuidanceShown = false;
+
+    // ------------------------------------------------------------------
+    // Agent 智能体选择(localStorage 记忆上次选择;模式同旧 openstoryline
+    // 聊天页 data-os-persist,持久化键先例:wf_monitor_theme / wf_monitor_thread)
+    // ------------------------------------------------------------------
+    const BACKEND_STORAGE_KEY = "wf_console_backend";
+    const BACKEND_CHOICES = Array.from(backendSelect.options).map((o) => o.value);
+    try {
+      const savedBackend = localStorage.getItem(BACKEND_STORAGE_KEY);
+      if (BACKEND_CHOICES.includes(savedBackend)) backendSelect.value = savedBackend;
+    } catch (e) {}
+    backendSelect.addEventListener("change", () => {
+      try { localStorage.setItem(BACKEND_STORAGE_KEY, backendSelect.value); } catch (e) {}
+    });
 
     // ------------------------------------------------------------------
     // 服务端限制(config 端点;失败回退内置默认值)
@@ -486,6 +513,7 @@
         target_duration_ms: Math.round(Number(durationInput.value || 0) * 1000),
         ratio: ratioSelect.value,
         lang: langSelect.value,
+        llm_backend: backendSelect.value,
       };
     }
     async function ensureCsrf() {
@@ -526,7 +554,7 @@
       const params = readParams();
       if (!canSubmit(consoleState, params, limits)) {
         const errs = validateParams(params, limits);
-        const first = [errs.prompt, errs.duration, errs.ratio, errs.lang].find(Boolean)
+        const first = [errs.prompt, errs.duration, errs.ratio, errs.lang, errs.backend].find(Boolean)
           || (consoleState.files.length ? "" : "请至少导入一个视频");
         renderFormMeta(first || "无法提交", true);
         return;
@@ -561,6 +589,8 @@
     function subscribeToThread(tid, eventsUrl) {
       liveThreadId = tid;
       threadLine.textContent = `Thread ID:${tid}`;
+      agentLine.textContent = `执行 Agent:${backendSelect.value}`;
+      agentLine.style.display = "";
       monitorLink.href = CONSOLE_API_PATHS.monitorPage(tid);
       monitorLink.style.display = "";
       try { localStorage.setItem("wf_monitor_thread", tid); } catch (e) {}

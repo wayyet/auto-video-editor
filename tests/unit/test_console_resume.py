@@ -189,6 +189,53 @@ class TestResumeRunService:
                        pg_check=lambda: None)
         assert ei.value.status_code == 503
 
+    # ------------------------------------------------------------------
+    # 2026-11-07:恢复优先用创建时固化的 record["llm_backend"]
+    # ------------------------------------------------------------------
+
+    def test_resume_uses_recorded_backend(self, waiting_env, monkeypatch):
+        """记录固化 claude-cli、env 已漂移为 mcode-cli → 恢复仍用 claude-cli。"""
+        result, root = waiting_env
+        record_path = cs.console_run_json_path(result["task_dir"])
+        stored = json.loads(record_path.read_text(encoding="utf-8"))
+        stored["llm_backend"] = "claude-cli"
+        cs._write_run_json(result["task_dir"], stored)
+        captured: dict = {}
+
+        def fake_popen(argv, **kwargs):
+            captured["argv"] = argv
+            return FakeProc(4321)
+
+        monkeypatch.setattr(config, "CONSOLE_LLM_BACKEND", "mcode-cli")
+        resume_run(result["thread_id"], popen=fake_popen, pg_check=lambda: None)
+        argv = captured["argv"]
+        assert argv[argv.index("--llm-backend") + 1] == "claude-cli"
+
+    def test_resume_recorded_stub_blocked_without_allow(self, waiting_env, monkeypatch):
+        """记录固化 stub 但 ALLOW_STUB 已收回 → 503(防御配置漂移)。"""
+        result, root = waiting_env
+        record_path = cs.console_run_json_path(result["task_dir"])
+        stored = json.loads(record_path.read_text(encoding="utf-8"))
+        stored["llm_backend"] = "stub"
+        cs._write_run_json(result["task_dir"], stored)
+        monkeypatch.setattr(config, "CONSOLE_ALLOW_STUB", False)
+        with pytest.raises(ConsoleLaunchError) as ei:
+            resume_run(result["thread_id"], popen=lambda a, **k: FakeProc(),
+                       pg_check=lambda: None)
+        assert ei.value.status_code == 503
+
+    def test_resume_recorded_invalid_backend_500(self, waiting_env, monkeypatch):
+        """记录里出现白名单外后端 = 记录损坏 → 500,不回落 env(避免静默换后端)。"""
+        result, root = waiting_env
+        record_path = cs.console_run_json_path(result["task_dir"])
+        stored = json.loads(record_path.read_text(encoding="utf-8"))
+        stored["llm_backend"] = "gpt-4"
+        cs._write_run_json(result["task_dir"], stored)
+        with pytest.raises(ConsoleLaunchError) as ei:
+            resume_run(result["thread_id"], popen=lambda a, **k: FakeProc(),
+                       pg_check=lambda: None)
+        assert ei.value.status_code == 500
+
     def test_concurrency_limit_409(self, waiting_env, monkeypatch):
         result, root = waiting_env
         monkeypatch.setattr(config, "CONSOLE_MAX_CONCURRENT_RUNS", 1)

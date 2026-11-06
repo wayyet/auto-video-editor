@@ -51,6 +51,13 @@ export const CONSOLE_API_PATHS = Object.freeze({
 });
 
 // ---------------------------------------------------------------------------
+// Agent 智能体白名单(与后端 web/console_service.py CONSOLE_FORM_BACKENDS
+// 冻结契约一致;stub 永不可由浏览器指定)
+// ---------------------------------------------------------------------------
+
+export const CONSOLE_BACKENDS = Object.freeze(["claude-cli", "mcode-cli"]);
+
+// ---------------------------------------------------------------------------
 // 客户端限制默认值(config 端点不可用时的兜底;与服务端 config.py 默认一致)
 // ---------------------------------------------------------------------------
 
@@ -147,12 +154,13 @@ export function removeFile(state, index) {
 // ---------------------------------------------------------------------------
 
 /**
- * 校验提交参数;返回错误对象 { prompt, duration, ratio, lang },全空表示通过。
- * params: { prompt, target_duration_ms, ratio, lang }
+ * 校验提交参数;返回错误对象 { prompt, duration, ratio, lang, backend },全空表示通过。
+ * params: { prompt, target_duration_ms, ratio, lang, llm_backend? }
+ * llm_backend 为空 = 跟随服务端默认(合法);非空必须 ∈ CONSOLE_BACKENDS。
  */
 export function validateParams(params, limits) {
   const lim = { ...DEFAULT_LIMITS, ...(limits || {}) };
-  const errors = { prompt: "", duration: "", ratio: "", lang: "" };
+  const errors = { prompt: "", duration: "", ratio: "", lang: "", backend: "" };
   const prompt = String((params && params.prompt) || "").trim();
   if (!prompt) errors.prompt = "请输入剪辑提示词";
   else if (prompt.length > lim.prompt_max_chars) {
@@ -164,6 +172,8 @@ export function validateParams(params, limits) {
   }
   if (!(lim.ratios || []).includes(params && params.ratio)) errors.ratio = "画幅比例非法";
   if (!(lim.langs || []).includes(params && params.lang)) errors.lang = "输出语言非法";
+  const backend = String((params && params.llm_backend) || "").trim();
+  if (backend && !CONSOLE_BACKENDS.includes(backend)) errors.backend = "Agent 智能体非法";
   return errors;
 }
 
@@ -243,6 +253,9 @@ export function buildCreateFormData(state, params) {
   fd.append("target_duration_ms", String(Math.round(Number(params && params.target_duration_ms))));
   fd.append("ratio", String((params && params.ratio) || ""));
   fd.append("lang", String((params && params.lang) || ""));
+  // Agent 智能体选择(2026-11-07):非空才下发,保持旧契约向后兼容(缺省 = 服务端默认)
+  const backend = String((params && params.llm_backend) || "").trim();
+  if (backend) fd.append("llm_backend", backend);
   return fd;
 }
 

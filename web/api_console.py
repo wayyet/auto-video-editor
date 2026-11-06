@@ -51,7 +51,12 @@ from starlette.concurrency import run_in_threadpool
 import config  # 运行时读 config.CONSOLE_*(可 monkeypatch),不在 import 期固化值
 from web.api_workflow import _verify_same_origin
 from web import cache_cleaner, console_service
-from web.console_service import ConsoleLaunchError, prepare_run, start_run
+from web.console_service import (
+    CONSOLE_FORM_BACKENDS,
+    ConsoleLaunchError,
+    prepare_run,
+    start_run,
+)
 from web.console_uploads import ALLOWED_VIDEO_EXTS, ConsoleUploadError, validate_thread_id
 from web.human_gate_payload import COMMON_RESUME_NOTE
 
@@ -171,12 +176,14 @@ def create_run(
     target_duration_ms: Optional[int] = Form(None),
     ratio: str = Form("9:16"),
     lang: str = Form("zh"),
+    llm_backend: str = Form(""),
 ) -> JSONResponse:
     """创建并启动一次工作流任务(第二期阶段 2 语义)。
 
     成功返回 202 与 thread_id,`state="starting"`(子进程已创建,执行不等待);
     同步 def 由 FastAPI 放线程池跑,落盘/Popen/PG 预检不阻塞事件循环。
-    LLM 后端等运行环境只由服务端配置决定,不接受浏览器字段。
+    llm_backend 可选(仅 claude-cli/mcode-cli,浏览器显式选择即生效);缺省
+    跟随服务端 CONSOLE_LLM_BACKEND 门禁;stub 不可由浏览器指定。
     """
     # 第二道防线:跨源浏览器请求直接拒绝(curl/同源不带 Origin 时放行)
     _verify_same_origin(request)
@@ -208,6 +215,12 @@ def create_run(
         raise _bad_request(f"ratio 非法: {ratio!r}(允许: {', '.join(ALLOWED_RATIOS)})")
     if lang not in ALLOWED_LANGS:
         raise _bad_request(f"lang 非法: {lang!r}(允许: {', '.join(ALLOWED_LANGS)})")
+    backend = str(llm_backend or "").strip().lower()
+    if backend and backend not in CONSOLE_FORM_BACKENDS:
+        raise _bad_request(
+            f"llm_backend 非法: {backend!r}(允许: {', '.join(CONSOLE_FORM_BACKENDS)};"
+            "stub 不可由浏览器指定)"
+        )
 
     # --- 落盘 + 构建 State(阶段 1;失败整体回滚任务目录) ---
     try:
@@ -223,7 +236,7 @@ def create_run(
 
     # --- 启动子进程(阶段 2;失败保留任务目录供排障,不伪成功) ---
     try:
-        record = start_run(result["task_dir"])
+        record = start_run(result["task_dir"], llm_backend=backend or None)
     except ConsoleLaunchError as e:
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e
 

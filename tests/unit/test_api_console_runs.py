@@ -109,6 +109,27 @@ class TestHappyPath:
         assert (console_env / tid / "inputs" / "0001.mp4").exists()
         assert (console_env / tid / "inputs" / "0002.mov").exists()
 
+    def test_llm_backend_override_recorded(self, console_env, monkeypatch):
+        """2026-11-07:表单 llm_backend 显式选择覆盖 env 默认,argv 与 record 同步。"""
+        captured = {}
+
+        def capturing_popen(argv, **kwargs):
+            captured["argv"] = list(argv)
+            return _FakeProc(4321)
+
+        monkeypatch.setattr("web.console_service._default_popen", lambda: capturing_popen)
+        resp = client.post(
+            "/api/console/runs",
+            data={"prompt": "p", "llm_backend": "claude-cli"},
+            files=_files(("a.mp4", b"x")),
+        )
+        assert resp.status_code == 202, resp.text
+        tid = resp.json()["thread_id"]
+        record = json.loads((console_env / tid / "console_run.json").read_text("utf-8"))
+        assert record["llm_backend"] == "claude-cli"
+        argv = captured["argv"]
+        assert argv[argv.index("--llm-backend") + 1] == "claude-cli"
+
     def test_prompt_never_in_argv(self, console_env):
         """提示词只进 initial_state.json,绝不进命令行(计划 §7.3)。"""
         resp = client.post(
@@ -188,6 +209,16 @@ class TestParamValidation400:
             files=_files(("a.mp4", b"x")),
         )
         assert resp.status_code == 400
+
+    @pytest.mark.parametrize("backend", ["stub", "gate", "gpt-4", "claude cli"])
+    def test_bad_llm_backend(self, console_env, backend):
+        """stub/gate 等不在表单白名单;浏览器只允许 claude-cli / mcode-cli。"""
+        resp = client.post(
+            "/api/console/runs", data={"prompt": "p", "llm_backend": backend},
+            files=_files(("a.mp4", b"x")),
+        )
+        assert resp.status_code == 400
+        assert "llm_backend" in resp.json()["detail"]
 
     def test_empty_ratio_lang_fall_back_to_defaults(self, console_env):
         """空串表单值按 FastAPI 语义回退契约默认值(9:16 / zh)。"""

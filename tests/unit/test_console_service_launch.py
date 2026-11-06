@@ -116,6 +116,57 @@ class TestStartRunHappyPath:
         assert record["thread_id"] in cs._ACTIVE_PROCS
 
 
+class TestLaunchBackendOverride:
+    """2026-11-07:创建台表单 llm_backend 显式选择(start_run 新 kwarg)。"""
+
+    def test_explicit_backend_overrides_env(self, prepared, monkeypatch):
+        captured: dict = {}
+
+        def fake_popen(argv, **kwargs):
+            captured["argv"] = argv
+            return FakeProc(4321)
+
+        monkeypatch.setattr(config, "CONSOLE_LLM_BACKEND", "stub")
+        record = start_run(
+            prepared["task_dir"], llm_backend="claude-cli",
+            popen=fake_popen, pg_check=lambda: None,
+        )
+        argv = captured["argv"]
+        assert argv[argv.index("--llm-backend") + 1] == "claude-cli"
+        assert record["llm_backend"] == "claude-cli"
+
+    def test_explicit_backend_works_without_env(self, prepared, monkeypatch):
+        """env 未配置时,显式真实后端仍可启动(不构成静默 Stub)。"""
+        monkeypatch.setattr(config, "CONSOLE_LLM_BACKEND", "")
+        record = start_run(
+            prepared["task_dir"], llm_backend="mcode-cli",
+            popen=lambda a, **k: FakeProc(7), pg_check=lambda: None,
+        )
+        assert record["llm_backend"] == "mcode-cli"
+
+    def test_empty_requested_falls_back_to_env(self, prepared):
+        """不传/传空 = 历史行为:走 env 门禁(fixture 里 env=stub 且已放行)。"""
+        record = start_run(
+            prepared["task_dir"], llm_backend=None,
+            popen=lambda a, **k: FakeProc(7), pg_check=lambda: None,
+        )
+        assert record["llm_backend"] == "stub"
+
+    @pytest.mark.parametrize("backend", ["gpt-4", "gate", "stub", "claude cli"])
+    def test_invalid_requested_rejected_400_no_popen(self, prepared, backend):
+        """白名单外(含 stub)一律 400,且绝不 Popen。"""
+
+        def must_not_spawn(argv, **kwargs):  # noqa: ARG001
+            raise AssertionError(f"不应启动子进程,却收到了 {argv!r}")
+
+        with pytest.raises(ConsoleLaunchError) as ei:
+            start_run(
+                prepared["task_dir"], llm_backend=backend,
+                popen=must_not_spawn, pg_check=lambda: None,
+            )
+        assert ei.value.status_code == 400
+
+
 class TestLaunchGates:
     def test_pg_down_503_and_no_popen(self, prepared, monkeypatch):
         called = {"popen": False}
