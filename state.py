@@ -177,6 +177,9 @@ class WorkflowState(TypedDict, total=False):
 
     # 汇合节点 QA 闸门结果(join_before_delivery 写)
     join_qa_issues: NotRequired[list[str]]
+    # 2026-11-07 阶段 4:结构化 QA 报告(draft_ops.draft_integrity.build_join_qa_report
+    # 的产物 + 节点级汇总);字符串版 join_qa_issues 保持兼容,结构化明细在此。
+    join_qa_report: NotRequired[Optional[dict]]
 
     # ===== Week 5 新增字段(对齐第 5 周计划 §1.1 / §4.1)=====
     # 节点 17 写,验收脚本读。Week 5 仍是 stub,产出 en_dub.wav 占位空 wav。
@@ -277,3 +280,11 @@ class WorkflowState(TypedDict, total=False):
     assembly_repair_evidence_path: NotRequired[Optional[str]]
     # node_05 宽高比归一化后的素材路径;None = 比例本就对齐,未做裁切。
     draft_source_normalized_path: NotRequired[Optional[str]]
+
+    # ===== 2026-11-07 阶段 6:最终 MP4 导出(人工关卡与剪映草稿导入计划)=====
+    # export_final_video 节点写:"succeeded" | "failed" | "skipped"(开关关闭)
+    # | "disabled"(显式禁用)。导出失败必须显式落在这里 —— 不把"草稿文件存在"
+    # 当成"成片交付成功"(计划 §8 阶段 6 验收标准)。
+    final_export_status: NotRequired[Optional[str]]
+    # 导出结构化报告:路径 / sha256 / 媒体探测结果 / 保真度说明 / 失败原因。
+    final_export_report: NotRequired[Optional[dict]]

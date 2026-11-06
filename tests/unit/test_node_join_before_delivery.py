@@ -1,4 +1,4 @@
-"""join_before_delivery 单测 — 3 种 QA 场景。"""
+"""join_before_delivery 单测 — 3 种 QA 场景 + 阶段 4 深度 QA。"""
 
 from __future__ import annotations
 
@@ -27,6 +27,9 @@ def test_join_happy_path_no_issues() -> None:
     out = join_before_delivery(state)
     assert out["join_qa_issues"] == []
     assert "join_before_delivery_done" in out["status_log"]
+    # 阶段 4:结构化报告存在,且"无英文分支"场景记 skipped(上游降级,不当缺陷)
+    assert out["join_qa_report"]["skipped"] is True
+    assert out["join_qa_report"]["passed"] is True
 
 
 def test_join_missing_en_cover() -> None:
@@ -88,12 +91,13 @@ def test_join_preserves_existing_state() -> None:
     # Week 4:delta-only 返回;LangGraph 运行时只更新返回的 keys
     assert "join_before_delivery_done" in out["status_log"]
     assert "join_qa_issues" in out
+    assert "join_qa_report" in out
     # 注:delta 返回不含 draft_path 是预期的;LangGraph 合并时保留
     assert "draft_path" not in out  # 验证是 delta-only
 
 
 # ---------------------------------------------------------------------------
-# K2=B:英文草稿尾链四项检查
+# K2=B:英文草稿尾链四项检查(+ 阶段 4 扩到中文侧)
 # ---------------------------------------------------------------------------
 def _ok_covers() -> list[dict]:
     return [
@@ -103,53 +107,109 @@ def _ok_covers() -> list[dict]:
     ]
 
 
-def _en_draft(**materials_and_tracks) -> dict:
-    return {
+def _healthy_draft(dir_path: Path, *, audio_volume: float | None = 0.35) -> dict:
+    """构造一份能通过阶段 4 深度 QA 的完整草稿(素材用真实临时文件)。
+
+    返回 draft dict 并把双文件写进 ``dir_path``(目录自动创建)。
+    """
+    src = dir_path.parent / f"src_{dir_path.name}.mp4"
+    src.write_bytes(b"\x00\x00\x00")  # 只需存在;深度 QA 只查 is_file
+    bgm = dir_path.parent / f"bgm_{dir_path.name}.mp3"
+    bgm.write_bytes(b"\x00\x00\x00")
+    audio_material: dict = {"id": "audio-bgm-1", "type": "audio", "path": str(bgm)}
+    if audio_volume is not None:
+        audio_material["volume"] = audio_volume
+    draft = {
         "canvas_config": {"width": 1080, "height": 1920},
         "duration": 35_000_000,
-        "materials": materials_and_tracks.get("materials", {}),
-        "tracks": materials_and_tracks.get("tracks", []),
-    }
-
-
-def _write_en(tmp_path: Path, draft: dict) -> Path:
-    en_dir = tmp_path / "en_branch"
-    en_dir.mkdir(parents=True, exist_ok=True)
-    f = en_dir / "draft_content.json"
-    f.write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
-    return en_dir
-
-
-def test_join_en_draft_complete_no_issues(tmp_path: Path) -> None:
-    """英文草稿尾链齐全(转场/特效/贴纸/BGM 音量)→ 无新增 issue。"""
-    en_dir = _write_en(tmp_path, _en_draft(
-        materials={
+        "materials": {
+            "videos": [{"id": "video-1", "type": "video", "path": str(src)}],
+            "audios": [audio_material],
             "transitions": [{"id": "transition-1"}],
             "video_effects": [{"id": "vfx-default"}],
             "stickers": [{"id": "sticker-t1"}],
-            "audios": [{"id": "audio-bgm-1", "volume": 0.35}],
+            "texts": [
+                {
+                    "id": "text-1",
+                    "content": "你好世界",
+                    "target_timerange": {"start": 0, "duration": 1_000_000},
+                }
+            ],
         },
-        tracks=[{"type": "audio", "segments": [{"id": "audio-bgm-1"}]}],
-    ))
+        "tracks": [
+            {
+                "type": "video",
+                "id": "track-video-1",
+                "segments": [
+                    {
+                        "id": "segment-1",
+                        "material_id": "video-1",
+                        "source_timerange": {"start": 0, "duration": 1_000_000},
+                        "target_timerange": {"start": 0, "duration": 1_000_000},
+                    }
+                ],
+            },
+            {
+                "type": "audio",
+                "id": "track-audio-1",
+                "segments": [{"id": "audio-bgm-1", "material_id": "audio-bgm-1"}],
+            },
+        ],
+    }
+    dir_path.mkdir(parents=True, exist_ok=True)
+    serialized = json.dumps(draft, ensure_ascii=False)
+    (dir_path / "draft_content.json").write_text(serialized, encoding="utf-8")
+    (dir_path / "draft_info.json").write_text(serialized, encoding="utf-8")
+    return draft
+
+
+def _state_with_drafts(tmp_path: Path, **overrides) -> dict:
+    """健康 zh + en 双草稿场景的基准 state(可按需覆盖字段)。"""
+    zh_dir = tmp_path / "zh"
+    en_dir = tmp_path / "en_branch"
+    _healthy_draft(zh_dir)
+    _healthy_draft(en_dir)
     state = {
         "covers": _ok_covers(),
         "subtitle_srt_path": "/p/subtitle_en.srt",
-        "draft_path": str(tmp_path / "zh" / "draft_content.json"),
+        "draft_path": str(zh_dir / "draft_content.json"),
         "draft_dir_en_branch": str(en_dir),
         "status_log": [],
         "error_log": [],
     }
+    state.update(overrides)
+    return state
+
+
+def test_join_en_draft_complete_no_issues(tmp_path: Path) -> None:
+    """中英双草稿尾链齐全 + 深度 QA 全过 → 无 issue,报告 passed。"""
+    state = _state_with_drafts(tmp_path)
     out = join_before_delivery(state)
     assert out["join_qa_issues"] == [], out["join_qa_issues"]
+    report = out["join_qa_report"]
+    assert report["skipped"] is False
+    assert report["passed"] is True
+    for name in ("dual_files", "video_track", "track_references", "material_paths", "texts"):
+        assert name in report["zh"]["checks"], report["zh"]["checks"]
+        assert name in report["en"]["checks"], report["en"]["checks"]
+    assert report["mirror"]["matched"] is True
+    assert "delivery_qa_ok" in out["status_log"]
 
 
 def test_join_en_draft_missing_tail_chain_items(tmp_path: Path) -> None:
     """英文草稿转场/特效/贴纸全空 → 报 3 条 issue。"""
-    en_dir = _write_en(tmp_path, _en_draft())
+    en_dir = tmp_path / "en_branch"
+    _healthy_draft(en_dir)
+    # 覆写成尾链全空的英文草稿(深度 QA 会另报视频轨为空,不影响本断言)
+    bare = json.dumps({"materials": {}, "tracks": []}, ensure_ascii=False)
+    (en_dir / "draft_content.json").write_text(bare, encoding="utf-8")
+    (en_dir / "draft_info.json").write_text(bare, encoding="utf-8")
+    zh_dir = tmp_path / "zh"
+    _healthy_draft(zh_dir)
     state = {
         "covers": _ok_covers(),
         "subtitle_srt_path": "/p/subtitle_en.srt",
-        "draft_path": str(tmp_path / "zh" / "draft_content.json"),
+        "draft_path": str(zh_dir / "draft_content.json"),
         "draft_dir_en_branch": str(en_dir),
         "status_log": [],
         "error_log": [],
@@ -163,32 +223,20 @@ def test_join_en_draft_missing_tail_chain_items(tmp_path: Path) -> None:
 
 def test_join_en_draft_audio_track_without_volume(tmp_path: Path) -> None:
     """英文草稿有音轨但没写音量 → 报"音量未写入"。"""
-    en_dir = _write_en(tmp_path, _en_draft(
-        materials={"audios": [{"id": "audio-bgm-1"}]},
-        tracks=[{"type": "audio", "segments": [{"id": "audio-bgm-1"}]}],
-    ))
-    state = {
-        "covers": _ok_covers(),
-        "subtitle_srt_path": "/p/subtitle_en.srt",
-        "draft_path": str(tmp_path / "zh" / "draft_content.json"),
-        "draft_dir_en_branch": str(en_dir),
-        "status_log": [],
-        "error_log": [],
-    }
+    state = _state_with_drafts(tmp_path)
+    en_dir = Path(state["draft_dir_en_branch"])
+    draft = json.loads((en_dir / "draft_content.json").read_text(encoding="utf-8"))
+    draft["materials"]["audios"][0].pop("volume")
+    serialized = json.dumps(draft, ensure_ascii=False)
+    (en_dir / "draft_content.json").write_text(serialized, encoding="utf-8")
+    (en_dir / "draft_info.json").write_text(serialized, encoding="utf-8")
     out = join_before_delivery(state)
     assert any("音量未写入" in i for i in out["join_qa_issues"]), out["join_qa_issues"]
 
 
 def test_join_en_draft_missing_file_is_reported(tmp_path: Path) -> None:
     """英文草稿目录指向不存在的路径 → 报"英文分支草稿缺失"。"""
-    state = {
-        "covers": _ok_covers(),
-        "subtitle_srt_path": "/p/subtitle_en.srt",
-        "draft_path": str(tmp_path / "zh" / "draft_content.json"),
-        "draft_dir_en_branch": str(tmp_path / "nope"),
-        "status_log": [],
-        "error_log": [],
-    }
+    state = _state_with_drafts(tmp_path, draft_dir_en_branch=str(tmp_path / "nope"))
     out = join_before_delivery(state)
     assert any("英文分支草稿缺失" in i for i in out["join_qa_issues"]), out["join_qa_issues"]
 
@@ -204,3 +252,117 @@ def test_join_skips_en_checks_when_no_en_branch() -> None:
     }
     out = join_before_delivery(state)
     assert out["join_qa_issues"] == []
+
+
+# ---------------------------------------------------------------------------
+# 阶段 4:深度 QA(中文侧 / 素材路径 / 根索引)
+# ---------------------------------------------------------------------------
+def test_join_zh_draft_file_missing_reported(tmp_path: Path) -> None:
+    """中文草稿文件缺失(draft_path 指向不存在目录)→ 中文侧 issue + QA 失败。"""
+    state = _state_with_drafts(
+        tmp_path, draft_path=str(tmp_path / "ghost" / "draft_content.json")
+    )
+    out = join_before_delivery(state)
+    joined = " ".join(out["join_qa_issues"])
+    assert "中文主草稿不可读" in joined
+    assert out["join_qa_report"]["passed"] is False
+    assert any(i["draft"] == "zh" for i in out["join_qa_report"]["issues"])
+
+
+def test_join_dual_files_mismatch_reported(tmp_path: Path) -> None:
+    """draft_content.json 与 draft_info.json 内容不一致 → 深度 QA 报错。"""
+    state = _state_with_drafts(tmp_path)
+    en_dir = Path(state["draft_dir_en_branch"])
+    info = json.loads((en_dir / "draft_content.json").read_text(encoding="utf-8"))
+    info["duration"] = 1
+    (en_dir / "draft_info.json").write_text(json.dumps(info), encoding="utf-8")
+    out = join_before_delivery(state)
+    assert any("双文件" in i and "不一致" in i for i in out["join_qa_issues"]), out["join_qa_issues"]
+    assert out["join_qa_report"]["passed"] is False
+
+
+def test_join_missing_material_file_fails_qa(tmp_path: Path) -> None:
+    """素材路径指向不存在的文件 → QA 明确失败,不报告假成功(计划阶段 4 验收)。"""
+    state = _state_with_drafts(tmp_path)
+    zh_dir = Path(state["draft_path"]).parent
+    draft = json.loads((zh_dir / "draft_content.json").read_text(encoding="utf-8"))
+    draft["materials"]["videos"][0]["path"] = str(tmp_path / "ghost.mp4")
+    serialized = json.dumps(draft, ensure_ascii=False)
+    (zh_dir / "draft_content.json").write_text(serialized, encoding="utf-8")
+    (zh_dir / "draft_info.json").write_text(serialized, encoding="utf-8")
+    out = join_before_delivery(state)
+    assert any("素材路径" in i and "ghost.mp4" in i for i in out["join_qa_issues"]), out["join_qa_issues"]
+    assert out["join_qa_report"]["passed"] is False
+
+
+def test_join_broken_mirror_reported(tmp_path: Path) -> None:
+    """英文侧丢掉中文音频轨段 → 镜像检查报错(关卡② 镜像不完整)。"""
+    state = _state_with_drafts(tmp_path)
+    en_dir = Path(state["draft_dir_en_branch"])
+    draft = json.loads((en_dir / "draft_content.json").read_text(encoding="utf-8"))
+    draft["tracks"] = [t for t in draft["tracks"] if t.get("type") != "audio"]
+    serialized = json.dumps(draft, ensure_ascii=False)
+    (en_dir / "draft_content.json").write_text(serialized, encoding="utf-8")
+    (en_dir / "draft_info.json").write_text(serialized, encoding="utf-8")
+    out = join_before_delivery(state)
+    assert any("BGM镜像" in i for i in out["join_qa_issues"]), out["join_qa_issues"]
+
+
+def test_join_registered_draft_missing_root_index(monkeypatch, tmp_path: Path) -> None:
+    """发布开启且草稿在剪映草稿库根下但未注册进根索引 → QA 明确失败。"""
+    jy_root = tmp_path / "jianying_root"
+    state = _state_with_drafts(tmp_path)
+    # 把 zh 草稿"搬"进剪映草稿库根目录下(模拟发布后的正式目录)
+    published = jy_root / "AutoVideo_test"
+    published.mkdir(parents=True)
+    for name in ("draft_content.json", "draft_info.json"):
+        (published / name).write_text(
+            (tmp_path / "zh" / name).read_text(encoding="utf-8"), encoding="utf-8"
+        )
+    state["draft_path"] = str(published / "draft_content.json")
+    monkeypatch.setattr("config.JY_DRAFT_PUBLISH_ENABLED", True)
+    monkeypatch.setattr("config.JIANYING_DRAFT_ROOT", str(jy_root))
+    out = join_before_delivery(state)
+    joined = " ".join(out["join_qa_issues"])
+    assert "根索引" in joined, joined
+    assert out["join_qa_report"]["passed"] is False
+
+
+def test_join_registered_draft_with_root_index_passes(monkeypatch, tmp_path: Path) -> None:
+    """发布开启且草稿已注册(draft_meta_info + 根索引)→ 索引检查通过。"""
+    jy_root = tmp_path / "jianying_root"
+    state = _state_with_drafts(tmp_path)
+    published = jy_root / "AutoVideo_test"
+    published.mkdir(parents=True)
+    for name in ("draft_content.json", "draft_info.json"):
+        (published / name).write_text(
+            (tmp_path / "zh" / name).read_text(encoding="utf-8"), encoding="utf-8"
+        )
+    state["draft_path"] = str(published / "draft_content.json")
+    meta = {"draft_id": "did-zh", "draft_name": "AutoVideo_test", "tm_duration": 35_000_000}
+    (published / "draft_meta_info.json").write_text(json.dumps(meta), encoding="utf-8")
+    (jy_root / "root_meta_info.json").write_text(
+        json.dumps({"all_draft_store": [meta]}), encoding="utf-8"
+    )
+    monkeypatch.setattr("config.JY_DRAFT_PUBLISH_ENABLED", True)
+    monkeypatch.setattr("config.JIANYING_DRAFT_ROOT", str(jy_root))
+    out = join_before_delivery(state)
+    assert out["join_qa_issues"] == [], out["join_qa_issues"]
+    assert "root_index" in out["join_qa_report"]["zh"]["checks"]
+
+
+def test_join_warning_not_in_join_qa_issues(tmp_path: Path) -> None:
+    """深度 QA 的 warning 只进结构化报告,不污染 join_qa_issues/error_log。"""
+    state = _state_with_drafts(tmp_path)
+    zh_dir = Path(state["draft_path"]).parent
+    draft = json.loads((zh_dir / "draft_content.json").read_text(encoding="utf-8"))
+    # duration<=0 的字幕条 → check_texts 出 warning
+    draft["materials"]["texts"].append(
+        {"id": "text-2", "content": "空段", "target_timerange": {"start": 0, "duration": 0}}
+    )
+    serialized = json.dumps(draft, ensure_ascii=False)
+    (zh_dir / "draft_content.json").write_text(serialized, encoding="utf-8")
+    (zh_dir / "draft_info.json").write_text(serialized, encoding="utf-8")
+    out = join_before_delivery(state)
+    assert out["join_qa_issues"] == [], out["join_qa_issues"]
+    assert any(i["severity"] == "warning" for i in out["join_qa_report"]["issues"])

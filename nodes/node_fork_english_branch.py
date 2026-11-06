@@ -52,8 +52,20 @@ def _find_existing_target(state: WorkflowState) -> Path | None:
 
 
 def _copy_snapshot(src_dir: Path, dst_dir: Path) -> None:
-    """递归复制 src_dir 到 dst_dir(覆盖),不做 symlink。"""
-    shutil.copytree(src=str(src_dir), dst=str(dst_dir), dirs_exist_ok=True)
+    """递归复制 src_dir 到 dst_dir(覆盖),不做 symlink。
+
+    阶段 4(人工关卡与剪映草稿导入):排除 ``.snapshots`` —— 与
+    :func:`draft_ops.draft_publisher._copy_tree` 同款 ignore 规则。快照是
+    safe_write_draft 的写前备份机制,属于工作流内部产物;en_branch 是要在剪映
+    首页出现的正式草稿目录,不该把快照垃圾(可能含整份旧草稿副本)带进剪映
+    草稿库。
+    """
+    shutil.copytree(
+        src=str(src_dir),
+        dst=str(dst_dir),
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns(".snapshots"),
+    )
 
 
 def _fork(state: WorkflowState) -> dict:

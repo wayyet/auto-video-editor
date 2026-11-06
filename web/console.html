@@ -124,6 +124,13 @@
     .st.waiting{ color:var(--chip-wait-text); border-color:var(--st-wait); }
     .st.retrying{ color:var(--chip-wait-text); border-color:var(--st-retry); }
     .st.failed{ color:var(--chip-fail-text); border-color:var(--st-fail); }
+    /* 阶段 4:交付状态四态卡 */
+    #deliveryTable td{ padding:3px 6px 3px 0; font-size:11px; vertical-align:top; }
+    #deliveryTable td:first-child{ white-space:nowrap; width:90px; }
+    #deliveryNote{ font-family:var(--mono); color:var(--muted); word-break:break-all; }
+    #deliveryIssues .qa-issue{ font-size:11px; margin:2px 0; word-break:break-all; }
+    #deliveryIssues .qa-issue.sev-error{ color:var(--err-text); }
+    #deliveryIssues .qa-issue.sev-warning{ color:var(--chip-wait-text); }
   </style>
   <script>
     /* 主题预置:与监控页共用 wf_monitor_theme 记忆,首帧前应用避免闪烁 */
@@ -213,6 +220,15 @@
       <h2>已导入视频</h2>
       <ul id="videoSummary" style="list-style:none; margin:4px 0; padding:0"><li class="hint">—</li></ul>
 
+      <h2>交付状态</h2>
+      <div id="deliveryCard">
+        <table id="deliveryTable" style="width:100%; border-collapse:collapse">
+          <tbody id="deliveryBody"></tbody>
+        </table>
+        <div id="deliveryIssues" style="margin-top:6px"></div>
+        <div class="hint">四状态来自工作流事件:草稿生成(generate_draft)→ 草稿发布(剪映草稿库注册)→ 交付 QA(join_before_delivery)→ MP4 导出(可选,默认关闭)。"草稿生成成功"不等于"发布成功";发布失败自动降级继续用任务目录草稿;导出失败会明确标红,不会把草稿当成成片。</div>
+      </div>
+
       <div id="resumeBox">
         <div id="resumeText"></div>
         <div id="gateCards" style="margin-top:8px"></div>
@@ -273,6 +289,7 @@
     const btnResume = $("btnResume"), resumeErr = $("resumeErr");
     const gateCards = $("gateCards"), resumeNote = $("resumeNote"), checkpointField = $("checkpointField");
     const evTable = $("evTable"), evBody = $("evBody"), evEmpty = $("evEmpty"), monitorLink = $("monitorLink");
+    const deliveryBody = $("deliveryBody"), deliveryIssues = $("deliveryIssues");
 
     let limits = { ...DEFAULT_LIMITS };
     let consoleState = createConsoleState();
@@ -623,6 +640,7 @@
       evBody.innerHTML = "";
       evTable.style.display = "";
       evEmpty.style.display = "none";
+      resetDeliveryCard();
       renderRunView();
       source = new EventSource(eventsUrl);
       for (const t of EVENT_TYPES) source.addEventListener(t, handleEvent);
@@ -655,6 +673,99 @@
       evBody.appendChild(tr);
       while (evBody.rows.length > MAX_ROWS) evBody.deleteRow(0);
     }
+
+    // ------------------------------------------------------------------
+    // 阶段 4:交付状态四态卡(草稿生成 / 草稿发布 / 交付 QA / MP4 导出)
+    // 状态只从 SSE 事件归约;SSE 断线重连按游标补发,重放即重建,不需要快照。
+    // 计划 §8 阶段 4:区分"草稿生成成功 / 草稿发布成功 / 交付 QA 成功 /
+    // MP4 导出成功"四种状态 —— 不把草稿文件存在误判为成片交付。
+    // ------------------------------------------------------------------
+    const DELIVERY_ROWS = ["draft_generated", "draft_published", "delivery_qa", "final_export"];
+    const DELIVERY_LABELS = {
+      draft_generated: "草稿生成",
+      draft_published: "草稿发布",
+      delivery_qa: "交付 QA",
+      final_export: "MP4 导出",
+    };
+    let delivery = {};
+    function resetDeliveryCard() {
+      delivery = {};
+      for (const key of DELIVERY_ROWS) delivery[key] = { state: "pending", note: "", issues: [] };
+      renderDeliveryCard();
+    }
+    function deliveryChipClass(state) {
+      if (state === "ok") return "st done";
+      if (state === "fail") return "st failed";
+      if (state === "warn") return "st waiting";
+      return "st"; // pending / skip:灰色
+    }
+    function deliveryChipText(state) {
+      return { pending: "待发生", ok: "成功", warn: "降级", fail: "失败", skip: "跳过" }[state] || state;
+    }
+    function renderDeliveryCard() {
+      if (!deliveryBody) return;
+      deliveryBody.innerHTML = DELIVERY_ROWS.map((key) => {
+        const row = delivery[key] || { state: "pending", note: "" };
+        const note = row.note ? escapeHtml(String(row.note)) : "";
+        return `<tr>` +
+          `<td><span class="${deliveryChipClass(row.state)}">${DELIVERY_LABELS[key]}</span></td>` +
+          `<td><span class="${deliveryChipClass(row.state)}">${deliveryChipText(row.state)}</span>` +
+          (note ? ` <span id="deliveryNote">${note}</span>` : "") + `</td></tr>`;
+      }).join("");
+      const issues = [];
+      for (const key of DELIVERY_ROWS) {
+        for (const it of (delivery[key].issues || [])) issues.push(it);
+      }
+      deliveryIssues.innerHTML = issues.length
+        ? `<div class="hint">QA 明细(${issues.length} 条;事件载荷最多展示 20 条):</div>` +
+          issues.map((it) => {
+            const sev = it && it.severity === "warning" ? "warning" : "error";
+            const where = it && it.draft && it.draft !== "-" ? `[${it.draft}] ` : "";
+            const what = it && it.check ? `${it.check}: ` : "";
+            const detail = it && typeof it.detail === "string" ? it.detail : JSON.stringify(it);
+            return `<div class="qa-issue sev-${sev}">${sev === "warning" ? "⚠" : "✖"} ${escapeHtml(where + what + detail)}</div>`;
+          }).join("")
+        : "";
+    }
+    function handleDeliverySummary(summary) {
+      const ev = String(summary.event || "");
+      if (ev === "draft.generated") {
+        delivery.draft_generated = { state: "ok", note: summary.draft_dir || "", issues: [] };
+      } else if (ev === "draft.published") {
+        delivery.draft_published = { state: "ok", note: summary.target || "", issues: [] };
+      } else if (ev === "draft.publish_failed") {
+        delivery.draft_published = {
+          state: "warn",
+          note: `发布失败,降级用任务目录草稿:${String(summary.reason || "")}`.slice(0, 300),
+          issues: [],
+        };
+      } else if (ev === "delivery.qa_passed") {
+        delivery.delivery_qa = {
+          state: summary.skipped ? "skip" : "ok",
+          note: summary.skipped ? "未执行(英文分支未生成,上游降级)" : "QA 通过",
+          issues: [],
+        };
+      } else if (ev === "delivery.qa_issues") {
+        delivery.delivery_qa = {
+          state: "fail",
+          note: `发现 ${summary.issue_count ?? "?"} 个问题(全量见监控事件 / state.join_qa_report)`,
+          issues: Array.isArray(summary.issues) ? summary.issues : [],
+        };
+      } else if (ev === "export.succeeded") {
+        delivery.final_export = { state: "ok", note: summary.output_path || "", issues: [] };
+      } else if (ev === "export.failed") {
+        delivery.final_export = {
+          state: "fail",
+          note: String(summary.reason || "").slice(0, 300),
+          issues: [],
+        };
+      } else if (ev === "export.skipped") {
+        delivery.final_export = { state: "skip", note: summary.reason || "未启用", issues: [] };
+      } else {
+        return;
+      }
+      renderDeliveryCard();
+    }
     function handleEvent(esEvent) {
       let data = {};
       try { data = JSON.parse(esEvent.data); } catch (e) { return; }
@@ -675,6 +786,12 @@
         return;
       }
       appendEventRow(event);
+      // 阶段 4:交付状态四态卡归约(node.progress 的 summary.event 是业务事件名)
+      const progressSummary = event.payload && typeof event.payload === "object"
+        ? event.payload.summary : null;
+      if (event.event_type === "node.progress" && progressSummary && progressSummary.event) {
+        handleDeliverySummary(progressSummary);
+      }
       const { applied } = applyEvent(monitor, event);
       if (!applied) return;
       runMeta.classList.remove("err-text");

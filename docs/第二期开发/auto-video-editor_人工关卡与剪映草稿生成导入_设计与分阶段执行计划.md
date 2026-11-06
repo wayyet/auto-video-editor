@@ -584,19 +584,19 @@ sequenceDiagram
 
 任务：
 
-- [ ] 检查 `fork_draft_for_english_branch` 复制出来的英文分支是否符合剪映项目目录结构。
-- [ ] 校验中文和英文草稿的素材路径在当前机器上都可访问。
-- [ ] 校验字幕、花字、封面、转场、视频特效和贴纸引用。
-- [ ] 验证关卡②后中文音频轨完整镜像到英文分支，音频素材引用无丢失。
-- [ ] 扩展 `join_before_delivery`：检查双草稿 JSON、元数据、素材路径、轨道和必要索引。
-- [ ] 将 QA 结果结构化写入 `join_qa_issues`，并在创建台展示具体问题。
-- [ ] 区分“草稿生成成功”“草稿发布成功”“交付 QA 成功”和“MP4 导出成功”四种状态。
+- [x] 检查 `fork_draft_for_english_branch` 复制出来的英文分支是否符合剪映项目目录结构。 <!-- 2026-11-07:copytree 对齐 draft_publisher ignore 规则,.snapshots 不再带进草稿库;fork 既有 en_branch 注册(draft_meta_info+根索引) -->
+- [x] 校验中文和英文草稿的素材路径在当前机器上都可访问。 <!-- draft_integrity.check_material_paths:videos[].path / audios[].path|ref,URI/占位跳过 -->
+- [x] 校验字幕、花字、封面、转场、视频特效和贴纸引用。 <!-- check_track_references(dangling material_id/extra_material_refs)+ check_texts + 节点级封面/SRT 检查保留 -->
+- [x] 验证关卡②后中文音频轨完整镜像到英文分支，音频素材引用无丢失。 <!-- check_audio_mirror:轨段集合一致 + 引用 materials 不丢 -->
+- [x] 扩展 `join_before_delivery`：检查双草稿 JSON、元数据、素材路径、轨道和必要索引。 <!-- 深度 QA 委托 draft_ops/draft_integrity.py;尾链四项检查扩到中文侧 -->
+- [x] 将 QA 结果结构化写入 `join_qa_issues`，并在创建台展示具体问题。 <!-- 结构化明细写 join_qa_report(新字段;join_qa_issues 字符串契约保持兼容,仅 error 级并入);创建台"交付状态"卡渲染 issues 明细 -->
+- [x] 区分"草稿生成成功""草稿发布成功""交付 QA 成功"和"MP4 导出成功"四种状态。 <!-- console.html 交付状态四态卡,从 SSE 事件归约(draft.generated/published/publish_failed + delivery.qa_*)+ export.*(阶段 6) -->
 
 验收标准：
 
-- 中文主草稿和英文分支草稿均可从剪映首页打开。
+- 中文主草稿和英文分支草稿均可从剪映首页打开。 <!-- 待实机:依赖阶段 5 剪映 GUI 验收 -->
 - 中文、英文字幕和音频轨道内容正确。
-- 素材缺失或草稿索引错误时，QA 明确失败，不报告假成功。
+- 素材缺失或草稿索引错误时，QA 明确失败，不报告假成功。 <!-- 单测覆盖:素材路径缺失/双文件不一致/根索引缺失 → passed=False -->
 
 ### 阶段 5：真实剪映端到端验收与回归（P1）
 
