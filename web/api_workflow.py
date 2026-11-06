@@ -127,16 +127,24 @@ def _validate_thread_id(thread_id: str) -> str:
 
 
 def _verify_same_origin(request: Request) -> None:
-    """访问控制(§6.2-E 要点 4):有 Origin 头时必须是本机来源,默认拒绝跨源。
+    """访问控制(§6.2-E 要点 4):有 Origin 头时必须是同源,默认拒绝跨源。
 
     curl / 同源 GET 导航不带 Origin,直接放行;浏览器跨源请求一定带 Origin。
-    uvicorn 已绑定 127.0.0.1,这里是第二道防线(防本机其它页面/代理转发)。
+    uvicorn 绑定 0.0.0.0(局域网可访问)后,这里是第二道防线:
+    - loopback Origin(本机工具/本机页面)放行;
+    - 其余 Origin 的 host:port 必须与请求 Host 头一致(浏览器同源场景必然一致,
+      即从本机 IP 或局域网 IP 打开的页面取到的 Origin 与其请求的 Host 天然匹配);
+    - 其它(跨站页面、代理改写 Host 的转发)一律 403。
     """
     origin = (request.headers.get("origin") or "").strip()
     if not origin:
         return
     host = (urlsplit(origin).hostname or "").lower()
-    if host not in ("127.0.0.1", "localhost", "::1"):
+    if host in ("127.0.0.1", "localhost", "::1"):
+        return
+    host_header = (request.headers.get("host") or "").strip().lower()
+    origin_netloc = urlsplit(origin).netloc.lower()
+    if not host_header or origin_netloc != host_header:
         raise HTTPException(status_code=403, detail=f"cross-origin rejected: {origin}")
 
 

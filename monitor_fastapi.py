@@ -9,7 +9,11 @@
 
 启动
 ----
-    .venv/Scripts/python.exe -m uvicorn monitor_fastapi:app --host 127.0.0.1 --port 7860
+    .venv/Scripts/python.exe -m uvicorn monitor_fastapi:app --host 0.0.0.0 --port 7860
+
+    绑 0.0.0.0:局域网设备可用 ``http://<本机IP>:7860/`` 访问所有页面
+    (防火墙入站规则由 start_production.ps1 幂等创建);本机 127.0.0.1 照常可用。
+    浏览器请求的应用层同源校验见 ``web/api_workflow.py::_verify_same_origin``。
 
 路由
 ----

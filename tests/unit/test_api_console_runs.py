@@ -294,6 +294,31 @@ class TestOriginGuard:
         )
         assert resp.status_code == 202
 
+    def test_lan_origin_same_host_accepted(self, console_env):
+        """绑 0.0.0.0 后局域网同源放行:从 http://<LAN-IP>:7860 打开的页面,
+        浏览器发出的 Origin 与请求 Host 头天然一致(真同源)。"""
+        token = _csrf_token()
+        resp = client.post(
+            "/api/console/runs",
+            data={"prompt": "p"}, files=_files(("a.mp4", b"x")),
+            headers={
+                "Host": "192.168.1.50:7860",
+                "Origin": "http://192.168.1.50:7860",
+                "X-CSRF-Token": token,
+            },
+        )
+        assert resp.status_code == 202
+
+    def test_lan_origin_host_mismatch_rejected_403(self, console_env):
+        """Origin 是局域网 IP 但与 Host 头不一致(跨站页面/代理改写)→ 403。"""
+        resp = client.post(
+            "/api/console/runs",
+            data={"prompt": "p"}, files=_files(("a.mp4", b"x")),
+            headers={"Host": "192.168.1.50:7860", "Origin": "http://192.168.1.66:7860"},
+        )
+        assert resp.status_code == 403
+        assert list(console_env.iterdir()) == []
+
 
 class TestCsrfGate:
     """阶段 3 CSRF 门禁:带 Origin 的写请求必须携带 GET /api/console/csrf 签发的 token;

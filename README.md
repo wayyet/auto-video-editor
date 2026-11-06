@@ -324,11 +324,17 @@ python -m agent_gate resume --thread-id drive-20261105-001 --outputs-root output
 **监控(只读)**:
 
 ```powershell
-# 独立启动(一键启动已包含;手动启动:)
-.\.venv\Scripts\python.exe -m uvicorn monitor_fastapi:app --host 127.0.0.1 --port 7860
+# 独立启动(一键启动已包含,绑 0.0.0.0;手动启动:)
+.\.venv\Scripts\python.exe -m uvicorn monitor_fastapi:app --host 0.0.0.0 --port 7860
 ```
 
 - 首页 <http://127.0.0.1:7860/>(SSE 事件流 + 节点状态);节点图 </node-map>。
+- **局域网访问**:一键启动默认绑 `0.0.0.0`,同一局域网内的设备(手机/其它电脑)
+  直接访问 `http://<本机IP>:7860/`、`http://<本机IP>:7860/console` 即可,前端全部
+  相对路径、无需任何配置。启动脚本会幂等创建防火墙入站放行规则
+  `auto-video-editor monitor 7860`(TCP 7860);手工等价命令:
+  `New-NetFirewallRule -DisplayName "auto-video-editor monitor 7860" -Direction Inbound -Protocol TCP -LocalPort 7860 -Action Allow -Profile Any`。
+  注意:创建台无鉴权,局域网内任何设备可创建运行(消耗 LLM tokens)。
 - 监控**只读**:查询运行快照、SSE 补发、图拓扑;刷新/重连绝不触发工作流。
   工作流触发只有入口 A/B 两条路径。
 
@@ -336,7 +342,7 @@ python -m agent_gate resume --thread-id drive-20261105-001 --outputs-root output
 
 浏览器里的第三类入口(仍经同一 `scripts/run_workflow.py`,非新 runner):
 
-1. 打开 <http://127.0.0.1:7860/console>;
+1. 打开 <http://127.0.0.1:7860/console>(局域网设备用 `http://<本机IP>:7860/console`);
 2. 输入剪辑提示词,拖入/选择 1-10 个 MP4/MOV(单文件 ≤2 GiB,可配);
 3. 设置目标时长(默认 35 秒)、画幅比例、输出语言;
 4. 点「创建并运行工作流」—— 服务端生成 `console-<12hex>` thread_id,

@@ -81,11 +81,27 @@ $VenvActivate = Join-Path $RepoRoot '.venv\Scripts\Activate.ps1'
 # .venv-openstoryline/ 已随旧聊天运行时退役,本脚本不再引用。
 $MonitorScript = Join-Path $RepoRoot 'monitor_fastapi.py'
 $MonitorPort   = 7860
+# 绑 0.0.0.0:局域网设备可访问 7860 上的所有页面(/、/console、/node-map);
+# 本机 127.0.0.1 照常可用。配套防火墙入站规则在「前置自检」之后幂等创建。
+$MonitorHost   = '0.0.0.0'
 $MonitorLog    = Join-Path $LogsDir ("monitor_${Timestamp}.log")
 $MonitorPidFile = Join-Path $LogsDir ("monitor_pids_${Timestamp}.json")
 
 # 派生路径
 $InputsFull = Join-Path $InputsDir $InputsFileName
+
+# ---------------------------------------------------------------
+# 局域网 IPv4 枚举(打印访问地址用;纯计算,无副作用)
+# ---------------------------------------------------------------
+function Get-LanIPv4Addresses {
+    $ips = @()
+    try {
+        $ips = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { $_.IPAddress -ne '127.0.0.1' -and $_.IPAddress -notlike '169.254.*' } |
+            Select-Object -ExpandProperty IPAddress -Unique
+    } catch { }
+    return @($ips)
+}
 
 # ---------------------------------------------------------------
 # URI 脱敏 / 分类(纯计算,无副作用 —— 必须在 WhatIf 之前完成)
@@ -196,17 +212,20 @@ function Test-TcpPortOpen {
 
 function Get-WebConfigFingerprint {
     # C-T2(执行设计 §6.6.C 第一阶段):本次启动期望的服务配置指纹。
-    # sha256("<PostgresUri>|<LlmBackend>") 前 16 位十六进制。创建台 LLM 后端
-    # (CONSOLE_LLM_BACKEND)随本脚本注入监控服务进程环境并决定创建台行为,
-    # 必须与 Postgres DSN 一并纳入指纹 —— 否则改了后端仍被「指纹一致→复用」
+    # sha256("<PostgresUri>|<LlmBackend>|<MonitorHost>") 前 16 位十六进制。创建台
+    # LLM 后端(CONSOLE_LLM_BACKEND)随本脚本注入监控服务进程环境并决定创建台
+    # 行为,必须与 Postgres DSN 一并纳入指纹 —— 否则改了后端仍被「指纹一致→复用」
     # 误放行,旧进程带着缺失/过期的后端配置继续跑。
+    # 绑定地址(MonitorHost,2026-11-07 起绑 0.0.0.0)同样纳入:否则从旧版
+    # 127.0.0.1 绑定升级时,旧进程会被「指纹一致→复用」误放行,局域网永远
+    # 访问不到(绑定地址改了但服务从不重启)。
     # 单向哈希 —— 不泄密码;只用于比对「上次启动服务的配置」与「这次想用的配置」
     # 是否一致,解决「HTTP 200 健康证明不了配置正确」的复用误判(§4.2 P0)。
-    param([string]$Uri, [string]$LlmBackend)
+    param([string]$Uri, [string]$LlmBackend, [string]$BindHost = '0.0.0.0')
 
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try {
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes("$Uri|$LlmBackend")
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes("$Uri|$LlmBackend|$BindHost")
         return ([System.BitConverter]::ToString($sha.ComputeHash($bytes)) -replace '-', '').ToLower().Substring(0, 16)
     } finally {
         $sha.Dispose()
@@ -396,6 +415,24 @@ try {
     }
     Write-PhaseOk "已是管理员"
 
+    # ---------------------------------------------------------------
+    # 防火墙入站规则(幂等):7860 绑 0.0.0.0 后,没有这条规则局域网设备
+    # 会被 Windows Defender 防火墙拦下。每次运行都确认存在(规则持久化,
+    # 重复创建无害,故只在缺失时 New)。
+    # ---------------------------------------------------------------
+    $fwRuleName = "auto-video-editor monitor $MonitorPort"
+    $fwExisting = Get-NetFirewallRule -DisplayName $fwRuleName -ErrorAction SilentlyContinue
+    if ($null -eq $fwExisting) {
+        Write-Phase "防火墙:创建入站放行规则(TCP $MonitorPort,供局域网访问)..."
+        New-NetFirewallRule -DisplayName $fwRuleName `
+            -Description "auto-video-editor 监控/创建台页面(7860)局域网入站放行" `
+            -Direction Inbound -Protocol TCP -LocalPort $MonitorPort `
+            -Action Allow -Profile Any | Out-Null
+        Write-PhaseOk ("防火墙规则已创建: {0}" -f $fwRuleName)
+    } else {
+        Write-PhaseOk ("防火墙规则已存在: {0}" -f $fwRuleName)
+    }
+
     # ===============================================================
     # Phase 0 — 准备视频输入 + 生成 initial-state.json
     # ===============================================================
@@ -550,7 +587,7 @@ try {
     $webUrl      = "http://127.0.0.1:$MonitorPort/"
     $webPortOpen = Test-PortOpen $MonitorPort
     # C-T2:本次启动期望的配置指纹(启动/复用/重启时都写进 PID 文件,供下次比对)
-    $expectedFp = Get-WebConfigFingerprint -Uri $PostgresUri -LlmBackend $env:CONSOLE_LLM_BACKEND
+    $expectedFp = Get-WebConfigFingerprint -Uri $PostgresUri -LlmBackend $env:CONSOLE_LLM_BACKEND -BindHost $MonitorHost
 
     if ($webPortOpen) {
         if (-not (Test-WebHealthy -Url $webUrl -TimeoutSec 5)) {
@@ -642,7 +679,7 @@ try {
         # 强制 Python 不缓冲(便于日志实时落盘)
         $env:PYTHONUNBUFFERED = '1'
 
-        Write-Phase "  启动监控服务(uvicorn monitor_fastapi:app --host 127.0.0.1 --port $MonitorPort)..."
+        Write-Phase "  启动监控服务(uvicorn monitor_fastapi:app --host $MonitorHost --port $MonitorPort)..."
         $monBatPath = Join-Path $env:TEMP "monitor_${Timestamp}.bat"
         # bat 以纯 ASCII 落盘(规避 cmd 代码页差异),因此内容里不能出现任何非
         # ASCII 字符:仓库路径含中文(如 "…\开发代码\…")时,绝对路径会被编码成
@@ -653,7 +690,7 @@ try {
         $monBatContent = @"
 @echo off
 set PYTHONUNBUFFERED=1
-"$monVenvPyRel" -m uvicorn monitor_fastapi:app --host 127.0.0.1 --port $MonitorPort 1> "$monLogRel" 2>&1
+"$monVenvPyRel" -m uvicorn monitor_fastapi:app --host $MonitorHost --port $MonitorPort 1> "$monLogRel" 2>&1
 "@
         [System.IO.File]::WriteAllText($monBatPath, $monBatContent, [System.Text.Encoding]::ASCII)
         $webProc = Start-Process `
@@ -756,6 +793,17 @@ set PYTHONUNBUFFERED=1
         exit 22
     }
     Write-PhaseOk "监控服务健康(:$MonitorPort 就绪;只读,不触发工作流)"
+
+    # 局域网访问提示(绑 0.0.0.0 后,同网段设备可直接打开)
+    $lanIps = Get-LanIPv4Addresses
+    if ($lanIps.Count -gt 0) {
+        Write-Phase '' 'Cyan'
+        Write-Phase "局域网访问(同一 Wi-Fi/网段内的其它设备):" 'Cyan'
+        foreach ($ip in $lanIps) {
+            Write-Phase ("    http://{0}:{1}/          (监控首页)" -f $ip, $MonitorPort) 'Cyan'
+            Write-Phase ("    http://{0}:{1}/console  (创建台)" -f $ip, $MonitorPort) 'Cyan'
+        }
+    }
 
     # ===============================================================
     # Phase 2 — run_workflow.py --production --skip-preflight
@@ -898,6 +946,11 @@ except Exception as e:
     Write-Phase ('=' * 60) 'Magenta'
     Write-Phase "一键启动完成" 'Green'
     Write-Phase ("完整日志: {0}" -f $LogFile) 'Cyan'
+    $lanIps = Get-LanIPv4Addresses
+    if ($lanIps.Count -gt 0) {
+        $lanUrls = ($lanIps | ForEach-Object { "http://$($_):$MonitorPort/console" }) -join '   '
+        Write-Phase ("局域网访问(创建台): {0}" -f $lanUrls) 'Cyan'
+    }
     Write-Phase ('=' * 60) 'Magenta'
     exit 0
 }
