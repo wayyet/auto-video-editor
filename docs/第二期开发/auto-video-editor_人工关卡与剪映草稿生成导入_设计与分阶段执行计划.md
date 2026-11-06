@@ -530,16 +530,16 @@ sequenceDiagram
 
 任务：
 
-- [ ] 统一读取 LangGraph `snapshot.interrupts`，提取 `checkpoint`、`legacy_id`、`step`、`instructions`、`draft_path`、`issues`。
-- [ ] 改造创建台等待卡片，显示具体关卡名称和节点名称。
-- [ ] 关卡①展示中文主草稿路径和分镜调整指引。
-- [ ] 关卡③展示英文分支目录、`issues`、`preview_video_path` 和证据帧路径。
-- [ ] 关卡②展示中文主草稿路径及“只需在中文草稿添加一次 BGM”的提示。
-- [ ] 增加“打开草稿目录”入口；路径必须来自当前 Thread 的状态，不能拼接用户输入。
-- [ ] 单一挂起关卡时自动选中；多挂起时要求明确选择，不允许默认恢复错误关卡。
-- [ ] 恢复值固定默认为 JSON `true`，页面明确说明“该操作只恢复工作流，不会自动完成剪辑”。
-- [ ] 恢复请求成功后显示 `resuming`，不要提前显示“已完成”。
-- [ ] 从事件流确认 `run.resumed`、`node.resumed` 和下一节点事件。
+- [x] 统一读取 LangGraph `snapshot.interrupts`，提取 `checkpoint`、`legacy_id`、`step`、`instructions`、`draft_path`、`issues`。
+- [x] 改造创建台等待卡片，显示具体关卡名称和节点名称。
+- [x] 关卡①展示中文主草稿路径和分镜调整指引。
+- [x] 关卡③展示英文分支目录、`issues`、`preview_video_path` 和证据帧路径。
+- [x] 关卡②展示中文主草稿路径及“只需在中文草稿添加一次 BGM”的提示。
+- [x] 增加“打开草稿目录”入口；路径必须来自当前 Thread 的状态，不能拼接用户输入。
+- [x] 单一挂起关卡时自动选中；多挂起时要求明确选择，不允许默认恢复错误关卡。
+- [x] 恢复值固定默认为 JSON `true`，页面明确说明“该操作只恢复工作流，不会自动完成剪辑”。
+- [x] 恢复请求成功后显示 `resuming`，不要提前显示“已完成”。
+- [x] 从事件流确认 `run.resumed`、`node.resumed` 和下一节点事件。
 
 建议涉及文件：
 

@@ -43,6 +43,9 @@ export const CONSOLE_API_PATHS = Object.freeze({
   clearCache: "/api/console/cache/clear",
   // 只读探针:人工关卡恢复指引
   resumeStatus: (threadId) => `/api/workflow/runs/${encodeURIComponent(threadId)}/resume-status`,
+  // 2026-11-06 阶段 2(人工关卡与剪映草稿导入):真实 payload 展示 + 打开草稿目录
+  gates: (threadId) => `/api/console/runs/${encodeURIComponent(threadId)}/gates`,
+  openDraftDir: (threadId) => `/api/console/runs/${encodeURIComponent(threadId)}/open-draft-dir`,
   // 监控页跳转(创建成功后"查看完整监控")
   monitorPage: (threadId) => `/?thread_id=${encodeURIComponent(threadId)}`,
 });

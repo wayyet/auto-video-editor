@@ -22,6 +22,11 @@
 - ``POST /api/console/runs/{thread_id}/resume`` 人工关卡恢复(复用 resume_workflow.py);
 - ``POST /api/console/runs/{thread_id}/cancel`` 取消运行(仅限本实例在册进程)。
 
+2026-11-06 补充(人工关卡与剪映草稿导入 阶段 2):
+- ``GET  /api/console/runs/{thread_id}/gates``       挂起关卡真实 payload(只读);
+- ``POST /api/console/runs/{thread_id}/open-draft-dir`` 打开草稿目录(路径取自
+  当前 Thread 的 checkpoint state,白名单根校验,绝不信任前端传路径)。
+
 2026-11-06 补充(维护入口):
 - ``POST /api/console/cache/clear``          清除可再生缓存(清理清单见 config.py
   缓存段;冷却限流 + 活跃任务 409;R-10 移除旧 /api/system/clean-cache 后,
@@ -30,19 +35,27 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
 import secrets
+import selectors
+import subprocess
+import sys
 import time
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 import config  # 运行时读 config.CONSOLE_*(可 monkeypatch),不在 import 期固化值
 from web.api_workflow import _verify_same_origin
 from web import cache_cleaner, console_service
 from web.console_service import ConsoleLaunchError, prepare_run, start_run
-from web.console_uploads import ALLOWED_VIDEO_EXTS, ConsoleUploadError
+from web.console_uploads import ALLOWED_VIDEO_EXTS, ConsoleUploadError, validate_thread_id
+from web.human_gate_payload import COMMON_RESUME_NOTE, build_gate_views
 
 router = APIRouter(prefix="/api/console")
 
@@ -260,6 +273,156 @@ def run_detail(request: Request, thread_id: str) -> dict:
     except ConsoleUploadError as e:
         raise _upload_error(e) from e
     return {"ok": True, **data}
+
+
+def _fetch_gate_data_sync(thread_id: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """读 checkpoint:返回(挂起关卡展示载荷列表, state values)。
+
+    独立线程 + ``asyncio.run(loop_factory=SelectorEventLoop)``(Windows
+    uvicorn 主循环 Proactor 与 async psycopg 不兼容;与 resume_workflow.py
+    修复同款纪律)。只读 aget_state,不写库、不跑图。
+    """
+    from graph import build_graph, get_checkpointer, normalize_thread_id
+    from scripts.resume_workflow import describe_interrupts
+
+    async def _inner():
+        tid = normalize_thread_id(thread_id)
+        async with get_checkpointer() as saver:
+            g = build_graph(
+                checkpointer=saver,
+                thread_id=tid,
+                start_heartbeat_thread=False,
+                run_preflight=False,
+            )
+            return await g.aget_state({"configurable": {"thread_id": tid}})
+
+    if sys.platform == "win32":
+        snap = asyncio.run(
+            _inner(),
+            loop_factory=lambda: asyncio.SelectorEventLoop(selectors.SelectSelector()),
+        )
+    else:
+        snap = asyncio.run(_inner())
+    interrupts = describe_interrupts(snap)
+    values = dict(snap.values or {})
+    return build_gate_views(interrupts, values), values
+
+
+def _fetch_gate_views_sync(thread_id: str) -> list[dict[str, Any]]:
+    """只取展示载荷(gates 端点用;state values 留给 open-draft-dir 复用入口)。"""
+    gates, _values = _fetch_gate_data_sync(thread_id)
+    return gates
+
+
+@router.get("/runs/{thread_id}/gates")
+async def run_gates(request: Request, thread_id: str) -> dict:
+    """挂起人工关卡的展示载荷(2026-11-06 阶段 2;只读)。
+
+    读 LangGraph checkpoint(``aget_state``)提取真实 interrupt payload,
+    经 :mod:`web.human_gate_payload` 归一为 UI 展示形态。**不**执行恢复。
+    aget_state 在独立线程 + 独立 Selector 事件循环里跑(Windows uvicorn 主循环
+    是 Proactor,async psycopg 不兼容 —— 与 resume_workflow 修复同款纪律)。
+    """
+    _verify_same_origin(request)
+    console_service.reap_now()
+    try:
+        validate_thread_id(thread_id)
+        gates = await run_in_threadpool(_fetch_gate_views_sync, thread_id)
+    except ConsoleUploadError as e:
+        raise _upload_error(e) from e
+    except Exception as e:  # noqa: BLE001 — PG 不可达/图构建失败统一 503
+        raise HTTPException(
+            status_code=503, detail=f"读取挂起关卡失败(checkpoint 不可达?): {e}"
+        ) from e
+    return {
+        "ok": True,
+        "thread_id": thread_id,
+        "gate_count": len(gates),
+        "gates": gates,
+        "common_note": COMMON_RESUME_NOTE,
+    }
+
+
+class OpenDraftDirBody(BaseModel):
+    """POST /runs/{tid}/open-draft-dir 请求体:打开哪一份草稿目录。"""
+
+    #: zh=中文主草稿;en=英文分支草稿(尚未创建时 409)
+    draft: Literal["zh", "en"] = "zh"
+
+
+def _allowed_open_roots() -> list[Path]:
+    """允许"打开目录"的根集合(outputs 任务目录 + 剪映草稿库根),运行时读 config。"""
+    roots: list[Path] = []
+    for attr in ("CONSOLE_OUTPUTS_ROOT", "JIANYING_DRAFT_ROOT"):
+        raw = getattr(config, attr, None)
+        if raw:
+            try:
+                roots.append(Path(raw).resolve())
+            except OSError:  # pragma: no cover — 非法路径直接忽略
+                pass
+    return roots
+
+
+def _resolve_open_target_sync(thread_id: str, draft: str) -> Path:
+    """从当前 Thread 的 checkpoint state 推导要打开的草稿目录(绝不信任前端传路径)。"""
+    _gates, values = _fetch_gate_data_sync(thread_id)
+    if draft == "en":
+        raw = values.get("draft_dir_en_branch")
+        if not raw:
+            raise ConsoleLaunchError(
+                "该任务尚未创建英文分支草稿(关卡③之前的流程位置)", status_code=409
+            )
+        target = Path(str(raw))
+    else:
+        raw = values.get("draft_path")
+        if not raw:
+            raise ConsoleLaunchError("该任务还没有主草稿(generate_draft 未成功?)", status_code=409)
+        p = Path(str(raw))
+        target = p.parent if p.suffix == ".json" else p
+    resolved = target.resolve()
+    if not resolved.is_dir():
+        raise ConsoleLaunchError(f"草稿目录不存在: {resolved}", status_code=404)
+    if not any(
+        resolved.is_relative_to(root) for root in _allowed_open_roots() if root.exists()
+    ):
+        raise ConsoleLaunchError(f"草稿目录越界,拒绝打开: {resolved}", status_code=400)
+    return resolved
+
+
+@router.post("/runs/{thread_id}/open-draft-dir")
+async def open_draft_dir(
+    request: Request, thread_id: str, body: OpenDraftDirBody
+) -> JSONResponse:
+    """打开草稿目录(2026-11-06 阶段 2;服务端唤起系统文件管理器)。
+
+    路径**只**来自当前 Thread 的 checkpoint state(计划 §8 阶段 2:
+    "路径必须来自当前 Thread 的状态,不能拼接用户输入"),并做白名单根校验。
+    """
+    _verify_same_origin(request)
+    _enforce_csrf(request)
+    try:
+        validate_thread_id(thread_id)
+        target = await run_in_threadpool(_resolve_open_target_sync, thread_id, body.draft)
+    except ConsoleLaunchError as e:
+        raise _launch_error(e) from e
+    except ConsoleUploadError as e:
+        raise _upload_error(e) from e
+    except Exception as e:  # noqa: BLE001 — checkpoint 不可达统一 503
+        raise HTTPException(
+            status_code=503, detail=f"读取草稿路径失败(checkpoint 不可达?): {e}"
+        ) from e
+    try:
+        if os.name == "nt":
+            os.startfile(str(target))  # noqa: S606 — 路径已过白名单校验
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(target)])  # noqa: S603
+        else:
+            subprocess.Popen(["xdg-open", str(target)])  # noqa: S603
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"唤起文件管理器失败: {e}") from e
+    return JSONResponse(
+        status_code=200, content={"ok": True, "thread_id": thread_id, "opened": str(target)}
+    )
 
 
 @router.post("/runs/{thread_id}/resume")

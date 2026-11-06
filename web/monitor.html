@@ -5,8 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Workflow Monitor</title>
   <style>
-    /* 独立只读监控页(单流水线架构 2026-11-04,阶段1)。
-       数据只来自 /api/workflow/* 只读端点;刷新/重连绝不触发工作流。 */
+    /* 监控首页(单流水线架构 2026-11-04,阶段1;2026-11-06 迁入历史任务与清除缓存维护入口)。
+       订阅/断开/刷新只走 /api/workflow/* 只读 GET,绝不触发或恢复工作流;
+       取消/恢复/清除缓存走 /api/console/* 显式确认后的 POST(带 CSRF)。 */
     :root{
       --bg:#0f0f0f; --panel:#171717; --text:#eaeaea; --muted:#b5b5b5;
       --border:#2c2c2c; --st-run:#3b82f6; --st-done:#22c55e; --st-wait:#d97706;
@@ -56,7 +57,9 @@
       appearance:none; background:transparent; color:var(--text); border:1px solid var(--border);
       border-radius:8px; padding:6px 10px; font-size:12px; cursor:pointer;
     }
-    .btn:hover{ border-color:var(--hover-border); background:var(--hover-bg); }
+    .btn:hover:not(:disabled){ border-color:var(--hover-border); background:var(--hover-bg); }
+    .btn:disabled{ opacity:.45; cursor:not-allowed; }
+    .btn.primary{ border-color:var(--st-run); color:var(--chip-run-text); font-weight:600; }
     #threadInput{
       background:var(--input-bg); border:1px solid var(--border); color:var(--text);
       border-radius:8px; padding:6px 8px; font-size:12px; font-family:var(--mono); width:240px;
@@ -72,7 +75,10 @@
     #counts,#meta{ font-family:var(--mono); font-size:11px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     #meta.err{ color:var(--err-text); }
     #layout{ display:flex; height:calc(100vh - 53px); }
-    #events{ flex:1.4; overflow:auto; border-right:1px solid var(--border); }
+    #left{ flex:1.4; display:flex; flex-direction:column; min-width:0; border-right:1px solid var(--border); }
+    #history{ flex:0 0 auto; border-bottom:1px solid var(--border); padding-bottom:8px; }
+    #historyWrap{ max-height:260px; overflow:auto; }
+    #events{ flex:1; overflow:auto; min-height:0; }
     #nodes{ flex:1; overflow:auto; padding:10px; }
     h2{ font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); margin:10px 10px 6px; font-weight:650; }
     table{ width:calc(100% - 20px); margin:0 10px 10px; border-collapse:collapse; font-family:var(--mono); font-size:11px; }
@@ -91,6 +97,18 @@
     .st.failed{ color:var(--chip-fail-text); border-color:var(--st-fail); }
     .hint{ color:var(--muted); font-size:11px; margin:8px 10px; }
     #nodeEmpty{ color:var(--muted); font-style:italic; font-size:11px; margin:8px 10px; }
+    /* 参数行 / 恢复面板(自创建台迁移,2026-11-06) */
+    .params{ display:flex; gap:14px; flex-wrap:wrap; align-items:flex-end; padding:0 10px; }
+    .params label{ display:flex; flex-direction:column; gap:4px; font-size:11px; color:var(--muted); }
+    .params input{
+      background:var(--input-bg); border:1px solid var(--border); color:var(--text);
+      border-radius:8px; padding:6px 8px; font-size:12px; font-family:var(--mono); width:110px;
+    }
+    #resumeBox{
+      display:none; border:1px solid var(--st-wait); border-radius:10px; padding:10px 12px; margin:8px 10px;
+      font-size:12px; color:var(--chip-wait-text);
+    }
+    #resumeBox.active{ display:block; }
   </style>
   <script>
     /* 主题预置:首帧前应用上次选择的背景主题,避免闪烁 */
@@ -115,15 +133,40 @@
     <button class="btn" id="btnTheme" title="切换背景颜色(白/黑)">背景:白色</button>
   </div>
   <div id="layout">
-    <div id="events">
-      <h2>事件流(SSE · Last-Event-ID 断线补发)</h2>
-      <div class="hint">只读:订阅/断开/刷新均为 GET,绝不触发或恢复工作流。</div>
-      <table id="evTable">
-        <thead><tr><th style="width:64px">id</th><th style="width:130px">时间</th><th style="width:150px">事件</th><th>节点 / 详情</th></tr></thead>
-        <tbody id="evBody"></tbody>
-      </table>
+    <div id="left">
+      <div id="history">
+        <h2>历史任务</h2>
+        <div class="params">
+          <label>搜索(thread_id / 状态 / 时间)<input id="historySearch" spellcheck="false" style="width:220px" /></label>
+          <button class="btn" id="btnHistoryRefresh">刷新</button>
+          <button class="btn" id="btnCleanCache" title="清除可再生缓存(临时目录 / __pycache__ / 日志 / 剪映草稿备份等)。不影响 outputs/ 成片、任务记录与剪映 User Data\Cache\Log。">清除缓存</button>
+        </div>
+        <div id="historyWrap">
+          <table id="historyTable">
+            <thead><tr><th>thread_id</th><th style="width:140px">创建时间</th><th style="width:110px">状态</th><th style="width:120px">操作</th></tr></thead>
+            <tbody id="historyBody"><tr><td colspan="4" class="hint">—</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="events">
+        <h2>事件流(SSE · Last-Event-ID 断线补发)</h2>
+        <div class="hint">订阅/断开/刷新均为只读 GET,绝不触发或恢复工作流;取消/恢复/清除缓存为历史任务区内显式确认后的 POST。</div>
+        <table id="evTable">
+          <thead><tr><th style="width:64px">id</th><th style="width:130px">时间</th><th style="width:150px">事件</th><th>节点 / 详情</th></tr></thead>
+          <tbody id="evBody"></tbody>
+        </table>
+      </div>
     </div>
     <div id="nodes">
+      <div id="resumeBox">
+        <div id="resumeText"></div>
+        <div class="params" style="margin-top:8px">
+          <label>关卡(留空=唯一挂起时自动匹配)<input id="resumeCheckpoint" spellcheck="false" placeholder="① / ② / ③" /></label>
+          <label>放行值(JSON,默认 true)<input id="resumeValue" spellcheck="false" value="true" /></label>
+          <button class="btn primary" id="btnResume">确认恢复</button>
+        </div>
+        <div class="hint" id="resumeErr"></div>
+      </div>
       <h2>节点状态</h2>
       <div id="nodeEmpty">—(订阅后显示)</div>
       <table id="ndTable" style="display:none">
@@ -137,6 +180,10 @@
     import {
       API_PATHS, applyEvent, createMonitorState, computeCounts,
     } from "/static/workflow_monitor.mjs";
+    import {
+      CONSOLE_API_PATHS, friendlyError, HISTORY_STATE_LABEL,
+      canResume, canCancel, filterHistoryRows, parseResumeValue,
+    } from "/static/workflow_console.mjs";
 
     const EVENT_TYPES = [
       "snapshot", "store_error",
@@ -158,9 +205,17 @@
     const chip = $("chip"), counts = $("counts"), meta = $("meta");
     const evBody = $("evBody"), ndBody = $("ndBody"), ndTable = $("ndTable"), nodeEmpty = $("nodeEmpty");
     const threadInput = $("threadInput");
+    const historySearch = $("historySearch"), btnHistoryRefresh = $("btnHistoryRefresh");
+    const btnCleanCache = $("btnCleanCache"), historyBody = $("historyBody");
+    const resumeBox = $("resumeBox"), resumeText = $("resumeText");
+    const resumeCheckpoint = $("resumeCheckpoint"), resumeValue = $("resumeValue");
+    const btnResume = $("btnResume"), resumeErr = $("resumeErr");
 
     let monitor = createMonitorState();
     let source = null;
+    let csrfToken = null;
+    let resumeGuidanceShown = false;
+    let historyRows = [];
 
     try { threadInput.value = localStorage.getItem("wf_monitor_thread") || ""; } catch (e) {}
 
@@ -250,6 +305,17 @@
       setChip(monitor.run.state, monitor.cursor ? `#${monitor.cursor}` : "");
       renderCounts();
       renderNodes();
+      const st = monitor.run.state;
+      if (st === "waiting_human" && !resumeGuidanceShown) {
+        resumeGuidanceShown = true;
+        showResumePanel();
+      } else if (st === "running" && resumeGuidanceShown) {
+        resumeGuidanceShown = false;
+        resumeBox.classList.remove("active");
+      } else if (st === "completed" || st === "failed") {
+        resumeBox.classList.remove("active");
+        loadHistory();  // 终态后刷新历史任务状态列
+      }
     }
     function subscribe() {
       const tid = (threadInput.value || "").trim();
@@ -257,6 +323,8 @@
       if (source) source.close();
       try { localStorage.setItem("wf_monitor_thread", tid); } catch (e) {}
       monitor = createMonitorState();
+      resumeGuidanceShown = false;
+      resumeBox.classList.remove("active");
       evBody.innerHTML = "";
       renderNodes(); renderCounts();
       setChip("running", "连接中…");
@@ -286,6 +354,175 @@
       try{ localStorage.setItem("wf_monitor_theme", toLight ? "light" : "dark"); }catch(e){}
       applyThemeButton();
     });
+
+    // ------------------------------------------------------------------
+    // 历史任务列表(自创建台迁移;状态经服务端调和,搜索为客户端过滤)
+    // ------------------------------------------------------------------
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+      }[c]));
+    }
+    async function loadHistory() {
+      try {
+        const r = await fetch(`${CONSOLE_API_PATHS.listRuns}?limit=50`, { headers: { Accept: "application/json" } });
+        if (!r.ok) return;
+        const data = await r.json();
+        historyRows = Array.isArray(data.runs) ? data.runs : [];
+      } catch (e) { return; }
+      renderHistory();
+    }
+    function renderHistory() {
+      const rows = filterHistoryRows(historyRows, historySearch.value);
+      historyBody.innerHTML = "";
+      if (!rows.length) {
+        historyBody.innerHTML = `<tr><td colspan="4" class="hint">${historyRows.length ? "无匹配任务" : "暂无任务"}</td></tr>`;
+        return;
+      }
+      for (const row of rows) {
+        const tr = document.createElement("tr");
+        const label = HISTORY_STATE_LABEL[row.state] || row.state || "—";
+        const created = typeof row.created_at === "string" ? row.created_at.replace("T", " ").slice(0, 19) : "—";
+        tr.innerHTML =
+          `<td>${escapeHtml(row.thread_id || "—")}</td>` +
+          `<td>${escapeHtml(created)}</td>` +
+          `<td>${escapeHtml(label)}</td>`;
+        const tdOp = document.createElement("td");
+        const actions = [];
+        const mkBtn = (text, fn) => {
+          const b = document.createElement("button");
+          b.className = "btn";
+          b.style.padding = "2px 8px";
+          b.textContent = text;
+          b.addEventListener("click", fn);
+          return b;
+        };
+        actions.push(mkBtn("查看", () => { threadInput.value = row.thread_id; subscribe(); }));
+        if (canResume(row.state)) {
+          actions.push(mkBtn("恢复", () => {
+            threadInput.value = row.thread_id;
+            subscribe();
+            resumeCheckpoint.value = "";
+            showResumePanel();
+          }));
+        }
+        if (canCancel(row.state)) {
+          actions.push(mkBtn("取消", async () => {
+            if (!window.confirm(`确认取消运行 ${row.thread_id}?`)) return;
+            try {
+              await postJson(CONSOLE_API_PATHS.cancelRun(row.thread_id), {});
+              loadHistory();
+              if ((threadInput.value || "").trim() === row.thread_id) {
+                setChip("failed", "已取消");
+                monitor.run.state = "failed"; // 停止等事件;终态以取消记录为准
+              }
+            } catch (err) {
+              window.alert(`取消失败:${err && err.message ? err.message : ""}`);
+            }
+          }));
+        }
+        for (const b of actions) { tdOp.appendChild(b); tdOp.appendChild(document.createTextNode(" ")); }
+        tr.appendChild(tdOp);
+        historyBody.appendChild(tr);
+      }
+    }
+    historySearch.addEventListener("input", renderHistory);
+    btnHistoryRefresh.addEventListener("click", loadHistory);
+
+    // ------------------------------------------------------------------
+    // 清除可再生缓存(维护入口;服务端有冷却限流与活跃任务 409)
+    // ------------------------------------------------------------------
+    btnCleanCache.addEventListener("click", async () => {
+      if (btnCleanCache.disabled) return;
+      if (!window.confirm(
+        "确认清除可再生缓存?(临时目录 / __pycache__ / 日志 / 剪映草稿备份等;"
+        + "不影响 outputs/ 成片与任务记录)"
+      )) return;
+      btnCleanCache.disabled = true;
+      try {
+        const data = await postJson(CONSOLE_API_PATHS.clearCache, {});
+        const n = Number(data.cleaned_count || 0);
+        const errs = Array.isArray(data.errors) ? data.errors.length : 0;
+        window.alert(errs ? `已清理 ${n} 个路径,${errs} 项失败(多为被占用的日志/缓存,可稍后再试)` : `已清理 ${n} 个缓存路径`);
+        loadHistory();
+      } catch (err) {
+        window.alert(`清除缓存失败:${err && err.message ? err.message : ""}`);
+      } finally {
+        btnCleanCache.disabled = false;
+      }
+    });
+
+    // ------------------------------------------------------------------
+    // CSRF + 写请求(取消/恢复/清除缓存共用;token 同源获取)
+    // ------------------------------------------------------------------
+    async function ensureCsrf() {
+      if (csrfToken) return csrfToken;
+      const r = await fetch(CONSOLE_API_PATHS.csrf, { headers: { Accept: "application/json" } });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        throw { status: r.status, detail: String(data.detail || "无法获取 CSRF token") };
+      }
+      const data = await r.json();
+      csrfToken = data.token;
+      return csrfToken;
+    }
+    async function postJson(url, body) {
+      const token = await ensureCsrf();
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": token, Accept: "application/json" },
+        body: JSON.stringify(body || {}),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw friendlyError(r.status, String(data.detail || r.statusText || ""));
+      return data;
+    }
+
+    // ------------------------------------------------------------------
+    // 人工关卡恢复面板(waiting_human 是正常状态;确认后由服务端恢复)
+    // ------------------------------------------------------------------
+    async function showResumePanel() {
+      const tid = (threadInput.value || "").trim();
+      if (!tid) return;
+      resumeText.textContent = "工作流已暂停在人工关卡,等待人工处理(正常状态,不是失败)。";
+      resumeErr.textContent = "";
+      resumeBox.classList.add("active");
+      try {
+        const r = await fetch(CONSOLE_API_PATHS.resumeStatus(tid), { headers: { Accept: "application/json" } });
+        if (r.ok) {
+          const data = await r.json();
+          const node = data.last_event && data.last_event.node_id ? `(${data.last_event.node_id})` : "";
+          resumeText.textContent =
+            `工作流已暂停在人工关卡${node},等待人工处理(正常状态,不是失败)。` +
+            `确认后由服务端以 scripts/resume_workflow.py 恢复(入口 A 同款语义)。`;
+        }
+      } catch (e) { /* 指引获取失败不影响面板可用性 */ }
+    }
+    btnResume.addEventListener("click", async () => {
+      const tid = (threadInput.value || "").trim();
+      if (!tid) { resumeErr.textContent = "请先订阅一个任务"; return; }
+      const parsed = parseResumeValue(resumeValue.value);
+      if (!parsed.ok) { resumeErr.textContent = parsed.error; return; }
+      btnResume.disabled = true;
+      resumeErr.textContent = "";
+      try {
+        await postJson(CONSOLE_API_PATHS.resumeRun(tid), {
+          checkpoint: resumeCheckpoint.value.trim() || null,
+          value: parsed.value,
+        });
+        resumeBox.classList.remove("active");
+        resumeGuidanceShown = false;
+        renderMeta("恢复已提交,等待执行事件…");
+        loadHistory();
+      } catch (err) {
+        resumeErr.textContent = err && err.message ? err.message : "恢复提交失败";
+      } finally {
+        btnResume.disabled = false;
+      }
+    });
+
+    // 页面就绪即展示历史任务
+    loadHistory();
   </script>
 </body>
 </html>

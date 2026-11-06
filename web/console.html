@@ -186,7 +186,8 @@
       <h2>说明</h2>
       <div class="hint">
         创建台只负责创建运行;订阅、断开与刷新均为只读 GET,不会重复启动工作流。
-        执行的完整节点轨迹请在监控首页查看;等待人工关卡属正常状态,恢复操作见监控页指引。
+        历史任务与清除缓存已移至监控首页;执行的完整节点轨迹请在监控首页查看,
+        等待人工关卡属正常状态,恢复操作见监控页指引。
       </div>
     </div>
 
@@ -202,11 +203,13 @@
 
       <div id="resumeBox">
         <div id="resumeText"></div>
+        <div id="gateCards" style="margin-top:8px"></div>
         <div class="params" style="margin-top:8px">
-          <label>关卡(留空=唯一挂起时自动匹配)<input id="resumeCheckpoint" spellcheck="false" placeholder="① / ② / ③" /></label>
+          <label id="checkpointField">关卡(留空=唯一挂起时自动匹配)<input id="resumeCheckpoint" spellcheck="false" placeholder="① / ② / ③" /></label>
           <label>放行值(JSON,默认 true)<input id="resumeValue" spellcheck="false" value="true" /></label>
           <button class="btn primary" id="btnResume">确认恢复</button>
         </div>
+        <div class="hint" id="resumeNote" style="margin-top:6px"></div>
         <div class="hint" id="resumeErr"></div>
       </div>
 
@@ -218,16 +221,6 @@
       </table>
       <p style="margin-top:10px"><a id="monitorLink" class="ok-text" style="display:none" target="_blank" rel="noopener">查看完整监控 →</a></p>
 
-      <h2>历史任务</h2>
-      <div class="params">
-        <label>搜索(thread_id / 状态 / 时间)<input id="historySearch" spellcheck="false" style="width:220px" /></label>
-        <button class="btn" id="btnHistoryRefresh">刷新</button>
-        <button class="btn" id="btnCleanCache" title="清除可再生缓存(临时目录 / __pycache__ / 日志 / 剪映草稿备份等)。不影响 outputs/ 成片、任务记录与剪映 User Data\Cache\Log。">清除缓存</button>
-      </div>
-      <table id="historyTable" style="margin-top:6px">
-        <thead><tr><th>thread_id</th><th style="width:140px">创建时间</th><th style="width:110px">状态</th><th style="width:120px">操作</th></tr></thead>
-        <tbody id="historyBody"><tr><td colspan="4" class="hint">—</td></tr></tbody>
-      </table>
     </div>
   </div>
 
@@ -237,7 +230,7 @@
       validateNewFiles, addFiles, removeFile, validateParams, hasErrors, canSubmit,
       createConsoleState, beginUpload, updateProgress, acceptCreated, failSubmission,
       buildCreateFormData, friendlyError, formatBytes, formatDuration, DEFAULT_LIMITS,
-      HISTORY_STATE_LABEL, canResume, canCancel, filterHistoryRows, parseResumeValue,
+      canCancel, parseResumeValue,
     } from "/static/workflow_console.mjs";
 
     const EVENT_TYPES = [
@@ -265,10 +258,8 @@
     const resumeBox = $("resumeBox"), resumeText = $("resumeText");
     const resumeCheckpoint = $("resumeCheckpoint"), resumeValue = $("resumeValue");
     const btnResume = $("btnResume"), resumeErr = $("resumeErr");
+    const gateCards = $("gateCards"), resumeNote = $("resumeNote"), checkpointField = $("checkpointField");
     const evTable = $("evTable"), evBody = $("evBody"), evEmpty = $("evEmpty"), monitorLink = $("monitorLink");
-    const historySearch = $("historySearch"), btnHistoryRefresh = $("btnHistoryRefresh");
-    const btnCleanCache = $("btnCleanCache");
-    const historyBody = $("historyBody");
 
     let limits = { ...DEFAULT_LIMITS };
     let consoleState = createConsoleState();
@@ -277,7 +268,6 @@
     let source = null;
     let csrfToken = null;
     let resumeGuidanceShown = false;
-    let historyRows = [];
 
     // ------------------------------------------------------------------
     // 服务端限制(config 端点;失败回退内置默认值)
@@ -314,7 +304,6 @@
       renderPromptCount();
       rebuildSelect(ratioSelect, limits.ratios);
       rebuildSelect(langSelect, limits.langs, { zh: "中文", en: "英文" });
-      loadHistory();  // 页面就绪即展示历史(阶段 5)
     }
 
     function rebuildSelect(sel, values, labels) {
@@ -586,7 +575,6 @@
       // 表单复位为空闲,允许创建下一个任务;右栏保持当前运行的实时视图
       consoleState = createConsoleState();
       renderAll();
-      loadHistory();
     }
 
     // ------------------------------------------------------------------
@@ -598,6 +586,9 @@
       monitor = createMonitorState();
       resumeGuidanceShown = false;
       resumeBox.classList.remove("active");
+      gateCards.innerHTML = "";
+      resumeNote.textContent = "";
+      checkpointField.style.display = "";
       runMeta.classList.remove("err-text");
       evBody.innerHTML = "";
       evTable.style.display = "";
@@ -667,7 +658,6 @@
         resumeBox.classList.remove("active");
       } else if (st === "completed" || st === "failed") {
         resumeBox.classList.remove("active");
-        loadHistory();
       }
     }
 
@@ -679,6 +669,7 @@
       if (!tid) return;
       resumeText.textContent = "工作流已暂停在人工关卡,等待人工处理(正常状态,不是失败)。";
       resumeErr.textContent = "";
+      resumeNote.textContent = "";
       resumeBox.classList.add("active");
       try {
         const r = await fetch(CONSOLE_API_PATHS.resumeStatus(tid), { headers: { Accept: "application/json" } });
@@ -690,7 +681,97 @@
             `确认后由服务端以 scripts/resume_workflow.py 恢复(入口 A 同款语义)。`;
         }
       } catch (e) { /* 指引获取失败不影响面板可用性 */ }
+      // 阶段 2:拉取挂起关卡的真实 payload(checkpoint aget_state;失败降级为手动输入)
+      try {
+        const r2 = await fetch(CONSOLE_API_PATHS.gates(tid), { headers: { Accept: "application/json" } });
+        if (r2.ok) {
+          const data = await r2.json();
+          renderGateCards(data.gates || [], data.common_note || "");
+        }
+      } catch (e) { /* gates 不可用时保留手动关卡输入 */ }
     }
+
+    function esc(v) { return escapeHtml(String(v ?? "")); }
+    function pathLine(label, p) {
+      if (!p) return "";
+      return `<div style="margin-top:4px"><span class="hint">${label}:</span> ` +
+        `<code style="word-break:break-all">${esc(p)}</code></div>`;
+    }
+    function renderGateCards(gates, commonNote) {
+      gateCards.innerHTML = "";
+      if (!gates.length) return;
+      const single = gates.length === 1;
+      const frag = document.createElement("div");
+      frag.appendChild(Object.assign(document.createElement("div"),
+        { textContent: `挂起人工关卡 ×${gates.length}` + (single ? "(已自动选中)" : "(多关卡:必须明确选择)") }));
+      for (const g of gates) {
+        const card = document.createElement("fieldset");
+        card.style.cssText = "margin:6px 0;padding:8px;border:1px solid var(--st-wait);border-radius:6px";
+        const issuesHtml = (g.issues || []).map((it, i) => {
+          if (it && typeof it === "object") {
+            const keys = ["index", "text", "width", "reason", "issue"];
+            const parts = keys.filter((k) => it[k] !== undefined && it[k] !== null && it[k] !== "")
+              .map((k) => `${k}=${typeof it[k] === "object" ? JSON.stringify(it[k]) : it[k]}`);
+            return `<li>#${i} ${esc(parts.join("  ") || JSON.stringify(it))}</li>`;
+          }
+          return `<li>#${i} ${esc(it)}</li>`;
+        }).join("");
+        const draftKind = g.checkpoint === "③" ? "en" : "zh";
+        card.innerHTML =
+          `<legend><label style="cursor:pointer">` +
+          `<input type="radio" name="gateRadio" value="${esc(g.checkpoint || "")}" ${single ? "checked" : ""} /> ` +
+          `<strong>${esc(g.title || g.checkpoint || "人工关卡")}</strong></label> ` +
+          `<span class="hint">${esc(g.node || "")}</span></legend>` +
+          (g.instructions ? `<div>${esc(g.instructions)}</div>` : "") +
+          `<div class="hint" style="margin-top:4px">${esc(g.action_hint || "")}</div>` +
+          (g.draft_paths || []).map((p) => pathLine("草稿文件", p)).join("") +
+          (g.draft_dirs || []).map((p) => pathLine("草稿目录", p)).join("") +
+          ((g.draft_dirs || []).length
+            ? `<button class="btn" type="button" data-draft="${draftKind}" data-open-dir style="margin-top:6px">打开草稿目录</button>`
+            : "") +
+          ((g.issues || []).length
+            ? `<div style="margin-top:6px"><span class="hint">布局异常(issues ×${g.issues.length}):</span><ul style="margin:4px 0">${issuesHtml}</ul></div>`
+            : "") +
+          pathLine("预览视频", g.preview_video_path) +
+          ((g.evidence_frames || []).length
+            ? `<div style="margin-top:4px"><span class="hint">证据帧 ×${g.evidence_frames.length}:</span>` +
+              g.evidence_frames.map((f) => pathLine("帧", f)).join("") + `</div>`
+            : "");
+        frag.appendChild(card);
+      }
+      if (commonNote) {
+        const note = document.createElement("div");
+        note.className = "hint";
+        note.style.marginTop = "4px";
+        note.textContent = commonNote;
+        frag.appendChild(note);
+      }
+      gateCards.appendChild(frag);
+      // 单关卡自动选中;多关卡不默认选(防误恢复错误关卡)
+      resumeCheckpoint.value = single ? String(gates[0].checkpoint || "") : "";
+      checkpointField.style.display = "none";  // 有卡片时隐藏手动输入(恢复值仍由此 input 提交)
+      resumeNote.textContent = single
+        ? "已自动选中唯一挂起关卡;确认恢复只继续工作流,不会自动完成剪辑。"
+        : "存在多个挂起关卡:请点击选择要恢复的那一道,再确认恢复。";
+      gateCards.querySelectorAll("input[name=gateRadio]").forEach((el) => {
+        el.addEventListener("change", () => { resumeCheckpoint.value = el.value; resumeErr.textContent = ""; });
+      });
+    }
+    gateCards.addEventListener("click", async (ev) => {
+      const btn = ev.target.closest("[data-open-dir]");
+      if (!btn) return;
+      const tid = liveThreadId;
+      if (!tid) return;
+      btn.disabled = true;
+      try {
+        const data = await postJson(CONSOLE_API_PATHS.openDraftDir(tid), { draft: btn.dataset.draft || "zh" });
+        resumeNote.textContent = `已在系统文件管理器打开: ${data.opened || ""}`;
+      } catch (e) {
+        resumeErr.textContent = e && e.message ? e.message : "打开草稿目录失败";
+      } finally {
+        btn.disabled = false;
+      }
+    });
     async function postJson(url, body) {
       const token = await ensureCsrf();
       const r = await fetch(url, {
@@ -717,7 +798,6 @@
         resumeBox.classList.remove("active");
         resumeGuidanceShown = false;
         runMeta.textContent = "执行状态:恢复已提交,等待执行事件…";
-        loadHistory();
       } catch (err) {
         resumeErr.textContent = err && err.message ? err.message : "恢复提交失败";
       } finally {
@@ -742,100 +822,9 @@
         runMeta.textContent = `执行状态:取消失败 —— ${err && err.message ? err.message : ""}`;
       } finally {
         btnCancel.disabled = false;
-        loadHistory();
       }
     });
 
-    // ------------------------------------------------------------------
-    // 阶段 5:历史任务列表(状态经服务端调和;搜索为客户端过滤)
-    // ------------------------------------------------------------------
-    async function loadHistory() {
-      try {
-        const r = await fetch(`${CONSOLE_API_PATHS.listRuns}?limit=50`, { headers: { Accept: "application/json" } });
-        if (!r.ok) return;
-        const data = await r.json();
-        historyRows = Array.isArray(data.runs) ? data.runs : [];
-      } catch (e) { return; }
-      renderHistory();
-    }
-    function renderHistory() {
-      const rows = filterHistoryRows(historyRows, historySearch.value);
-      historyBody.innerHTML = "";
-      if (!rows.length) {
-        historyBody.innerHTML = `<tr><td colspan="4" class="hint">${historyRows.length ? "无匹配任务" : "暂无任务"}</td></tr>`;
-        return;
-      }
-      for (const row of rows) {
-        const tr = document.createElement("tr");
-        const label = HISTORY_STATE_LABEL[row.state] || row.state || "—";
-        const created = typeof row.created_at === "string" ? row.created_at.replace("T", " ").slice(0, 19) : "—";
-        tr.innerHTML =
-          `<td>${escapeHtml(row.thread_id || "—")}</td>` +
-          `<td>${escapeHtml(created)}</td>` +
-          `<td>${escapeHtml(label)}</td>`;
-        const tdOp = document.createElement("td");
-        const actions = [];
-        const mkBtn = (text, fn) => {
-          const b = document.createElement("button");
-          b.className = "btn";
-          b.style.padding = "2px 8px";
-          b.textContent = text;
-          b.addEventListener("click", fn);
-          return b;
-        };
-        actions.push(mkBtn("查看", () => subscribeToThread(row.thread_id)));
-        if (canResume(row.state)) {
-          actions.push(mkBtn("恢复", async () => {
-            subscribeToThread(row.thread_id);
-            resumeCheckpoint.value = "";
-            await showResumePanel();
-          }));
-        }
-        if (canCancel(row.state)) {
-          actions.push(mkBtn("取消", async () => {
-            if (!window.confirm(`确认取消运行 ${row.thread_id}?`)) return;
-            try {
-              await postJson(CONSOLE_API_PATHS.cancelRun(row.thread_id), {});
-              loadHistory();
-              if (liveThreadId === row.thread_id) {
-                setChip("failed", "已取消");
-                runMeta.textContent = "执行状态:已取消(子进程已终止)";
-              }
-            } catch (err) {
-              window.alert(`取消失败:${err && err.message ? err.message : ""}`);
-            }
-          }));
-        }
-        for (const b of actions) { tdOp.appendChild(b); tdOp.appendChild(document.createTextNode(" ")); }
-        tr.appendChild(tdOp);
-        historyBody.appendChild(tr);
-      }
-    }
-    historySearch.addEventListener("input", renderHistory);
-    btnHistoryRefresh.addEventListener("click", loadHistory);
-
-    // ------------------------------------------------------------------
-    // 2026-11-06:清除可再生缓存(维护入口;服务端有冷却限流与活跃任务 409)
-    // ------------------------------------------------------------------
-    btnCleanCache.addEventListener("click", async () => {
-      if (btnCleanCache.disabled) return;
-      if (!window.confirm(
-        "确认清除可再生缓存?(临时目录 / __pycache__ / 日志 / 剪映草稿备份等;"
-        + "不影响 outputs/ 成片与任务记录)"
-      )) return;
-      btnCleanCache.disabled = true;
-      try {
-        const data = await postJson(CONSOLE_API_PATHS.clearCache, {});
-        const n = Number(data.cleaned_count || 0);
-        const errs = Array.isArray(data.errors) ? data.errors.length : 0;
-        window.alert(errs ? `已清理 ${n} 个路径,${errs} 项失败(多为被占用的日志/缓存,可稍后再试)` : `已清理 ${n} 个缓存路径`);
-        loadHistory();
-      } catch (err) {
-        window.alert(`清除缓存失败:${err && err.message ? err.message : ""}`);
-      } finally {
-        btnCleanCache.disabled = false;
-      }
-    });
   </script>
 </body>
 </html>
