@@ -171,3 +171,39 @@
 | 集成测试 | 仅剩 §3 既有失败 `test_tail_chain_applies_to_both_drafts`;`test_english_draft_gets_subtitles_and_text_fx` 断言按双形态契约更新后通过 |
 | 前端 node mjs | 36/36 通过 |
 | 剪映实机 | 待操作员按 §4 清单用**新建任务**重跑(旧线程草稿为旧格式,恢复不补发布) |
+
+## 7. 切镜抽帧超时→空草稿修复记录(2026-11-07;§6.3 实机复验前的最后一轮)
+
+### 7.1 实机现象与根因(五层)
+
+新建验证任务 `console-da0cf811f347`(69s 4K HEVC Main10/HLG iPhone 源):剪映首页正常列出草稿、双击正常打开(**§6 修复在本任务上验证生效**),但草稿为 0 片段/00:00 空时间轴,关卡①的"调整镜头顺序"无从下手。根因链:
+
+1. **触发**:`split_shots` 抽帧用全分辨率 PNG(单帧 ~9.2MB)+ `timeout=60`;该源软解 HEVC 10bit + 落盘吞吐 328 帧/60s,完成需 ~63.3s → 超预算 3.3s 被杀(帧目录 mtime 13:55:47→13:56:47 精确 60s);
+2. **放大**:`except (FileNotFoundError, TimeoutExpired): return []` 把两类可恢复性完全不同的失败同等"静默放弃",已落盘的 328 张有效帧被丢弃;`len(frames)<2` 早退无 error 标记;
+3. **贯通**:understand/filter/group(`no_input`/`empty_input`)、plan(`method: empty`)、qa_gate(空 plan 显式放行,plan §4.2 设计)、CanonicalTimeline(允许空 clips)、node_05(单空 storyline 照发草稿)、node_06(无条件 interrupt)—— 全链无一处把"空"当失败;
+4. **哲学**:"环境级失败降级"纪律未覆盖数据缺陷 —— 缺"时间轴至少一个镜头"这条语义不变量;
+5. **观测**:全链无异常 → 监控"完成 23 · 失败 0";线索只埋在产物 method 字段与 stderr 警告里(其中 `探测分辨率失败('1080x')` 还是另一个被降级纪律吞掉的 bug,见 7.2)。
+
+### 7.2 修复内容
+
+前 4 项已随 `b8548dd` 入库并推送:
+
+- `storyline_capabilities/split_shots.py`:抽帧降分辨率 480 宽(`scale=480:-2`,帧差无需原分辨率)+ 超时 300s + **超时不弃帧**(已落盘帧继续参与切分)+ 真空结果带 `error=no_frames`;min_shot 合并后补 **max_shot 后置强制切**(连续运动素材帧帧超阈值,相邻段全部被合并成 1 个 69s 巨镜头,逐对强切分支永远轮不到 —— 违反 docstring "超过 max_shot 强制切"契约,现兜底切为 3×30s);
+- `nodes/node_05_generate_draft.py`:canonical `clips=0` → raise ContractInvalid fail-closed —— 不发布空草稿、不挂死局关卡①(qa_gate 空 plan 放行是 plan §4.2 既定设计,不翻转,拦截点上移到 node_05);
+- `nodes/storyline/node_split_shots.py`:0 镜头 → `SPLIT_SHOTS_EMPTY` 写 error_log(监控事件流直接可见切镜层原因);
+- `video_edit_capabilities/render.py`:`probe_video_size` 兼容本机 ffprobe csv 输出尾部 `x` 分隔符(实机输出 `1920x1080x`,旧解析 `int("1080x")` 崩,归一化被降级跳过)。
+
+本轮追加:
+
+- `storyline_capabilities/load_media.py`:ffprobe `-show_entries` 补 `codec_type,sample_rate` —— 此前分类循环永不命中,宽高/fps/has_audio/sample_rate 全 0;`has_audio=False` 连带 `graph.py` ASR 分支路由永不触发(功能缺陷,非仅显示问题);
+- 测试密封:`test_node_05` 两用例注入 `proc_checker=lambda: False`(原子双写/快照/verify 仍真实执行,剪映开着不再环境性失败;互斥行为仍由 test_safe_write_guard / test_atomic_writer* 覆盖);
+- 测试:新增 `test_split_shots_extraction_robustness.py`(4 用例:超时保帧/scale+300s 断言/ffprobe 缺失 no_frames 标记/max_shot 强切无缝)+ `test_empty_storyline_fail_closed.py`(4 用例:node_05 空守卫 raise/1-clip 正例不误伤/node_split_shots 空诊断/probe 尾分隔符)+ load_media ffprobe 分类回归用例(随 b8548dd / 本轮分别入库)。
+
+### 7.3 修复后回归
+
+| 项目 | 结果 |
+|---|---|
+| 单元测试(tests/unit 全量) | **全部通过**(1512 用例,exit 0;含新增 9 用例) |
+| 真机复核(split_shots) | 0001.mov(69s 4K HEVC 10bit):76s 抽帧 346/346,切出 3 镜头(30s/30s/9.1s,无缝),无 error |
+| 真机复核(load_media) | 同源 metadata:1920x1080 / fps 30.0 / has_audio True / 44100Hz 全字段正确填充 |
+| 剪映实机 | 待操作员**关闭剪映后新建任务**重跑(工作流为每任务独立子进程,新任务自动带上修复;挂起任务 console-da0cf811f347 的 state 已是空 storyline 不回补,其空草稿卡片在剪映内手动删除) |
