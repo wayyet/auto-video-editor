@@ -207,3 +207,45 @@
 | 真机复核(split_shots) | 0001.mov(69s 4K HEVC 10bit):76s 抽帧 346/346,切出 3 镜头(30s/30s/9.1s,无缝),无 error |
 | 真机复核(load_media) | 同源 metadata:1920x1080 / fps 30.0 / has_audio True / 44100Hz 全字段正确填充 |
 | 剪映实机 | 待操作员**关闭剪映后新建任务**重跑(工作流为每任务独立子进程,新任务自动带上修复;挂起任务 console-da0cf811f347 的 state 已是空 storyline 不回补,其空草稿卡片在剪映内手动删除) |
+
+## 8. beat_align 总时长修复 + 切镜质量升级 TransNetV2(2026-11-08)
+
+### 8.1 beat_align 总时长被 BGM 参考时长架空 —— 修复与实机复验
+
+**现象**:任务 `console-9b8f05ce5096`(34.235s 素材,target 35000ms),plan_timeline 走 beat_align 后时间轴 **119850ms**(255×470)——BGM 库回退条目 `bgm_upbeat_energetic` 的 `duration_ms=120000` 被当成时间轴总长唯一权威,单 clip 全吃,素材 30s @ speed 1.0 铺满 2 分钟;qa_gate deterministic 检查重试 3 次不变、按设计强制放行。
+
+**修复**(随合并提交 `175afec` 入库):`storyline_capabilities/timeline_planner.py` 的 `elif has_bgm:` 分支取 `cap_ms = min(target_ms, Σ素材跨度)` 做硬上限传给 `_distribute_by_beats(max_total_ms=...)`;超限时**向内对齐到最大整数节拍点**(`(cap_ms // beat_period) * beat_period`),保住"落点在节拍上"语义。BGM 库条目是元数据参考(path 可为空),其 duration_ms 不能架空用户目标与素材现实。TTS 路径与无 BGM 的 scale 路径不受影响。
+
+**测试套件全局密封**(同提交):新增 `tests/unit/conftest.py` autouse fixture 把 `draft_ops.atomic_writer._default_proc_checker` / `draft_ops.draft_publisher._default_proc_checker` 桩成"剪映不在跑"——此前剪映客户端开着跑全量回归,真实写盘路径(快照/双写/verify)触发写入互斥严格模式直接 raise,45 例环境性失败。显式传 `proc_checker` 的用例(用例级 monkeypatch)不受影响。新增 `test_timeline_planner_beats_cap.py` 5 用例(封顶/取 min/约束内不变/多 clip 无缝/scale 路径不受影响)。
+
+**实机复验**(任务 `console-29c2357af339`,2026-11-08,同素材 0001.mov 34.235s,剪映关闭,经创建台 API 新建):
+
+| 验收项 | 结果 |
+|---|---|
+| split_shots | 2 镜头(30s + 4.2s,max_shot 强切),与上一任务一致 |
+| timeline_plan.json | `method=beat_align`,时间轴 **29610ms = 63×470**(≤35000,节拍对齐),`warnings=[]` |
+| 草稿 | 剪映草稿库 `AutoVideo_console-29c2357af339`,video 轨 1 段 `target_timerange.duration=29610000µs`,speed 1.0 |
+| 关卡① | node_06_human_reorder 正常挂起,payload 指向真实草稿目录 |
+| 挂起任务 | `console-9b8f05ce5096` 不回补(state 已是坏计划,保持原样) |
+
+已知备注:该验证任务的 prompt 经 curl 命令行传入被 ANSI 代码页(GBK)转码,initial_state 回显乱码 —— **调用方问题,非 console 缺陷**(经浏览器表单创建的任务无此问题);下游 LLM 产物(理解字幕/脚本)均为正确中文,时间轴验收不受影响。
+
+### 8.2 选项C(治本):切镜质量升级 —— TransNetV2 接入(阶段 5)
+
+**背景**:转场缺失的根因之一是切镜粒度粗(帧差法把 34s 手持素材切成 30s+4.2s 两个巨镜头),镜头数少 → 边界少 → 转场/卡点无处安放。用户在"mapper 消费转场(小步)/node_09 开场转场(补缺口)/切镜质量(治本)"三方向中选 C。
+
+**实现**:
+
+- 主 venv 装 CPU torch(用户决策:不走独立 venv 子进程,原 `split_shots_via_vendored` stub 移除);
+- `vendor/transnetv2/transnetv2_pytorch.py`:soCzech/TransNetV2 官方 PyTorch 推理实现 vendored(CC BY-NC-SA,本地私人使用);
+- `storyline_capabilities/split_shots.py`:
+  - `transnetv2_split_shots()`:ffmpeg rawvideo rgb24 管道抽帧(48×27@25fps,3888 字节/帧,免 PNG 落盘)→ 滑窗推理(窗 100/步 50/首尾补 25,官方 `predict_frames` 口径)→ sigmoid ≥0.5 切点 → **复用与帧差版共享的 min_shot 合并 / max_shot 强切管线**(`_clips_from_cuts`,从帧差版原样抽出),`method=transnetv2`;
+  - 检测器选择 `STORYLINE_SPLIT_SHOTS_DETECTOR=auto|transnetv2|frame_diff`(config.py 新增,默认 auto):auto = torch 可导入+权重存在(`.storyline/models/transnetv2-pytorch-weights.pth`,`STORYLINE_TRANSNETV2_WEIGHTS` 可覆盖)才走 TransNetV2,否则/推理失败自动回退帧差,`detector_fallback` 原因经节点写 `TRANSNET_FALLBACK` error_log + status tag,**不静默**;
+- `nodes/storyline/node_split_shots.py`:docstring 更新 + 回退原因透传;
+- `scripts/download_models.ps1` / `download_resources.ps1`:"权重暂无运行时读方"注释更新为已接入。
+
+**测试**:`tests/unit/test_split_shots_transnet.py` 11 用例,全程无 torch 依赖(桩 torch module/模型/抽帧/ffprobe):滑窗切分数学、切点→clips 契约、min_shot 合并语义、不可用 raise、auto 回退、强制 transnetv2 失败回退、frame_diff 直通不触 TransNet、media_id 接线、media list 回退聚合、节点层 TRANSNET_FALLBACK 透传。
+
+**回归**:tests/unit 全量 exit 0(1515 + 新增 11 用例)。
+
+**实机复验**:待新建任务验证 —— 预期 `split_shots.json` `method=transnetv2`、34s 素材镜头数显著多于帧差版 2 段,关卡①时间轴多段正常。
