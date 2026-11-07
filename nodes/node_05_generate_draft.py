@@ -141,6 +141,17 @@ def generate_initial_jianying_draft(
             "error_log": errors,
         }
 
+    # 3a-2. 空 storyline fail-closed(2026-11-07 实机回归):切镜 0 镜头时
+    # canonical plan 本身合法(Pydantic 可过)但 clips=0,旧行为会发布空草稿
+    # 并挂关卡① —— 人工面对一张 00:00 空时间轴的"调整镜头顺序"死局。
+    # 直接终止运行,经 node.failed 把原因透出到监控(与 7860 fail-closed 纪律
+    # 一致;qa_gate 对空 plan 的放行是 plan §4.2 既有设计,不在此翻转)。
+    if storyline_plan and not storyline_plan.get("clips"):
+        raise ContractInvalid(
+            "[node_05] storyline 时间轴为空(clips=0,典型原因:切镜无产出,"
+            "见 storyline/split_shots.json),拒绝发布空草稿并挂关卡①",
+        )
+
     # 3b. 原生转换(2026-11-07 剪映导入修复):三路产物统一转剪映原生 schema
     # (mapper 4 键格式首页可列但双击必失败);转换失败降级保留 storyline 格式,
     # 发布链(draft_publisher)会对旧格式再做一次转换兜底。

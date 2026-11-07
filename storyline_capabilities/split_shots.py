@@ -24,6 +24,11 @@ DEFAULT_MIN_SHOT_MS: int = 1000
 DEFAULT_MAX_SHOT_MS: int = 30000
 DEFAULT_FRAMES_PER_SECOND: int = 5
 DEFAULT_DIFF_THRESHOLD: float = 12.0  # 0~255 像素平均差阈值
+# 帧差分析抽帧宽度:帧差只需要看"画面变没变",480 宽足够且把抽帧耗时/磁盘
+# 占用压低 1-2 个数量级(1080p 10bit HDR 源全尺寸 PNG 单帧 ~9MB)。
+DEFAULT_ANALYSIS_WIDTH: int = 480
+# ffmpeg 抽帧超时:60s 曾在 69s 4K HEVC 源上超时且静默返回空 → 0 镜头级联。
+DEFAULT_EXTRACT_TIMEOUT_S: int = 300
 
 
 # ---------------------------------------------------------------------------
@@ -70,8 +75,16 @@ def _run_ffmpeg_extract_frames(
     *,
     fps: int,
     out_dir: Path,
+    analysis_width: int = DEFAULT_ANALYSIS_WIDTH,
+    timeout_s: int = DEFAULT_EXTRACT_TIMEOUT_S,
 ) -> list[Path]:
-    """用 ffmpeg 抽帧到 out_dir,返回 frame 路径列表(按时间顺序)。"""
+    """用 ffmpeg 抽帧到 out_dir,返回 frame 路径列表(按时间顺序)。
+
+    帧差分析不需要原分辨率:统一缩到 ``analysis_width`` 宽(等比、偶数高),
+    否则 1080p 10bit 源全尺寸抽帧又慢又占盘,60s 超时曾导致"0 帧静默返回"。
+    超时**不再静默放弃**:已写出的帧继续参与切分(部分帧好过空结果);
+    只有 ffmpeg 二进制缺失(FileNotFoundError)才返回空,由上层报错。
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     pattern = out_dir / "frame_%05d.png"
     try:
@@ -82,18 +95,20 @@ def _run_ffmpeg_extract_frames(
                 "-i",
                 str(video),
                 "-vf",
-                f"fps={fps}",
+                f"fps={fps},scale={analysis_width}:-2",
                 "-q:v",
                 "2",
                 str(pattern),
             ],
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=timeout_s,
             check=False,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except FileNotFoundError:
         return []
+    except subprocess.TimeoutExpired:
+        pass  # 超时不放弃:落盘的帧照常用
     return sorted(out_dir.glob("frame_*.png"))
 
 
@@ -137,6 +152,8 @@ def frame_difference_split_shots(
     max_shot_ms: int = DEFAULT_MAX_SHOT_MS,
     output_dir: Optional[Path] = None,
     progress_cb: Optional[Callable[[int, int], None]] = None,
+    analysis_width: int = DEFAULT_ANALYSIS_WIDTH,
+    extract_timeout_s: int = DEFAULT_EXTRACT_TIMEOUT_S,
 ) -> dict[str, Any]:
     """帧差版镜头切分(本地;无 torch / 无 TransNetV2)。
 
@@ -148,6 +165,8 @@ def frame_difference_split_shots(
         max_shot_ms: 最大时长;超过此值的镜头会被强制切(保留断点)。
         output_dir: 抽帧临时目录;None 时用 ``<video>.frames/``。
         progress_cb: 进度回调 ``(done, total)``,用于 UI 进度条。
+        analysis_width: 帧差分析抽帧宽度(降分辨率提速),默认 480。
+        extract_timeout_s: ffmpeg 抽帧超时秒数,默认 300。
 
     Returns:
         ``{"clips": [{clip_id, source_in_ms, source_out_ms, ...}, ...], "method": "frame_diff", ...}``
@@ -161,9 +180,20 @@ def frame_difference_split_shots(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. ffmpeg 抽帧
-    frames = _run_ffmpeg_extract_frames(video, fps=fps, out_dir=output_dir)
+    frames = _run_ffmpeg_extract_frames(
+        video,
+        fps=fps,
+        out_dir=output_dir,
+        analysis_width=analysis_width,
+        timeout_s=extract_timeout_s,
+    )
     if len(frames) < 2:
-        return {"clips": [], "method": "frame_diff", "frames_total": len(frames)}
+        return {
+            "clips": [],
+            "method": "frame_diff",
+            "frames_total": len(frames),
+            "error": "no_frames",
+        }
 
     # 2. 帧间差,生成边界候选
     cuts_ms: list[int] = [0]  # 第一帧的位置 = 0 ms
@@ -267,6 +297,39 @@ def frame_difference_split_shots(
             # source_ref 是嵌套 dict,浅拷贝会与原 clip 共享引用 → 单独复制一份
             copied["source_ref"] = dict(c.get("source_ref") or {})
             final_clips.append(copied)
+    # max_shot 后置强制切(2026-11-07 实机回归):连续运动素材(手持旅游片)
+    # 帧帧超阈值 → 全部相邻段被 min_shot 合并进同一个 clip,上面的逐对强制切
+    # 分支永远轮不到,最终产出 1 个 69s 巨镜头(违反"超过 max_shot 强制切"
+    # 的文档契约)。这里对合并后的最终 clip 再兜底切一遍。
+    enforced: list[dict[str, Any]] = []
+    for c in final_clips:
+        span = c["timeline_out_ms"] - c["timeline_in_ms"]
+        if span <= max_shot_ms:
+            enforced.append(c)
+            continue
+        cur = c["timeline_in_ms"]
+        while cur + max_shot_ms < c["timeline_out_ms"]:
+            enforced.append(
+                _make_clip(
+                    f"clip_{len(enforced) + 1:04d}",
+                    cur,
+                    cur + max_shot_ms,
+                    method="frame_diff_max_split",
+                    video_path=str(c.get("path") or video),
+                )
+            )
+            cur += max_shot_ms
+        if c["timeline_out_ms"] - cur > 0:
+            enforced.append(
+                _make_clip(
+                    f"clip_{len(enforced) + 1:04d}",
+                    cur,
+                    c["timeline_out_ms"],
+                    method="frame_diff_max_split",
+                    video_path=str(c.get("path") or video),
+                )
+            )
+    final_clips = enforced
     # 重排 clip_id
     for i, c in enumerate(final_clips, start=1):
         c["clip_id"] = f"clip_{i:04d}"
@@ -311,6 +374,8 @@ def split_shots(
     diff_threshold: float = DEFAULT_DIFF_THRESHOLD,
     min_shot_ms: int = DEFAULT_MIN_SHOT_MS,
     max_shot_ms: int = DEFAULT_MAX_SHOT_MS,
+    analysis_width: int = DEFAULT_ANALYSIS_WIDTH,
+    extract_timeout_s: int = DEFAULT_EXTRACT_TIMEOUT_S,
 ) -> dict[str, Any]:
     """对单个 video 做镜头切分;或对 list 输入 → 调 ``split_shots_for_media_list``。
 
@@ -331,6 +396,8 @@ def split_shots(
             diff_threshold=diff_threshold,
             min_shot_ms=min_shot_ms,
             max_shot_ms=max_shot_ms,
+            analysis_width=analysis_width,
+            extract_timeout_s=extract_timeout_s,
         )
     if isinstance(media_artifact, (str, Path)):
         video_path = Path(media_artifact)
@@ -351,6 +418,8 @@ def split_shots(
         diff_threshold=diff_threshold,
         min_shot_ms=min_shot_ms,
         max_shot_ms=max_shot_ms,
+        analysis_width=analysis_width,
+        extract_timeout_s=extract_timeout_s,
     )
     # 关联 media_id 与权威 path(understand_clips 靠 source_ref.media_id 找素材)
     for c in result.get("clips", []):
@@ -398,6 +467,8 @@ __all__ = [
     "DEFAULT_MAX_SHOT_MS",
     "DEFAULT_FRAMES_PER_SECOND",
     "DEFAULT_DIFF_THRESHOLD",
+    "DEFAULT_ANALYSIS_WIDTH",
+    "DEFAULT_EXTRACT_TIMEOUT_S",
     "frame_difference_split_shots",
     "split_shots_via_vendored",
     "split_shots",

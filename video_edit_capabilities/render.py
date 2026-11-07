@@ -108,11 +108,13 @@ def probe_video_size(source: Path) -> tuple[int, int]:
     if proc.returncode != 0:
         raise RuntimeError(f"ffprobe failed: {(proc.stderr or '').strip()}")
     out = (proc.stdout or "").strip()
-    if "x" not in out:
+    # csv=s=x 输出形如 "1920x1080";部分 ffprobe 构建会带**尾部分隔符**
+    # ("1920x1080x",2026-11-07 实机回归),按 x 全量切分后取前两个非空段。
+    parts = [p.strip() for p in out.split("x") if p.strip()]
+    if len(parts) < 2:
         raise RuntimeError(f"could not parse ffprobe output for {source}: {out!r}")
-    width_s, height_s = out.split("x", 1)
-    width = int(width_s.strip())
-    height = int(height_s.strip())
+    width = int(parts[0])
+    height = int(parts[1])
     if width <= 0 or height <= 0:
         raise RuntimeError(f"invalid dimensions from ffprobe for {source}: {width}x{height}")
     return width, height

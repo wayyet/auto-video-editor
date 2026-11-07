@@ -68,6 +68,28 @@ def storyline_split_shots_node(state: WorkflowState) -> dict:
             "status_log": append_status_tag(state, "storyline_split_shots_failed"),
         }
 
+    # 空切分诊断标记(2026-11-07 实机回归):0 镜头继续流转只会级联出空 storyline
+    # (understand/filter/plan 全 no_input),最终在 node_05 fail-closed 终止。
+    # 这里先把原因写进 error_log,监控事件流能直接看到切镜层的原因。
+    shots = result.get("shots") or {}
+    total_clips = sum(len(v or []) for v in shots.values())
+    video_count = sum(
+        1 for m in media_list if isinstance(m, dict) and m.get("media_type") == "video"
+    )
+    if video_count and total_clips == 0:
+        per_media = ", ".join(
+            f"{mid}: {len(v or [])} clips" for mid, v in shots.items()
+        )
+        return {
+            "status_log": append_status_tag(state, "storyline_split_shots_empty"),
+            "error_log": [
+                *list(state.get("error_log", []) or []),
+                f"[storyline:split_shots] SPLIT_SHOTS_EMPTY: "
+                f"{video_count} 个视频切出 0 个镜头({per_media});"
+                f"node_05 将拒绝发布空草稿",
+            ],
+        }
+
     out_path = out_dir / "split_shots.json"
     out_path.write_text(
         json.dumps(result, ensure_ascii=False, default=str), encoding="utf-8"
