@@ -272,6 +272,7 @@ class _FakeCursor:
         self.executed: list[tuple[str, tuple]] = []
         self._results = results or []
         self.description = None
+        self.rowcount = 0  # DELETE/UPDATE 影响行数(delete_thread_events 用)
 
     def execute(self, sql, params=()):
         self.executed.append((sql, params))
@@ -421,3 +422,29 @@ def test_append_event_rejects_malformed_event_without_touching_db(monkeypatch):
     monkeypatch.setattr(store, "_conn", conn_spy)
     assert store.append_event({"event_type": "node.started"}) is None  # 缺字段
     assert calls == []
+
+
+def test_delete_thread_events_success_and_degrade(monkeypatch, caplog):
+    """删除事件:成功返回 rowcount;连接失败降级 None(目录删除不被阻断)。"""
+    cursor = _FakeCursor()
+    cursor.rowcount = 5
+    conn = _wire_fake_conn(monkeypatch, cursor)
+    deleted = store.delete_thread_events("console-abcdef123456")
+    assert deleted == 5
+    sql, params = cursor.executed[0]
+    assert "DELETE FROM workflow_run_events" in sql
+    assert "thread_id = %s" in sql
+    assert params == ("console-abcdef123456",)
+    assert conn.commits == 1
+
+    @contextmanager
+    def broken_conn():
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(store, "_conn", broken_conn)
+    before = store.degraded_count()
+    with caplog.at_level(logging.ERROR, logger="monitoring.workflow_event_store"):
+        result = store.delete_thread_events("console-abcdef123456")
+    assert result is None
+    assert store.degraded_count() == before + 1
+    assert any("delete_thread_events" in r.message for r in caplog.records)

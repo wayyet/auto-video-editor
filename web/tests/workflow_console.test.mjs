@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 
 import {
   CONSOLE_API_PATHS, CONSOLE_BACKENDS, DEFAULT_LIMITS, HISTORY_STATE_LABEL, acceptCreated, addFiles,
-  applyEvent, beginUpload, buildCreateFormData, canCancel, canResume, canSubmit,
+  applyEvent, beginUpload, buildCreateFormData, canCancel, canDelete, canResume, canSubmit,
   createConsoleState, createMonitorState, failSubmission, filterHistoryRows,
   formatBytes, formatDuration, friendlyError, historyActions, makeFileEntry,
   parseResumeValue, removeFile, updateProgress, validateNewFiles, validateParams,
@@ -251,6 +251,10 @@ test("CONSOLE_API_PATHS 阶段 5 路径与后端路由契约一致", () => {
     CONSOLE_API_PATHS.cancelRun(tid),
     "/api/console/runs/console-abcdef123456/cancel",
   );
+  assert.equal(
+    CONSOLE_API_PATHS.deleteRun(tid),
+    "/api/console/runs/console-abcdef123456/delete",
+  );
 });
 
 test("canResume / canCancel 状态门禁(waiting_human 是唯一可恢复态)", () => {
@@ -265,11 +269,21 @@ test("canResume / canCancel 状态门禁(waiting_human 是唯一可恢复态)", 
   }
 });
 
+test("canDelete 状态门禁(仅终态 + prepared;与服务端 DELETABLE_STATES 一致)", () => {
+  for (const s of ["completed", "failed", "cancelled", "prepared"]) {
+    assert.equal(canDelete(s), true, s);
+  }
+  for (const s of ["starting", "running", "waiting_human", "unknown"]) {
+    assert.equal(canDelete(s), false, s);
+  }
+});
+
 test("historyActions 按状态给操作提示", () => {
-  assert.deepEqual(historyActions({ state: "waiting_human" }), { resume: true, cancel: false });
-  assert.deepEqual(historyActions({ state: "running" }), { resume: false, cancel: true });
-  assert.deepEqual(historyActions({ state: "completed" }), { resume: false, cancel: false });
-  assert.deepEqual(historyActions(null), { resume: false, cancel: false });
+  assert.deepEqual(historyActions({ state: "waiting_human" }), { resume: true, cancel: false, delete: false });
+  assert.deepEqual(historyActions({ state: "running" }), { resume: false, cancel: true, delete: false });
+  assert.deepEqual(historyActions({ state: "completed" }), { resume: false, cancel: false, delete: true });
+  assert.deepEqual(historyActions({ state: "prepared" }), { resume: false, cancel: false, delete: true });
+  assert.deepEqual(historyActions(null), { resume: false, cancel: false, delete: false });
 });
 
 test("filterHistoryRows:空查询原样返回;按 thread_id/状态/中文词/时间过滤", () => {

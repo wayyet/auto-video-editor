@@ -38,6 +38,7 @@ __all__ = [
     "append_event",
     "fetch_events_after",
     "latest_snapshot",
+    "delete_thread_events",
     "degraded_count",
 ]
 
@@ -245,3 +246,27 @@ def latest_snapshot(thread_id: str) -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001
         _record_degraded(f"latest_snapshot({thread_id!r})", e)
         return empty
+
+
+# ---------------------------------------------------------------------------
+# 删除(历史任务清理;web.console_service.delete_run 尽力调用)
+# ---------------------------------------------------------------------------
+def delete_thread_events(thread_id: str) -> Optional[int]:
+    """删除指定线程的全部事件行,返回删除行数;存储不可用/失败降级 ``None``。
+
+    供监控页"删除历史任务"尽力清理 SSE 回放/断线补发数据;调用方约定:
+    事件删除失败**不阻断**任务目录删除,只把 ``None`` 随响应报告给操作员。
+    """
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"DELETE FROM {EVENTS_TABLE} WHERE thread_id = %s",
+                    (thread_id,),
+                )
+                deleted = cur.rowcount
+            conn.commit()
+        return int(deleted) if deleted is not None and deleted >= 0 else 0
+    except Exception as e:  # noqa: BLE001 — 降级语义见模块 docstring
+        _record_degraded(f"delete_thread_events({thread_id!r})", e)
+        return None

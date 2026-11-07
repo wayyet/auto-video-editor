@@ -39,6 +39,8 @@ export const CONSOLE_API_PATHS = Object.freeze({
   runDetail: (threadId) => `/api/console/runs/${encodeURIComponent(threadId)}`,
   resumeRun: (threadId) => `/api/console/runs/${encodeURIComponent(threadId)}/resume`,
   cancelRun: (threadId) => `/api/console/runs/${encodeURIComponent(threadId)}/cancel`,
+  // 2026-11-07:历史任务行内删除(终态/未启动;任务目录+PG事件,不可恢复)
+  deleteRun: (threadId) => `/api/console/runs/${encodeURIComponent(threadId)}/delete`,
   // 2026-11-06:清除可再生缓存(维护入口)
   clearCache: "/api/console/cache/clear",
   // 只读探针:人工关卡恢复指引
@@ -329,6 +331,16 @@ export function canCancel(state) {
 }
 
 /**
+ * 删除只对终态 + 已就绪未启动(prepared,从未有进程)开放;与后端
+ * web/console_service.py DELETABLE_STATES 冻结契约一致 —— running/starting/
+ * waiting_human/unknown 一律 409 拒删,这里只做即时反馈,服务端是权威。
+ */
+export function canDelete(state) {
+  return state === "completed" || state === "failed"
+    || state === "cancelled" || state === "prepared";
+}
+
+/**
  * 历史列表客户端过滤(任务搜索,阶段 5):query 按 thread_id / 状态 /
  * 状态中文词 / 创建时间 做大小写不敏感的子串匹配。
  */
@@ -370,9 +382,9 @@ export function parseResumeValue(raw) {
 
 /**
  * 单行历史 → 操作提示(哪个动作可用;服务端仍是权威,这里只做即时反馈)。
- * 返回 { resume: bool, cancel: bool }。
+ * 返回 { resume: bool, cancel: bool, delete: bool }。
  */
 export function historyActions(row) {
   const state = row && row.state;
-  return { resume: canResume(state), cancel: canCancel(state) };
+  return { resume: canResume(state), cancel: canCancel(state), delete: canDelete(state) };
 }

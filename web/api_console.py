@@ -463,6 +463,24 @@ def cancel_run(request: Request, thread_id: str) -> JSONResponse:
     )
 
 
+@router.post("/runs/{thread_id}/delete")
+def delete_run(request: Request, thread_id: str) -> JSONResponse:
+    """删除历史任务(2026-11-07):任务目录(含成片)+ PG 事件尽力清理,不可恢复。
+
+    仅终态/未启动记录可删(running/waiting_human/unknown 409 拒删,fail-closed);
+    ``events_deleted`` 为 ``None`` 表示事件清理降级(如 PG 不可达),目录已删。
+    """
+    _verify_same_origin(request)
+    _enforce_csrf(request)
+    try:
+        result = console_service.delete_run(thread_id)
+    except ConsoleLaunchError as e:
+        raise _launch_error(e) from e
+    except ConsoleUploadError as e:
+        raise _upload_error(e) from e
+    return JSONResponse(status_code=200, content={"ok": True, **result})
+
+
 # ---------------------------------------------------------------------------
 # 2026-11-06 补充:清除可再生缓存(维护入口)
 # ---------------------------------------------------------------------------

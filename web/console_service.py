@@ -835,3 +835,68 @@ def cancel_run(
     if not record:
         raise ConsoleLaunchError("取消成功但运行记录更新失败", status_code=500)
     return record
+
+
+#: 允许删除的调和态:三个终态 + prepared(已就绪未启动,从未有进程,纯惰性记录)。
+#: waiting_human/running/starting 有活跃进程,unknown = 事件库不可达无法确证
+#: (事件库是事实来源,绝不把"查不到"当成功),一律 409 拒删。
+DELETABLE_STATES: frozenset[str] = frozenset(
+    {"completed", "failed", "cancelled", "prepared"}
+)
+
+
+def delete_run(thread_id: str) -> dict[str, Any]:
+    """删除历史任务(2026-11-07):任务目录(含成片)+ PG 事件尽力清理,不可恢复。
+
+    纪律:
+    - 仅限终态/未启动记录;活跃运行与状态不明一律 409 拒删(fail-closed);
+    - 双保险:服务注册表里有活跃进程即拒(调和态判完后仍可能被并发恢复);
+    - 事件删除失败**不阻断**目录删除(孤儿事件无读取方危害,只随响应报告)。
+
+    Raises:
+        ConsoleLaunchError: 400(形状非法/越界)/ 404(不存在)/ 409(状态拒删)
+            / 500(目录删除失败,如被播放器/同步盘占用)。
+    """
+    validate_thread_id(thread_id)
+    task_dir = _task_dir_for(thread_id)
+    record_path = console_run_json_path(task_dir)
+    if not record_path.exists():
+        raise ConsoleLaunchError(f"任务不存在: {thread_id}", status_code=404)
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+    except Exception as e:  # noqa: BLE001
+        raise ConsoleLaunchError(f"运行记录损坏: {e}", status_code=500) from e
+    state = reconcile_run_state(record, thread_id)
+    if state not in DELETABLE_STATES:
+        hints = {
+            "waiting_human": "任务正等待人工关卡,请先处理或取消后再删除",
+            "running": "任务运行中,请等待完成或取消后再删除",
+            "starting": "任务启动中,请稍后再删除",
+            "unknown": "任务状态不明(事件库不可达且进程已退出),"
+                       "请先恢复 Postgres 或重启服务调和状态后再删除",
+        }
+        raise ConsoleLaunchError(
+            f"任务 {thread_id} 状态为 {state},拒绝删除:{hints.get(state, '仅终态任务可删除')}",
+            status_code=409,
+        )
+    with _ACTIVE_LOCK:
+        if thread_id in _ACTIVE_PROCS:
+            raise ConsoleLaunchError(
+                f"任务 {thread_id} 仍有本实例管理的活跃进程,拒绝删除", status_code=409,
+            )
+    events_deleted: int | None = None
+    try:
+        from monitoring.workflow_event_store import delete_thread_events
+
+        events_deleted = delete_thread_events(thread_id)
+    except Exception:  # noqa: BLE001 — 事件清理尽力而为,不阻断目录删除
+        events_deleted = None
+    try:
+        shutil.rmtree(task_dir)
+    except OSError as e:
+        raise ConsoleLaunchError(
+            f"任务目录删除失败({e});目录可能被占用(播放器/同步盘/杀毒),"
+            "请关闭相关程序后重试",
+            status_code=500,
+        ) from e
+    return {"thread_id": thread_id, "state": state, "events_deleted": events_deleted}
