@@ -60,7 +60,9 @@ def test_happy_path_produces_draft_and_uses_atomic_writer(tmp_path: Path) -> Non
         writer_called.append((draft_dir, content))
         from draft_ops.atomic_writer import safe_write_draft
 
-        safe_write_draft(draft_dir, content)
+        # proc_checker 桩:本用例验证原子双写,不验证写入互斥(那是
+        # test_safe_write_guard 的职责);剪映开着跑单测也不应环境性失败
+        safe_write_draft(draft_dir, content, proc_checker=lambda: False)
 
     out = generate_initial_jianying_draft(
         state, tmp_path, encrypt_detector=fake_encrypt, writer=fake_writer
@@ -101,7 +103,8 @@ def test_writer_called_not_bare_open(tmp_path: Path) -> None:
         captured["called"] = True
         captured["draft_dir"] = draft_dir
         captured["content_keys"] = set(content.keys())
-        safe_write_draft(draft_dir, content)
+        # proc_checker 桩:同上,写入互斥由 test_safe_write_guard 单独覆盖
+        safe_write_draft(draft_dir, content, proc_checker=lambda: False)
 
     generate_initial_jianying_draft(
         state,
