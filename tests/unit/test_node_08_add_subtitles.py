@@ -1,4 +1,4 @@
-"""节点 8 字幕注入单测 — ASR Mock + 样式字段完整性。"""
+"""节点 8 字幕主干单测 — B1 ASR 移除后的无 ASR 语义 + scout 样式字段完整性。"""
 
 from __future__ import annotations
 
@@ -7,19 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from jy_common.asr_client import set_default_client
 from nodes.node_08_add_subtitles import add_subtitles
 from video_edit_capabilities import subtitle_style as sty
-
-
-class _FixedASRClient:
-    """返回固定字幕段的 ASR mock。"""
-
-    def __init__(self, segments: list[dict]) -> None:
-        self._segments = segments
-
-    def transcribe(self, video_path: str) -> list[dict]:
-        return list(self._segments)
 
 
 @pytest.fixture
@@ -46,60 +35,73 @@ def _state(draft_path: Path, video_path: str = "C:/v.mp4") -> dict:
     }
 
 
-def test_add_subtitles_basic(tmp_draft: Path) -> None:
-    """ASR 返回 3 段 → materials.texts 应含 3 条,样式字段完整。"""
-    set_default_client(_FixedASRClient([
-        {"text": "你好", "start_s": 0.0, "end_s": 1.5},
-        {"text": "世界", "start_s": 1.5, "end_s": 3.0},
-        {"text": "再见", "start_s": 3.0, "end_s": 4.5},
-    ]))
-
+def test_add_subtitles_no_asr_returns_empty_segments(tmp_draft: Path) -> None:
+    """B1 ASR 移除:节点不做语音转写 —— 返回空 asr_segments_zh,不注入任何字幕。"""
     out = add_subtitles(_state(tmp_draft))
 
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    texts = draft["materials"]["texts"]
-    assert len(texts) == 3
-    # 第一条 target_timerange 应是 [0, 1.5s]
-    assert texts[0]["target_timerange"]["start"] == 0
-    assert texts[0]["target_timerange"]["duration"] == 1_500_000
-    # 样式字段完整性(借鉴 jianying-add-subtitles 惯例)
-    style = texts[0]["style"]
-    assert style["size"] == 5.0
-    assert style["bold"] is True
-    assert style["align"] == 1
-    assert style["border"]["width"] == 40.0
-    assert style["transform_y"] == -0.8
-    assert texts[0]["track_name"] == "Subtitles"
+    assert out["asr_segments_zh"] == []
+    assert out["asr_segments_zh_written"] is False
+    assert out["error_log"] == []
     assert "node_08_add_subtitles_done" in out["status_log"]
-
-
-def test_add_subtitles_empty_asr(tmp_draft: Path) -> None:
-    """ASR 返回空 → materials.texts 应为空列表。"""
-    set_default_client(_FixedASRClient([]))
-    out = add_subtitles(_state(tmp_draft))
-
+    # 草稿不被注入文本素材(ASR 字幕通道已整体移除)
     draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    assert draft["materials"]["texts"] == []
+    assert draft["materials"].get("texts") is None
+
+
+def test_add_subtitles_preserves_existing_script_subtitles(tmp_path: Path) -> None:
+    """已有脚本字幕(mapper 写入)→ node_08 不得清空/覆盖/替换原字幕轨。
+
+    回归锁:历史上 ``sync_text_track(draft, [])`` 会把已有 text 轨整轨替换为空。
+    """
+    draft = {
+        "canvas_config": {"width": 1080, "height": 1920},
+        "duration": 10_000_000,
+        "materials": {
+            "videos": [{"id": "v1"}],
+            "texts": [{
+                "id": "subtitle-zh-1",
+                "type": "text",
+                "content": "脚本字幕",
+                "target_timerange": {"start": 0, "duration": 10_000_000},
+            }],
+        },
+        "tracks": [
+            {"type": "video", "segments": [{"id": "s1", "target_timerange": {"start": 0, "duration": 10_000_000}}]},
+            {"type": "text", "segments": [{"id": "t1", "material_id": "subtitle-zh-1", "target_timerange": {"start": 0, "duration": 10_000_000}}]},
+        ],
+    }
+    draft_file = tmp_path / "draft" / "draft_content.json"
+    draft_file.parent.mkdir(parents=True, exist_ok=True)
+    draft_file.write_text(json.dumps(draft, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    out = add_subtitles(_state(draft_file))
+
+    # 整份草稿逐字段不变:无 ASR 段时绝不做整轨同步
+    after = json.loads(draft_file.read_text(encoding="utf-8"))
+    assert after == draft
+    assert len(after["materials"]["texts"]) == 1
+    assert after["materials"]["texts"][0]["content"] == "脚本字幕"
+    assert any(t["type"] == "text" and len(t["segments"]) == 1 for t in after["tracks"])
     assert "node_08_add_subtitles_done" in out["status_log"]
 
 
 def test_add_subtitles_uses_snapshot2(tmp_path: Path, tmp_draft: Path) -> None:
-    """若 state.snapshot2_path 存在,优先从 snapshot2 读取。"""
-    # 构造 snapshot2 文件
+    """若 state.snapshot2_path 存在,优先从 snapshot2 读取(内容原样落回 draft_path)。"""
+    # 构造 snapshot2 文件(带可识别标记:materials 为空,与 draft_path 的 v1 区分)
     snap2_dir = tmp_path / "snapshots" / "snapshot2"
     snap2_dir.mkdir(parents=True)
     snap2_path = snap2_dir / "draft_content.json"
     snap2_draft = {"canvas_config": {"width": 1080, "height": 1920}, "materials": {}, "tracks": []}
     snap2_path.write_text(json.dumps(snap2_draft), encoding="utf-8")
 
-    set_default_client(_FixedASRClient([{"text": "A", "start_s": 0, "end_s": 1}]))
     state = _state(tmp_draft)
     state["snapshot2_path"] = str(snap2_path)
     out = add_subtitles(state)
 
-    # 写入的是 draft_path(应保留原有内容);读取的是 snapshot2
+    # 读取的是 snapshot2:其内容被原样写回 draft_path(v1 视频素材消失即为证据)
     draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    assert len(draft["materials"]["texts"]) == 1
+    assert draft["materials"] == {}
+    assert "node_08_add_subtitles_done" in out["status_log"]
 
 
 # ---------------------------------------------------------------------------
@@ -113,8 +115,6 @@ def test_add_subtitles_scout_failure_falls_back_to_default_style(
 
     from assembly_capabilities.result import ToolResult
 
-    set_default_client(_FixedASRClient([{"text": "你好", "start_s": 0.0, "end_s": 1.5}]))
-
     # 让 subtitle_scout 返回 [ERROR](模拟 ffmpeg 缺失 / scenedetect 未装)
     err = ToolResult(text="[ERROR] could not probe video size: missing ffmpeg")
 
@@ -126,12 +126,7 @@ def test_add_subtitles_scout_failure_falls_back_to_default_style(
     # status_log 标注 scout 失败 + 沿用默认
     log_text = " | ".join(out["status_log"])
     assert "scout 失败" in log_text
-    # 草稿里的样式仍是默认
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    style = draft["materials"]["texts"][0]["style"]
-    assert style["size"] == 5.0
-    assert style["bold"] is True
-    assert style["border"]["width"] == 40.0
+    assert "node_08_add_subtitles_done" in out["status_log"]
 
 
 def test_add_subtitles_scout_exception_falls_back_to_default_style(
@@ -140,8 +135,6 @@ def test_add_subtitles_scout_exception_falls_back_to_default_style(
     """``subtitle_scout`` 抛异常 → 同样兜底为默认样式,不污染主链。"""
     from unittest.mock import patch
 
-    set_default_client(_FixedASRClient([{"text": "你好", "start_s": 0.0, "end_s": 1.5}]))
-
     def boom(*args, **kwargs):
         raise RuntimeError("scenedetect import error")
 
@@ -149,28 +142,24 @@ def test_add_subtitles_scout_exception_falls_back_to_default_style(
         out = add_subtitles(_state(tmp_draft))
 
     assert "subtitle_scout_report" not in out
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    style = draft["materials"]["texts"][0]["style"]
-    assert style["size"] == 5.0
-    assert style["border"]["width"] == 40.0
+    assert "node_08_add_subtitles_done" in out["status_log"]
 
 
 def test_add_subtitles_scout_success_writes_report_to_state(
     tmp_draft: Path,
     scout_style,
 ) -> None:
-    """``subtitle_scout`` 成功 → 报告落到 state,且两条建议都真的改进草稿样式。
+    """``subtitle_scout`` 成功 → 报告落到 state,换算说明进 status_log。
 
     9 工具迁移 §7.1 原始片段写的是 ``{**default, **result.data["style"]}``,但 scout
     报告根本没有顶层 ``style`` 键——建议挂在 ``contrast_recommendation.style`` /
     ``font_recommendation.style``,而剪映 ``style`` 与 libass 键名、单位两套,所以
-    必须经 ``STYLE_KEY_MAP`` 换算。这就是原先"只记录不生效"的缺口。
+    必须经 ``STYLE_KEY_MAP`` 换算。B1 ASR 移除后 node_08 不再产生 ASR 字幕素材,
+    换算结果暂无草稿落点,但 scout 报告与换算说明的 state/status 契约保持不变。
     """
     from unittest.mock import patch
 
     from assembly_capabilities.result import ToolResult
-
-    set_default_client(_FixedASRClient([{"text": "你好", "start_s": 0.0, "end_s": 1.5}]))
 
     scout_data = {
         "preset": "shortform_zh",
@@ -197,17 +186,7 @@ def test_add_subtitles_scout_success_writes_report_to_state(
     log_text = " | ".join(out["status_log"])
     assert "scout 成功" in log_text
 
-    # 建议真正落进草稿:字号 96/63 ≈ 1.5238 倍 → 5.0*1.5238;描边 heavy_outline ≈1.6 倍
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    style = draft["materials"]["texts"][0]["style"]
-    assert style["size"] == 7.62
-    assert style["border"]["width"] == 64.01
-    # 未被建议触及的字段保持调好的默认值
-    assert style["bold"] is True
-    assert style["align"] == 1
-    assert style["transform_y"] == -0.8
-    assert style["color"] == [1.0, 1.0, 1.0]
-    # 变更说明进 status_log,跑批时不用翻 draft 就知道 scout 改了什么
+    # 换算说明进 status_log(字号 96/63 ≈ 1.5238 倍 → 5.0*1.5238;描边 ≈1.6 倍)
     assert "scout 样式已生效" in log_text
     assert "字号 5.0 → 7.62" in log_text
     assert "描边宽度 40.0 → 64.01" in log_text
@@ -217,7 +196,6 @@ def test_add_subtitles_no_video_path_skips_scout(tmp_draft: Path) -> None:
     """``video_input_path`` 缺失 → 不调 scout(避免 [ERROR] 噪声),沿用默认。"""
     from unittest.mock import patch
 
-    set_default_client(_FixedASRClient([{"text": "hi", "start_s": 0, "end_s": 1}]))
     state = {"draft_path": str(tmp_draft), "status_log": [], "error_log": []}
 
     with patch("nodes.node_08_add_subtitles.subtitle_scout") as mock_scout:
@@ -226,9 +204,6 @@ def test_add_subtitles_no_video_path_skips_scout(tmp_draft: Path) -> None:
         mock_scout.assert_not_called()
 
     assert "subtitle_scout_report" not in out
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    style = draft["materials"]["texts"][0]["style"]
-    assert style["size"] == 5.0
 
 
 # ---------------------------------------------------------------------------
@@ -414,31 +389,6 @@ def test_scout_style_never_mutates_default_constant(scout_style) -> None:
     )
     style["border"]["width"] = 1.0        # 事后就地改,模拟下游误用
     assert _JIANYING_DEFAULT_STYLE == snapshot
-
-
-def test_add_subtitles_each_text_gets_own_style_dict(tmp_draft: Path, scout_style) -> None:
-    """3 条字幕的 style 互相独立:改一条不影响另外两条(嵌套 border 也要分开)。"""
-    from unittest.mock import patch
-
-    from assembly_capabilities.result import ToolResult
-
-    set_default_client(_FixedASRClient([
-        {"text": "一", "start_s": 0.0, "end_s": 1.0},
-        {"text": "二", "start_s": 1.0, "end_s": 2.0},
-        {"text": "三", "start_s": 2.0, "end_s": 3.0},
-    ]))
-    ok = ToolResult(text="ok", data=_report(
-        font_recommendation={"level": "too_small", "style": {"font_size": 96}}
-    ))
-    with patch("nodes.node_08_add_subtitles.subtitle_scout", return_value=ok):
-        add_subtitles(_state(tmp_draft))
-
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    texts = draft["materials"]["texts"]
-    assert len(texts) == 3
-    assert all(t["style"]["size"] == 7.62 for t in texts)
-    assert texts[0]["style"] is not texts[1]["style"]
-    assert texts[0]["style"]["border"] is not texts[1]["style"]["border"]
 
 
 def test_scout_style_with_real_resolve_style() -> None:

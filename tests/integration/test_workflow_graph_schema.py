@@ -45,7 +45,8 @@ ASSEMBLY_NODES = {
     "assembly_write_report",
 }
 
-#: 阶段3 删除的 human 模式 5 节点 + 运维节点(不得再出现在编译图与 schema 中)
+#: 阶段3 删除的 human 模式 5 节点 + 运维节点 + B1 移除的 storyline ASR 旁支 2 节点
+#: (不得再出现在编译图与 schema 中)
 REMOVED_NODES = {
     "clean_cache",
     "launch_openstoryline",
@@ -53,6 +54,8 @@ REMOVED_NODES = {
     "checkpoint0_storyline_plan",
     "import_video",
     "get_storyboard_plan",
+    "storyline_local_asr",
+    "storyline_speech_rough_cut",
 }
 
 #: interrupt 关卡节点 → 关卡编号(阶段3 后仅 ①②③)
@@ -234,6 +237,25 @@ def test_start_wires_directly_to_storyline_load_media(monkeypatch):
     pairs = _edge_pairs(schema)
     assert ("storyline_generate_voiceover", "storyline_select_bgm") in pairs
     assert ("storyline_filter_clips", "storyline_group_clips") in pairs
+
+
+def test_storyline_asr_side_branch_removed(monkeypatch):
+    """B1 ASR 移除:切镜后静态直连 understand_clips,ASR 旁支节点/边不复存在。"""
+    schema = _make_schema(monkeypatch, qc=True)
+    by_id = {n["id"]: n for n in schema["nodes"]}
+
+    assert "storyline_local_asr" not in by_id
+    assert "storyline_speech_rough_cut" not in by_id
+
+    pairs = _edge_pairs(schema)
+    # 静态确定性主边(不再是条件路由)
+    assert ("storyline_split_shots", "storyline_understand_clips") in pairs
+    # 旁支节点相关的任何边都不存在
+    leftovers = [
+        p for p in pairs
+        if "storyline_local_asr" in p or "storyline_speech_rough_cut" in p
+    ]
+    assert leftovers == []
 
 
 def test_interrupt_checkpoints_reachable(monkeypatch):

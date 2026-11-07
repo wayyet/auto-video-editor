@@ -3,7 +3,7 @@
 覆盖:
 - marker 已存在 → 跳过翻译,只写 state
 - marker 不存在 → 调翻译 + 写 marker + 写 state
-- asr_segments_zh 缺失 → 跳过(error_log)
+- asr_segments_zh 缺失 → 正常跳过(skipped_no_source_subtitles,非错误)
 - draft_dir_en_branch 缺失 → 跳过(error_log)
 - layout 校验写 state(不触发 interrupt)
 """
@@ -108,16 +108,21 @@ def test_node_16a_marker_exists_skips_translate(tmp_path: Path) -> None:
 
 
 def test_node_16a_no_asr_segments_skips(tmp_path: Path) -> None:
-    """asr_segments_zh 缺失 → 跳过,error_log 有说明。"""
+    """asr_segments_zh 缺失/为空 → 正常跳过(无源字幕是预期场景),不写 error_log。
+
+    B1 ASR 移除后这是英文分支的常态输入:状态用 skipped_no_source_subtitles,
+    不再算错误,也不得阻断后续 node_17(route_after_translate 只看
+    layout_issues_detected,空段路径不设置它)。
+    """
     state = {
-        "asr_segments_zh": [],
         "draft_dir_en_branch": str(tmp_path),
         "status_log": [],
         "error_log": [],
     }
     out = node_16a_translate_and_check(state)
-    assert "node_16a_translate_skipped" in out["status_log"]
-    assert any("asr_segments_zh" in e for e in out["error_log"])
+    assert "skipped_no_source_subtitles" in out["status_log"]
+    assert not out.get("error_log")
+    assert "node_16a_translate_skipped" not in out["status_log"]
 
 
 def test_node_16a_no_draft_dir_skips() -> None:

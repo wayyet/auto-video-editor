@@ -218,12 +218,12 @@ def test_node_16_normal_path_writes_srt(_seed_en_branch: Path) -> None:
 
 
 def test_node_16_no_asr_segments_skips(tmp_path: Path) -> None:
-    """asr_segments_zh 缺失 → 跳过,error_log 有说明。"""
-    state = {"asr_segments_zh": [], "draft_dir_en_branch": str(tmp_path), "status_log": [], "error_log": []}
+    """asr_segments_zh 缺失 → shim 透传 node_16a 的正常跳过(非错误)。"""
+    state = {"draft_dir_en_branch": str(tmp_path), "status_log": [], "error_log": []}
     out = node_16_translate_subtitles(state)
-    # Week 5:status_log 由 node_16a 透传,所以是 node_16a_translate_skipped
-    assert "node_16a_translate_skipped" in out["status_log"]
-    assert any("asr_segments_zh" in e for e in out["error_log"])
+    # B1 ASR 移除:node_16a 空段路径返回 skipped_no_source_subtitles,shim 原样透传
+    assert "skipped_no_source_subtitles" in out["status_log"]
+    assert not out.get("error_log")
 
 
 def test_node_16_no_draft_dir_skips() -> None:
