@@ -15,6 +15,7 @@
 | 前端(node mjs 21 例 + console/monitor 前端测试) | 全绿 |
 | 剪映实机端到端(GUI) | **待操作员执行**(清单见 §4;代码侧已就绪) |
 | 素材准备 | 已完成:`outputs/e2e-assets/clip_a.mp4` + `clip_b.mp4`(脚本可复现) |
+| 导入失败修复回归(2026-11-07 晚,§6) | unit 全量通过 / integration 仅剩 §3 既有失败 / 前端 mjs 36 例全绿 |
 
 既有失败与本阶段改动**无关**:在阶段 4 提交前的 `736e7b7`(干净树)上同样失败,根因见 §3。
 
@@ -113,3 +114,60 @@
 - 双草稿剪映首页显示:__________
 - 导出链(若启用):__________
 - 遗留问题:__________
+
+---
+
+## 6. 导入失败修复记录(2026-11-07 晚;§4 清单第 4 步首跑即证伪后的一轮修复)
+
+### 6.1 实机证伪结论
+
+按 §4 步骤 1-4 首跑:首页能列出发布草稿,但双击必报"草稿有异常,导入失败";
+剪映启动另弹"草稿列表异常,检测到部分草稿丢失"。证据链:
+
+- 发布产物的 `draft_content.json` 是仓库内部 storyline 4 键格式
+  (canvas_config/materials/storyline_meta/tracks),缺原生必填的 28 顶层键 /
+  45 素材桶 / 34 键 segment —— 剪映首页列表只读 `root_meta_info.json` +
+  `draft_meta_info.json`(所以"可列"),加载时间轴必失败(所以"导入失败");
+- "部分草稿丢失"是另一回事:`draft_acion_watch.json` 显示剪映启动对账时清掉
+  了索引外的游离草稿(一次会话外测试残留)与旧 id 条目;
+- 首页磁贴实为阶段 1 冒烟夹具 `AutoVideo_SMOKE-阶段1勿编辑-99c742e55c7d`
+  (真实 thread 的草稿因发布功能晚于其草稿生成 14h 合入,从未发布)。
+
+### 6.2 修复内容(字段级依据:真实样本 + 参考实现)
+
+- **真实样本**:操作员在剪映 5.9.0.11632 新建空白草稿("11月7日"),其
+  draft_content.json(28 顶层键/45 桶/46 键视频素材/34 键 segment)、
+  draft_meta_info.json(34 键)、root_meta_info.json 条目(22 键)逐字段采集;
+  关键口径:tm_draft_create/modified 为**微秒**、draft_root_path 反斜杠、
+  meta 侧 `draft_timeline_materials_size_` 带尾下划线而根索引不带。
+- **参考实现**:isYangs/jianying-editor-skill(MIT,内嵌 pyJianYingDraft 裁剪
+  fork,产出 5.9 可打开草稿)提供音频/文本素材字段模板;并证明最小 platform
+  头、tm_*/封面缺失不阻碍打开。
+
+代码改动(P1 原生转换核心):
+
+- 新增 `storyline/native_draft.py`:storyline→原生转换器(uuid5 确定性 id、
+  四伴随条目、BGM/配音占位与私有语义进 sidecar `autovideo_storyline_source.json`);
+- `node_05`:三路构建统一过转换器,staging 出生即原生;
+- `jianying_registry`:meta/索引条目升级为原生 34/22 键(µs 时间戳等);
+- `draft_publisher`:旧格式 staging 发布时转换+幂等直通;ffmpeg 抽帧生成
+  draft_cover.jpg(best-effort)。
+
+代码改动(P2 读回/写入链兼容):
+
+- node_12/13/join 音频匹配改 `segment.material_id` 优先(兼容旧 id 约定)——
+  人工在剪映加的 BGM 不再被镜像/QA 静默丢弃;
+- node_07:段已引用 speed material 时同步更新速度值(原生伴随结构下变速生效);
+- 文本链原生升级:node_08/08b 把字幕铺上**原生 text 轨道**(此前只躺
+  materials.texts 桶,剪映时间轴不可见,关卡③ 无从下手);material 带原生
+  必填键(content=styles JSON)+ 私有键双形态;node_16 SRT 重建、
+  draft_exporter、draft_integrity 双形态兼容(人工编辑保存后照样读得到)。
+
+### 6.3 修复后回归
+
+| 项目 | 结果 |
+|---|---|
+| 单元测试(tests/unit 全量) | **全部通过**(exit 0;新增 test_native_draft_converter + test_subtitle_texts_native) |
+| 集成测试 | 仅剩 §3 既有失败 `test_tail_chain_applies_to_both_drafts`;`test_english_draft_gets_subtitles_and_text_fx` 断言按双形态契约更新后通过 |
+| 前端 node mjs | 36/36 通过 |
+| 剪映实机 | 待操作员按 §4 清单用**新建任务**重跑(旧线程草稿为旧格式,恢复不补发布) |
