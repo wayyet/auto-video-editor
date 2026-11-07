@@ -121,3 +121,25 @@
 - [x] 图拓扑快照已存(§1)。
 - [x] pytest 基线已存(§4)。
 - 备注:`docs/第三期开发/` 两份计划文档已在基线提交内(单独 docs 提交,先于本记录)。
+
+---
+
+## 6. 阶段 0~3 执行结果(2026-11-08 追加)
+
+| 阶段 | 提交 | 内容 |
+|---|---|---|
+| 1 | `c7e117d` | 新语义测试:node_08 无 ASR/字幕保留、16a/08b 空段正常跳过、schema ASR 旁支负向断言(实现前按计划允许红,7 例红在正确断言上) |
+| 2 | `4a359b6` | 删 `storyline_local_asr` / `storyline_speech_rough_cut` 节点与 3 个能力模块(`asr_runner` / `speech_rough_cut` / `timeline_transcript`)与 prompt 目录;`split_shots` 改静态直连 `understand_clips`;config/.env 清开关;PTP 去 transcript 回填;测试同步(golden 48→46、schema 死端 3→2、wiring/routers/flag/c_classes/provider_contracts/web_topic 同步) |
+| 3 | `d43d692` | node_08 去 ASR:`call_asr2s` import、`_collect_source_spans` / `_map_asr_to_target` / `_multi_video_asr_segments`、注入循环、**`sync_text_track` 空轨替换调用**全部删除;scout 样式链保留;`asr_segments_zh` / `asr_segments_zh_written` **不再写**(计划 §3.3"置空或缺省"取缺省,state 旧值经 `{**state}` 透传兼容旧线程);16a 空段改 `skipped_no_source_subtitles` 正常跳过、08b 空段改 `node_08b_skipped_no_en_segments`;shim 同步转发;删 `jy_common/asr_client.py` 及 2 个专属测试 |
+
+**设计决策变更说明**:node_08 对 `asr_segments_zh` 由"显式写空列表"调整为"完全不写"(缺省)。原因:显式写空会清掉旧线程 state 里已有的段落,导致 9 个播种该键的存量集成测试(week4/week5/state_field)的"有源字幕"路径断链;"缺省"同样满足计划 §3.4.7"新任务为空/缺省",且与 §3.3"暂时保留为兼容字段"的定位一致——新任务 state 天然无此键(16a 正常跳过),旧线程残留值经 `{**state}` 原样透传,不新增伪造、不主动清写。
+
+### 6.1 验证结果
+
+- **图拓扑**:基线 48 节点 / 37 静态边 / 7 条件分支源 → 终态 **46 / 37 / 6**(-2 节点、-1 条件分支,静态边数不变:-2 旁支边 +1 静态主边)。
+- **check_imports**:`未解析的导入: 0 处`。
+- **全量单元套件**(`tests/unit`):**1474 例,0 失败,0 错误,3 环境跳过**。
+- **受影响集成套件**(schema/compiles/wiring/reorder/week4/week5/state_field/postgres_resume/auto_mode):与阶段0基线**完全相同的 7 个存量失败**(wiring×5 + reorder tail_chain×1 + auto_mode split_shots×1,失败签名逐字一致,均为存量环境/LLM 问题,与 ASR 无关),**零新增失败**。
+- **残留扫描**(计划 §7.1):生产代码无可执行 ASR import/注册/开关;剩余命中仅为——历史注释(config/.env.example/graph.py)、监控展示元数据(`monitoring/workflow_graph.py`,阶段5)、`firered_adapter` ToolSpec 与 docstring 交叉引用(阶段5)、测试负向断言与历史说明、assembly 侧(本轮不动)。
+- **明确遗留**(阶段5~6 范围,本轮不动):`monitoring/workflow_graph.py` 两节点元数据与边标签、`storyline/firered_adapter.py` ToolSpec、`jy_common/provider_contracts.py:51` docstring、`tts_client.py`/`speech_synthesize.py` docstring 对照提及、state.py 四个 ASR 字段声明、README/节点图文档。
+- **旧 checkpoint**:图拓扑已变更(删 2 节点 + 静态边),暂停在旧节点的存量线程不能跨拓扑恢复(计划 §5.3);发布前需由运维侧完成/终止存量任务。
