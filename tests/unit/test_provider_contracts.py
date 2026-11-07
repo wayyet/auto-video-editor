@@ -182,12 +182,16 @@ def test_storyline_stub_category_shape(tmp_path: Path) -> None:
 
 
 def test_toolresult_adapter_category_shape() -> None:
-    """ToolResult 适配器(assembly/video_edit):位置参 (args: dict, ctx) → ToolResult。"""
+    """ToolResult 适配器(assembly/video_edit):位置参 (args: dict, ctx) → ToolResult。
+
+    (B1 ASR 移除,2026-11-08:assembly 侧锚定对象从 speech_transcribe
+    换成仍存活的 video_ingest。)
+    """
     from assembly_capabilities.result import ToolResult
-    from assembly_capabilities.speech_asr import speech_transcribe
+    from assembly_capabilities.visual_observe import video_ingest
     from video_edit_capabilities.speech_synthesize import speech_synthesize
 
-    for fn in (speech_transcribe, speech_synthesize):
+    for fn in (video_ingest, speech_synthesize):
         params = inspect.signature(fn).parameters
         assert list(params) == ["args", "ctx"]
         ann = params["args"].annotation

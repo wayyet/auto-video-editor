@@ -1,10 +1,14 @@
 """节点 3/6:``assembly_build_timeline``(plan §7.3)。
 
 **这是 6 节点中唯一需要调用 LLM 的节点**。输入是前两步产物
-``media.json`` / ``transcript.json`` / ``video_ingest.json``,让模型看截图
-+ 读转写文字,按 ``video-edit-assembly`` 第 3-5 阶段规则(分组评分选段 →
+``media.json`` / ``video_ingest.json``,让模型看截图,按
+``video-edit-assembly`` 第 3-5 阶段规则(分组评分选段 →
 定版式与结构 → 搭建 project 风格 timeline)做选段和排序判断,按
 ``schemas/timeline.schema.json`` 写出 ``timeline.json``。
+
+(B1 ASR 移除,2026-11-08)不再读取 ``assembly_transcript_artifact`` /
+``transcript.json``;能力层 ``build_timeline_from_paths`` 的可选 transcript
+入参保留给非主图调用方(评估脚本),主图只传媒体与视觉产物。
 
 按 plan §3.3:"本方案里要做一个**会调用 LLM/VLM 的节点**(跟仓库里现成的
 ``storyline_generate_script`` 节点做法一样),不是零 AI 调用的确定性代码"。
@@ -70,13 +74,11 @@ def assembly_build_timeline_node(state: WorkflowState) -> dict:
             "status_log": append_status_tag(state, "assembly_build_timeline_failed"),
         }
 
-    transcript_artifact = state.get("assembly_transcript_artifact")
     ingest_artifact = state.get("assembly_ingest_artifact")
 
     try:
         timeline_data = build_timeline_from_paths(
             media_artifact=media_artifact,
-            transcript_artifact=transcript_artifact,
             ingest_artifact=ingest_artifact,
             lang="zh",
             client=None,

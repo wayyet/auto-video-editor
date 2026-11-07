@@ -9,7 +9,7 @@
   append_status_tag / append_error)
 """
 from .node_discover_and_probe import assembly_discover_and_probe_node
-from .node_asr_and_visual_observe import assembly_asr_and_visual_observe_node
+from .node_visual_observe import assembly_visual_observe_node
 from .node_build_timeline import assembly_build_timeline_node
 from .node_validate_render_qc import (
     assembly_validate_render_qc_node,
@@ -20,7 +20,7 @@ from .node_write_report import assembly_write_report_node
 
 __all__ = [
     "assembly_discover_and_probe_node",
-    "assembly_asr_and_visual_observe_node",
+    "assembly_visual_observe_node",
     "assembly_build_timeline_node",
     "assembly_validate_render_qc_node",
     "assembly_repair_loop_node",

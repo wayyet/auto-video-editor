@@ -16,7 +16,6 @@ __all__ = [
     "RunContext",
     "inspect_media",
     "analyze_media",
-    "speech_transcribe",
     "video_ingest",
     "validate_timeline",
     "timeline_diff",

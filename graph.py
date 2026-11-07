@@ -6,7 +6,7 @@
     → generate_draft
     → [ASSEMBLY_QC_GATE_ENABLED=True 时插入 6 节点 QC 通道]
         assembly_discover_and_probe
-        → assembly_asr_and_visual_observe
+        → assembly_visual_observe
         → assembly_build_timeline
         → assembly_validate_render_qc      🔁 条件边(route_after_assembly_qc):
             ├─→ assembly_repair_loop       (未达标且 retry < MAX)
@@ -132,11 +132,11 @@ from state import WorkflowState
 # ---------------------------------------------------------------------------
 # Phase 5:assembly QC 通道节点(plan §七 / ADR-1~5 / §十 阶段四)
 # ---------------------------------------------------------------------------
-# 6 个新节点:discover → asr/observe → build_timeline → validate/render/qc
+# 6 个新节点:discover → visual_observe → build_timeline → validate/render/qc
 # → repair_loop (条件) → write_report。所有节点都注册到图中,但当
 # ``ASSEMBLY_QC_GATE_ENABLED=false`` 时不接边,等价于改动前状态。
 from nodes.assembly import (
-    assembly_asr_and_visual_observe_node,
+    assembly_visual_observe_node,
     assembly_build_timeline_node,
     assembly_discover_and_probe_node,
     assembly_repair_loop_node,
@@ -492,7 +492,7 @@ def _build_state_graph():
     # 设为 False 时只 add_node 不接边,等价于改动前状态,human-mode 关卡①
     # 不会突然被打破。
     g.add_node("assembly_discover_and_probe", assembly_discover_and_probe_node)
-    g.add_node("assembly_asr_and_visual_observe", assembly_asr_and_visual_observe_node)
+    g.add_node("assembly_visual_observe", assembly_visual_observe_node)
     g.add_node("assembly_build_timeline", assembly_build_timeline_node)
     g.add_node("assembly_validate_render_qc", assembly_validate_render_qc_node)
     g.add_node("assembly_repair_loop", assembly_repair_loop_node)
@@ -568,8 +568,8 @@ def _build_state_graph():
         # 重新指向:generate_draft 不再直连 node_06_human_reorder,
         # 先接 assembly 链首;6 节点按 plan §八 接边 + 条件路由。
         g.add_edge("generate_draft", "assembly_discover_and_probe")
-        g.add_edge("assembly_discover_and_probe", "assembly_asr_and_visual_observe")
-        g.add_edge("assembly_asr_and_visual_observe", "assembly_build_timeline")
+        g.add_edge("assembly_discover_and_probe", "assembly_visual_observe")
+        g.add_edge("assembly_visual_observe", "assembly_build_timeline")
         g.add_edge("assembly_build_timeline", "assembly_validate_render_qc")
         g.add_conditional_edges(
             "assembly_validate_render_qc",

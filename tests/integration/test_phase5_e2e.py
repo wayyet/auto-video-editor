@@ -64,7 +64,6 @@ from scripts.assembly.phase5_e2e import (  # noqa: E402
 # 共享 fixtures
 # ---------------------------------------------------------------------------
 VIDEO_INPUT = ROOT / "inputs" / "30s.mp4"
-TRANSCRIPT_FIXTURE = ROOT / "tests" / "fixtures" / "assembly_phase5" / "transcript.json"
 
 
 def _ffmpeg_available() -> bool:
@@ -89,12 +88,13 @@ slow_skip = pytest.mark.skipif(
 @slow_skip
 def test_phase5_happy_path_default_enabled() -> None:
     """默认 ``ASSEMBLY_QC_GATE_ENABLED=True`` 时,一条 30s 视频从 assembly 6 节点
-    顺序跑完,8 个产物文件全部生成,preview.mp4 ffprobe 可读,report.md 可读。
+    顺序跑完,7 个产物文件全部生成(B1 ASR 移除后无 transcript.json),
+    preview.mp4 ffprobe 可读,report.md 可读。
 
     对应阶段五执行记录 §二 Case ``happy`` + plan §十一 验收项
     "默认开启生效 / 产物完整性"。
     """
-    result = case_happy(VIDEO_INPUT, str(TRANSCRIPT_FIXTURE))
+    result = case_happy(VIDEO_INPUT)
 
     assert result["all_ok"] is True, (
         f"happy case 失败:qc_status={result.get('qc_status')}, "
@@ -119,7 +119,7 @@ def test_phase5_qc_fail_soft_degrade_repair_loop() -> None:
     对应阶段五执行记录 §二 Case ``qc_fail`` + plan §十一
     "软降级验证"。
     """
-    result = case_qc_fail(VIDEO_INPUT, str(TRANSCRIPT_FIXTURE))
+    result = case_qc_fail(VIDEO_INPUT)
 
     # 软降级核心断言:即便 QC 反复失败,产物仍完整 + report.md 仍生成
     assert result["all_ok"] is True, (

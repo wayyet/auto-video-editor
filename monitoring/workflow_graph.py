@@ -69,7 +69,7 @@ QC_FLAG = "ASSEMBLY_QC_GATE_ENABLED"
 
 _ASSEMBLY_NODES = (
     "assembly_discover_and_probe",
-    "assembly_asr_and_visual_observe",
+    "assembly_visual_observe",
     "assembly_build_timeline",
     "assembly_validate_render_qc",
     "assembly_repair_loop",
@@ -96,10 +96,10 @@ _NODE_META: dict[str, dict[str, Any]] = {
         "group": "assembly_qc",
         "description": "扫描源视频与渲染产物,做 ffprobe 探测",
     },
-    "assembly_asr_and_visual_observe": {
-        "name": "ASR 与视觉观察",
+    "assembly_visual_observe": {
+        "name": "视觉观察",
         "group": "assembly_qc",
-        "description": "对草稿素材做语音识别与关键帧观察",
+        "description": "对草稿素材做关键帧抽帧与 contact sheet 观察",
     },
     "assembly_build_timeline": {
         "name": "装配时间线",

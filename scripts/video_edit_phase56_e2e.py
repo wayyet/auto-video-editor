@@ -34,7 +34,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 DEFAULT_INPUT = ROOT / "inputs" / "30s.mp4"
-TRANSCRIPT_FIXTURE = ROOT / "tests" / "fixtures" / "assembly_phase5" / "transcript.json"
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +61,7 @@ def _ffmpeg_ready() -> bool:
 # Case 1:assembly 6 节点真实链路(顺带验证 repair loop 没被接入搞坏)
 # ---------------------------------------------------------------------------
 def case_assembly_chain(video_input: Path, transcript: str | None) -> dict[str, Any]:
-    """真实跑 discover → asr/visual → timeline → validate/render/qc → report。"""
+    """真实跑 discover → timeline → validate/render/qc → report(visual_observe 由 phase5_e2e 覆盖)。"""
     from nodes.assembly import (
         assembly_build_timeline_node,
         assembly_discover_and_probe_node,
@@ -440,7 +439,6 @@ def main() -> int:
     p = argparse.ArgumentParser(prog="video_edit_phase56_e2e")
     p.add_argument("--case", default="all", choices=("all", *CASES))
     p.add_argument("--input", default=str(DEFAULT_INPUT))
-    p.add_argument("--transcript", default=str(TRANSCRIPT_FIXTURE))
     p.add_argument("--report-json", default=None)
     args = p.parse_args()
 
@@ -457,7 +455,7 @@ def main() -> int:
     for name in names:
         print(f"\n===== CASE {name} =====")
         try:
-            result = CASES[name](video_input, args.transcript)
+            result = CASES[name](video_input, None)
         except Exception as exc:  # 任何 case 崩了都记下来,继续跑下一个
             result = _case(name, [_check("case 执行", False, repr(exc))])
         results.append(result)

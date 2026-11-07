@@ -16,9 +16,15 @@
   (本仓库精简版 RunContext 没有 active_video 字段)。
 - 删除 ``cloud_asr_available`` 探测(MCP 服务专用,本仓库无云 ASR)。
 - 删除 ``vali_video_metadata``(依赖 nvidia vali)。
+- (B1 ASR 移除,2026-11-08)删除 transcript 输入链:
+  ``video_ingest`` 不再接受 ``transcript_path`` / ``inline_text``,
+  ``build_video_observation`` 不再带 ``transcript_text`` 配文,
+  ``observation_signature`` 去掉 ``transcript_sha256`` 分量
+  (缓存签名变化 → 改动后首次运行会重建一次 contact sheet 缓存),
+  ``transcript_for_inline`` helper 一并删除。
 - 保留 ``build_video_observation`` / ``sample_video_frames`` /
   ``build_contact_sheets`` / ``normalize_video_frame`` /
-  ``reset_frames_dir`` / ``transcript_for_inline`` /
+  ``reset_frames_dir`` /
   ``validate_defaults`` / ``observation_signature`` /
   ``read_cached_observation`` / ``video_metadata`` / ``ffprobe_metadata``
   / ``parse_rate`` / ``ffprobe_duration`` /
@@ -45,10 +51,8 @@ from .ffproc import run_proc
 from .fonts import find_cjk_font
 from .result import ToolResult
 from .run_context import RunContext
-from .transcript import read_transcript_text
 
 MAX_INLINE_IMAGES = 600
-INLINE_TRANSCRIPT_CHAR_LIMIT = 40000
 
 
 @dataclass
@@ -84,28 +88,17 @@ def video_ingest(args: dict, ctx: RunContext) -> ToolResult:
 
     标准流程(对应 plan §7.2):
     1. 校验 ``video_path`` 存在(否则 ``[ERROR] video not found``)。
-    2. 若给了 ``transcript_path`` 则读其全文;否则 transcript_text 为空(仍可
-       跑通整条链路,只是 contact sheet 内联无对应文字)。
-    3. 调用 ``build_video_observation`` 抽帧 + 生成 contact sheet + 写
+    2. 调用 ``build_video_observation`` 抽帧 + 生成 contact sheet + 写
        ``video_ingest.json``。
+
+    (B1 ASR 移除)不再接受 ``transcript_path`` / ``transcript_text`` /
+    ``inline_text`` 等转写配文参数;传入时被忽略。
     """
     if not args.get("video_path"):
         return ToolResult(text="[ERROR] video_path is required")
     video_path = ctx.resolve(args["video_path"])
     if not video_path.is_file():
         return ToolResult(text=f"[ERROR] video not found: {video_path}")
-
-    transcript_path_arg = args.get("transcript_path")
-    inline_text = args.get("transcript_text") or args.get("inline_text")
-    transcript_path: Path | None = None
-    transcript_text: str = ""
-    if transcript_path_arg:
-        transcript_path = ctx.resolve(transcript_path_arg)
-        if not transcript_path.is_file():
-            return ToolResult(text=f"[ERROR] transcript not found: {transcript_path}")
-        transcript_text = read_transcript_text(transcript_path)
-    elif inline_text:
-        transcript_text = inline_text
 
     output_json = ctx.resolve(args.get("output_json") or "out/video_ingest.json")
     frames_dir = ctx.resolve(
@@ -122,7 +115,6 @@ def video_ingest(args: dict, ctx: RunContext) -> ToolResult:
         frames_dir=frames_dir,
         label="video_ingest",
         prompt=prompt,
-        transcript_text=transcript_text,
         original_time_range=None,
     )
 
@@ -139,14 +131,13 @@ def build_video_observation(
     frames_dir: Path,
     label: str,
     prompt: str,
-    transcript_text: str,
     original_time_range: tuple[float, float] | None,
     extra_data: dict | None = None,
 ) -> ToolResult:
     validate_defaults(defaults)
     started = time.perf_counter()
     output_json.parent.mkdir(parents=True, exist_ok=True)
-    signature = observation_signature(video_path, defaults, prompt, transcript_text,
+    signature = observation_signature(video_path, defaults, prompt,
                                       original_time_range, extra_data, frames_dir)
     reused = False
     cached = read_cached_observation(output_json, signature)
@@ -174,7 +165,6 @@ def build_video_observation(
             "original_time_range": original_time_range,
             "used_time_range": media.get("source_time_range"),
             "prompt_for_main_agent": prompt,
-            "transcript_text": transcript_text,
             "media": media,
             "frame_paths": [str(frame.path) for frame in frames if frame.path],
             "sheet_paths": [str(path) for path in sheets],
@@ -182,14 +172,12 @@ def build_video_observation(
             "notes": [
                 "No model API was called by this tool.",
                 "An upstream model must inspect the returned timestamped images directly.",
-                "Every visual observation must be evaluated together with the matching transcript text.",
             ],
             "elapsed_seconds": round(time.perf_counter() - started, 4),
             **(extra_data or {}),
         }
         output_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    transcript_block = transcript_for_inline(transcript_text)
     sheet_lines = "\n".join(f"- {ctx.virtualize(path)}" for path in sheets)
     frame_note = (
         "Frame timestamps are source-video timestamps within original_time_range."
@@ -205,14 +193,10 @@ def build_video_observation(
         f"{frame_note}\n"
         "Read sheet cells left-to-right and top-to-bottom. Adjacent timestamp jumps mean the sampler "
         "did not include intermediate frames.\n\n"
-        f"Task prompt for the main model:\n{prompt}\n\n"
-        "Matching transcript for these images:\n"
-        "<transcript>\n"
-        f"{transcript_block}\n"
-        "</transcript>"
+        f"Task prompt for the main model:\n{prompt}"
     )
     if reused:
-        text += "\n\n[note] Reused previously generated contact sheet(s) for the same video, time range, prompt, transcript, and sampling settings."
+        text += "\n\n[note] Reused previously generated contact sheet(s) for the same video, time range, prompt, and sampling settings."
     return ToolResult(
         text=text,
         data={
@@ -259,17 +243,6 @@ def _is_relative_to(child: Path, parent: Path) -> bool:
         return False
 
 
-def transcript_for_inline(transcript_text: str) -> str:
-    if not transcript_text:
-        return "(No transcript available.)"
-    if len(transcript_text) <= INLINE_TRANSCRIPT_CHAR_LIMIT:
-        return transcript_text
-    return (
-        transcript_text[:INLINE_TRANSCRIPT_CHAR_LIMIT]
-        + f"\n\n[TRUNCATED in tool text at {INLINE_TRANSCRIPT_CHAR_LIMIT} chars; full transcript is saved in observation JSON.]"
-    )
-
-
 def validate_defaults(defaults: VideoSamplingDefaults) -> None:
     if not math.isfinite(defaults.video_fps) or defaults.video_fps <= 0:
         raise ValueError("video_fps must be a finite number > 0")
@@ -289,13 +262,11 @@ def observation_signature(
     video_path: Path,
     defaults: VideoSamplingDefaults,
     prompt: str,
-    transcript_text: str,
     original_time_range: tuple[float, float] | None,
     extra_data: dict | None,
     frames_dir: Path,
 ) -> dict[str, Any]:
     stat = video_path.stat()
-    transcript_hash = hashlib.sha256(transcript_text.encode("utf-8")).hexdigest()
     return {
         "video_path": str(video_path.resolve()),
         "video_size": stat.st_size,
@@ -303,7 +274,6 @@ def observation_signature(
         "sampling": defaults.__dict__,
         "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
         "original_time_range": list(original_time_range) if original_time_range else None,
-        "transcript_sha256": transcript_hash,
         "frames_dir": str(frames_dir.resolve()),
         "extra": extra_data or {},
     }

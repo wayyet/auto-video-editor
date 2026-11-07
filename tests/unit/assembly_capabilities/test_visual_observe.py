@@ -37,15 +37,25 @@ def test_video_ingest_rejects_missing_video(run_context, tmp_path):
     assert "video not found" in r.text
 
 
-def test_video_ingest_rejects_missing_transcript_path(run_context, tmp_path):
+def test_video_ingest_ignores_transcript_args(run_context, tmp_path):
+    """B1 ASR 移除:transcript_path / inline_text 参数被忽略,不再有 transcript 校验。
+
+    传入已失效的 transcript_path 不报 "transcript not found",而是继续走
+    video_path 校验路径(视频缺失 → video not found)。
+    """
     src = tmp_path / "src.mp4"
     src.write_bytes(b"\x00" * 1024)
     r = video_ingest(
-        {"video_path": str(src), "transcript_path": str(tmp_path / "missing.json")},
+        {
+            "video_path": str(tmp_path / "missing.mp4"),
+            "transcript_path": str(tmp_path / "missing.json"),
+            "inline_text": "ignored",
+        },
         run_context,
     )
     assert r.text.startswith("[ERROR]")
-    assert "transcript not found" in r.text
+    assert "video not found" in r.text
+    assert "transcript" not in r.text.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -101,8 +111,8 @@ def test_observation_signature_changes_with_different_video(tmp_path):
     v1.write_bytes(b"x" * 100)
     v2.write_bytes(b"y" * 200)
     frames_dir = tmp_path / "frames"
-    sig1 = observation_signature(v1, VideoSamplingDefaults(), "prompt", "", None, None, frames_dir)
-    sig2 = observation_signature(v2, VideoSamplingDefaults(), "prompt", "", None, None, frames_dir)
+    sig1 = observation_signature(v1, VideoSamplingDefaults(), "prompt", None, None, frames_dir)
+    sig2 = observation_signature(v2, VideoSamplingDefaults(), "prompt", None, None, frames_dir)
     assert sig1 != sig2
     assert sig1["video_size"] != sig2["video_size"]
 
@@ -111,9 +121,17 @@ def test_observation_signature_stable_across_calls(tmp_path):
     v = tmp_path / "a.mp4"
     v.write_bytes(b"x" * 100)
     frames_dir = tmp_path / "frames"
-    sig1 = observation_signature(v, VideoSamplingDefaults(), "prompt", "text", None, None, frames_dir)
-    sig2 = observation_signature(v, VideoSamplingDefaults(), "prompt", "text", None, None, frames_dir)
+    sig1 = observation_signature(v, VideoSamplingDefaults(), "prompt", None, None, frames_dir)
+    sig2 = observation_signature(v, VideoSamplingDefaults(), "prompt", None, None, frames_dir)
     assert sig1 == sig2
+
+
+def test_observation_signature_drops_transcript_component(tmp_path):
+    """B1 ASR 移除:缓存签名不再有 transcript_sha256 分量。"""
+    v = tmp_path / "a.mp4"
+    v.write_bytes(b"x" * 100)
+    sig = observation_signature(v, VideoSamplingDefaults(), "prompt", None, None, tmp_path / "frames")
+    assert "transcript_sha256" not in sig
 
 
 # ---------------------------------------------------------------------------

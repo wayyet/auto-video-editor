@@ -8,10 +8,13 @@ fixtures (auto-injected by pytest):
 
 helpers (普通函数,可在测试里 from .conftest import ...):
 - ``make_media_reports`` / ``make_timeline``
-- ``fake_inspect_media`` / ``fake_analyze_media`` / ``fake_speech_transcribe_success`` /
+- ``fake_inspect_media`` / ``fake_analyze_media`` /
   ``fake_video_ingest_success`` / ``fake_validate_timeline`` /
   ``fake_render_preview_success`` / ``fake_qc_preview_pass`` /
   ``fake_qc_preview_with_blocking_issues`` / ``fake_timeline_diff_success``
+
+(B1 ASR 移除,2026-11-08)``fake_speech_transcribe_success`` 与
+``speech_asr`` / ``node_asr_and_visual_observe`` 相关 patch 已随模块删除。
 """
 from __future__ import annotations
 
@@ -81,33 +84,6 @@ def fake_analyze_media(args, ctx):
     )
 
 
-def fake_speech_transcribe_success(args, ctx):
-    output_json = args.get("output_json")
-    payload = {
-        "language": "zh",
-        "segments": [{"start": 0, "end": 5, "text": "你好"}],
-        "words": [],
-        "provider": "external",
-        "source_media": args.get("input_path"),
-    }
-    if output_json:
-        Path(output_json).parent.mkdir(parents=True, exist_ok=True)
-        Path(output_json).write_text(json.dumps(payload), encoding="utf-8")
-    return ToolResult(
-        text=f"external transcript written: {output_json}",
-        data={
-            "provider": "external",
-            "channel": "external_passthrough",
-            "output_json": output_json,
-            "source_media": args.get("input_path"),
-            "language": "zh",
-            "word_count": 0,
-            "segment_count": 1,
-        },
-        artifacts=[output_json] if output_json else [],
-    )
-
-
 def fake_video_ingest_success(args, ctx):
     output_json = args.get("output_json")
     sheet_path = Path(args["video_path"]).with_suffix(".sheet.jpg")
@@ -117,7 +93,6 @@ def fake_video_ingest_success(args, ctx):
         "media": {"sampled_frames": 4, "duration": 5.0},
         "sheet_paths": [str(sheet_path)],
         "frame_paths": [str(sheet_path)],
-        "transcript_text": "",
     }
     if output_json:
         Path(output_json).parent.mkdir(parents=True, exist_ok=True)
@@ -252,11 +227,11 @@ def mock_assembly_capabilities(monkeypatch):
     ``nodes.assembly.node_xxx.Y``(消费端模块属性)。
     """
     from assembly_capabilities import (
-        media_probe, qc_preview, render_preview, speech_asr,
+        media_probe, qc_preview, render_preview,
         timeline_ops, visual_observe,
     )
     from nodes.assembly import (
-        node_asr_and_visual_observe,
+        node_visual_observe,
         node_discover_and_probe,
         node_repair_loop,
         node_validate_render_qc,
@@ -265,7 +240,6 @@ def mock_assembly_capabilities(monkeypatch):
     # 源模块属性(保险)
     monkeypatch.setattr(media_probe, "inspect_media", fake_inspect_media)
     monkeypatch.setattr(media_probe, "analyze_media", fake_analyze_media)
-    monkeypatch.setattr(speech_asr, "speech_transcribe", fake_speech_transcribe_success)
     monkeypatch.setattr(visual_observe, "video_ingest", fake_video_ingest_success)
     monkeypatch.setattr(timeline_ops, "validate_timeline", fake_validate_timeline)
     monkeypatch.setattr(render_preview, "render_preview", fake_render_preview_success)
@@ -274,8 +248,7 @@ def mock_assembly_capabilities(monkeypatch):
     # 消费端模块属性(关键:节点模块顶部已 import 过这些名字)
     monkeypatch.setattr(node_discover_and_probe, "inspect_media", fake_inspect_media)
     monkeypatch.setattr(node_discover_and_probe, "analyze_media", fake_analyze_media)
-    monkeypatch.setattr(node_asr_and_visual_observe, "speech_transcribe", fake_speech_transcribe_success)
-    monkeypatch.setattr(node_asr_and_visual_observe, "video_ingest", fake_video_ingest_success)
+    monkeypatch.setattr(node_visual_observe, "video_ingest", fake_video_ingest_success)
     monkeypatch.setattr(node_validate_render_qc, "validate_timeline", fake_validate_timeline)
     monkeypatch.setattr(node_validate_render_qc, "render_preview", fake_render_preview_success)
     monkeypatch.setattr(node_validate_render_qc, "qc_preview", fake_qc_preview_pass)

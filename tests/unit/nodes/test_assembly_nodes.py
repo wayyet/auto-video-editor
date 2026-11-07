@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from nodes.assembly import (
-    assembly_asr_and_visual_observe_node,
+    assembly_visual_observe_node,
     assembly_build_timeline_node,
     assembly_discover_and_probe_node,
     assembly_repair_loop_node,
@@ -74,34 +74,34 @@ def test_discover_handles_directory_no_videos(mock_assembly_capabilities, base_s
 
 
 # =============================================================================
-# assembly_asr_and_visual_observe
+# assembly_visual_observe(B1 ASR 移除后为纯视觉观察节点)
 # =============================================================================
-def test_asr_observe_requires_video_input_path(base_state):
+def test_visual_observe_requires_video_input_path(base_state):
     base_state.pop("video_input_path")
-    out = assembly_asr_and_visual_observe_node(base_state)
+    out = assembly_visual_observe_node(base_state)
     assert any("CONTRACT_INVALID" in e and "video_input_path" in e for e in out["error_log"])
 
 
-def test_asr_observe_requires_media_artifact(mock_assembly_capabilities, base_state):
+def test_visual_observe_requires_media_artifact(mock_assembly_capabilities, base_state):
     # media_artifact 缺失
-    out = assembly_asr_and_visual_observe_node(base_state)
+    out = assembly_visual_observe_node(base_state)
     assert any("missing assembly_media_artifact" in e for e in out["error_log"])
 
 
-def test_asr_observe_happy_path(mock_assembly_capabilities, base_state, tmp_path):
+def test_visual_observe_happy_path(mock_assembly_capabilities, base_state, tmp_path):
     # 直接构造 media_artifact 路径(假装 discover 已跑过)
     artifact = tmp_path / "media.json"
     artifact.parent.mkdir(parents=True, exist_ok=True)
     artifact.write_text(json.dumps(make_media_reports(str(base_state["video_input_path"]), [])), encoding="utf-8")
     base_state["assembly_media_artifact"] = str(artifact)
 
-    out = assembly_asr_and_visual_observe_node(base_state)
-    assert "assembly_transcript_artifact" in out
+    out = assembly_visual_observe_node(base_state)
     assert "assembly_ingest_artifact" in out
-    assert "assembly_asr_observe_done" in out["status_log"]
-    # transcript 文件应被 fake_speech_transcribe_success 写出
-    assert Path(out["assembly_transcript_artifact"]).is_file()
+    assert "assembly_visual_observe_done" in out["status_log"]
     assert Path(out["assembly_ingest_artifact"]).is_file()
+    # B1 ASR 移除:不再产出 transcript 产物,也不再有 ASR 专属 status tag
+    assert "assembly_transcript_artifact" not in out
+    assert not any("assembly_asr_observe" in tag for tag in out["status_log"])
 
 
 # =============================================================================

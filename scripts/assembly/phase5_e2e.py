@@ -3,15 +3,15 @@
 目的
 ----
 从 Windows 本机跑一条真实素材(``inputs/30s.mp4``),顺序驱动 assembly 6 节点
-``assembly_discover_and_probe → assembly_asr_and_visual_observe →
+``assembly_discover_and_probe → assembly_visual_observe →
 assembly_build_timeline → assembly_validate_render_qc →
 assembly_repair_loop → assembly_write_report``,记录每节点耗时与产物路径,
 最后验证:
 
-1. 产物完整性:``outputs/<job_id>/assembly/`` 下 8 个文件全部生成
-   (media.json / transcript.json / video_ingest.json / timeline.json /
+1. 产物完整性:``outputs/<job_id>/assembly/`` 下 7 个文件全部生成
+   (media.json / video_ingest.json / timeline.json /
    timeline_validation.json / preview.mp4 / preview_qc_report.json /
-   report.md)
+   report.md;B1 ASR 移除后不再产出 transcript.json)
 2. preview.mp4 真实可播放(``ffprobe`` 读得到 stream)
 3. report.md 内容可读(中文 Markdown 渲染,包含全部 section)
 4. 关卡① ``node_06_human_reorder`` 的通知文案正确带上 ``assembly_report_path``
@@ -29,7 +29,7 @@ assembly_repair_loop → assembly_write_report``,记录每节点耗时与产物�
 
 为什么不用 ``build_graph().invoke()`` 直接跑完整 17 步:
 
-完整 17 步需要 19 个 storyline 节点 + OpenStoryline Web UI + ASR + LLM
+完整 17 步需要 19 个 storyline 节点 + LLM
 网关,启动成本巨大且与阶段五职责(验证 assembly 6 节点产物)无关。
 本脚本直接驱动 6 个节点函数(顺序,共享 state dict),完整覆盖阶段五
 验收项;``graph.py`` 接线正确性通过 ``build_graph(ASSEMBLY_QC_GATE_ENABLED=...)``
@@ -76,18 +76,18 @@ except (AttributeError, OSError):
 # ---------------------------------------------------------------------------
 # 通用工具
 # ---------------------------------------------------------------------------
-def _make_initial_state(video_input_path: str, job_id: str, *, external_transcript: str | None = None) -> dict[str, Any]:
+def _make_initial_state(video_input_path: str, job_id: str) -> dict[str, Any]:
     """构造最小可用的 initial state —— assembly 6 节点只读以下字段:
     - ``session_id``(``outputs/<job_id>/`` 路径来源)
-    - ``video_input_path``(素材发现 / ASR / video_ingest 共用)
-    - ``storyline_transcript_external_path``(可选,外部喂入的转写;
-      speech_transcribe 模块不支持云端 ASR,必须由外部 fixture 提供)
+    - ``video_input_path``(素材发现 / video_ingest 共用)
     - ``status_log`` / ``error_log``(append-only 累加)
+
+    (B1 ASR 移除,2026-11-08)``storyline_transcript_external_path``
+    外部转写透传入口已随 ASR 移除取消。
     """
     return {
         "session_id": job_id,
         "video_input_path": video_input_path,
-        "storyline_transcript_external_path": external_transcript,
         "status_log": [],
         "error_log": [],
     }
@@ -134,7 +134,6 @@ def _drive_happy_path(
     job_id: str,
     *,
     qc_force_fail: bool = False,
-    external_transcript: str | None = None,
 ) -> dict[str, Any]:
     """顺序跑 assembly 6 节点,返回最终 state + 每节点耗时。
 
@@ -142,9 +141,8 @@ def _drive_happy_path(
     把 ``assembly_qc_status`` 设为 ``"escalated"``,触发 ``route_after_assembly_qc``
     走 ``assembly_repair_loop``,验证软降级。
     """
-    from assembly_capabilities.run_context import RunContext
     from nodes.assembly import (
-        assembly_asr_and_visual_observe_node,
+        assembly_visual_observe_node,
         assembly_build_timeline_node,
         assembly_discover_and_probe_node,
         assembly_repair_loop_node,
@@ -152,12 +150,12 @@ def _drive_happy_path(
         assembly_write_report_node,
     )
 
-    state = _make_initial_state(video_input_path, job_id, external_transcript=external_transcript)
+    state = _make_initial_state(video_input_path, job_id)
     timings: list[tuple[str, float, dict[str, Any]]] = []
 
     for node_name, fn in (
         ("assembly_discover_and_probe", assembly_discover_and_probe_node),
-        ("assembly_asr_and_visual_observe", assembly_asr_and_visual_observe_node),
+        ("assembly_visual_observe", assembly_visual_observe_node),
         ("assembly_build_timeline", assembly_build_timeline_node),
         ("assembly_validate_render_qc", assembly_validate_render_qc_node),
     ):
@@ -218,7 +216,6 @@ def _drive_happy_path(
 # ---------------------------------------------------------------------------
 _EXPECTED_FILES = (
     "media.json",
-    "transcript.json",
     "video_ingest.json",
     "timeline.json",
     "timeline_validation.json",
@@ -229,7 +226,7 @@ _EXPECTED_FILES = (
 
 
 def _verify_artifacts(out_dir: Path) -> dict[str, Any]:
-    """逐个核对 8 个产物文件 + preview.mp4 可播放 + report.md 可读。"""
+    """逐个核对 7 个产物文件 + preview.mp4 可播放 + report.md 可读。"""
     result: dict[str, Any] = {"all_present": True, "files": {}, "preview_playable": False}
     for name in _EXPECTED_FILES:
         p = out_dir / name
@@ -276,14 +273,14 @@ def _verify_artifacts(out_dir: Path) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Case A:happy path
 # ---------------------------------------------------------------------------
-def case_happy(video_input: Path, external_transcript: str | None) -> dict[str, Any]:
+def case_happy(video_input: Path) -> dict[str, Any]:
     _print_banner("Case A:happy path (30s.mp4)")
     job_id = f"phase5-happy-{int(time.time())}"
     out_dir = ROOT / "outputs" / job_id / "assembly"
     if out_dir.exists():
         shutil.rmtree(out_dir, ignore_errors=True)
 
-    result = _drive_happy_path(str(video_input), job_id, qc_force_fail=False, external_transcript=external_transcript)
+    result = _drive_happy_path(str(video_input), job_id, qc_force_fail=False)
     state = result["state"]
 
     artifacts = _verify_artifacts(out_dir)
@@ -374,14 +371,14 @@ def case_gate_off() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Case C:软降级 (QC 必然失败,验证 repair loop + 软收尾)
 # ---------------------------------------------------------------------------
-def case_qc_fail(video_input: Path, external_transcript: str | None) -> dict[str, Any]:
+def case_qc_fail(video_input: Path) -> dict[str, Any]:
     _print_banner("Case C:QC 必然失败 → 软降级 → repair loop 收尾")
     job_id = f"phase5-qcfail-{int(time.time())}"
     out_dir = ROOT / "outputs" / job_id / "assembly"
     if out_dir.exists():
         shutil.rmtree(out_dir, ignore_errors=True)
 
-    result = _drive_happy_path(str(video_input), job_id, qc_force_fail=True, external_transcript=external_transcript)
+    result = _drive_happy_path(str(video_input), job_id, qc_force_fail=True)
     state = result["state"]
 
     artifacts = _verify_artifacts(out_dir)
@@ -601,8 +598,6 @@ def _parse_args() -> argparse.Namespace:
                    help="要跑的 case;默认 all")
     p.add_argument("--input", default=str(ROOT / "inputs" / "30s.mp4"),
                    help="happy / qc_fail 用素材;默认 inputs/30s.mp4")
-    p.add_argument("--transcript", default=str(ROOT / "tests" / "fixtures" / "assembly_phase5" / "transcript.json"),
-                   help="外部 transcript.json(speech_transcribe 必须依赖);默认 tests/fixtures/assembly_phase5/transcript.json")
     p.add_argument("--report-json", default=None,
                    help="可选:把汇总结果写到 JSON 文件,默认写到 outputs/phase5_e2e_report.json")
     return p.parse_args()
@@ -627,7 +622,7 @@ def main() -> int:
     qc_result: Optional[dict[str, Any]] = None
 
     if "happy" in cases_to_run:
-        happy_result = case_happy(video_input, args.transcript if Path(args.transcript).is_file() else None)
+        happy_result = case_happy(video_input)
         summary["cases"]["happy"] = happy_result
         print(f"\n  → case_happy all_ok={happy_result['all_ok']}")
 
@@ -637,7 +632,7 @@ def main() -> int:
         print(f"\n  → case_gate_off all_ok={gate_off_result['all_ok']}")
 
     if "qc_fail" in cases_to_run:
-        qc_result = case_qc_fail(video_input, args.transcript if Path(args.transcript).is_file() else None)
+        qc_result = case_qc_fail(video_input)
         summary["cases"]["qc_fail"] = qc_result
         print(f"\n  → case_qc_fail all_ok={qc_result['all_ok']}")
 
@@ -645,7 +640,6 @@ def main() -> int:
         # 用 happy path 的 state 验(它有完整产物和 report_path)
         state_for_notify = happy_result["state"] if happy_result else _make_initial_state(
             str(video_input), "phase5-fake",
-            external_transcript=args.transcript if Path(args.transcript).is_file() else None,
         )
         notify_result = case_checkpoint1_notification(state_for_notify)
         summary["cases"]["checkpoint1"] = notify_result

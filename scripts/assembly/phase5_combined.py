@@ -49,21 +49,14 @@ def main() -> int:
         "phase": "Phase 5 (端到端验证)",
         "plan_ref": "docs/integration/video-agent-kit集成auto-video-editor设计执行计划.md §10",
         "input": str(ROOT / "inputs" / "30s.mp4"),
-        "transcript_fixture": str(ROOT / "tests" / "fixtures" / "assembly_phase5" / "transcript.json"),
         "cases": {},
     }
 
     print("[1/5] happy path ...")
-    summary["cases"]["happy"] = case_happy(
-        ROOT / "inputs" / "30s.mp4",
-        str(ROOT / "tests" / "fixtures" / "assembly_phase5" / "transcript.json"),
-    )
+    summary["cases"]["happy"] = case_happy(ROOT / "inputs" / "30s.mp4")
 
     print("[2/5] qc_fail (软降级) ...")
-    summary["cases"]["qc_fail"] = case_qc_fail(
-        ROOT / "inputs" / "30s.mp4",
-        str(ROOT / "tests" / "fixtures" / "assembly_phase5" / "transcript.json"),
-    )
+    summary["cases"]["qc_fail"] = case_qc_fail(ROOT / "inputs" / "30s.mp4")
 
     print("[3/5] gate_off (应急关闭) ...")
     summary["cases"]["gate_off"] = case_gate_off()
@@ -104,7 +97,6 @@ def _render_markdown(summary: dict, all_ok: bool) -> str:
     lines.append("# 阶段五端到端验证报告\n")
     lines.append(f"> 计划依据:`{summary['plan_ref']}`\n")
     lines.append(f"> 输入素材:`{summary['input']}`\n")
-    lines.append(f"> Transcript fixture:`{summary['transcript_fixture']}`\n")
     lines.append(f"\n**全部通过:{all_ok}**\n")
 
     for name, r in summary["cases"].items():

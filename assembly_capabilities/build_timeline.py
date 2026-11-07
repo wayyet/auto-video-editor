@@ -490,9 +490,9 @@ def build_timeline_from_media(
 
     Args:
         media_reports: ``assembly_discover_and_probe`` 写出的 ``media.json``。
-        transcript_data: ``assembly_asr_and_visual_observe`` 写出的 ``transcript.json``
-            (允许 None,表示无转写)。
-        ingest_data: ``assembly_asr_and_visual_observe`` 写出的 ``video_ingest.json``
+        transcript_data: 可选的转写文本上下文(B1 ASR 移除后主图不再提供;
+            保留通用可选接口给评估脚本等非主图调用方,允许 None)。
+        ingest_data: ``assembly_visual_observe`` 写出的 ``video_ingest.json``
             (允许 None,表示无截图)。
         lang: prompt 语言(目前只接 ``"zh"``)。
         client: LLM client。None 时用 ``vlm_client.get_default_client()``(默认 Stub)。
@@ -600,7 +600,8 @@ def build_timeline_from_media(
             "candidate_segments_count": len(candidates),
             "selected_segments_count": len(chosen),
             "fallback_used": fallback_used,
-            "transcript_chars": len(transcript_text),
+            # B1 ASR 移除后主图不再提供 transcript;仅在调用方显式传入时计入
+            "transcript_chars": len(transcript_text) if transcript_data is not None else 0,
             "sheet_count": len(sheet_paths),
             "llm_used": llm_used,
         },

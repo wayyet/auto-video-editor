@@ -10,8 +10,9 @@
 5. 节点 ``route_after_assembly_qc`` 在 ``assembly_qc_status == "pass"`` 时
    走 ``assembly_write_report``(已在单元测试覆盖,这里仅 spot-check)
 6. **核心集成**:从 ``generate_draft`` 端到端 invoke 到 ``node_06_human_reorder``
-   中断之前,验证 ``outputs/<job>/assembly/`` 下 8 个产物文件全部生成
-   (mock 掉 ``assembly_capabilities.*`` 工具,避免依赖 ffmpeg)
+   中断之前,验证 ``outputs/<job>/assembly/`` 下 7 个产物文件全部生成
+   (mock 掉 ``assembly_capabilities.*`` 工具,避免依赖 ffmpeg;
+   B1 ASR 移除后不再产出 transcript.json)
 
 参考:plan §八 graph.py 接线改动 + §十一 验收标准。
 """
@@ -130,20 +131,12 @@ def patched_assembly_tools(monkeypatch: pytest.MonkeyPatch, base_state: dict) ->
         }
     ]
 
-    transcript_data = {
-        "language": "zh",
-        "segments": [{"start": 0, "end": 5, "text": "你好"}],
-        "words": [],
-        "provider": "stub",
-        "source_media": base_state["video_input_path"],
-    }
     ingest_data = {
         "tool": "video_ingest",
         "video_path": base_state["video_input_path"],
         "media": {"sampled_frames": 4, "duration": 10.0},
         "sheet_paths": [],
         "frame_paths": [],
-        "transcript_text": "",
     }
     timeline_data = {
         "version": "stub-1",
@@ -229,7 +222,6 @@ def patched_assembly_tools(monkeypatch: pytest.MonkeyPatch, base_state: dict) ->
         media_probe,
         qc_preview as qc_preview_mod,
         render_preview as render_preview_mod,
-        speech_asr,
         timeline_ops,
         visual_observe,
     )
@@ -243,7 +235,6 @@ def patched_assembly_tools(monkeypatch: pytest.MonkeyPatch, base_state: dict) ->
         }),
     )
     monkeypatch.setattr(media_probe, "analyze_media", _make_stub_writer(media_data[0]["analysis"]))
-    monkeypatch.setattr(speech_asr, "speech_transcribe", _make_stub_writer(transcript_data))
     monkeypatch.setattr(visual_observe, "video_ingest", _make_stub_writer(ingest_data))
     monkeypatch.setattr(
         timeline_ops, "validate_timeline", _make_stub_writer(validation_data)
@@ -278,15 +269,14 @@ def patched_assembly_tools(monkeypatch: pytest.MonkeyPatch, base_state: dict) ->
 
     # patch 消费端(节点模块命名空间已 import 过的绑定)
     from nodes.assembly import (
-        node_asr_and_visual_observe,
+        node_visual_observe,
         node_discover_and_probe,
         node_repair_loop,
         node_validate_render_qc,
     )
     monkeypatch.setattr(node_discover_and_probe, "inspect_media", media_probe.inspect_media)
     monkeypatch.setattr(node_discover_and_probe, "analyze_media", media_probe.analyze_media)
-    monkeypatch.setattr(node_asr_and_visual_observe, "speech_transcribe", speech_asr.speech_transcribe)
-    monkeypatch.setattr(node_asr_and_visual_observe, "video_ingest", visual_observe.video_ingest)
+    monkeypatch.setattr(node_visual_observe, "video_ingest", visual_observe.video_ingest)
     monkeypatch.setattr(node_validate_render_qc, "validate_timeline", timeline_ops.validate_timeline)
     monkeypatch.setattr(node_validate_render_qc, "render_preview", _fake_render)
     monkeypatch.setattr(node_validate_render_qc, "qc_preview", qc_preview_mod.qc_preview)
@@ -351,8 +341,8 @@ def test_qc_gate_true_wires_full_assembly_chain(monkeypatch: pytest.MonkeyPatch)
     # generate_draft → assembly_discover_and_probe
     assert "assembly_discover_and_probe" in _edges_from(g, "generate_draft")
     # 6 节点串联 + 条件路由 + repair_loop 回到 validate
-    assert "assembly_asr_and_visual_observe" in _edges_from(g, "assembly_discover_and_probe")
-    assert "assembly_build_timeline" in _edges_from(g, "assembly_asr_and_visual_observe")
+    assert "assembly_visual_observe" in _edges_from(g, "assembly_discover_and_probe")
+    assert "assembly_build_timeline" in _edges_from(g, "assembly_visual_observe")
     assert "assembly_validate_render_qc" in _edges_from(g, "assembly_build_timeline")
     # assembly_write_report → node_06_human_reorder(回到主流程)
     assert "node_06_human_reorder" in _edges_from(g, "assembly_write_report")
@@ -371,7 +361,7 @@ def test_qc_gate_true_wires_full_assembly_chain(monkeypatch: pytest.MonkeyPatch)
 
 
 # ---------------------------------------------------------------------------
-# 测试 5:端到端跑一遍,验证 8 个产物文件全部生成
+# 测试 5:端到端跑一遍,验证 7 个产物文件全部生成(B1 ASR 移除后无 transcript.json)
 # ---------------------------------------------------------------------------
 def test_assembly_chain_end_to_end_produces_all_artifacts(
     monkeypatch: pytest.MonkeyPatch,
@@ -393,7 +383,6 @@ def test_assembly_chain_end_to_end_produces_all_artifacts(
     assembly_dir = Path(base_state["storyline_outputs_root"]) / "assembly"
     expected_files = [
         "media.json",
-        "transcript.json",
         "video_ingest.json",
         "timeline.json",
         "timeline_validation.json",
@@ -496,7 +485,7 @@ def test_assembly_chain_missing_timeline_soft_degrades_within_max_retry(
 
     这里只 stub 掉 ``assembly_build_timeline_node``,让它不产出
     ``assembly_timeline_path``;其余 6 节点与路由函数都是生产代码,
-    不依赖真实 ffmpeg / ASR。
+    不依赖真实 ffmpeg / LLM 网关。
     """
     import graph as graph_mod
 

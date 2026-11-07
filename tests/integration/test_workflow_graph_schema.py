@@ -38,7 +38,7 @@ from monitoring.workflow_graph import (
 
 ASSEMBLY_NODES = {
     "assembly_discover_and_probe",
-    "assembly_asr_and_visual_observe",
+    "assembly_visual_observe",
     "assembly_build_timeline",
     "assembly_validate_render_qc",
     "assembly_repair_loop",
@@ -46,7 +46,7 @@ ASSEMBLY_NODES = {
 }
 
 #: 阶段3 删除的 human 模式 5 节点 + 运维节点 + B1 移除的 storyline ASR 旁支 2 节点
-#: (不得再出现在编译图与 schema 中)
+#: 与 assembly ASR 复合节点(改名 assembly_visual_observe)(不得再出现在编译图与 schema 中)
 REMOVED_NODES = {
     "clean_cache",
     "launch_openstoryline",
@@ -56,6 +56,7 @@ REMOVED_NODES = {
     "get_storyboard_plan",
     "storyline_local_asr",
     "storyline_speech_rough_cut",
+    "assembly_asr_and_visual_observe",
 }
 
 #: interrupt 关卡节点 → 关卡编号(阶段3 后仅 ①②③)
@@ -256,6 +257,24 @@ def test_storyline_asr_side_branch_removed(monkeypatch):
         p for p in pairs
         if "storyline_local_asr" in p or "storyline_speech_rough_cut" in p
     ]
+    assert leftovers == []
+
+
+def test_assembly_visual_observe_chain_wiring(monkeypatch):
+    """B1 ASR 移除阶段 4:assembly 复合节点改名 assembly_visual_observe,
+    上下游两条边重接,旧节点名/边不复存在(计划 §7.3)。"""
+    schema = _make_schema(monkeypatch, qc=True)
+    by_id = {n["id"]: n for n in schema["nodes"]}
+
+    assert "assembly_discover_and_probe" in by_id
+    assert "assembly_visual_observe" in by_id
+    assert "assembly_build_timeline" in by_id
+    assert "assembly_asr_and_visual_observe" not in by_id
+
+    pairs = _edge_pairs(schema)
+    assert ("assembly_discover_and_probe", "assembly_visual_observe") in pairs
+    assert ("assembly_visual_observe", "assembly_build_timeline") in pairs
+    leftovers = [p for p in pairs if "assembly_asr_and_visual_observe" in p]
     assert leftovers == []
 
 
