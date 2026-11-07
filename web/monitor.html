@@ -216,6 +216,7 @@
     let csrfToken = null;
     let resumeGuidanceShown = false;
     let historyRows = [];
+    let NODE_NAMES = {};  // node_id -> 中文显示名(与节点图视图同一事实源;未收录回退英文 id)
 
     try { threadInput.value = localStorage.getItem("wf_monitor_thread") || ""; } catch (e) {}
 
@@ -229,6 +230,20 @@
         subscribe();
       }
     }
+
+    // 节点状态面板的中文显示名映射:非阻塞拉取,拿到后重渲染一次(处理节点
+    // 快照先于映射到达的时序);失败静默,未收录的节点回退显示英文 id。
+    (async () => {
+      try {
+        const r = await fetch(API_PATHS.nodeNames, { headers: { Accept: "application/json" } });
+        if (!r.ok) return;
+        const data = await r.json();
+        if (data && data.names && typeof data.names === "object") {
+          NODE_NAMES = data.names;
+          renderNodes();
+        }
+      } catch (e) { /* 映射不可用时保持英文 id */ }
+    })();
 
     function setChip(stateKey, extra) {
       chip.className = "s-" + (stateKey || "");
@@ -277,8 +292,9 @@
       for (const id of ids.sort()) {
         const n = monitor.nodes[id];
         const label = NODE_ST_LABEL[n.status] || n.status || "—";
+        const name = NODE_NAMES[id] || id;
         ndBody.insertAdjacentHTML("beforeend",
-          `<tr><td>${id}</td><td><span class="st ${n.status || ""}">${label}</span></td><td>${n.attempt || 1}</td></tr>`);
+          `<tr><td>${escapeHtml(name)}</td><td><span class="st ${n.status || ""}">${label}</span></td><td>${n.attempt || 1}</td></tr>`);
       }
     }
     function handleEvent(esEvent) {

@@ -55,6 +55,7 @@ const LAST_EVENT_RUN_STATE = Object.freeze({
 /** API 路径(只读监控 API;工作流启动走 POST /api/console/runs —— 订阅绝不触发执行)。 */
 export const API_PATHS = Object.freeze({
   graph: "/api/workflow/graph",
+  nodeNames: "/api/workflow/node-names",
   runs: "/api/workflow/runs",
   runSnapshot: (threadId) => `/api/workflow/runs/${encodeURIComponent(threadId)}`,
   runEvents: (threadId) => `/api/workflow/runs/${encodeURIComponent(threadId)}/events`,

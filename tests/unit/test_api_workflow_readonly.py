@@ -5,8 +5,8 @@
 - R-05:``repo_root()`` 必须解析到仓库根(旧实现 ``parents[2]`` 指到仓库
   **父**目录 —— 2026-11-01 扁平化前的路径遗留);
 - R-04:监控 router 只读 —— 无 ``POST /runs``、无 chat-sessions 查询、
-  无任何 POST/写端点;保留 GET /graph、/runs/{tid}、/runs/{tid}/events、
-  /runs/{tid}/resume-status;
+  无任何 POST/写端点;保留 GET /graph、/node-names、/runs/{tid}、
+  /runs/{tid}/events、/runs/{tid}/resume-status;
 - ``monitor_fastapi.app`` 独立可导入,且挂载监控页与静态资源。
 """
 
@@ -41,6 +41,7 @@ def test_monitor_router_is_read_only():
     assert not any(method != "GET" for method, _ in routes), "监控 router 只允许 GET"
 
     assert ("GET", "/api/workflow/graph") in routes
+    assert ("GET", "/api/workflow/node-names") in routes
     assert ("GET", "/api/workflow/runs/{thread_id}") in routes
     assert ("GET", "/api/workflow/runs/{thread_id}/events") in routes
     assert ("GET", "/api/workflow/runs/{thread_id}/resume-status") in routes
@@ -60,3 +61,39 @@ def test_monitor_app_is_importable_and_mounts_pages():
     assert "/node-map" in paths
     assert "/node_map" in paths
     assert "/static" in paths
+
+
+def test_node_names_endpoint_returns_registry_names():
+    """GET /api/workflow/node-names:轻量返回注册表中文名(监控页节点状态用)。
+
+    与 /graph 的 nodes[].name 同源(_NODE_META),但本端点不触发图编译 ——
+    用例在 TestClient 下秒级返回即验证了"未走 13s 重构建"这一约定。
+    """
+    from fastapi.testclient import TestClient
+
+    from monitor_fastapi import app  # 函数内 import:保持本守卫模块 import 轻量
+
+    with TestClient(app) as client:
+        resp = client.get("/api/workflow/node-names")
+    assert resp.status_code == 200
+    names = resp.json()["names"]
+    assert isinstance(names, dict) and len(names) >= 40
+    assert all(
+        isinstance(k, str) and k and isinstance(v, str) and v.strip()
+        for k, v in names.items()
+    )
+    # 抽查与节点图视图展示一致的中文名
+    assert names["storyline_load_media"] == "载入媒体"
+    assert names["node_06_human_reorder"] == "人工调整镜头顺序①"
+    assert names["storyline_recommend_transition"] == "推荐转场"
+
+
+def test_node_display_names_matches_graph_schema_source():
+    """node_display_names 与 _NODE_META 同源:每个已注册节点都有非空中文名。"""
+    from monitoring.workflow_graph import _NODE_META, node_display_names
+
+    names = node_display_names()
+    assert set(names) == set(_NODE_META)
+    for node_id, meta in _NODE_META.items():
+        assert names[node_id] == meta["name"]
+        assert names[node_id].strip()

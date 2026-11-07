@@ -55,6 +55,7 @@ __all__ = [
     "SCHEMA_VERSION",
     "CHECKPOINT_MARKS",
     "build_graph_schema",
+    "node_display_names",
 ]
 
 WORKFLOW_ID = "auto_video_editor_main"
@@ -333,6 +334,15 @@ _NODE_META: dict[str, dict[str, Any]] = {
         "description": "反序列化规划产物;有 storyline_plan 进 generate_draft,无则 END",
     },
 }
+
+
+def node_display_names() -> dict[str, str]:
+    """``node_id -> 中文显示名`` 只读视图(轻量消费者用,不触发图编译)。
+
+    与 :func:`build_graph_schema` 输出的 ``nodes[].name`` 同一事实源(都是
+    ``_NODE_META``);未收录的节点由调用方回退展示(拓扑真源是编译图)。
+    """
+    return {node_id: meta["name"] for node_id, meta in _NODE_META.items()}
 
 # ---------------------------------------------------------------------------
 # 条件边标签注册表:(from, to) -> 标签(归一化后的 id;START/END 用大写)

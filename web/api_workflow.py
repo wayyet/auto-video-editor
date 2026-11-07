@@ -200,6 +200,23 @@ async def workflow_graph(request: Request, refresh: bool = False):
 
 
 # ---------------------------------------------------------------------------
+# GET /node-names —— 节点 id -> 中文名(轻量;只读注册表,不触发图编译)
+# ---------------------------------------------------------------------------
+@router.get("/node-names")
+async def workflow_node_names(request: Request):
+    """节点显示名映射(监控页「节点状态」面板把英文 id 换成中文名用)。
+
+    与 ``/graph`` 的 ``nodes[].name`` 同一事实源(``monitoring.workflow_graph``
+    的注册表),但只读静态注册表、不编译图 —— 毫秒级响应;未收录的节点由
+    前端回退显示英文 id。
+    """
+    _verify_same_origin(request)
+    from monitoring.workflow_graph import node_display_names  # 延迟 import(保持本模块跨进程轻量)
+
+    return JSONResponse({"names": node_display_names()})
+
+
+# ---------------------------------------------------------------------------
 # 事件存储访问(统一延迟 import + 线程池,psycopg 是同步驱动)
 # ---------------------------------------------------------------------------
 def _store():
