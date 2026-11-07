@@ -82,11 +82,14 @@ def _tail_chain_issues(draft: dict, label: str) -> list[str]:
     # 有音轨却没音量才是真问题(尾链 node_13 该写没写)。
     audio_tracks = [t for t in (draft.get("tracks", []) or []) if t.get("type") == "audio"]
     if audio_tracks:
+        # 匹配键双口径:原生草稿用 segment.material_id 引用素材;旧约定
+        # segment.id == material.id(同 node_12/node_13,兼容两者)。
         seg_ids = {
-            seg.get("id")
+            seg.get(key)
             for track in audio_tracks
             for seg in (track.get("segments", []) or [])
-            if seg.get("id")
+            for key in ("material_id", "id")
+            if seg.get(key)
         }
         audios = [m for m in (materials.get("audios", []) or []) if m.get("id") in seg_ids]
         if seg_ids and not audios:

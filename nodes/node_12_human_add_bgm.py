@@ -111,12 +111,16 @@ def mirror_bgm_to_en_draft(state: WorkflowState) -> list[str]:
         dict(t) for t in audio_tracks
     ]
 
-    # 2) audio materials:把中文草稿里被这些 segment 引用的 material 一并复制
+    # 2) audio materials:把中文草稿里被这些 segment 引用的 material 一并复制。
+    # 匹配键双口径:原生草稿(人工在剪映加的 BGM)用 segment.material_id 引用
+    # 素材;旧约定(mapper 自产段)segment.id == material.id —— 两个键都收,
+    # 兼容人工编辑过的原生稿与既有测试 fixture。
     referenced_ids = {
-        seg.get("id")
+        seg.get(key)
         for track in audio_tracks
         for seg in (track.get("segments", []) or [])
-        if seg.get("id")
+        for key in ("material_id", "id")
+        if seg.get(key)
     }
     if referenced_ids:
         zh_materials = zh_draft.get("materials", {}) or {}

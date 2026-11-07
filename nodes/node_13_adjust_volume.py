@@ -60,10 +60,15 @@ def _find_audio_segments(draft: dict) -> list[dict]:
     return []
 
 
-def _find_audio_material_by_id(draft: dict, segment_id: str) -> dict | None:
-    """在 ``materials.audios`` 中按 id 找对应的 audio material 对象。"""
+def _find_audio_material_by_segment(draft: dict, segment: dict) -> dict | None:
+    """按 segment 找对应 audio material,匹配键双口径。
+
+    原生草稿(人工在剪映加的 BGM)segment 用 ``material_id`` 引用素材;旧约定
+    (mapper 自产段)``segment.id == material.id``。两个键都试,兼容两者。
+    """
+    wanted = {str(segment.get("material_id") or ""), str(segment.get("id") or "")}
     for mat in draft.get("materials", {}).get("audios", []) or []:
-        if mat.get("id") == segment_id:
+        if str(mat.get("id") or "") in wanted:
             return mat
     return None
 
@@ -178,7 +183,7 @@ def _adjust_volume_with_write(
 
     for seg in matched:
         seg_id = seg.get("id")
-        audio_mat = _find_audio_material_by_id(draft, seg_id) if seg_id else None
+        audio_mat = _find_audio_material_by_segment(draft, seg)
         if audio_mat is not None:
             _apply_volume(audio_mat, volume_level)
         if fade_in_seconds > 0 or fade_out_seconds > 0:

@@ -26,7 +26,7 @@ import config
 from assembly_capabilities.run_context import RunContext
 from jy_common.asr_client import call_asr2s
 from nodes._draft_io import apply_and_write, load_draft
-from nodes._subtitle_texts import make_text_material
+from nodes._subtitle_texts import make_text_material, sync_text_track
 from state import SubtitleSegment, WorkflowState
 from video_edit_capabilities import subtitle_style as sty
 from video_edit_capabilities.subtitle_scout import subtitle_scout
@@ -396,6 +396,10 @@ def add_subtitles(state: WorkflowState) -> dict:
             "end_ms": int(end_s * 1000),
             "text_zh": text_content,
         })
+
+    # 2026-11-07 文本链原生升级:字幕铺上原生 text 轨道(整轨替换,幂等),
+    # 人工在剪映里才能看到并调整字幕(此前只躺在 materials.texts 桶,剪映不可见)
+    sync_text_track(draft, texts)
 
     # Week 5:参数从 draft_path 提升为 draft_path.parent,safe_write_draft 双写
     log = list(state.get("status_log", []) or [])

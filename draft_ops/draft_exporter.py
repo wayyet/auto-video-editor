@@ -43,6 +43,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Callable
 
+from jy_common.native_text import text_display_text
+
 #: argv runner:``(argv) -> (returncode, stderr尾部)``;注入用
 Runner = Callable[[list[str]], tuple[int, str]]
 
@@ -170,14 +172,29 @@ def build_render_plan(draft: dict) -> dict[str, Any]:
             )
 
     # 3) 字幕/花字文本(materials.texts;content 非空)
+    # 双形态(2026-11-07 文本链原生升级):人工在剪映保存后,material 只剩
+    # content JSON,计时落在 text 轨道段 —— 按 material_id 兜底取计时。
+    text_segs_by_mat: dict[str, dict[str, Any]] = {}
+    for tr in draft.get("tracks") or []:
+        if not isinstance(tr, dict) or tr.get("type") != "text":
+            continue
+        for s in tr.get("segments") or []:
+            if isinstance(s, dict) and s.get("material_id"):
+                text_segs_by_mat.setdefault(str(s["material_id"]), s)
     texts: list[dict[str, Any]] = []
     for t in (draft.get("materials") or {}).get("texts") or []:
         if not isinstance(t, dict):
             continue
-        content = str(t.get("content") or "").strip()
+        content = text_display_text(t).strip()
         if not content:
             continue
         start_us, dur_us = _seg_range_us(t)
+        if start_us == 0 and dur_us == 0:
+            seg = text_segs_by_mat.get(str(t.get("id") or ""))
+            if seg is not None:
+                tr = seg.get("target_timerange") or {}
+                start_us = int(tr.get("start") or 0)
+                dur_us = int(tr.get("duration") or 0)
         style = t.get("style") or {}
         texts.append(
             {

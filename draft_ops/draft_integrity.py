@@ -211,9 +211,21 @@ def check_video_track(draft: dict, tag: str) -> list[dict[str, str]]:
 
 
 def check_texts(draft: dict, tag: str) -> list[dict[str, str]]:
-    """``materials.texts[]`` 条目 content 非空、时间 range 合法(字幕/花字引用完整性)。"""
+    """``materials.texts[]`` 条目 content 非空、时间 range 合法(字幕/花字引用完整性)。
+
+    双形态(2026-11-07 文本链原生升级):人工在剪映保存后 material 的私有
+    ``target_timerange`` 被丢弃,计时权威移到 text 轨道段 —— 按 material_id
+    兜底;两处都缺才告警(字幕不可见)。
+    """
     issues: list[dict[str, str]] = []
     texts = (draft.get("materials") or {}).get("texts") or []
+    text_track_tr_by_mat: dict[str, dict] = {}
+    for tr in draft.get("tracks") or []:
+        if not isinstance(tr, dict) or tr.get("type") != "text":
+            continue
+        for s in tr.get("segments") or []:
+            if isinstance(s, dict) and s.get("material_id"):
+                text_track_tr_by_mat.setdefault(str(s["material_id"]), s.get("target_timerange") or {})
     for i, t in enumerate(texts):
         if not isinstance(t, dict):
             issues.append(_issue("字幕文本", SEV_ERROR, tag, f"texts#{i} 不是 dict"))
@@ -222,12 +234,19 @@ def check_texts(draft: dict, tag: str) -> list[dict[str, str]]:
         if not isinstance(content, str) or not content.strip():
             issues.append(_issue("字幕文本", SEV_ERROR, tag, f"texts#{i}({t.get('id', '?')}) content 为空"))
         tr = t.get("target_timerange")
+        if not isinstance(tr, dict):
+            tr = text_track_tr_by_mat.get(str(t.get("id") or ""))
         if isinstance(tr, dict):
             try:
                 if int(tr.get("duration") or 0) <= 0:
                     issues.append(_issue("字幕文本", SEV_WARNING, tag, f"texts#{i}({t.get('id', '?')}) duration<=0"))
             except (TypeError, ValueError):
                 issues.append(_issue("字幕文本", SEV_WARNING, tag, f"texts#{i}({t.get('id', '?')}) target_timerange 非法"))
+        else:
+            issues.append(_issue(
+                "字幕文本", SEV_WARNING, tag,
+                f"texts#{i}({t.get('id', '?')}) 无计时(既无 target_timerange 也无 text 轨段,字幕不可见)",
+            ))
     return issues
 
 

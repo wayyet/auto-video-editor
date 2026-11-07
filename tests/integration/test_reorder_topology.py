@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from jy_common.native_text import text_display_text
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
@@ -123,11 +124,23 @@ def test_english_draft_gets_subtitles_and_text_fx(tmp_path, monkeypatch):
     texts = en["materials"]["texts"]
     assert len(texts) == len(final["subtitle_segments_en"]) > 0
     assert all(t["track_name"] == "Subtitles_en" for t in texts)
-    assert all(t["content"] == t["text_en"] for t in texts)
+    # 2026-11-07 文本链原生升级:content 是原生 styles JSON 字符串,显示文本经
+    # text_display_text 还原后仍与 text_en 一致;material 带原生必填键。
+    assert all(text_display_text(t) == t["text_en"] for t in texts)
+    assert all(t["type"] == "text" for t in texts)
+    # 字幕铺上原生 text 轨道(关卡③ 人工可见可改),轨道段与 texts 一一对应
+    text_tracks = [t for t in en["tracks"] if t.get("type") == "text"]
+    assert len(text_tracks) == 1
+    assert len(text_tracks[0]["segments"]) == len(texts)
+    assert all(
+        seg["material_id"] == mat["id"]
+        for seg, mat in zip(text_tracks[0]["segments"], texts)
+    )
     assert all(t["style"].get("outline") for t in texts)          # 10b 的花字已生效
     # 中文草稿不受英文节点影响
     zh = json.loads(Path(final["draft_path"]).read_text(encoding="utf-8"))
     assert all(t["track_name"] == "Subtitles" for t in zh["materials"]["texts"])
+    assert any(t.get("type") == "text" for t in zh["tracks"]), "中文字幕同样铺 text 轨"
 
 
 def test_checkpoint3_path_no_parallel_conflict_and_human_edit_survives(tmp_path, monkeypatch):

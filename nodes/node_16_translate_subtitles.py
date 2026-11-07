@@ -33,6 +33,7 @@ from langgraph.types import interrupt  # 模块级别 import:让 ``patch("nodes.
 
 from draft_ops.atomic_writer import safe_write_draft
 from draft_ops.atomic_writer_file import atomic_write_file
+from jy_common.native_text import text_display_text
 from state import SubtitleSegment, WorkflowState
 
 
@@ -137,22 +138,52 @@ def _segments_to_srt(segments: list[SubtitleSegment]) -> str:
 # 草稿读写
 # ---------------------------------------------------------------------------
 def _read_segments_from_draft(draft_dir: Path) -> list[SubtitleSegment]:
-    """从 en_branch 草稿读 materials.texts 还原 SubtitleSegment 列表。
+    """从 en_branch 草稿还原 SubtitleSegment 列表(双形态,2026-11-07 升级)。
 
-    转换规则:从 start/duration 微秒 → start_ms/end_ms 毫秒;text_en 若存在则
-    保留,否则用 content 作为占位。
+    - **原生形态**(人工在剪映编辑保存后,私有键被剪映丢弃):计时权威在
+      **text 轨道段** ``segment.target_timerange``,文本在 material 的 content
+      JSON 里 —— 按 material_id 关联读取,按 start 排序重建 index;
+    - **旧形态**(本链路自产、未经剪映保存):``texts[].target_timerange`` +
+      ``text_en``/content 纯文本。
     """
     draft_file = draft_dir / "draft_content.json"
     if not draft_file.exists():
         return []
     draft = json.loads(draft_file.read_text(encoding="utf-8"))
     texts = draft.get("materials", {}).get("texts", [])
+    texts_by_id = {
+        str(t.get("id")): t for t in texts if isinstance(t, dict) and t.get("id")
+    }
+
+    native_rows: list[tuple[int, int, str]] = []
+    for track in draft.get("tracks") or []:
+        if not isinstance(track, dict) or track.get("type") != "text":
+            continue
+        for seg in track.get("segments") or []:
+            if not isinstance(seg, dict):
+                continue
+            mat = texts_by_id.get(str(seg.get("material_id") or ""))
+            if mat is None:
+                continue
+            tr = seg.get("target_timerange") or {}
+            start_ms = int(tr.get("start", 0) or 0) // 1_000
+            end_ms = start_ms + int(tr.get("duration", 0) or 0) // 1_000
+            native_rows.append((start_ms, end_ms, text_display_text(mat)))
+    if native_rows:
+        native_rows.sort(key=lambda r: r[0])
+        return [
+            {"index": i, "start_ms": s, "end_ms": e, "text_en": txt}
+            for i, (s, e, txt) in enumerate(native_rows)
+        ]
+
     out: list[SubtitleSegment] = []
     for i, t in enumerate(texts):
+        if not isinstance(t, dict):
+            continue
         tr = t.get("target_timerange", {})
-        start_ms = int(tr.get("start", 0)) // 1_000
-        end_ms = start_ms + int(tr.get("duration", 0)) // 1_000
-        text_en = t.get("content", "")
+        start_ms = int(tr.get("start", 0) or 0) // 1_000
+        end_ms = start_ms + int(tr.get("duration", 0) or 0) // 1_000
+        text_en = t.get("text_en") or text_display_text(t)
         out.append({
             "index": i,
             "start_ms": start_ms,

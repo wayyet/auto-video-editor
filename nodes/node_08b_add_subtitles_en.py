@@ -21,7 +21,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from nodes._draft_io import apply_and_write, load_draft
-from nodes._subtitle_texts import make_text_material
+from nodes._subtitle_texts import make_text_material, sync_text_track
 from nodes.node_08_add_subtitles import _style_from_scout
 from state import WorkflowState
 
@@ -64,6 +64,9 @@ def add_subtitles_en(state: WorkflowState) -> dict:
 
     # 整表替换 = 幂等(重放不会叠出重复字幕)
     draft.setdefault("materials", {})["texts"] = texts
+    # 2026-11-07 文本链原生升级:字幕铺上原生 text 轨道(整轨替换,幂等),
+    # 关卡③ 人工才能在剪映时间轴里看到并修正英文字幕布局
+    sync_text_track(draft, texts)
 
     log = apply_and_write(
         draft_file,

@@ -115,22 +115,28 @@ def speed_fit(state: WorkflowState) -> dict:
         speed = src_dur / new_dur if new_dur > 0 else 1.0
         seg["speed"] = speed
 
-        # 补建 speed material 引用(若段无 extra_material_refs)
         refs = seg.setdefault("extra_material_refs", [])
-        # 检查是否已有 speed 引用
-        has_speed_ref = any(
-            any(sm.get("id") == ref for sm in speeds_material)
-            for ref in refs
+        # 找该段已引用的 speed material(原生伴随结构里每段一个;旧链路可能没有)
+        speed_ref = next(
+            (ref for ref in refs if any(sm.get("id") == ref for sm in speeds_material)),
+            None,
         )
-        if not has_speed_ref:
+        if speed_ref is None:
             mat_id = f"speed-{uuid4().hex[:8]}"
             speeds_material.append({
                 "id": mat_id,
                 "speed": speed,
                 "mode": 0,           # 0 = 常规变速(曲线变速 mode != 0)
                 "curve_speed": None,
+                "type": "speed",     # 原生 speed material 必带(2026-11-07 样本核对)
             })
             refs.append(mat_id)
+        else:
+            # 原生伴随结构(转换器引入):剪映按 material 里的速度播放,
+            # 段引用已存在时必须同步写新速度,否则变速不生效
+            for sm in speeds_material:
+                if sm.get("id") == speed_ref:
+                    sm["speed"] = speed
 
     # 重算 target_timerange.start + 顶层 duration
     cursor = 0
