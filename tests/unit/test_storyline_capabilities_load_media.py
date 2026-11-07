@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -75,6 +76,45 @@ def test_load_media_empty_inputs() -> None:
     assert res["media"] == []
     assert res["summary"]["video"] == 0
     assert res["summary"]["image"] == 0
+
+
+def test_video_metadata_via_ffprobe_fills_typed_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ffprobe 退化路径必须请求 codec_type/sample_rate 并正确分类填字段。
+
+    2026-11-07 实机回归:-show_entries 漏请求 codec_type → 分类循环
+    (靠 s.get("codec_type") 分流)永不命中 → 宽高/fps/has_audio 全 0;
+    has_audio 恒 False 连带 graph 的 ASR 分支永不触发。
+    """
+    from storyline_capabilities.load_media import _video_metadata_via_ffprobe
+
+    captured: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        payload = {
+            "streams": [
+                {"codec_type": "video", "width": 1920, "height": 1080,
+                 "r_frame_rate": "103700/3457"},
+                {"codec_type": "audio", "sample_rate": "44100"},
+            ],
+            "format": {"duration": "69.138333"},
+        }
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    meta = _video_metadata_via_ffprobe(tmp_path / "any.mov")
+
+    entries = captured["cmd"][captured["cmd"].index("-show_entries") + 1]
+    assert "codec_type" in entries, "-show_entries 必须请求 codec_type"
+    assert "sample_rate" in entries, "-show_entries 必须请求 sample_rate"
+    assert meta["width"] == 1920
+    assert meta["height"] == 1080
+    assert 29.9 < meta["fps"] < 30.1
+    assert meta["has_audio"] is True
+    assert meta["audio_sample_rate_hz"] == 44100
+    assert meta["duration_ms"] == 69138
 
 
 # ---------------------------------------------------------------------------

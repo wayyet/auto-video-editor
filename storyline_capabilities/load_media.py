@@ -150,7 +150,11 @@ def _video_metadata_via_ffprobe(path: Path) -> dict[str, Any]:
                 "-v",
                 "error",
                 "-show_entries",
-                "format=duration:stream=width,height,r_frame_rate",
+                # codec_type/sample_rate 必须显式请求:ffprobe 只回传被请求的
+                # 字段,而下方分类循环靠 codec_type 分流(2026-11-07 实机回归:
+                # 漏请求 → 视频/音频分支永不命中 → 宽高/fps/has_audio 全 0,
+                # has_audio 恒 False 连带 graph 的 ASR 分支永不触发)
+                "format=duration:stream=codec_type,width,height,r_frame_rate,sample_rate",
                 "-of",
                 "json",
                 str(path),
