@@ -321,8 +321,9 @@ def node_16_translate_subtitles(state: WorkflowState) -> dict:
     layout_issues = step1.get("layout_issues") or []
     draft_dir_p = Path(state.get("draft_dir_en_branch") or "")
 
-    # 若 node_16a 跳过(asr/draft_dir 缺失),整个透传,避免覆盖 skip 信息
-    if "node_16a_translate_skipped" in (step1.get("status_log") or []):
+    # 若 node_16a 跳过(asr 缺失为正常 skip / draft_dir 缺失为错误),整个透传,避免覆盖 skip 信息
+    _16a_skip_tags = {"node_16a_translate_skipped", "skipped_no_source_subtitles"}
+    if _16a_skip_tags & set(step1.get("status_log") or []):
         return step1
 
     # Step 2:条件关卡③(同步模拟,不真挂起)

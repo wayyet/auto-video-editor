@@ -194,9 +194,11 @@ def node_16a_translate_and_check(state: WorkflowState) -> dict:
     """
     segments_zh = list(state.get("asr_segments_zh") or [])
     if not segments_zh:
+        # B1 ASR 移除(2026-11-08)后"无源字幕"是英文分支的**常态输入**:
+        # 正常跳过而非错误(不写 error_log,不污染排障日志);
+        # layout_issues_detected 不设置 → route_after_translate 照常放行 node_17。
         return {
-            "error_log": ["[node_16a] asr_segments_zh 缺失,跳过翻译"],
-            "status_log": ["node_16a_translate_skipped"],
+            "status_log": ["skipped_no_source_subtitles"],
         }
 
     draft_dir = state.get("draft_dir_en_branch")

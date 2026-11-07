@@ -35,17 +35,37 @@ def _state(draft_path: Path, video_path: str = "C:/v.mp4") -> dict:
     }
 
 
-def test_add_subtitles_no_asr_returns_empty_segments(tmp_draft: Path) -> None:
-    """B1 ASR 移除:节点不做语音转写 —— 返回空 asr_segments_zh,不注入任何字幕。"""
+def test_add_subtitles_no_asr_omits_asr_keys(tmp_draft: Path) -> None:
+    """B1 ASR 移除:节点不做语音转写 —— 不写 asr_segments_zh(计划 §3.3 取"缺省")。
+
+    新任务 state 无此键 → node_16a 走"无源字幕"正常跳过;不注入任何字幕。
+    """
     out = add_subtitles(_state(tmp_draft))
 
-    assert out["asr_segments_zh"] == []
-    assert out["asr_segments_zh_written"] is False
+    assert "asr_segments_zh" not in out
+    assert "asr_segments_zh_written" not in out
     assert out["error_log"] == []
     assert "node_08_add_subtitles_done" in out["status_log"]
     # 草稿不被注入文本素材(ASR 字幕通道已整体移除)
     draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
     assert draft["materials"].get("texts") is None
+
+
+def test_add_subtitles_passes_through_legacy_asr_segments_unchanged(tmp_draft: Path) -> None:
+    """旧线程兼容:state 已有的 asr_segments_zh 经 {**state} 原样透传,node_08 不改写。
+
+    节点既不重新生产也不清空 —— 16a 对旧线程残留段按兼容语义消费。
+    """
+    state = _state(tmp_draft)
+    legacy = [{"index": 0, "start_ms": 0, "end_ms": 1_000, "text_zh": "旧段"}]
+    state["asr_segments_zh"] = legacy
+    state["asr_segments_zh_written"] = True
+
+    out = add_subtitles(state)
+
+    assert out["asr_segments_zh"] == legacy
+    assert out["asr_segments_zh_written"] is True
+    assert "node_08_add_subtitles_done" in out["status_log"]
 
 
 def test_add_subtitles_preserves_existing_script_subtitles(tmp_path: Path) -> None:

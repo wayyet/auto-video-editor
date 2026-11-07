@@ -23,8 +23,17 @@ from langgraph.types import Command
 from graph import build_graph
 
 
-def _seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
-    """预置 35s 草稿;**不**预置 asr_segments_zh —— 必须由 node_08 自己产出。"""
+def _seed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    asr_segments_zh: list[dict] | None = None,
+) -> dict:
+    """预置 35s 草稿;默认**不**预置 asr_segments_zh(B1 ASR 移除后的常态输入)。
+
+    ``asr_segments_zh`` 仅用于显式验证"有源字幕"的老路径(关卡③ 布局人工校对),
+    模拟旧线程恢复时 state 里已有段落的场景;新流程 node_08 恒产出空列表。
+    """
     draft_dir = tmp_path / "drafts" / "demo"
     draft_dir.mkdir(parents=True)
     dur = 35_000_000
@@ -37,7 +46,7 @@ def _seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
                     "segments": [{"id": "s1", "target_timerange": {"start": 0, "duration": dur}}]}],
     }, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setenv("AUTO_VIDEO_EDITOR_DRAFT_DIR", str(draft_dir))
-    return {
+    state = {
         "session_id": "reorder",
         "video_input_path": "C:/tmp/fake.mp4",
         "draft_path": str(draft_file),
@@ -47,6 +56,9 @@ def _seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
         "error_log": [],
         "status_log": ["node_05_generate_draft_done"],
     }
+    if asr_segments_zh is not None:
+        state["asr_segments_zh"] = asr_segments_zh
+    return state
 
 
 def _drive(state: dict, *, force_layout_issue: bool = False, human_edit: str | None = None):
@@ -103,7 +115,7 @@ def test_execution_order_after_reorder(tmp_path, monkeypatch):
 
     # 中文线:08 → 10 → 14 → 15
     assert s("node_08_add_subtitles") < s("node_10_inject_text_fx") < s("node_14_make_covers") < s("node_15_localize_covers_en")
-    # 英文线:16a → 08b → 10b → 17;且 16a 严格晚于 08(显式依赖 asr_segments_zh)
+    # 英文线:16a → 08b → 10b → 17;且 16a 严格晚于 08(经 fork 的图边,拓扑不变)
     assert s("node_08_add_subtitles") < s("fork_draft_for_english_branch") < s("node_16a_translate_and_check")
     assert s("node_16a_translate_and_check") < s("node_08b_add_subtitles_en") < s("node_10b_inject_text_fx_en") < s("node_17_inject_english_tts")
     # 尾链:09 必须晚于 15 和 17(汇合屏障),之后严格 09 → 11 → 12 → 13 → QA
@@ -118,8 +130,43 @@ def test_execution_order_after_reorder(tmp_path, monkeypatch):
     assert stops == [["①"], ["②"]]
 
 
+def test_english_branch_skips_cleanly_without_source_subtitles(tmp_path, monkeypatch):
+    """B1 ASR 移除:node_08 不再产 ASR 段 → 16a 正常 skip(非错误)、08b 只记 skip 状态。
+
+    英文分支的**节点照常执行**(边不动),只是内容跳过:不产英文字幕素材,
+    也不阻断 TTS(node_17)与尾链。
+    """
+    steps, stops, final = _drive(_seed(tmp_path, monkeypatch))
+    s = lambda n: _first_step(steps, n)  # noqa: E731
+
+    log = final["status_log"]
+    assert "skipped_no_source_subtitles" in log
+    assert "node_08b_skipped_no_en_segments" in log
+    # 跳过不算错误
+    assert not any("asr_segments_zh" in e for e in final.get("error_log") or [])
+
+    # 英文线节点仍全部执行且顺序不变
+    assert s("node_08_add_subtitles") < s("fork_draft_for_english_branch") < s("node_16a_translate_and_check")
+    assert s("node_16a_translate_and_check") < s("node_08b_add_subtitles_en") < s("node_10b_inject_text_fx_en") < s("node_17_inject_english_tts")
+
+    # 无源字幕 → 不写英文字幕素材/翻译段
+    assert not (final.get("subtitle_segments_en") or [])
+    en = json.loads((Path(final["draft_dir_en_branch"]) / "draft_content.json").read_text(encoding="utf-8"))
+    assert not (en.get("materials", {}).get("texts") or [])
+    assert not [t for t in en.get("tracks", []) if t.get("type") == "text" and "Subtitles_en" == t.get("track_name")]
+    # 关卡③不触发(layout_issues_detected 未设置),正常路径 ① → ②
+    assert stops == [["①"], ["②"]]
+
+
 def test_english_draft_gets_subtitles_and_text_fx(tmp_path, monkeypatch):
-    _, _, final = _drive(_seed(tmp_path, monkeypatch))
+    """有源字幕(模拟旧线程恢复时 state 已带 asr_segments_zh)→ 英文字幕照常写入。
+
+    node_08 不写也不清该键(B1 §3.3 取"缺省"),state 里的段经 {**state} 透传给 16a。
+    """
+    _, _, final = _drive(_seed(tmp_path, monkeypatch, asr_segments_zh=[
+        {"index": 0, "start_ms": 0, "end_ms": 2_000, "text_zh": "你好"},
+        {"index": 1, "start_ms": 2_000, "end_ms": 4_000, "text_zh": "世界"},
+    ]))
     en = json.loads((Path(final["draft_dir_en_branch"]) / "draft_content.json").read_text(encoding="utf-8"))
     texts = en["materials"]["texts"]
     assert len(texts) == len(final["subtitle_segments_en"]) > 0
@@ -137,15 +184,19 @@ def test_english_draft_gets_subtitles_and_text_fx(tmp_path, monkeypatch):
         for seg, mat in zip(text_tracks[0]["segments"], texts)
     )
     assert all(t["style"].get("outline") for t in texts)          # 10b 的花字已生效
-    # 中文草稿不受英文节点影响
+    # 中文草稿不受英文节点影响;B1 ASR 移除后 node_08 不再产中文字幕
     zh = json.loads(Path(final["draft_path"]).read_text(encoding="utf-8"))
-    assert all(t["track_name"] == "Subtitles" for t in zh["materials"]["texts"])
-    assert any(t.get("type") == "text" for t in zh["tracks"]), "中文字幕同样铺 text 轨"
+    assert not (zh.get("materials", {}).get("texts") or [])
+    assert not [t for t in zh.get("tracks", []) if t.get("track_name") == "Subtitles_en"]
 
 
 def test_checkpoint3_path_no_parallel_conflict_and_human_edit_survives(tmp_path, monkeypatch):
-    steps, stops, final = _drive(_seed(tmp_path, monkeypatch),
-                                 force_layout_issue=True, human_edit="HUMAN FIXED LINE")
+    steps, stops, final = _drive(
+        _seed(tmp_path, monkeypatch, asr_segments_zh=[
+            {"index": 0, "start_ms": 0, "end_ms": 2_000, "text_zh": "你好"},
+            {"index": 1, "start_ms": 2_000, "end_ms": 4_000, "text_zh": "世界"},
+        ]),
+        force_layout_issue=True, human_edit="HUMAN FIXED LINE")
     s = lambda n: _first_step(steps, n)  # noqa: E731
     # ③ 与 ② 永不同时挂起:先 ③(英文线),尾链走到 BGM 时才 ②。
     assert stops == [["①"], ["③"], ["②"]]
@@ -177,9 +228,9 @@ def test_tail_chain_applies_to_both_drafts(tmp_path, monkeypatch):
             f"{key} 条数不一致:zh={len(zh_m[key])} en={len(en_m[key])}"
         )
 
-    # 字幕轨不串台
-    assert all(t["track_name"] == "Subtitles" for t in zh_m["texts"])
-    assert all(t["track_name"] == "Subtitles_en" for t in en_m["texts"])
+    # 字幕轨不串台(B1 ASR 移除后本用例无源字幕,两侧 texts 为空,断言自然空真)
+    assert all(t["track_name"] == "Subtitles" for t in zh_m.get("texts") or [])
+    assert all(t["track_name"] == "Subtitles_en" for t in en_m.get("texts") or [])
 
     # K2=B 接线的直接证据:尾链对英文草稿那一轮各留一个 done_tag。
     # (BGM 镜像不在这里断言 —— 自动跑里没有真人往中文草稿加音轨,镜像会正确降级;

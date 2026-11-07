@@ -34,7 +34,9 @@ def add_subtitles_en(state: WorkflowState) -> dict:
     if not draft_dir_raw:
         return {"error_log": ["[node_08b] draft_dir_en_branch 缺失,跳过英文字幕写入"]}
     if not segments:
-        return {"error_log": ["[node_08b] subtitle_segments_en 为空,跳过英文字幕写入"]}
+        # B1 ASR 移除(2026-11-08)后 16a 无源字幕 → 正常 skip 是**常态输入**:
+        # 只记 skip 状态,不算错误,不写 error_log,后续节点(node_10b 等)照常放行。
+        return {"status_log": ["node_08b_skipped_no_en_segments"]}
 
     draft_file = Path(draft_dir_raw) / "draft_content.json"
     if not draft_file.exists():

@@ -607,7 +607,7 @@ def _build_state_graph():
     g.add_edge("node_10_inject_text_fx", "node_14_make_covers")
     g.add_edge("node_14_make_covers", "node_15_localize_covers_en")
 
-    # 英文线:显式依赖 08(16a 读 08 产出的 asr_segments_zh)——不再靠"超步顺序碰巧满足"
+    # 英文线:B1 ASR 移除后 16a 无源字幕即正常 skip;08 → fork 的图边保留(拓扑不变)
     g.add_edge("node_08_add_subtitles", "fork_draft_for_english_branch")
     g.add_edge("fork_draft_for_english_branch", "node_16a_translate_and_check")
     g.add_edge("node_16a_translate_and_check", "node_08b_add_subtitles_en")
