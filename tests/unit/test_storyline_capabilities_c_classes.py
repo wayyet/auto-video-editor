@@ -5,13 +5,13 @@
 - bgm_selector:rank_candidates + compute_beats_ms + load_bgm_library
 - generate_voiceover:stub 默认 + 单段失败 + 空输入
 - select_bgm:启发式 + LLM + fallback + empty library
-- speech_rough_cut:LLM 拆分
 - timeline_planner:TimeLine 简化版(节拍对齐 + TTS 对齐 + target_duration 缩放)
 - plan_timeline_pro:组合 capability
+
+(speech_rough_cut / asr_runner 用例已随 2026-11-08 B1 ASR 移除删除。)
 """
 from __future__ import annotations
 
-import json
 import wave
 from pathlib import Path
 from typing import Any
@@ -27,13 +27,8 @@ from storyline_capabilities.bgm_selector import (
 from storyline_capabilities.generate_voiceover import generate_voiceover
 from storyline_capabilities.select_bgm import select_bgm
 # Stage 5 modules
-from storyline_capabilities.speech_rough_cut import speech_rough_cut
 from storyline_capabilities.timeline_planner import TimeLine
 from storyline_capabilities.plan_timeline_pro import plan_timeline_pro
-from storyline_capabilities.asr_runner import (
-    StubASRClient,
-    transcribe_media,
-)
 from storyline_capabilities.ai_transition_client import (
     StubAITransitionClient,
     is_ai_transition_enabled,
@@ -249,73 +244,8 @@ def test_select_bgm_with_group_narration() -> None:
 
 
 # ===========================================================================
-# speech_rough_cut & timeline_planner — stage 5 tests
-# ===========================================================================
-def test_speech_rough_cut_empty() -> None:
-    res = speech_rough_cut(asr_sentence={}, ctx_text="", history=[])
-    assert res["segments"] == []
-    assert res["reason"]
-
-
-def test_speech_rough_cut_basic_with_stub_llm(tmp_path: Path) -> None:
-    from storyline_capabilities.vlm_client import StubLLMClient
-
-    asr = {
-        "text": "今天我们讲 OpenStoryline",
-        "start": 1000,
-        "end": 3000,
-        "timestamp": [[1000, 1100], [1100, 1300], [1300, 1500]],
-    }
-    client = StubLLMClient(
-        default_caption=json.dumps(
-            {
-                "reason": "ok",
-                "res": [
-                    {"text": "今天我们讲 OpenStoryline", "start": 1000, "end": 3000}
-                ],
-            },
-            ensure_ascii=False,
-        )
-    )
-    res = speech_rough_cut(
-        asr_sentence=asr,
-        ctx_text=asr["text"],
-        history=[],
-        client=client,
-    )
-    assert len(res["segments"]) == 1
-
-
-def test_speech_rough_cut_keeps_relative_to_original_window(
-    tmp_path: Path,
-) -> None:
-    """end <= start 的段被丢弃(plan §5 阶段 5 + vendored 行为对齐)。"""
-    from storyline_capabilities.vlm_client import StubLLMClient
-
-    asr = {"text": "短句", "start": 0, "end": 1000}
-    client = StubLLMClient(
-        default_caption=json.dumps(
-            {
-                "reason": "edge cases",
-                "res": [
-                    {"text": "ok", "start": 100, "end": 900},
-                    {"text": "bad1", "start": 0, "end": 0},       # end <= start → drop
-                    {"text": "bad2", "start": 500, "end": 400},   # end < start → drop
-                    {"text": "", "start": 0, "end": 100},         # empty text → drop
-                ],
-            },
-            ensure_ascii=False,
-        )
-    )
-    res = speech_rough_cut(
-        asr_sentence=asr, ctx_text="短句", history=[], client=client
-    )
-    assert len(res["segments"]) == 1
-    assert res["segments"][0]["text"] == "ok"
-
-
-# ===========================================================================
 # timeline_planner & plan_timeline_pro(阶段 5 TimeLine 简化版)
+# (speech_rough_cut 用例已随 2026-11-08 B1 ASR 移除删除)
 # ===========================================================================
 def test_timeline_distribute_by_tts_durations() -> None:
     """纯 TTS 驱动:总长 = sum(tts_durations),每组按 TTS duration 平分给 clips。"""
@@ -474,27 +404,9 @@ def test_plan_timeline_pro_empty_groups() -> None:
 
 
 # ===========================================================================
-# asr_runner / ai_transition_client
+# ai_transition_client
+# (asr_runner 用例已随 2026-11-08 B1 ASR 移除删除)
 # ===========================================================================
-def test_stub_asr_client_empty_segments(tmp_path: Path) -> None:
-    client = StubASRClient()
-    res = client.transcribe(
-        media_path=tmp_path / "x.mp4", output_dir=tmp_path / "out"
-    )
-    assert res.provider == "stub"
-    assert res.segments == []
-    assert res.artifact_path.exists()
-
-
-def test_transcribe_media_returns_dict(tmp_path: Path) -> None:
-    fake = tmp_path / "x.mp4"
-    fake.write_bytes(b"")
-    res = transcribe_media(media_path=fake, output_dir=tmp_path / "out")
-    assert "artifact" in res
-    assert "segments" in res
-    assert "provider" in res
-
-
 def test_stub_ai_transition_writes_artifact(tmp_path: Path) -> None:
     client = StubAITransitionClient()
     res = client.generate(
@@ -521,8 +433,6 @@ def test_node_shells_importable() -> None:
         node_generate_voiceover,
         node_select_bgm,
         node_plan_timeline_pro,
-        node_local_asr,
-        node_speech_rough_cut,
         node_render_video,
         node_generate_ai_transition,
         node_plan_timeline_ai_transition,

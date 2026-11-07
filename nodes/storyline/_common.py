@@ -236,24 +236,8 @@ def target_duration_ms(
 
 # ---------------------------------------------------------------------------
 # 2026-10 接入原"不可达节点"所需的 helper(图路由 / 文案节点共用)
+# (media_has_audio 已随 2026-11-08 B1 ASR 移除删除:唯一调用方 _asr_branch_enabled 不存在了)
 # ---------------------------------------------------------------------------
-def media_has_audio(state: WorkflowState) -> bool:
-    """素材里是否至少有一个带音轨的视频(读 ``storyline_media_artifact``)。
-
-    ``load_media`` 用 PyAV(缺失时退化 ffprobe)把 ``metadata.has_audio`` 写进产物。
-    读不到产物 / 缺字段一律返回 ``False``(保守:没把握就不跑 ASR)。
-    """
-    for m in _read_media(state):
-        if not isinstance(m, dict):
-            continue
-        if str(m.get("media_type") or "").lower() != "video":
-            continue
-        meta = m.get("metadata")
-        if isinstance(meta, dict) and meta.get("has_audio"):
-            return True
-    return False
-
-
 def web_topic_query(state: WorkflowState) -> str:
     """``storyline_targets.query``(去空白);取不到返回空串。
 
@@ -325,7 +309,6 @@ __all__ = [
     "resolve_lang",
     "extract_user_request",
     "target_duration_ms",
-    "media_has_audio",
     "web_topic_query",
     "format_web_topic_reference",
     "WEB_TOPIC_MAX_ITEMS",

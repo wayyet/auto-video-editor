@@ -1,9 +1,9 @@
 {
   "meta": {
     "note": "单 Loader golden 基线(2026-11-04 阶段2 重录):旧聊天运行时 open_storyline.utils.prompts 已删除,唯一 Loader 为 storyline_capabilities.prompts,数据目录 prompts/tasks/。sha_* 字段供后续重构逐文件复算比对。",
-    "base_commit": "65308377fc3afd1a325f9ff003542e7364594b44",
-    "generated_at": "2026-11-04T06:39:18",
-    "file_count": 48
+    "base_commit": "c7e117d3ac6fd30fd543d301922b893b41f2a2b3",
+    "generated_at": "2026-11-08T02:13:05",
+    "file_count": 46
   },
   "files": [
     {
@@ -479,35 +479,6 @@
       "variable_count": 2,
       "variables": {
         "candidates": "<candidates>",
-        "user_request": "<user_request>"
-      }
-    },
-    {
-      "rel": "prompts/tasks/speech_rough_cut/zh/system.md",
-      "kind": "speech_rough_cut",
-      "lang": "zh",
-      "part": "system",
-      "sha_template": "c37a7b6b6b2eb5d36f4b63c2ee95857851fe55be1d8c8bba34d78eac4ff8de5a",
-      "sha_load_prompt": "c37a7b6b6b2eb5d36f4b63c2ee95857851fe55be1d8c8bba34d78eac4ff8de5a",
-      "sha_render_prompt": "c37a7b6b6b2eb5d36f4b63c2ee95857851fe55be1d8c8bba34d78eac4ff8de5a",
-      "variable_count": 0,
-      "variables": {}
-    },
-    {
-      "rel": "prompts/tasks/speech_rough_cut/zh/user.md",
-      "kind": "speech_rough_cut",
-      "lang": "zh",
-      "part": "user",
-      "sha_template": "5fde3be577c7b0e7e4ad574ce640409f3364db1b273b9b865bac292c1801f747",
-      "sha_load_prompt": "5fde3be577c7b0e7e4ad574ce640409f3364db1b273b9b865bac292c1801f747",
-      "sha_render_prompt": "bc052721db5a671bf4816ed8f0b6034126ff40aad75366f8cad57456077b9a1a",
-      "variable_count": 6,
-      "variables": {
-        "curr_asr_sentence_info": "<curr_asr_sentence_info>",
-        "pre_ctx": "<pre_ctx>",
-        "nxt_ctx": "<nxt_ctx>",
-        "asr_text": "<asr_text>",
-        "history_rough_cut_jsons": "<history_rough_cut_jsons>",
         "user_request": "<user_request>"
       }
     },

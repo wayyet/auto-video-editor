@@ -30,7 +30,6 @@ from storyline_capabilities.plan_timeline_pro import (
     normalize_source_media,
     plan_timeline_pro,
 )
-from storyline_capabilities.timeline_transcript import fill_clip_transcripts
 from nodes.storyline._common import (
     _read_groups,
     _read_json_artifact,
@@ -125,22 +124,10 @@ def storyline_plan_timeline_pro_node(state: WorkflowState) -> dict:
             ),
         }
 
-    # 2026-10:ASR / 口播粗剪产物回填 Clip.transcript(只回填文本,不改镜头与时长)。
-    # 失败只记 warning,绝不影响时间线本身。
-    # ⚠️ 这里故意**不**往 status_log 写"回填了 N 条"这类会变的标签:qa 重试路由
-    #    (qa_gate.route_after_storyline_qa)靠 status_log 的**最后一条**判断,而重试
-    #    回路里同名标签会被去重 —— 循环内多出一个新标签就会让重试提前结束。
-    try:
-        rough_doc = _read_json_artifact(state, "storyline_rough_cut_artifact")
-        asr_doc = _read_json_artifact(state, "storyline_asr_artifact")
-        if rough_doc or asr_doc:
-            filled = fill_clip_transcripts(
-                timeline, rough_cut=rough_doc, asr=asr_doc
-            )
-            if filled:
-                logger.info("plan_timeline_pro: transcript 回填 %d 个 clip", filled)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("plan_timeline_pro: transcript 回填失败(忽略): %r", e)
+    # 2026-11-08 B1 ASR 移除:原"ASR / 口播粗剪产物回填 Clip.transcript"步骤
+    # 随旁支一起删除(timeline_transcript.fill_clip_transcripts 已删)。
+    # ⚠️ 历史约束仍然有效:qa 重试路由(qa_gate.route_after_storyline_qa)靠
+    #    status_log 的**最后一条**判断,本节点不得产生每轮都不同的状态标签。
 
     out_path = out_dir / "timeline_plan.json"
     out_path.write_text(

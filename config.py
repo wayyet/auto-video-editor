@@ -30,17 +30,17 @@ from typing import Literal
 # OpenStoryline 现走本地 uvicorn + httpx 健康检查,不再有 MCP 链路与外部路径常量。
 
 # ---------------------------------------------------------------------------
-# 2026-10 接入原"不可达节点"的三个开关(默认全开;三个都设为 0 ⇒ 图拓扑与接入前一致)
+# 2026-10 接入原"不可达节点"的开关(默认全开;设为 0 ⇒ 走向与接入前一致)
 # ---------------------------------------------------------------------------
 # 设置方式(PowerShell,须在 Python 进程启动前设置):
 #   $env:STORYLINE_ENABLE_WEB_TOPIC = "0"
-#   $env:STORYLINE_ENABLE_ASR_BRANCH = "0"
 #   $env:STORYLINE_ENABLE_AI_TRANSITION = "0"
-# 前两个开关(STORYLINE_ENABLE_WEB_TOPIC / STORYLINE_ENABLE_ASR_BRANCH):
-#   图里的路由函数在**运行时**读 ``config.XXX``(单测可用 monkeypatch.setattr 改),
-#   不改变图的节点/边集合,只改变走向。
-# 第三个开关(STORYLINE_ENABLE_AI_TRANSITION)在**建图时**读取:它决定图里接不接那两个节点
+# STORYLINE_ENABLE_WEB_TOPIC:图里的路由函数在**运行时**读 ``config.XXX``
+#   (单测可用 monkeypatch.setattr 改),不改变图的节点/边集合,只改变走向。
+# STORYLINE_ENABLE_AI_TRANSITION 在**建图时**读取:它决定图里接不接那两个节点
 #   (屏障要随之改变),所以修改后必须重启进程。
+# (原 STORYLINE_ENABLE_ASR_BRANCH 已随 2026-11-08 B1 ASR 移除删除:
+#  storyline_local_asr / storyline_speech_rough_cut 不再存在于图中。)
 #
 # ⚠️ 没有"清缓存"开关:``clean_cache`` 节点已整体移除(2026-11-04 R-10,不接图);
 #    清理能力以创建台手动入口形式回归 —— Web UI「清除缓存」按钮经
@@ -53,14 +53,7 @@ STORYLINE_ENABLE_WEB_TOPIC: bool = (
     os.environ.get("STORYLINE_ENABLE_WEB_TOPIC", "true").lower().strip() in ("1", "true", "yes")
 )
 
-# 2) auto 模式:切镜后素材有音轨时并行跑本地 ASR + 口播粗剪
-#    (storyline_local_asr → storyline_speech_rough_cut),结果只回填 Clip.transcript。
-#    默认 STORYLINE_ASR_MODE=stub 时转写为空 → 回填为空,行为无变化。
-STORYLINE_ENABLE_ASR_BRANCH: bool = (
-    os.environ.get("STORYLINE_ENABLE_ASR_BRANCH", "true").lower().strip() in ("1", "true", "yes")
-)
-
-# 3) auto 模式:与 plan_timeline_pro 并排生成 AI 转场,qa_gate 之前把清单写进时间线 ai_transitions
+# 2) auto 模式:与 plan_timeline_pro 并排生成 AI 转场,qa_gate 之前把清单写进时间线 ai_transitions
 #    (storyline_generate_ai_transition → storyline_plan_timeline_ai_transition)。建图时读取。
 #    ADR-005 原为默认关闭;2026-10 按用户决定改为默认开启(当前仅 stub 客户端,不改动 clips)。
 #    注意:storyline_capabilities/ai_transition_client.py 里还有一份同名读取

@@ -11,8 +11,11 @@
    (``docs/修改文档/auto-video-editor_ASR_TTS_ProviderContract草案与字段映射_20261103.md``)。
 
 本文件不验证适配器的业务行为——那由既有测试覆盖
-(``test_asr_client_firered`` / ``test_tts_client`` /
-``test_storyline_capabilities_c_classes`` / ``test_speech_synthesize`` 等)。
+(``test_tts_client`` / ``test_storyline_capabilities_c_classes`` /
+``test_speech_synthesize`` 等)。
+
+(2026-11-08 B1 ASR 移除:jy_common.asr_client / storyline_capabilities.asr_runner
+已删除,原 ASR 侧的形状锚定用例一并移除;TTS 侧锚定保留。)
 """
 
 from __future__ import annotations
@@ -152,16 +155,12 @@ def test_mock_asr_provider_reports_failure_via_error_field() -> None:
 # 2. 四类现有适配器的形状锚定(现状 ↔ 契约映射的前置事实)
 # ---------------------------------------------------------------------------
 def test_http_client_category_shape_jy_common() -> None:
-    """HTTP 客户端(jy_common):transcribe(video_path) 位置参 → list[dict] 秒;synthesize → dict。"""
-    from jy_common.asr_client import MockASRClient
-    from jy_common.tts_client import MockTTSClient
+    """HTTP 客户端(jy_common):synthesize → dict。
 
-    # ASR:返回段列表,时间单位是**秒**(start_s/end_s)
-    media = Path(__file__).resolve()
-    segments = MockASRClient(segments=2).transcribe(str(media))
-    assert isinstance(segments, list) and len(segments) == 2
-    assert set(segments[0]) == {"text", "start_s", "end_s"}
-    assert isinstance(segments[0]["start_s"], float)
+    (ASR 侧 ``transcribe(video_path) → list[dict] 秒`` 已随 2026-11-08 B1 ASR
+    移除删除,只剩 TTS 侧锚定。)
+    """
+    from jy_common.tts_client import MockTTSClient
 
     # TTS:返回 dict 键集合固定
     tts = MockTTSClient().synthesize(text="你好", voice="zh", speed=1.0)
@@ -169,17 +168,8 @@ def test_http_client_category_shape_jy_common() -> None:
 
 
 def test_storyline_stub_category_shape(tmp_path: Path) -> None:
-    """Storyline runner Stub:kw-only (media_path, output_dir) → ASRResult;(text, wav_path, params) → TTSResult。"""
-    from storyline_capabilities.asr_runner import StubASRClient
+    """Storyline runner Stub:kw-only (text, wav_path, params) → TTSResult。"""
     from storyline_capabilities.tts_runner import StubTTSClient
-
-    asr_params = inspect.signature(StubASRClient.transcribe).parameters
-    assert list(asr_params) == ["self", "media_path", "output_dir"]
-    result = StubASRClient().transcribe(
-        media_path=tmp_path / "m.mp4", output_dir=tmp_path
-    )
-    assert result.provider == "stub" and result.segments == []
-    assert result.artifact_path.name == "asr.json"
 
     tts_params = inspect.signature(StubTTSClient.synthesize).parameters
     assert list(tts_params) == ["self", "text", "wav_path", "params"]

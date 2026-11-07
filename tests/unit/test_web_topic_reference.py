@@ -2,12 +2,10 @@
 
 网页标题是**不可信的外部文本**,会拼进文案 prompt。这里锁定清洗规则:
 单行 / 去控制字符 / 花括号换成圆括号 / 每条 ≤80 字 / 最多 5 条 / 去重 / 不带 URL / 明确标注不可信。
-同时测 ``web_topic_query`` 与 ``media_has_audio`` 两个路由 helper。
+同时测 ``web_topic_query`` 路由 helper。
+(media_has_audio 用例已随 2026-11-08 B1 ASR 移除删除——该 helper 已无消费者。)
 """
 from __future__ import annotations
-
-import json
-from pathlib import Path
 
 import pytest
 
@@ -15,7 +13,6 @@ from nodes.storyline._common import (
     WEB_TOPIC_MAX_ITEMS,
     WEB_TOPIC_MAX_TITLE_LEN,
     format_web_topic_reference,
-    media_has_audio,
     web_topic_query,
 )
 from storyline_capabilities.prompts import render_prompt, unresolved_placeholders
@@ -123,52 +120,3 @@ def test_titles_that_become_equal_after_cleaning_are_deduplicated() -> None:
 )
 def test_web_topic_query(state, expected) -> None:
     assert web_topic_query(state) == expected
-
-
-# ---------------------------------------------------------------------------
-# media_has_audio
-# ---------------------------------------------------------------------------
-def _artifact(tmp_path: Path, payload) -> str:
-    p = tmp_path / "m.json"
-    p.write_text(json.dumps(payload), encoding="utf-8")
-    return str(p)
-
-
-def test_media_has_audio_true_when_any_video_has_audio(tmp_path: Path) -> None:
-    state = {
-        "storyline_media_artifact": _artifact(
-            tmp_path,
-            {
-                "media": [
-                    {"media_type": "video", "metadata": {"has_audio": False}},
-                    {"media_type": "VIDEO", "metadata": {"has_audio": True}},
-                ]
-            },
-        )
-    }
-    assert media_has_audio(state) is True
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {"media": []},
-        {"media": [{"media_type": "video", "metadata": {"has_audio": False}}]},
-        {"media": [{"media_type": "video", "metadata": {}}]},
-        {"media": [{"media_type": "video"}]},
-        {"media": [{"media_type": "image", "metadata": {"has_audio": True}}]},
-        {"media": [None, 3, "x"]},
-        {"media": "不是 list"},
-        {},
-    ],
-)
-def test_media_has_audio_false_cases(tmp_path: Path, payload) -> None:
-    assert media_has_audio({"storyline_media_artifact": _artifact(tmp_path, payload)}) is False
-
-
-def test_media_has_audio_false_when_artifact_missing_or_broken(tmp_path: Path) -> None:
-    assert media_has_audio({}) is False
-    assert media_has_audio({"storyline_media_artifact": str(tmp_path / "nope.json")}) is False
-    bad = tmp_path / "bad.json"
-    bad.write_text("{不是 json", encoding="utf-8")
-    assert media_has_audio({"storyline_media_artifact": str(bad)}) is False

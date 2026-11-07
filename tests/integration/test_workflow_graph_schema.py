@@ -15,7 +15,7 @@
 关于 ``get_graph()`` 的画图伪边(langgraph 1.2.9 实测,``pregel/_draw.py``):
 它按静态模拟推边,会把所有"只入不出"的 termini 节点**合成**普通 ``→__end__``
 边,并漏掉"有出边节点"的普通直连 ``→__end__`` 边。因此 schema 以 builder 为
-真源;护栏测试断言:drawn − schema 恰为 termini 合成集(当前拓扑 3 个 storyline
+真源;护栏测试断言:drawn − schema 恰为 termini 合成集(当前拓扑 2 个 storyline
 死胡同节点),schema − drawn 为空集(→END 真边所在节点的出边只有 →END 时,
 画图合成边与真边重合)—— langgraph 升级改变该行为时,这里会先红。
 
@@ -146,14 +146,15 @@ def test_schema_matches_drawn_graph_with_documented_artifacts(monkeypatch):
     }
     schema_triples = _edge_triples(schema)
 
-    # drawn − schema = 只入不出节点的合成 →END 边(当前拓扑 3 个 storyline 死胡同)
+    # drawn − schema = 只入不出节点的合成 →END 边(当前拓扑 2 个 storyline 死胡同:
+    # web_topic / script_template_recommendation;speech_rough_cut 已随 B1 ASR 移除删除)
     # langgraph 规则显式排除 END 自身(if d != END)
     schema_targets = {t for _, t, _ in schema_triples}
     schema_sources = {s for s, _, _ in schema_triples}
     termini = (schema_targets - schema_sources) - {"END"}
     expected_synthetic = {(t, "END", "normal") for t in termini}
     assert drawn - schema_triples == expected_synthetic
-    assert len(expected_synthetic) == 3
+    assert len(expected_synthetic) == 2
 
     # schema − drawn = 有出边节点的普通直连 END(画图漏掉的**真**边)
     # 当前拓扑中 →END 真边所在节点(join_before_delivery / escalate_guardrail_failure)

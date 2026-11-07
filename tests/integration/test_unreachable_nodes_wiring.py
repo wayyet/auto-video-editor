@@ -1,8 +1,9 @@
 """2026-10「不可达节点接入」—— 图结构 + 运行时走向的守卫测试。
 
-被接入的 5 个节点:
-``storyline_search_web_topic`` / ``storyline_local_asr`` /
-``storyline_speech_rough_cut`` / ``storyline_generate_ai_transition`` /
+被接入的 3 个节点(2026-11-08 B1 ASR 移除:原 5 节点中的
+``storyline_local_asr`` / ``storyline_speech_rough_cut`` 已整体删除,
+``storyline_split_shots`` 改为静态直连 ``storyline_understand_clips``):
+``storyline_search_web_topic`` / ``storyline_generate_ai_transition`` /
 ``storyline_plan_timeline_ai_transition``。
 
 (阶段3 注:曾与它们同批"注册但零边"的 ``clean_cache`` 已随旧聊天运行时
@@ -16,12 +17,11 @@ START 直连 ``storyline_load_media``。)
 
 锁定的不变量:
 1. 结构:所有注册节点都能从 START 到达;
-   **条件触发**的节点(web_topic / local_asr /
-   speech_rough_cut / search_media)不在任何 fan-in 屏障里(D10)。
-2. 位置:五个节点**各挂在自己最相关的现有节点旁**(邻居表 NEIGHBORS),且两两不共用挂接点
+   **条件触发**的节点(web_topic / search_media)不在任何 fan-in 屏障里(D10)。
+2. 位置:各节点**挂在自己最相关的现有节点旁**(邻居表 NEIGHBORS),且两两不共用挂接点
    ——不允许把它们聚到同一个地方。
-3. 三个开关全部为 0 ⇒ 执行轨迹与接入前逐步一致(黄金轨迹);AI 开关关 ⇒ 屏障与接入前一致。
-4. 默认全开 ⇒ 五个节点都被执行,且走向 / 并行关系符合设计。
+3. 开关全关 ⇒ 执行轨迹与接入前逐步一致(黄金轨迹);AI 开关关 ⇒ 屏障与接入前一致。
+4. 默认全开 ⇒ 各节点都被执行,且走向 / 并行关系符合设计。
 5. 每条旁支失败都被隔离:图仍走到关卡①(node_06_human_reorder)。
 6. qa 重试 3 次的回路里,plan_timeline_pro 仍会被重新触发(D10 回归);AI 转场两节点与它同频
    (每轮各 1 次);重试回路里分组数变化也不会让 qa 路由悄悄跳过重试(状态标签固定)。
@@ -44,8 +44,6 @@ from storyline.contract import CanonicalTimeline
 
 WIRED_NODES = {
     "storyline_search_web_topic",
-    "storyline_local_asr",
-    "storyline_speech_rough_cut",
     "storyline_generate_ai_transition",
     "storyline_plan_timeline_ai_transition",
 }
@@ -53,8 +51,6 @@ WIRED_NODES = {
 # AI 转场两个节点不在此列:建图时按开关决定接不接,接了就**每轮必跑**,所以可以进屏障。
 CONDITIONAL_NODES = {
     "storyline_search_web_topic",
-    "storyline_local_asr",
-    "storyline_speech_rough_cut",
     "storyline_search_media",
 }
 
@@ -103,14 +99,10 @@ _QA = "storyline_qa_gate"
 _RTR = "storyline_recommend_transition"
 _RT = "storyline_recommend_text"
 
-# 五个节点 → (入边邻居, 出边邻居)。这张表就是《关联分析表》的"放在哪":每个新节点贴着自己的相关节点。
+# 各节点 → (入边邻居, 出边邻居)。这张表就是《关联分析表》的"放在哪":每个新节点贴着自己的相关节点。
 NEIGHBORS: dict[str, tuple[set[str], set[str]]] = {
     # load_media 旁的并行死胡同分支(与 search_media / split_shots 并列);结果经 state 给 generate_script
     "storyline_search_web_topic": ({"storyline_load_media"}, set()),
-    # split_shots 旁,与 understand_clips 并行;死胡同分支,结果经 state 给 plan_timeline_pro
-    "storyline_local_asr": ({"storyline_split_shots"}, {"storyline_speech_rough_cut"}),
-    # 紧跟 local_asr
-    "storyline_speech_rough_cut": ({"storyline_local_asr"}, set()),
     # 与 plan_timeline_pro 并排:同一道 4 源屏障
     _GAT: ({_GC, _GS, _GV, _SB}, {_PTAT}),
     # plan_timeline_pro + generate_ai_transition 之后、qa_gate 之前
@@ -183,22 +175,22 @@ def test_each_new_node_sits_beside_its_own_related_nodes(
     assert outs.get(node, set()) == want_out, f"{node} 的出边邻居不对:{sorted(outs.get(node, set()))}"
 
 
-def test_five_nodes_are_spread_out_not_clustered(monkeypatch: pytest.MonkeyPatch) -> None:
-    """不聚堆:五个节点两两**不共用挂接点**(挂接点 = 邻居里除五个新节点之外的现有节点)。"""
+def test_wired_nodes_are_spread_out_not_clustered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """不聚堆:各节点两两**不共用挂接点**(挂接点 = 邻居里除新节点之外的现有节点)。"""
     _, compiled = _compiled(monkeypatch)
     ins, outs = _neighbors(_edge_set(compiled))
     attach = {n: (ins.get(n, set()) | outs.get(n, set())) - WIRED_NODES for n in WIRED_NODES}
     for a, b in combinations(sorted(WIRED_NODES), 2):
         shared = attach[a] & attach[b]
         assert not shared, f"{a} 和 {b} 挂在同一个现有节点上:{sorted(shared)}"
-    # 除了 speech_rough_cut(唯一邻居就是上游 local_asr),每个节点都至少贴着一个现有节点
-    for n in WIRED_NODES - {"storyline_speech_rough_cut"}:
+    # 每个节点都至少贴着一个现有节点
+    for n in WIRED_NODES:
         assert attach[n], f"{n} 没有挂在任何现有节点旁"
 
 
-@pytest.mark.parametrize("node", ["storyline_search_web_topic", "storyline_speech_rough_cut"])
+@pytest.mark.parametrize("node", ["storyline_search_web_topic"])
 def test_side_branches_are_dead_ends(monkeypatch: pytest.MonkeyPatch, node: str) -> None:
-    """web_topic / speech_rough_cut 是死胡同旁支:唯一的出边是 END,结果只经 state 交给下游读取。"""
+    """web_topic 是死胡同旁支:唯一的出边是 END,结果只经 state 交给下游读取。"""
     _, compiled = _compiled(monkeypatch)
     out_targets = {t for s, t in _edge_set(compiled) if s == node}
     assert out_targets == {"__end__"}
@@ -303,13 +295,10 @@ def run_auto(
     tmp_path: Path,
     *,
     web: bool = True,
-    asr: bool = True,
     ai: bool = True,
     has_audio: bool = True,
     query: str = "",
     target_ms: int = 35000,
-    asr_segments: list[dict] | None = None,
-    rough_segments: list[dict] | None = None,
     web_titles: list[str] | None = None,
     boom: tuple[str, ...] = (),
     saver: Any | None = None,
@@ -319,7 +308,6 @@ def run_auto(
     """在真实图上跑一遍 auto 模式,直到关卡①(node_06_human_reorder)挂起。"""
     # ---- 开关 ----
     monkeypatch.setattr(config, "STORYLINE_ENABLE_WEB_TOPIC", web)
-    monkeypatch.setattr(config, "STORYLINE_ENABLE_ASR_BRANCH", asr)
     monkeypatch.setattr(config, "STORYLINE_ENABLE_AI_TRANSITION", ai)
     monkeypatch.setattr("storyline_capabilities.ai_transition_client.ENABLE_AI_TRANSITION", ai)
     monkeypatch.setattr(config, "ASSEMBLY_QC_GATE_ENABLED", False)  # 直连 node_06,不跑 assembly 6 节点
@@ -426,30 +414,6 @@ def run_auto(
 
     monkeypatch.setattr(ngs, "generate_script", spy_generate_script)
 
-    if asr_segments is not None:
-
-        def fake_transcribe(*, media_path, output_dir):
-            out = Path(output_dir) / "asr.json"
-            out.write_text(
-                json.dumps({"segments": asr_segments, "provider": "fake"}, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            return {"artifact": str(out), "segments": asr_segments, "provider": "fake", "error": None}
-
-        monkeypatch.setattr("nodes.storyline.node_local_asr.transcribe_media", fake_transcribe)
-
-    if rough_segments is not None:
-
-        def fake_rough(*, asr_sentence, **_kw):
-            segs = [s for s in rough_segments if s.get("src") == asr_sentence.get("text")]
-            return {
-                "segments": [{"text": s["text"], "start": s["start"], "end": s["end"]} for s in segs],
-                "reason": "fake",
-                "method": "llm",
-            }
-
-        monkeypatch.setattr("nodes.storyline.node_speech_rough_cut.speech_rough_cut", fake_rough)
-
     if web_titles is not None:
 
         def fake_topic(*, query, max_results=10, provider="duckduckgo_html", **_kw):
@@ -532,16 +496,14 @@ def run_auto(
 def test_all_flags_off_matches_pre_wiring_golden_trace(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """三个开关都为 0:即使有 query、有音轨,执行轨迹也必须与接入前逐步一致。"""
+    """开关都为 0:即使有 query,执行轨迹也必须与接入前逐步一致。"""
     run = run_auto(
         monkeypatch,
         tmp_path,
         web=False,
-        asr=False,
         ai=False,
         query="夏季防晒",
         web_titles=["不应出现"],
-        asr_segments=[{"text": "不应出现", "start": 0, "end": 1000}],
     )
     assert run.grouped() == GOLDEN_STEPS
     assert not (WIRED_NODES & set(run.names()))
@@ -551,9 +513,9 @@ def test_all_flags_off_matches_pre_wiring_golden_trace(
 
 
 # ---------------------------------------------------------------------------
-# 2. 默认全开:五个节点都执行,并行关系正确
+# 2. 默认全开:各节点都执行,并行关系正确
 # ---------------------------------------------------------------------------
-def test_defaults_run_all_five_nodes_with_expected_shape(
+def test_defaults_run_all_wired_nodes_with_expected_shape(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     run = run_auto(
@@ -571,8 +533,7 @@ def test_defaults_run_all_five_nodes_with_expected_shape(
 
     # 并行 fan-out:同一超步
     assert run.steps_of("storyline_search_web_topic") == run.steps_of("storyline_split_shots")
-    assert run.steps_of("storyline_local_asr")[0] == run.steps_of("storyline_understand_clips")[0]
-    assert run.steps_of("storyline_speech_rough_cut")[0] == run.steps_of("storyline_filter_clips")[0]
+    # B1 ASR 移除:split_shots 后静态直连 understand_clips(同一条主边,无旁支)
 
     # AI 转场两节点与 plan_timeline_pro 并排:GAT 与 PTP 同一超步;PTAT 紧随其后;再下一步才是 qa_gate
     ptp = run.steps_of("storyline_plan_timeline_pro")
@@ -603,15 +564,13 @@ def test_qa_retry_loop_still_retriggers_plan_timeline_pro(
         tmp_path,
         query="夏季防晒",
         web_titles=["防晒霜怎么选"],
-        asr_segments=[{"text": "大家好", "start": 500, "end": 1500}],
     )
     assert run.count("storyline_group_clips") == 4
     assert run.count("storyline_plan_timeline_pro") == 4
     assert run.count("storyline_qa_gate") == 4
     assert run.count("storyline_generate_ai_transition") == 4
     assert run.count("storyline_plan_timeline_ai_transition") == 4
-    # ASR / 网页分支在回路上游,只跑 1 次
-    assert run.count("storyline_local_asr") == 1
+    # 网页分支在回路上游,只跑 1 次
     assert run.count("storyline_search_web_topic") == 1
     assert run.next_nodes == ("node_06_human_reorder",), "图提前 END 了(D10 症状)"
 
@@ -628,89 +587,7 @@ def test_qa_passes_first_time_runs_ai_pair_once(
 
 
 # ---------------------------------------------------------------------------
-# 4. ASR 分支
-# ---------------------------------------------------------------------------
-_ASR = [
-    {"text": "大家好", "start": 500, "end": 1500},
-    {"text": "今天介绍产品", "start": 4500, "end": 6500},
-    {"text": "谢谢", "start": 9000, "end": 9500},  # 落在所有 clip 之外
-]
-_ROUGH = [
-    {"src": "大家好", "text": "大家好", "start": 500, "end": 1500},
-    {"src": "今天介绍产品", "text": "介绍产品", "start": 5000, "end": 6500},
-]
-
-
-def test_asr_branch_fills_clip_transcripts_with_rough_cut_text(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    run = run_auto(monkeypatch, tmp_path, asr_segments=_ASR, rough_segments=_ROUGH)
-    assert run.timeline is not None
-    assert [c.get("transcript") for c in run.timeline["clips"]] == ["大家好", "介绍产品"]
-    CanonicalTimeline.model_validate(run.timeline)
-    # clip 个数 / 范围 / 时长一个都没动(只回填文字)
-    assert [c["clip_id"] for c in run.timeline["clips"]] == ["clip_0001", "clip_0002"]
-
-
-def test_asr_branch_falls_back_to_raw_asr_when_rough_cut_is_empty(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    run = run_auto(monkeypatch, tmp_path, asr_segments=_ASR, rough_segments=[])
-    assert run.timeline is not None
-    assert [c.get("transcript") for c in run.timeline["clips"]] == ["大家好", "今天介绍产品"]
-
-
-def test_asr_branch_skipped_when_media_has_no_audio(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    run = run_auto(monkeypatch, tmp_path, has_audio=False, asr_segments=_ASR)
-    assert "storyline_local_asr" not in run.names()
-    assert "storyline_speech_rough_cut" not in run.names()
-    assert run.timeline is not None
-    assert all(not c.get("transcript") for c in run.timeline["clips"])
-
-
-def test_asr_default_stub_mode_changes_nothing_visible(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """默认 STORYLINE_ASR_MODE=stub:ASR 节点会跑,但转写为空 → 不回填、不报错。"""
-    run = run_auto(monkeypatch, tmp_path)
-    assert run.count("storyline_local_asr") == 1
-    assert run.count("storyline_speech_rough_cut") == 1
-    assert "storyline_speech_rough_cut_skipped" in run.status_log
-    assert run.timeline is not None
-    assert all(not c.get("transcript") for c in run.timeline["clips"])
-
-
-def test_asr_failure_is_isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    run = run_auto(
-        monkeypatch,
-        tmp_path,
-        asr_segments=[],
-        boom=("nodes.storyline.node_local_asr.transcribe_media",),
-    )
-    assert "storyline_local_asr_failed" in run.status_log
-    assert any("[storyline:local_asr]" in e for e in run.error_log)
-    assert run.next_nodes == ("node_06_human_reorder",)
-
-
-def test_transcript_fill_failure_does_not_break_timeline(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    run = run_auto(
-        monkeypatch,
-        tmp_path,
-        asr_segments=_ASR,
-        rough_segments=[],
-        boom=("nodes.storyline.node_plan_timeline_pro.fill_clip_transcripts",),
-    )
-    assert run.timeline is not None
-    assert all(not c.get("transcript") for c in run.timeline["clips"])
-    assert run.next_nodes == ("node_06_human_reorder",)
-
-
-# ---------------------------------------------------------------------------
-# 5. 网页话题分支
+# 4. 网页话题分支
 # ---------------------------------------------------------------------------
 def test_web_topic_reference_reaches_script_prompt_and_is_sanitized(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -761,7 +638,7 @@ def test_web_topic_failure_is_isolated(monkeypatch: pytest.MonkeyPatch, tmp_path
 
 
 # ---------------------------------------------------------------------------
-# 6. AI 转场链
+# 5. AI 转场链
 # ---------------------------------------------------------------------------
 def test_ai_transition_attaches_stub_items_and_stays_contract_valid(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -857,7 +734,7 @@ def test_ai_pair_attaches_only_junctions_that_exist_in_the_final_timeline(
 
 
 # ---------------------------------------------------------------------------
-# 7. 存档:接入后的图能在同一个 checkpointer 上挂起并恢复
+# 6. 存档:接入后的图能在同一个 checkpointer 上挂起并恢复
 # ---------------------------------------------------------------------------
 def test_checkpoint_roundtrip_on_shared_checkpointer(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path

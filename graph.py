@@ -19,12 +19,12 @@
       ├─→ node_07_speed_fit      (未达标,retry_counts < MAX_RETRY)
       └─→ escalate_guardrail_failure → END  (重试超限)
     → bridge_snapshot2                 (写 snapshot2_path)
-    → node_08_add_subtitles            (同步写 asr_segments_zh 到 state)
+    → node_08_add_subtitles            (字幕主干兼容节点;B1 ASR 移除后不再转写语音)
     ├─→ [中文线] node_10_inject_text_fx
     │              → node_14_make_covers
     │              → node_15_localize_covers_en ──────────────┐
     └─→ [英文线] fork_draft_for_english_branch                  │
-                   → node_16a_translate_and_check  (显式依赖 node_08 的 asr_segments_zh)
+                   → node_16a_translate_and_check  (无源字幕时正常 skip)
                    → node_08b_add_subtitles_en     (英文字幕写入英文分支草稿)
                    → node_10b_inject_text_fx_en    (英文花字/字幕动画,先于人工校对)
                    → 🔁 条件边(route_after_translate):          │
@@ -57,21 +57,21 @@
 - 英文线补 ``node_08b_add_subtitles_en`` / ``node_10b_inject_text_fx_en``;
 - ``node_09/11/12/13`` 全部推迟到 ``node_17`` 之后(列表型 fan-in 保证先后);
 - K3=B:``node_10b`` 在关卡③ **之前**;K2=B:尾链四节点内部同时处理中英草稿;
-- ``node_08 → fork`` 显式依赖:16a 读 node_08 产出的 asr_segments_zh;
+- ``node_08 → fork`` 显式依赖:16a 读 node_08 的 asr_segments_zh
+  (2026-11-08 B1 ASR 移除后恒为空 → 16a 正常 skip);
 - ②与③ 永不同时挂起(②在尾链,③在英文线)。
 
 2026-10 接入原"不可达节点"(保留,见《不可达节点接入LangGraph设计与执行计划》):
 - ``storyline_search_web_topic``:``storyline_load_media`` 后并行旁支
   (``STORYLINE_ENABLE_WEB_TOPIC`` 且 query 非空);死胡同分支。
-- ``storyline_local_asr`` → ``storyline_speech_rough_cut``:
-  ``storyline_split_shots`` 后并行旁支(``STORYLINE_ENABLE_ASR_BRANCH`` 且有音轨);
-  死胡同分支,产物由 ``plan_timeline_pro`` 回填 ``Clip.transcript``。
 - ``storyline_generate_ai_transition`` 与 ``plan_timeline_pro`` 并排共用 4 源屏障;
   ``plan_timeline_ai_transition`` 屏障 [PTP, GAT] 后接管 qa_gate 的屏障位
   (``STORYLINE_ENABLE_AI_TRANSITION``,默认开,**建图时读取**,改开关要重启进程)。
-- ⚠️ 屏障规则(D10):**条件触发**的节点(web_topic / local_asr / speech_rough_cut)
+- ⚠️ 屏障规则(D10):**条件触发**的节点(web_topic)
   **绝不能**放进任何 fan-in 屏障 —— qa 重试回路不会重跑它们的上游,屏障永远
   凑不齐,图会静默 END。AI 转场两节点每轮必跑(建图时按开关决定接不接),可以进屏障。
+  (``storyline_local_asr`` / ``storyline_speech_rough_cut`` 曾是条件旁支,
+  2026-11-08 B1 ASR 移除已整体删除,``split_shots`` 改为静态直连 ``understand_clips``。)
 - ⚠️ qa 重试路由靠 ``status_log[-1] == "storyline_qa_retry"`` 判断:重试回路内的
   节点**不得产生每轮都不同的状态标签**。
 
@@ -156,8 +156,6 @@ from nodes.storyline.node_load_media import storyline_load_media_node
 from nodes.storyline.node_search_media import storyline_search_media_node
 from nodes.storyline.node_search_web_topic import storyline_search_web_topic_node
 from nodes.storyline.node_split_shots import storyline_split_shots_node
-from nodes.storyline.node_local_asr import storyline_local_asr_node
-from nodes.storyline.node_speech_rough_cut import storyline_speech_rough_cut_node
 from nodes.storyline.node_generate_ai_transition import (
     storyline_generate_ai_transition_node,
 )
@@ -183,7 +181,7 @@ from nodes.storyline.node_plan_timeline_ai_transition import (
     storyline_plan_timeline_ai_transition_node,
 )
 from nodes.storyline.node_render_video import storyline_render_video_node
-from nodes.storyline._common import media_has_audio, web_topic_query
+from nodes.storyline._common import web_topic_query
 from storyline_capabilities.ai_transition_client import is_ai_transition_enabled
 
 
@@ -213,13 +211,6 @@ def _web_topic_branch_enabled(state: WorkflowState) -> bool:
     return bool(_config.STORYLINE_ENABLE_WEB_TOPIC and web_topic_query(state))
 
 
-def _asr_branch_enabled(state: WorkflowState) -> bool:
-    """ASR 分支是否触发:开关为真 **且** 素材里至少有一个带音轨的视频(读 ``has_audio``)。"""
-    import config as _config
-
-    return bool(_config.STORYLINE_ENABLE_ASR_BRANCH and media_has_audio(state))
-
-
 def _storyline_route_after_load_media(state: WorkflowState):
     """storyline_load_media 之后的条件路由(plan §2.2 第 96/97 行)。
 
@@ -238,23 +229,6 @@ def _storyline_route_after_load_media(state: WorkflowState):
     if _web_topic_branch_enabled(state):
         return [main, "storyline_search_web_topic"]
     return main
-
-
-def _storyline_route_after_split_shots(state: WorkflowState):
-    """storyline_split_shots 之后的条件路由(plan §2.2 第 99/100 行)。
-
-    主干永远是 ``understand_clips``。2026-10:``_asr_branch_enabled`` 为真时**同时**触发
-    ``storyline_local_asr``(→ ``storyline_speech_rough_cut``,返回 list = 并行 fan-out)。
-
-    该 ASR 分支是死胡同,结果通过 state 里的 ``storyline_asr_artifact`` /
-    ``storyline_rough_cut_artifact`` 交给 ``plan_timeline_pro`` 回填 ``Clip.transcript``。
-    时序保证:ASR 链只需 2 个超步,而 plan_timeline_pro 至少在
-    group_clips → generate_script → generate_voiceover 之后(≥ 5 步)才触发。
-    返回值:单个分支时是 ``str``,两个分支时是 ``list[str]``。
-    """
-    if _asr_branch_enabled(state):
-        return ["storyline_understand_clips", "storyline_local_asr"]
-    return "storyline_understand_clips"
 
 
 # ---------------------------------------------------------------------------
@@ -543,9 +517,6 @@ def _build_state_graph():
     # 2026-10 已接入:storyline_load_media 之后的并行旁支(见 _storyline_route_after_load_media)
     g.add_node("storyline_search_web_topic", storyline_search_web_topic_node)
     g.add_node("storyline_split_shots", storyline_split_shots_node)
-    # 2026-10 已接入:storyline_split_shots 之后的并行旁支(见 _storyline_route_after_split_shots)
-    g.add_node("storyline_local_asr", storyline_local_asr_node)
-    g.add_node("storyline_speech_rough_cut", storyline_speech_rough_cut_node)
     # 2026-10 已接入:与 plan_timeline_pro 并排(同一道 4 源屏障;建图时按开关接边)
     g.add_node(
         "storyline_generate_ai_transition",
@@ -690,19 +661,9 @@ def _build_state_graph():
     )
     g.add_edge("storyline_search_media", "storyline_split_shots")
 
-    # split_shots 出 2 个分支(并行 fan-out):
-    #   A) understand_clips 主路径
-    #   B) local_asr 条件(有语音)→ speech_rough_cut(2026-10 已接入;死胡同分支,
-    #      产物经 state 交给 plan_timeline_pro 回填 Clip.transcript)
-    g.add_conditional_edges(
-        "storyline_split_shots",
-        _storyline_route_after_split_shots,
-        {
-            "storyline_understand_clips": "storyline_understand_clips",
-            "storyline_local_asr": "storyline_local_asr",
-        },
-    )
-    g.add_edge("storyline_local_asr", "storyline_speech_rough_cut")
+    # 2026-11-08 B1 ASR 移除:原条件路由(_storyline_route_after_split_shots,含
+    # local_asr 旁支)删除,改为确定性主边 —— 无论素材有无音轨都进入视觉理解主链。
+    g.add_edge("storyline_split_shots", "storyline_understand_clips")
 
     # understand_clips → filter_clips → group_clips(主线)
     g.add_edge("storyline_understand_clips", "storyline_filter_clips")
