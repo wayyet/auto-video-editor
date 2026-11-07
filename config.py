@@ -69,6 +69,15 @@ STORYLINE_ENABLE_AI_TRANSITION: bool = (
     os.environ.get("STORYLINE_ENABLE_AI_TRANSITION", "true").lower().strip() in ("1", "true", "yes")
 )
 
+# 4) 切镜检测器(2026-11-08 选项C 治本:TransNetV2 接入,提升切镜质量)。
+#    auto(默认)= torch 可导入且权重存在才走 TransNetV2,否则/推理失败自动
+#    回退帧差版(原因写入结果 detector_fallback,节点转 error_log,不静默);
+#    transnetv2 = 强制 TransNetV2(不可用即回退并报告);frame_diff = 永远帧差。
+#    权重路径可用 STORYLINE_TRANSNETV2_WEIGHTS 覆盖(默认 .storyline/models/)。
+STORYLINE_SPLIT_SHOTS_DETECTOR: str = (
+    os.environ.get("STORYLINE_SPLIT_SHOTS_DETECTOR", "auto").strip().lower()
+)
+
 
 def storyline_outputs_root() -> Path:
     """``outputs/{job_id}/`` 根目录,可被 ``AUTO_VIDEO_EDITOR_OUTPUTS_ROOT`` 覆盖。"""

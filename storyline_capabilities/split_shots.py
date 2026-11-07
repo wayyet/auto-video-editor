@@ -1,21 +1,31 @@
-"""本地化 split_shots(plan_v4 §5 阶段 1 / A 类)。
+"""本地化 split_shots(plan_v4 §5 阶段 1 / A 类;阶段 5 TransNetV2 已接入)。
 
-策略(plan §5 阶段 1 第 5 行):
-- **TransNetV2 走 vendored venv**(本机主 venv 不装 torch)。
-- **本地实现**简化版 ``frame_difference_split_shots``:用 ffmpeg 抽帧,
-  用帧间像素平均差作阈值,产出 scene-cut 候选。
-  这是 vendored 主版本``detect_scenes_with_transnetv2_without_proxy``的退化
-  替代,适合本地 CI 烟测与无 torch 环境的"快速版"。
+检测器两级(2026-11-08 选项C 治本升级):
+- **TransNetV2**(``transnetv2_split_shots``):主 venv 进程内推理(用户决定
+  主 venv 直接装 CPU torch,不再走独立 venv 子进程),ffmpeg rawvideo 管道
+  48×27 抽帧 + soCzech 官方权重(``.storyline/models/``)。
+- **帧差版**(``frame_difference_split_shots``):ffmpeg 抽帧 + 帧间像素平均
+  差阈值,无 torch 环境的退化替代,也是 TransNetV2 失败时的自动回退。
+
+检测器选择见 ``STORYLINE_SPLIT_SHOTS_DETECTOR``(config.py):auto 默认——
+torch 可导入且权重存在才走 TransNetV2,否则/失败时回退帧差,不静默(结果带
+``detector_fallback`` 原因,节点写 error_log)。
+
+两种检测器共享同一套 min_shot 合并 / max_shot 强切 / clip_id 重编号管线
+(``_clips_from_cuts``),clip 契约与 vendored ``split_shots.py`` 对齐。
 
 重要:plan §1.3 案例一(170s vs 35s)就是因为切分/规划过于细碎导致总时长超
-预算;本地实现仍把 min_shot_ms / max_shot_ms 作为硬约束,与 vendored
+预算;本地实现仍把 min_shot_ms / max_shot_ms 作为硬约束,与原版
 ``DEFAULT_MIN_SHOT_DURATION_MILLISECONDS``(1000) / ``DEFAULT_MAX_SHOT_DURATION_..``
 (30000)对齐。
 """
 from __future__ import annotations
 
+import importlib.util
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
@@ -29,6 +39,48 @@ DEFAULT_DIFF_THRESHOLD: float = 12.0  # 0~255 像素平均差阈值
 DEFAULT_ANALYSIS_WIDTH: int = 480
 # ffmpeg 抽帧超时:60s 曾在 69s 4K HEVC 源上超时且静默返回空 → 0 镜头级联。
 DEFAULT_EXTRACT_TIMEOUT_S: int = 300
+
+# TransNetV2(选项C):参考实现口径 —— 48×27 RGB 输入、25fps、滑窗 100 步 50、
+# sigmoid ≥0.5 记切点。
+TRANSTNV2_INPUT_SIZE = (27, 48)  # (H, W)
+DEFAULT_TRANSTNV2_FPS: int = 25
+DEFAULT_TRANSTNV2_THRESHOLD: float = 0.5
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_DEFAULT_TRANSTNV2_WEIGHTS = _REPO_ROOT / ".storyline" / "models" / "transnetv2-pytorch-weights.pth"
+_VENDORED_MODEL_PY = _REPO_ROOT / "vendor" / "transnetv2" / "transnetv2_pytorch.py"
+
+
+def _transnetv2_weights_path() -> Path:
+    """权重路径;``STORYLINE_TRANSNETV2_WEIGHTS`` 可覆盖。"""
+    env = os.environ.get("STORYLINE_TRANSNETV2_WEIGHTS", "").strip()
+    return Path(env) if env else _DEFAULT_TRANSTNV2_WEIGHTS
+
+
+def _detector_choice() -> str:
+    """``STORYLINE_SPLIT_SHOTS_DETECTOR``:auto | transnetv2 | frame_diff。
+
+    读 ``config.STORYLINE_SPLIT_SHOTS_DETECTOR``(导入时从 env 固化,与
+    ``STORYLINE_ENABLE_*`` 开关同模式);单测用 monkeypatch.setattr 改。
+    """
+    from config import STORYLINE_SPLIT_SHOTS_DETECTOR
+
+    raw = str(STORYLINE_SPLIT_SHOTS_DETECTOR or "auto").strip().lower()
+    return raw if raw in ("auto", "transnetv2", "frame_diff") else "auto"
+
+
+def _transnetv2_available() -> tuple[bool, str]:
+    """(可用, 不可用原因)。torch 可导入 + vendored 代码 + 权重文件齐才可用。"""
+    try:
+        import torch  # noqa: F401
+    except Exception as e:  # noqa: BLE001 —— ImportError 之外也可能是二进制损坏
+        return False, f"torch_import_failed: {e!r}"
+    if not _VENDORED_MODEL_PY.exists():
+        return False, f"vendored_model_missing: {_VENDORED_MODEL_PY}"
+    weights = _transnetv2_weights_path()
+    if not weights.exists():
+        return False, f"weights_missing: {weights}"
+    return True, ""
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +195,157 @@ def _frame_avg_diff(a: Path, b: Path) -> float:
         return 0.0
 
 
+# ---------------------------------------------------------------------------
+# 共享后处理:切点毫秒序列 → clips(两种检测器共用)
+# ---------------------------------------------------------------------------
+def _clips_from_cuts(
+    cuts_ms: list[int],
+    *,
+    video_path: str,
+    method: str,
+    method_max_split: str,
+    min_shot_ms: int,
+    max_shot_ms: int,
+) -> list[dict[str, Any]]:
+    """把升序切点毫秒序列(含首 0 与末 duration)按契约加工成 clips。
+
+    步骤与原帧差版实现一致:
+    1. 相邻切点成段,短于 ``min_shot_ms`` 并入前段;
+    2. 超过 ``max_shot_ms`` 逐段强制切;
+    3. 最小长度回填(首段过短并入下一段);
+    4. max_shot **后置兜底强切**(2026-11-07 实机回归:连续运动素材帧帧超
+       阈值 → 全部相邻段被 min_shot 合并成 1 个巨镜头,违反 max_shot 契约);
+    5. clip_id 重排。
+    """
+    clips: list[dict[str, Any]] = []
+    for i in range(len(cuts_ms) - 1):
+        s = cuts_ms[i]
+        e = cuts_ms[i + 1]
+        if e - s < min_shot_ms and clips:
+            # 与上一段合并
+            clips[-1]["timeline_out_ms"] = e
+            clips[-1]["source_out_ms"] = e
+            continue
+        if e - s > max_shot_ms:
+            # 强制切
+            cur = s
+            while cur + max_shot_ms < e:
+                nxt = cur + max_shot_ms
+                clips.append(
+                    _make_clip(
+                        f"clip_{len(clips) + 1:04d}",
+                        cur,
+                        nxt,
+                        method=method_max_split,
+                        video_path=video_path,
+                    )
+                )
+                cur = nxt
+            if e - cur > 0:
+                clips.append(
+                    _make_clip(
+                        f"clip_{len(clips) + 1:04d}",
+                        cur,
+                        e,
+                        method=method_max_split,
+                        video_path=video_path,
+                    )
+                )
+            continue
+        clips.append(
+            _make_clip(
+                f"clip_{len(clips) + 1:04d}",
+                s,
+                e,
+                method=method,
+                video_path=video_path,
+            )
+        )
+    # 最小长度回填(把第一个 <min_shot_ms 的 clip 短片合并到下一个)
+    final_clips: list[dict[str, Any]] = []
+    for c in clips:
+        if (
+            c["timeline_out_ms"] - c["timeline_in_ms"] < min_shot_ms
+            and final_clips
+        ):
+            merged = final_clips[-1]
+            merged["timeline_out_ms"] = c["timeline_out_ms"]
+            merged["source_out_ms"] = c["timeline_out_ms"]
+            # source_ref 必须同步,否则画面抽取区间与 clip 时间对不上(D5)
+            ref = merged.get("source_ref") or {}
+            ref["end"] = merged["source_out_ms"]
+            ref["duration"] = max(0, merged["source_out_ms"] - merged["source_in_ms"])
+            merged["source_ref"] = ref
+        else:
+            copied = dict(c)
+            # source_ref 是嵌套 dict,浅拷贝会与原 clip 共享引用 → 单独复制一份
+            copied["source_ref"] = dict(c.get("source_ref") or {})
+            final_clips.append(copied)
+    # max_shot 后置强制切(2026-11-07 实机回归):连续运动素材(手持旅游片)
+    # 帧帧超阈值 → 全部相邻段被 min_shot 合并进同一个 clip,上面的逐对强制切
+    # 分支永远轮不到,最终产出 1 个 69s 巨镜头(违反"超过 max_shot 强制切"
+    # 的文档契约)。这里对合并后的最终 clip 再兜底切一遍。
+    enforced: list[dict[str, Any]] = []
+    for c in final_clips:
+        span = c["timeline_out_ms"] - c["timeline_in_ms"]
+        if span <= max_shot_ms:
+            enforced.append(c)
+            continue
+        cur = c["timeline_in_ms"]
+        while cur + max_shot_ms < c["timeline_out_ms"]:
+            enforced.append(
+                _make_clip(
+                    f"clip_{len(enforced) + 1:04d}",
+                    cur,
+                    cur + max_shot_ms,
+                    method=method_max_split,
+                    video_path=str(c.get("path") or video_path),
+                )
+            )
+            cur += max_shot_ms
+        if c["timeline_out_ms"] - cur > 0:
+            enforced.append(
+                _make_clip(
+                    f"clip_{len(enforced) + 1:04d}",
+                    cur,
+                    c["timeline_out_ms"],
+                    method=method_max_split,
+                    video_path=str(c.get("path") or video_path),
+                )
+            )
+    final_clips = enforced
+    # 重排 clip_id
+    for i, c in enumerate(final_clips, start=1):
+        c["clip_id"] = f"clip_{i:04d}"
+    return final_clips
+
+
+def _probe_duration_ms(video: Path) -> tuple[int, bool]:
+    """ffprobe 取真实时长毫秒;(duration_ms, 是否取到)。失败退 (0, False)。"""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(video),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return int(round(float(result.stdout.strip()) * 1000)), True
+    except Exception:  # noqa: BLE001
+        pass
+    return 0, False
+
+
 def frame_difference_split_shots(
     video: Path,
     *,
@@ -208,131 +411,21 @@ def frame_difference_split_shots(
 
     # 3. 末帧位置:用 ffmpeg 查 duration(退化:等于 (n-1)*interval)
     duration_ms = (len(frames) - 1) * interval_ms
-    try:
-        result = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                str(video),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            duration_ms = int(round(float(result.stdout.strip()) * 1000))
-    except Exception:  # noqa: BLE001
-        pass
+    probed, ok = _probe_duration_ms(video)
+    if ok:
+        duration_ms = probed
 
     cuts_ms.append(duration_ms)
 
-    # 4. 边界 → clips;应用 min/max_ms 约束
-    clips: list[dict[str, Any]] = []
-    for i in range(len(cuts_ms) - 1):
-        s = cuts_ms[i]
-        e = cuts_ms[i + 1]
-        if e - s < min_shot_ms and clips:
-            # 与上一段合并
-            clips[-1]["timeline_out_ms"] = e
-            clips[-1]["source_out_ms"] = e
-            continue
-        if e - s > max_shot_ms:
-            # 强制切
-            cur = s
-            while cur + max_shot_ms < e:
-                nxt = cur + max_shot_ms
-                clips.append(
-                    _make_clip(
-                        f"clip_{len(clips) + 1:04d}",
-                        cur,
-                        nxt,
-                        method="frame_diff_max_split",
-                        video_path=str(video),
-                    )
-                )
-                cur = nxt
-            if e - cur > 0:
-                clips.append(
-                    _make_clip(
-                        f"clip_{len(clips) + 1:04d}",
-                        cur,
-                        e,
-                        method="frame_diff_max_split",
-                        video_path=str(video),
-                    )
-                )
-            continue
-        clips.append(
-            _make_clip(
-                f"clip_{len(clips) + 1:04d}",
-                s,
-                e,
-                method="frame_diff",
-                video_path=str(video),
-            )
-        )
-    # 最小长度回填(把第一个 <min_shot_ms 的 clip 短片合并到下一个)
-    final_clips: list[dict[str, Any]] = []
-    for c in clips:
-        if (
-            c["timeline_out_ms"] - c["timeline_in_ms"] < min_shot_ms
-            and final_clips
-        ):
-            merged = final_clips[-1]
-            merged["timeline_out_ms"] = c["timeline_out_ms"]
-            merged["source_out_ms"] = c["timeline_out_ms"]
-            # source_ref 必须同步,否则画面抽取区间与 clip 时间对不上(D5)
-            ref = merged.get("source_ref") or {}
-            ref["end"] = merged["source_out_ms"]
-            ref["duration"] = max(0, merged["source_out_ms"] - merged["source_in_ms"])
-            merged["source_ref"] = ref
-        else:
-            copied = dict(c)
-            # source_ref 是嵌套 dict,浅拷贝会与原 clip 共享引用 → 单独复制一份
-            copied["source_ref"] = dict(c.get("source_ref") or {})
-            final_clips.append(copied)
-    # max_shot 后置强制切(2026-11-07 实机回归):连续运动素材(手持旅游片)
-    # 帧帧超阈值 → 全部相邻段被 min_shot 合并进同一个 clip,上面的逐对强制切
-    # 分支永远轮不到,最终产出 1 个 69s 巨镜头(违反"超过 max_shot 强制切"
-    # 的文档契约)。这里对合并后的最终 clip 再兜底切一遍。
-    enforced: list[dict[str, Any]] = []
-    for c in final_clips:
-        span = c["timeline_out_ms"] - c["timeline_in_ms"]
-        if span <= max_shot_ms:
-            enforced.append(c)
-            continue
-        cur = c["timeline_in_ms"]
-        while cur + max_shot_ms < c["timeline_out_ms"]:
-            enforced.append(
-                _make_clip(
-                    f"clip_{len(enforced) + 1:04d}",
-                    cur,
-                    cur + max_shot_ms,
-                    method="frame_diff_max_split",
-                    video_path=str(c.get("path") or video),
-                )
-            )
-            cur += max_shot_ms
-        if c["timeline_out_ms"] - cur > 0:
-            enforced.append(
-                _make_clip(
-                    f"clip_{len(enforced) + 1:04d}",
-                    cur,
-                    c["timeline_out_ms"],
-                    method="frame_diff_max_split",
-                    video_path=str(c.get("path") or video),
-                )
-            )
-    final_clips = enforced
-    # 重排 clip_id
-    for i, c in enumerate(final_clips, start=1):
-        c["clip_id"] = f"clip_{i:04d}"
+    # 4. 边界 → clips;min/max_ms 约束与 TransNetV2 路径共用同一后处理
+    final_clips = _clips_from_cuts(
+        cuts_ms,
+        video_path=str(video),
+        method="frame_diff",
+        method_max_split="frame_diff_max_split",
+        min_shot_ms=min_shot_ms,
+        max_shot_ms=max_shot_ms,
+    )
 
     return {
         "clips": final_clips,
@@ -344,28 +437,267 @@ def frame_difference_split_shots(
 
 
 # ---------------------------------------------------------------------------
-# TransNetV2 路径(仍走 vendored venv)
+# TransNetV2 路径(阶段 5 / 选项C 治本;主 venv 进程内推理)
 # ---------------------------------------------------------------------------
-def split_shots_via_vendored(
+class TransNetV2Unavailable(RuntimeError):
+    """TransNetV2 运行时不可用(torch 缺失 / vendored 代码 / 权重缺失)。"""
+
+
+def _extract_frames_rgb24(
     video: Path,
     *,
-    vendored_venv_python: Path,
-    script_path: Optional[Path] = None,
-    timeout_s: int = 600,
-) -> dict[str, Any]:
-    """TransNetV2 / 完整 split_shots 走 vendored venv 子进程。
+    fps: int,
+    height: int,
+    width: int,
+    timeout_s: int,
+) -> Any:
+    """ffmpeg rawvideo 管道抽帧 → frames uint8 [T,h,w,3]。
 
-    **不在阶段 1 实现**(plan §6.4 + §5 阶段 5):vendored OpenStoryline copy 的
-    runway/main entry 还没建;阶段 1 仅提供此 stub + 注释,阶段 5 才补 `_mcp_passthrough`
-    的 vendored 调用路径。
+    免 PNG 落盘:48×27×3=3888 字节/帧,34s@25fps ≈ 3.3MB,分钟级视频也在
+    几十 MB 量级;比帧差版的 PNG 抽帧快一个数量级且无磁盘垃圾。
     """
-    raise NotImplementedError(
-        "split_shots_via_vendored 是阶段 5 工作;阶段 1 用 frame_difference_split_shots"
+    import numpy as np
+
+    cmd = [
+        "ffmpeg",
+        "-nostdin",
+        "-i",
+        str(video),
+        "-vf",
+        f"fps={fps},scale={width}:{height}",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "pipe:1",
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            timeout=timeout_s,
+            check=False,
+        )
+    except FileNotFoundError as e:
+        raise TransNetV2Unavailable(f"ffmpeg_not_found: {e!r}") from e
+    except subprocess.TimeoutExpired as e:
+        # 超时不静默:与帧差版口径一致,已产出的部分字节照常解析
+        raw = e.stdout or b""
+    else:
+        raw = result.stdout
+    n_bytes = int(height * width * 3)
+    n_frames = len(raw) // n_bytes
+    if n_frames < 1:
+        return np.zeros((0, height, width, 3), dtype=np.uint8)
+    frames = np.frombuffer(raw[: n_frames * n_bytes], dtype=np.uint8).reshape(
+        [n_frames, height, width, 3]
     )
+    return frames
+
+
+def _load_transnetv2_model() -> tuple[Any, Any]:
+    """加载 vendored TransNetV2 + 官方权重;(model, torch)。"""
+    import torch
+
+    spec = importlib.util.spec_from_file_location(
+        "transnetv2_pytorch_vendored", _VENDORED_MODEL_PY
+    )
+    if spec is None or spec.loader is None:  # pragma: no cover — 路径存在性已在 available 检查
+        raise TransNetV2Unavailable(f"vendored_model_unloadable: {_VENDORED_MODEL_PY}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    weights = _transnetv2_weights_path()
+    model = module.TransNetV2()
+    state_dict = torch.load(str(weights), map_location="cpu")
+    model.load_state_dict(state_dict)
+    model.eval()
+    return model, torch
+
+
+def _transnetv2_cut_frames(
+    frames: Any,
+    *,
+    model: Any,
+    torch_mod: Any,
+    threshold: float,
+    progress_cb: Optional[Callable[[int, int], None]] = None,
+) -> list[int]:
+    """滑窗推理 → 切点帧号列表(该帧为**新镜头第一帧**,即 0→1 跳变处)。
+
+    口径与官方 ``predict_frames`` 一致:窗口 100 帧、步进 50、首尾各补 25 帧
+    (重复首帧/末帧),每窗取 [25:75] 的有效输出;sigmoid ≥ threshold 记切。
+    """
+    total = int(frames.shape[0])
+    pad_start = 25
+    pad_end = 25 + 50 - (total % 50 if total % 50 != 0 else 50)
+    import numpy as np
+
+    first = frames[0:1]
+    last = frames[total - 1 : total]
+    padded = np.concatenate([first] * pad_start + [frames] + [last] * pad_end, axis=0)
+
+    preds: list[Any] = []
+    ptr = 0
+    windows = 0
+    with torch_mod.no_grad():
+        while ptr + 100 <= padded.shape[0]:
+            window = torch_mod.from_numpy(padded[ptr : ptr + 100]).unsqueeze(0)
+            one_hot, _many_hot = model(window)
+            prob = torch_mod.sigmoid(one_hot)[0, 25:75, 0].numpy()
+            preds.append(prob)
+            ptr += 50
+            windows += 1
+            if progress_cb:
+                progress_cb(min(windows * 50, total), total)
+    if not preds:
+        return []
+    all_pred = np.concatenate(preds)[:total]
+    return [int(i) for i in range(1, total) if all_pred[i] > threshold]
+
+
+def transnetv2_split_shots(
+    video: Path,
+    *,
+    fps: int = DEFAULT_TRANSTNV2_FPS,
+    threshold: float = DEFAULT_TRANSTNV2_THRESHOLD,
+    min_shot_ms: int = DEFAULT_MIN_SHOT_MS,
+    max_shot_ms: int = DEFAULT_MAX_SHOT_MS,
+    extract_timeout_s: int = DEFAULT_EXTRACT_TIMEOUT_S,
+    progress_cb: Optional[Callable[[int, int], None]] = None,
+) -> dict[str, Any]:
+    """TransNetV2 镜头切分(选项C 治本;主 venv torch 进程内推理)。
+
+    Returns:
+        与 ``frame_difference_split_shots`` 同构:
+        ``{"clips": [...], "method": "transnetv2", "video_duration_ms", ...}``
+        不可用时抛 ``TransNetV2Unavailable``(由上层决定回退,不静默)。
+    """
+    import numpy as np
+
+    video = Path(video)
+    if not video.exists():
+        return {"clips": [], "method": "transnetv2", "error": "video_not_found"}
+
+    available, reason = _transnetv2_available()
+    if not available:
+        raise TransNetV2Unavailable(reason)
+
+    height, width = TRANSTNV2_INPUT_SIZE
+    frames = _extract_frames_rgb24(
+        video,
+        fps=fps,
+        height=height,
+        width=width,
+        timeout_s=extract_timeout_s,
+    )
+    if frames.shape[0] < 2:
+        return {
+            "clips": [],
+            "method": "transnetv2",
+            "frames_total": int(frames.shape[0]),
+            "error": "no_frames",
+        }
+
+    model, torch_mod = _load_transnetv2_model()
+    cut_indices = _transnetv2_cut_frames(
+        frames,
+        model=model,
+        torch_mod=torch_mod,
+        threshold=threshold,
+        progress_cb=progress_cb,
+    )
+
+    duration_ms = (frames.shape[0]) * int(round(1000.0 / fps))
+    probed, ok = _probe_duration_ms(video)
+    if ok:
+        duration_ms = probed
+
+    cuts_ms = [0] + [int(round(i * 1000.0 / fps)) for i in cut_indices]
+    cuts_ms.append(duration_ms)
+
+    final_clips = _clips_from_cuts(
+        cuts_ms,
+        video_path=str(video),
+        method="transnetv2",
+        method_max_split="transnetv2_max_split",
+        min_shot_ms=min_shot_ms,
+        max_shot_ms=max_shot_ms,
+    )
+    return {
+        "clips": final_clips,
+        "method": "transnetv2",
+        "video_duration_ms": duration_ms,
+        "frames_total": int(frames.shape[0]),
+        "cut_count": len(cut_indices),
+        "threshold": threshold,
+        "fps": fps,
+    }
+
+
+def _split_one_video(
+    video_path: Path,
+    media_id: str,
+    *,
+    detector: str,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """单视频检测分派:transnetv2(可用/失败回退)或 frame_diff。
+
+    返回帧差版/TransNet 版结果 dict;回退时带 ``detector_fallback`` 原因
+    (节点据此写 error_log,不静默)。media_id 接线在本函数内完成。
+    """
+    fallback: dict[str, Any] | None = None
+    if detector in ("auto", "transnetv2"):
+        available, reason = _transnetv2_available()
+        if detector == "auto" and not available:
+            fallback = {"requested": "auto", "reason": reason}
+        else:
+            try:
+                result = transnetv2_split_shots(video_path, **{
+                    "fps": kwargs.get("fps", DEFAULT_FRAMES_PER_SECOND),
+                    "threshold": kwargs.get("transnetv2_threshold", DEFAULT_TRANSTNV2_THRESHOLD),
+                    "min_shot_ms": kwargs.get("min_shot_ms", DEFAULT_MIN_SHOT_MS),
+                    "max_shot_ms": kwargs.get("max_shot_ms", DEFAULT_MAX_SHOT_MS),
+                    "extract_timeout_s": kwargs.get("extract_timeout_s", DEFAULT_EXTRACT_TIMEOUT_S),
+                })
+            except Exception as e:  # noqa: BLE001 —— 推理任何失败都回退,原因上报
+                fallback = {"requested": detector, "reason": f"transnetv2_failed: {e!r}"}
+            else:
+                if result.get("error"):  # video_not_found / no_frames 走帧差同款错误通道
+                    return {**result, "media_id": media_id, "detector_used": "transnetv2"}
+                for c in result.get("clips", []):
+                    c["media_id"] = media_id
+                    ref = c.get("source_ref") or {}
+                    ref["media_id"] = media_id
+                    c["source_ref"] = ref
+                result["media_id"] = media_id
+                result["detector_used"] = "transnetv2"
+                return result
+    result = frame_difference_split_shots(
+        video_path,
+        **{
+            k: v
+            for k, v in kwargs.items()
+            if k in ("fps", "diff_threshold", "min_shot_ms", "max_shot_ms", "analysis_width", "extract_timeout_s")
+        },
+    )
+    if fallback:
+        result["detector_fallback"] = fallback
+    result["detector_used"] = "frame_diff"
+    for c in result.get("clips", []):
+        c["media_id"] = media_id
+        c["path"] = str(video_path)
+        ref = c.get("source_ref") or {}
+        ref["media_id"] = media_id
+        c["source_ref"] = ref
+    result["media_id"] = media_id
+    return result
 
 
 # ---------------------------------------------------------------------------
-# 对外主入口 — 阶段 1 默认 frame_difference,TransNetV2 阶段 5 接入
+# 对外主入口 — 检测器选择(auto:TransNetV2 优先,失败回退帧差)
 # ---------------------------------------------------------------------------
 def split_shots(
     media_artifact: dict[str, Any] | str | Path | list[dict[str, Any]],
@@ -376,6 +708,8 @@ def split_shots(
     max_shot_ms: int = DEFAULT_MAX_SHOT_MS,
     analysis_width: int = DEFAULT_ANALYSIS_WIDTH,
     extract_timeout_s: int = DEFAULT_EXTRACT_TIMEOUT_S,
+    detector: str | None = None,
+    transnetv2_threshold: float = DEFAULT_TRANSTNV2_THRESHOLD,
 ) -> dict[str, Any]:
     """对单个 video 做镜头切分;或对 list 输入 → 调 ``split_shots_for_media_list``。
 
@@ -385,6 +719,10 @@ def split_shots(
     - **list[dict]**(``load_media`` 输出的 ``{"media": [...]}`` 风格的 media 列表)
       → 自动转 ``split_shots_for_media_list``,返回 ``{"shots": ..., "method": ...}``
       与下面 understand_clips 消费方兼容。
+
+    ``detector``:None 时读 ``STORYLINE_SPLIT_SHOTS_DETECTOR``(默认 auto)。
+    auto/显式 transnetv2 时用 TransNetV2 主 venv 推理;不可用或推理失败回退
+    frame_diff,结果带 ``detector_fallback`` 原因(节点写 error_log,不静默)。
 
     Returns dict key ``clips`` 与 vendored ``split_shots.py`` 对齐;list 输入时
     返回 ``{"shots": {media_id: [clip_dict]}}``。
@@ -398,6 +736,8 @@ def split_shots(
             max_shot_ms=max_shot_ms,
             analysis_width=analysis_width,
             extract_timeout_s=extract_timeout_s,
+            detector=detector,
+            transnetv2_threshold=transnetv2_threshold,
         )
     if isinstance(media_artifact, (str, Path)):
         video_path = Path(media_artifact)
@@ -412,23 +752,19 @@ def split_shots(
     if not video_path.exists():
         return {"clips": [], "method": "frame_diff", "error": "video_not_found"}
 
-    result = frame_difference_split_shots(
+    chosen = detector or _detector_choice()
+    result = _split_one_video(
         video_path,
+        media_id,
+        detector=chosen,
         fps=fps,
         diff_threshold=diff_threshold,
         min_shot_ms=min_shot_ms,
         max_shot_ms=max_shot_ms,
         analysis_width=analysis_width,
         extract_timeout_s=extract_timeout_s,
+        transnetv2_threshold=transnetv2_threshold,
     )
-    # 关联 media_id 与权威 path(understand_clips 靠 source_ref.media_id 找素材)
-    for c in result.get("clips", []):
-        c["media_id"] = media_id
-        c["path"] = str(video_path)
-        ref = c.get("source_ref") or {}
-        ref["media_id"] = media_id
-        c["source_ref"] = ref
-    result["media_id"] = media_id
     return result
 
 
@@ -440,17 +776,28 @@ def split_shots_for_media_list(
 
     Returns dict 带顶层 ``shots``(vendored 兼容),内含每个 video 的 ``clips``。
 
-    **clip_id 全局唯一**:单视频内部 ``frame_difference_split_shots`` 会把 clip
-    重编号为 ``clip_0001, clip_0002, ...``;N 个视频 → N 组同号 clip,下游
+    **clip_id 全局唯一**:单视频内部会把 clip 重编号为
+    ``clip_0001, clip_0002, ...``;N 个视频 → N 组同号 clip,下游
     ``filter_clips`` 用 ``clip_id`` 当 LLM 决策标识符时会歧义(误保留/误丢弃)。
     故在合并阶段按 media 顺序做**全局连续重编号**。
     单视频时结果与改动前**完全一致**(``clip_0001..clip_000N``)。
+
+    ``method`` 取第一个视频实际使用的检测器(frame_diff / transnetv2)。
     """
     shots: dict[str, list[dict[str, Any]]] = {}
+    fallbacks: list[dict[str, Any]] = []
+    detector_used = "frame_diff"
+    chosen = kwargs.pop("detector", None) or _detector_choice()
     for m in media_list or []:
         if m.get("media_type") != "video":
             continue
-        result = split_shots(m, **kwargs)
+        # 走模块级 split_shots(单视频入口)保持既有桩接缝(单测 monkeypatch)
+        result = split_shots(m, detector=chosen, **kwargs)
+        if result.get("detector_fallback"):
+            fallbacks.append(
+                {"media_id": m.get("media_id"), **result["detector_fallback"]}
+            )
+        detector_used = result.get("detector_used") or detector_used
         shots[m.get("media_id", "")] = result.get("clips", [])
 
     # 全局连续重编号(跨源唯一)
@@ -459,7 +806,10 @@ def split_shots_for_media_list(
         for c in clips:
             counter += 1
             c["clip_id"] = f"clip_{counter:04d}"
-    return {"shots": shots, "method": "frame_diff"}
+    out = {"shots": shots, "method": detector_used}
+    if fallbacks:
+        out["detector_fallbacks"] = fallbacks
+    return out
 
 
 __all__ = [
@@ -469,8 +819,11 @@ __all__ = [
     "DEFAULT_DIFF_THRESHOLD",
     "DEFAULT_ANALYSIS_WIDTH",
     "DEFAULT_EXTRACT_TIMEOUT_S",
+    "DEFAULT_TRANSTNV2_FPS",
+    "DEFAULT_TRANSTNV2_THRESHOLD",
+    "TransNetV2Unavailable",
     "frame_difference_split_shots",
-    "split_shots_via_vendored",
+    "transnetv2_split_shots",
     "split_shots",
     "split_shots_for_media_list",
 ]
