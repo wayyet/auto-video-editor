@@ -107,8 +107,12 @@ def test_adjust_volume_warns_when_jianying_running(
     锁定"放行模式"的旧行为(告警去重 + 照常写入)不回归。
     node_13 会连写两次(主音轨 + BGM),告警必须去重,否则一次节点执行刷两条。
     """
+    # 在外层默认值注入(simulating 剪映在跑):safe_write_draft 的
+    # proc_checker 缺省即读 _default_proc_checker;内层 guard 函数是它的
+    # 实现细节,tests/unit/conftest.py 会把默认值桩成"不在跑",用例级
+    # monkeypatch 在其后生效,仍然用例级优先
     monkeypatch.setattr(
-        "draft_ops.safe_write_guard.check_jianying_not_running", lambda: True
+        "draft_ops.atomic_writer._default_proc_checker", lambda: True
     )
     monkeypatch.setattr(config, "JY_WRITE_FAIL_ON_JIANYING_RUNNING", False)
 
@@ -131,7 +135,7 @@ def test_adjust_volume_strict_mode_refuses_when_jianying_running(
 ) -> None:
     """阶段 3 严格互斥(默认):剪映在跑 → 写入被拒(RuntimeError 冒泡,节点失败重试)。"""
     monkeypatch.setattr(
-        "draft_ops.safe_write_guard.check_jianying_not_running", lambda: True
+        "draft_ops.atomic_writer._default_proc_checker", lambda: True
     )
     with pytest.raises(RuntimeError, match="写入互斥严格模式"):
         adjust_volume(_state(draft_with_audio))
@@ -142,7 +146,7 @@ def test_adjust_volume_no_warning_when_jianying_not_running(
 ) -> None:
     """剪映没在跑 → 不产生该告警(避免无意义噪音)。"""
     monkeypatch.setattr(
-        "draft_ops.safe_write_guard.check_jianying_not_running", lambda: False
+        "draft_ops.atomic_writer._default_proc_checker", lambda: False
     )
 
     out = adjust_volume(_state(draft_with_audio))

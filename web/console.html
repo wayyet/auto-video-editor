@@ -299,6 +299,11 @@
     let csrfToken = null;
     let resumeGuidanceShown = false;
 
+    // 查看模式(?thread_id=<id>):监控首页「查看」跳转而来,附着已有运行只读展示。
+    // 参数名与监控页 /?thread_id= 契约一致(monitor.html 同名解析)。
+    const VIEW_THREAD_ID = (new URLSearchParams(location.search).get("thread_id") || "").trim();
+    const VIEW_MODE = !!VIEW_THREAD_ID;
+
     // ------------------------------------------------------------------
     // Agent 智能体选择(localStorage 记忆上次选择;模式同旧 openstoryline
     // 聊天页 data-os-persist,持久化键先例:wf_monitor_theme / wf_monitor_thread)
@@ -315,8 +320,10 @@
 
     // ------------------------------------------------------------------
     // 服务端限制(config 端点;失败回退内置默认值)
+    // 查看模式回填表单前需 await 本 promise,避免 applyLimitsToForm
+    // 的默认值覆盖任务原始参数。
     // ------------------------------------------------------------------
-    (async () => {
+    const configReady = (async () => {
       try {
         const r = await fetch(CONSOLE_API_PATHS.config, { headers: { Accept: "application/json" } });
         if (r.ok) {
@@ -338,6 +345,51 @@
       }
       applyLimitsToForm();
     })();
+
+    // ------------------------------------------------------------------
+    // 查看模式初始化:先校验任务存在,再全量重放事件重建右栏视图。
+    // ?last_event_id=0 触发 SSE 从头重放,handleEvent 管线照常重建
+    // 事件表/节点/计数/交付四态卡;waiting_human 照常弹恢复面板。
+    // ------------------------------------------------------------------
+    if (VIEW_MODE) {
+      renderSubmitControls(); // 模块加载本无初始渲染调用,这里显式禁用创建按钮
+      renderFormMeta(`查看模式:已附着任务 ${VIEW_THREAD_ID},创建已禁用;新建任务请从监控首页「创建任务」进入。`);
+      // 表单只读:回填展示任务原始设置,不可编辑(拖放区一并隐藏,02 区纯展示)
+      promptInput.readOnly = true;
+      durationInput.readOnly = true;
+      ratioSelect.disabled = true;
+      langSelect.disabled = true;
+      backendSelect.disabled = true;
+      dropZone.style.display = "none";
+      (async () => {
+        let agent = null;
+        try {
+          const r = await fetch(CONSOLE_API_PATHS.runDetail(VIEW_THREAD_ID), { headers: { Accept: "application/json" } });
+          if (r.status === 404) {
+            runMeta.classList.add("err-text");
+            runMeta.textContent = `未找到任务 ${VIEW_THREAD_ID}(可能已删除或 id 有误)。`;
+            return;
+          }
+          if (r.status === 400) {
+            // validate_thread_id 形状闸:URL 里的 thread_id 不是服务端生成的形状
+            runMeta.classList.add("err-text");
+            runMeta.textContent = `thread_id 形状非法:${VIEW_THREAD_ID};请从监控首页历史任务进入。`;
+            return;
+          }
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const detail = await r.json();
+          agent = (detail && detail.record && detail.record.llm_backend) || null;
+          // 先等服务端限制/下拉选项就绪,再回填任务原始设置
+          await configReady;
+          applyViewFormState(detail);
+        } catch (err) {
+          runMeta.classList.add("err-text");
+          runMeta.textContent = `任务状态校验失败:${err && err.message ? err.message : ""};请刷新重试。`;
+          return;
+        }
+        subscribeToThread(VIEW_THREAD_ID, `/api/workflow/runs/${encodeURIComponent(VIEW_THREAD_ID)}/events?last_event_id=0`, agent);
+      })();
+    }
 
     function applyLimitsToForm() {
       promptInput.maxLength = limits.prompt_max_chars;
@@ -381,6 +433,51 @@
         fileErrors.appendChild(li);
       }
     }
+    // 查看模式:任务原始设置回填(record.files + initial_state.storyline_targets)
+    function ensureSelectOption(sel, value, labels) {
+      if (!value) return;
+      let exists = false;
+      for (const o of sel.options) { if (o.value === value) { exists = true; break; } }
+      if (!exists) {
+        // config 变更后原值不在选项里:追加原始值选项,如实展示
+        const opt = document.createElement("option");
+        opt.value = value;
+        opt.textContent = (labels && labels[value]) || value;
+        sel.appendChild(opt);
+      }
+      sel.value = value;
+    }
+    function applyViewFormState(detail) {
+      const record = (detail && detail.record) || {};
+      const targets = (detail && detail.initial_state && detail.initial_state.storyline_targets) || {};
+      // 01·提示词(user_request 与 script_request 同源,任一即可)
+      const prompt = targets.user_request || targets.script_request || "";
+      if (prompt) {
+        promptInput.value = prompt;
+        renderPromptCount();
+      }
+      // 03·剪辑参数
+      if (targets.target_duration_ms) {
+        durationInput.value = String(Math.round(Number(targets.target_duration_ms) / 1000));
+      }
+      ensureSelectOption(ratioSelect, targets.ratio);
+      ensureSelectOption(langSelect, targets.lang, { zh: "中文", en: "英文" });
+      // 04·Agent(记录无此字段时保留下拉当前值)
+      const backend = record.llm_backend;
+      if (backend && BACKEND_CHOICES.includes(backend)) backendSelect.value = backend;
+      // 02·视频列表(伪条目:无 File 对象、时长未探测显示 —)
+      consoleState.files = (record.files || []).map((f) => {
+        const name = f.original_name || String(f.path || "").split(/[\\/]/).pop() || "—";
+        return {
+          name,
+          size: Number(f.bytes) || 0,
+          ext: (name.match(/\.[^.]+$/) || [])[0] || "",
+          durationMs: null,
+          file: null,
+        };
+      });
+      renderAll();
+    }
     function renderFileList() {
       const files = consoleState.files;
       fileTable.style.display = files.length ? "" : "none";
@@ -394,22 +491,32 @@
           `<td>${escapeHtml((f.ext || "").replace(".", "").toUpperCase() || "—")}</td>` +
           `<td>${formatDuration(f.durationMs)}</td>`;
         const td = document.createElement("td");
-        const btn = document.createElement("button");
-        btn.className = "row-remove";
-        btn.title = "移除";
-        btn.textContent = "×";
-        btn.disabled = consoleState.phase !== "idle";
-        btn.addEventListener("click", () => {
-          removeFile(consoleState, i);
-          renderFileList();
-        });
-        td.appendChild(btn);
+        if (!VIEW_MODE) {
+          const btn = document.createElement("button");
+          btn.className = "row-remove";
+          btn.title = "移除";
+          btn.textContent = "×";
+          btn.disabled = consoleState.phase !== "idle";
+          btn.addEventListener("click", () => {
+            removeFile(consoleState, i);
+            renderFileList();
+          });
+          td.appendChild(btn);
+        }
         tr.appendChild(td);
         fileBody.appendChild(tr);
       }
-      fileMeta.textContent = files.length
-        ? `已选择 ${files.length} 个视频 · 共 ${formatBytes(files.reduce((s, f) => s + f.size, 0))}`
-        : "尚未选择视频";
+      const totalBytes = formatBytes(files.reduce((s, f) => s + f.size, 0));
+      if (VIEW_MODE) {
+        // 查看模式展示的是任务创建时导入的视频,非本页选择
+        fileMeta.textContent = files.length
+          ? `任务导入 ${files.length} 个视频 · 共 ${totalBytes}`
+          : "任务无视频记录";
+      } else {
+        fileMeta.textContent = files.length
+          ? `已选择 ${files.length} 个视频 · 共 ${totalBytes}`
+          : "尚未选择视频";
+      }
       renderVideoSummary();
     }
     function renderVideoSummary() {
@@ -442,7 +549,8 @@
     function renderSubmitControls() {
       const params = readParams();
       const busy = consoleState.phase === "uploading";
-      btnCreate.disabled = busy || !canSubmit(consoleState, params, limits);
+      // 查看模式下创建按钮永久禁用(附着的是已有运行,不允许重复创建)
+      btnCreate.disabled = VIEW_MODE || busy || !canSubmit(consoleState, params, limits);
       progressWrap.classList.toggle("active", busy);
       if (!busy) renderProgress();
     }
@@ -603,10 +711,11 @@
         }
       }
     });
-    function subscribeToThread(tid, eventsUrl) {
+    function subscribeToThread(tid, eventsUrl, agentBackend) {
       liveThreadId = tid;
       threadLine.textContent = `Thread ID:${tid}`;
-      agentLine.textContent = `执行 Agent:${backendSelect.value}`;
+      // 查看模式传入任务记录的真实后端;本地创建仍显示当前下拉选择
+      agentLine.textContent = `执行 Agent:${agentBackend || backendSelect.value}`;
       agentLine.style.display = "";
       monitorLink.href = CONSOLE_API_PATHS.monitorPage(tid);
       monitorLink.style.display = "";
@@ -652,7 +761,8 @@
       return typeof t === "string" ? t.replace("T", " ").slice(0, 19) : "";
     }
     function detailOf(ev) {
-      const keys = ["error", "detail", "summary", "label", "reason"];
+      // 详情列字段 = 监控页事件流(run_id/status/branch/message)∪ 创建台原有(summary/label/reason)的并集
+      const keys = ["run_id", "status", "error", "detail", "branch", "message", "summary", "label", "reason"];
       const parts = [];
       if (ev.node_id) parts.push(ev.node_id);
       for (const k of keys) {

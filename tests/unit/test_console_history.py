@@ -180,6 +180,34 @@ class TestGetConsoleRun:
         assert data["state"] == "prepared"
         assert data["task_dir"] == str(result["task_dir"])
 
+    def test_detail_includes_initial_state_targets(self, prepared, monkeypatch):
+        """详情携带 initial_state(创建台查看模式回填表单的数据源)。"""
+        result, root = prepared
+        monkeypatch.setattr(cs, "_latest_snapshot", lambda tid: _snap(False))
+        monkeypatch.setattr(cs, "_pid_alive", lambda pid: False)
+        data = get_console_run(result["thread_id"], outputs_root=root)
+        targets = data["initial_state"]["storyline_targets"]
+        assert targets["user_request"] == "剪一条短片"
+        assert targets["target_duration_ms"] == 30000
+        assert targets["ratio"] == "9:16"
+        assert targets["lang"] == "zh"
+
+    def test_detail_initial_state_none_when_missing(self, prepared, monkeypatch):
+        result, root = prepared
+        monkeypatch.setattr(cs, "_latest_snapshot", lambda tid: _snap(False))
+        monkeypatch.setattr(cs, "_pid_alive", lambda pid: False)
+        (result["task_dir"] / "initial_state.json").unlink()
+        data = get_console_run(result["thread_id"], outputs_root=root)
+        assert data["initial_state"] is None
+
+    def test_detail_initial_state_none_when_corrupt(self, prepared, monkeypatch):
+        result, root = prepared
+        (result["task_dir"] / "initial_state.json").write_text(
+            "{broken json", encoding="utf-8"
+        )
+        data = get_console_run(result["thread_id"], outputs_root=root)
+        assert data["initial_state"] is None
+
     def test_traversal_thread_id_rejected(self, tmp_path):
         with pytest.raises(ConsoleUploadError) as ei:
             get_console_run("..", outputs_root=tmp_path)

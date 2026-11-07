@@ -20,6 +20,18 @@ from jy_common.translate_client import MockTranslateClient, set_default_client
 from nodes.node_16a_translate_and_check import node_16a_translate_and_check
 
 
+@pytest.fixture(autouse=True)
+def _no_jianying_mutex(monkeypatch: pytest.MonkeyPatch) -> None:
+    """本文件多个用例会让节点**真实写草稿**(safe_write_draft):剪映客户端
+    开着时写入互斥严格模式直接 raise,造成环境性失败(2026-11-08 全量回归
+    实测 3 例)。QC 链用例验证的是翻译/QC 契约,互斥行为由 test_safe_write_guard
+    单独覆盖 —— 这里统一注入"剪映不在跑"的桩,写入路径(快照/双写/verify)
+    仍真实执行。"""
+    import draft_ops.atomic_writer as _aw
+
+    monkeypatch.setattr(_aw, "_default_proc_checker", lambda: False)
+
+
 def _seed_en_branch(tmp_path: Path) -> Path:
     draft_dir = tmp_path / "en_branch"
     draft_dir.mkdir()

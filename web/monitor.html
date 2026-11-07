@@ -78,17 +78,13 @@
     #left{ flex:1.4; display:flex; flex-direction:column; min-width:0; border-right:1px solid var(--border); }
     #history{ flex:0 0 auto; border-bottom:1px solid var(--border); padding-bottom:8px; }
     #historyWrap{ max-height:260px; overflow:auto; }
-    #events{ flex:1; overflow:auto; min-height:0; }
     #nodes{ flex:1; overflow:auto; padding:10px; }
     h2{ font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); margin:10px 10px 6px; font-weight:650; }
     table{ width:calc(100% - 20px); margin:0 10px 10px; border-collapse:collapse; font-family:var(--mono); font-size:11px; }
     th{ text-align:left; color:var(--muted); border-bottom:1px solid var(--border); padding:5px 8px; position:sticky; top:0; background:var(--bg); }
     td{ border-bottom:1px solid var(--table-row-border); padding:5px 8px; vertical-align:top; word-break:break-all; }
-    td.ev-type{ white-space:nowrap; font-weight:600; }
-    .t-run\.started,.t-node\.succeeded,.t-run\.completed{ color:var(--chip-done-text); }
-    .t-run\.failed,.t-node\.failed{ color:var(--chip-fail-text); }
-    .t-node\.started,.t-node\.resumed,.t-node\.retrying,.t-node\.progress,.t-run\.resumed{ color:var(--chip-run-text); }
-    .t-run\.interrupted,.t-node\.waiting_input{ color:var(--chip-wait-text); }
+    /* 行内订阅标记:当前 SSE 订阅行 thread_id 单元格左侧色条(--st-run 双主题均定义) */
+    #historyTable tr.live-row td:first-child{ box-shadow: inset 3px 0 0 var(--st-run); }
     .st{ display:inline-block; padding:1px 7px; border-radius:999px; border:1px solid var(--border); font-size:10px; }
     .st.running{ color:var(--chip-run-text); border-color:var(--st-run); }
     .st.done{ color:var(--chip-done-text); border-color:var(--st-done); }
@@ -123,8 +119,6 @@
   <div id="topbar">
     <h1>Workflow Monitor</h1>
     <input id="threadInput" spellcheck="false" placeholder="thread_id,如 video-wiring-001" />
-    <button class="btn" id="btnSub">订阅</button>
-    <button class="btn" id="btnUnsub">断开</button>
     <span id="chip">未连接</span>
     <span id="counts"></span>
     <span id="meta"></span>
@@ -143,18 +137,11 @@
         </div>
         <div id="historyWrap">
           <table id="historyTable">
-            <thead><tr><th>thread_id</th><th style="width:140px">创建时间</th><th style="width:110px">状态</th><th style="width:120px">操作</th></tr></thead>
+            <thead><tr><th>thread_id</th><th style="width:140px">创建时间</th><th style="width:110px">状态</th><th style="width:180px">操作</th></tr></thead>
             <tbody id="historyBody"><tr><td colspan="4" class="hint">—</td></tr></tbody>
           </table>
         </div>
-      </div>
-      <div id="events">
-        <h2>事件流(SSE · Last-Event-ID 断线补发)</h2>
         <div class="hint">订阅/断开/刷新均为只读 GET,绝不触发或恢复工作流;取消/恢复/清除缓存/删除为历史任务区内显式确认后的 POST(删除仅限终态/未启动任务,含成片,不可恢复)。</div>
-        <table id="evTable">
-          <thead><tr><th style="width:64px">id</th><th style="width:130px">时间</th><th style="width:150px">事件</th><th>节点 / 详情</th></tr></thead>
-          <tbody id="evBody"></tbody>
-        </table>
       </div>
     </div>
     <div id="nodes">
@@ -199,11 +186,10 @@
       running: "执行中", done: "已完成", waiting: "等待人工",
       retrying: "重试中", failed: "失败",
     };
-    const MAX_ROWS = 500;
 
     const $ = (id) => document.getElementById(id);
     const chip = $("chip"), counts = $("counts"), meta = $("meta");
-    const evBody = $("evBody"), ndBody = $("ndBody"), ndTable = $("ndTable"), nodeEmpty = $("nodeEmpty");
+    const ndBody = $("ndBody"), ndTable = $("ndTable"), nodeEmpty = $("nodeEmpty");
     const threadInput = $("threadInput");
     const historySearch = $("historySearch"), btnHistoryRefresh = $("btnHistoryRefresh");
     const btnCleanCache = $("btnCleanCache"), historyBody = $("historyBody");
@@ -213,6 +199,7 @@
 
     let monitor = createMonitorState();
     let source = null;
+    let liveThreadId = null;  // 当前 SSE 订阅的 thread;行内订阅/断开按钮与取消/删除联动以此为准
     let csrfToken = null;
     let resumeGuidanceShown = false;
     let historyRows = [];
@@ -222,7 +209,7 @@
 
     // 阶段 3:支持 /?thread_id=<id> 初始化输入框并自动订阅(创建台创建成功后跳转而来)。
     // 参数保留在 URL 中:刷新后仍按该 thread_id 重连,配合 Last-Event-ID 继续补发。
-    // 无参数时保持现状(localStorage 回退 + 手工订阅)。
+    // 无参数时保持现状(localStorage 回退 + 行内订阅按钮 / 输入框回车)。
     {
       const urlTid = new URLSearchParams(location.search).get("thread_id");
       if (urlTid && urlTid.trim()) {
@@ -258,32 +245,6 @@
       counts.textContent = Object.keys(monitor.nodes).length
         ? `完成 ${c.done} · 执行中 ${c.running} · 等待 ${c.waiting} · 失败 ${c.failed}` : "";
     }
-    function fmtTime(ev) {
-      const t = ev.occurred_at || ev.timestamp || "";
-      return typeof t === "string" ? t.replace("T", " ").slice(0, 19) : "";
-    }
-    function detailOf(ev) {
-      const keys = ["node_id", "run_id", "status", "error", "detail", "branch", "message"];
-      const parts = [];
-      if (ev.node_id) parts.push(ev.node_id);
-      for (const k of keys.slice(1)) {
-        if (ev[k] !== undefined && ev[k] !== null && ev[k] !== "") {
-          parts.push(`${k}=${typeof ev[k] === "object" ? JSON.stringify(ev[k]) : ev[k]}`);
-        }
-      }
-      return parts.join("  ");
-    }
-    function appendEventRow(ev) {
-      const tr = document.createElement("tr");
-      const type = String(ev.event_type || "");
-      tr.innerHTML =
-        `<td>${ev.id ?? "-"}</td>` +
-        `<td>${fmtTime(ev)}</td>` +
-        `<td class="ev-type t-${type.replaceAll(".", "\\.")}">${type}</td>` +
-        `<td>${detailOf(ev)}</td>`;
-      evBody.appendChild(tr);
-      while (evBody.rows.length > MAX_ROWS) evBody.deleteRow(0);
-    }
     function renderNodes() {
       const ids = Object.keys(monitor.nodes);
       if (!ids.length) { ndTable.style.display = "none"; nodeEmpty.style.display = ""; return; }
@@ -315,7 +276,6 @@
         renderMeta(String(data.detail || "event store unavailable"), true);
         return;
       }
-      appendEventRow(event);
       const { applied } = applyEvent(monitor, event);
       if (!applied) return;
       setChip(monitor.run.state, monitor.cursor ? `#${monitor.cursor}` : "");
@@ -341,7 +301,6 @@
       monitor = createMonitorState();
       resumeGuidanceShown = false;
       resumeBox.classList.remove("active");
-      evBody.innerHTML = "";
       renderNodes(); renderCounts();
       setChip("running", "连接中…");
       renderMeta(`thread=${tid}`);
@@ -349,12 +308,16 @@
       for (const t of EVENT_TYPES) source.addEventListener(t, handleEvent);
       source.onopen = () => setChip(monitor.run.state || "running", "已连接");
       source.onerror = () => setChip(monitor.run.state || "idle", "重连中…");
+      liveThreadId = tid;
+      renderHistory();  // 行内按钮切换为「断开」并标记已订阅行
     }
-    $("btnSub").addEventListener("click", subscribe);
-    $("btnUnsub").addEventListener("click", () => {
+    // 断开当前 SSE 订阅(原顶栏「断开」按钮,2026-11-07 迁移为历史任务行内按钮)
+    function disconnect() {
       if (source) { source.close(); source = null; }
+      liveThreadId = null;
       setChip("idle", "已断开");
-    });
+      renderHistory();  // 行内按钮还原为「订阅」
+    }
     threadInput.addEventListener("keydown", (e) => { if (e.key === "Enter") subscribe(); });
 
     // 背景主题切换:黑色(默认) <-> 白色,经 localStorage 记忆;按钮文案显示点击后切到的目标主题
@@ -397,6 +360,8 @@
       }
       for (const row of rows) {
         const tr = document.createElement("tr");
+        const isLive = !!source && row.thread_id === liveThreadId;
+        if (isLive) tr.classList.add("live-row");
         const label = HISTORY_STATE_LABEL[row.state] || row.state || "—";
         const created = typeof row.created_at === "string" ? row.created_at.replace("T", " ").slice(0, 19) : "—";
         tr.innerHTML =
@@ -413,7 +378,19 @@
           b.addEventListener("click", fn);
           return b;
         };
-        actions.push(mkBtn("查看", () => { threadInput.value = row.thread_id; subscribe(); }));
+        // 查看 = 跳转创建台查看模式(?thread_id= 与本页 227 行参数契约一致)
+        actions.push(mkBtn("查看", () => {
+          window.location.href = "/console?thread_id=" + encodeURIComponent(row.thread_id);
+        }));
+        // 行内订阅/断开(自顶栏迁移,2026-11-07):订阅 = 把 SSE 切到该行;断开 = 关闭当前订阅
+        if (isLive) {
+          actions.push(mkBtn("断开", disconnect));
+        } else {
+          actions.push(mkBtn("订阅", () => {
+            threadInput.value = row.thread_id;
+            subscribe();
+          }));
+        }
         if (canResume(row.state)) {
           actions.push(mkBtn("恢复", () => {
             threadInput.value = row.thread_id;
@@ -428,7 +405,7 @@
             try {
               await postJson(CONSOLE_API_PATHS.cancelRun(row.thread_id), {});
               loadHistory();
-              if ((threadInput.value || "").trim() === row.thread_id) {
+              if (liveThreadId === row.thread_id) {  // 以真实订阅为准(输入框可能已被手改)
                 setChip("failed", "已取消");
                 monitor.run.state = "failed"; // 停止等事件;终态以取消记录为准
               }
@@ -440,6 +417,7 @@
         if (canDelete(row.state)) {
           actions.push(mkBtn("删除", async () => {
             if (!window.confirm(`确认删除任务 ${row.thread_id}?将删除任务目录(含成片输出)与事件记录,不可恢复。`)) return;
+            if (liveThreadId === row.thread_id) disconnect();  // fail-safe:不留指向已删任务的 SSE
             try {
               await postJson(CONSOLE_API_PATHS.deleteRun(row.thread_id), {});
               loadHistory();

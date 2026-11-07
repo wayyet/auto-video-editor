@@ -115,10 +115,25 @@ class TimeLine:
                     f"(plan §5 阶段 5 决策 1)."
                 )
         elif has_bgm:
+            # 节拍对齐的"总时长权威"是 BGM 节拍序列,但目标预算与实际素材量
+            # 是硬上限(2026-11-08 实机回归:回退 BGM 库条目 duration_ms=120000
+            # / beat_period_ms=470 → 255×470=119850ms,单 clip 全吃,时间轴
+            # 119.85s >> 35s 目标;素材 30s @ speed 1.0 铺满 2 分钟,剪映里
+            # 播到 30s 就没画面)。取 min(target, Σ素材跨度) 封顶。
+            src_sum_ms = sum(
+                max(
+                    0,
+                    int(c.get("source_out_ms", 0) or 0)
+                    - int(c.get("source_in_ms", 0) or 0),
+                )
+                for c in flat_clips
+            )
+            cap_ms = min(target_ms, src_sum_ms) if src_sum_ms > 0 else target_ms
             durations, method = self._distribute_by_beats(
                 n_clips=n_clips,
                 bgm=bgm or {},
                 min_clip=min_clip,
+                max_total_ms=cap_ms,
             )
         else:
             durations, method = self._distribute_by_scale(
@@ -197,8 +212,15 @@ class TimeLine:
         n_clips: int,
         bgm: dict[str, Any],
         min_clip: int,
+        max_total_ms: int = 0,
     ) -> tuple[list[int], str]:
-        """BGM 节拍对齐:总时长 ≈ min(BGM 时长, BGM 末节拍点)。"""
+        """BGM 节拍对齐:总时长 ≈ min(BGM 时长, BGM 末节拍点, max_total_ms)。
+
+        ``max_total_ms`` 是硬上限(target 预算 / Σ素材跨度的较小值):BGM 库
+        条目是**元数据参考**(path 可为空、真实音频未必存在),其 duration_ms
+        不能架空用户目标与素材现实;超限时向内对齐到最大的整数节拍点,保住
+        "落点在节拍上"的语义。
+        """
         beat_period = int(bgm.get("beat_period_ms") or 1000)
         # 计算有效总时长:取 BGM duration 的整数个节拍
         bgm_dur = int(bgm.get("duration_ms") or 0)
@@ -206,6 +228,9 @@ class TimeLine:
             bgm_dur = beat_period * n_clips
         n_beats_total = max(1, bgm_dur // beat_period)
         total_ms = n_beats_total * beat_period
+        if max_total_ms > 0 and total_ms > max_total_ms:
+            aligned = (max_total_ms // beat_period) * beat_period
+            total_ms = aligned if aligned > 0 else max_total_ms
 
         # 平均分配;最后一个 clip 吃剩余毫秒
         base = max(min_clip, total_ms // n_clips)

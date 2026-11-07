@@ -630,10 +630,30 @@ def list_console_runs(
     return runs[:limit_int]
 
 
+def _read_initial_state(task_dir: Path, record: dict[str, Any]) -> dict[str, Any] | None:
+    """读 initial_state.json(创建台查看模式回填表单用)。
+
+    prompt 与剪辑参数不在 record 里,而在任务目录 initial_state.json 的
+    ``storyline_targets`` 下。优先按任务目录定位(输出根迁移后仍有效),
+    回退 record 里记的绝对路径;缺失/损坏返回 None,只读展示不因它失败。
+    """
+    candidates = [Path(task_dir) / "initial_state.json"]
+    raw = str(record.get("initial_state_path") or "")
+    if raw:
+        candidates.append(Path(raw))
+    for path in candidates:
+        try:
+            if path.exists():
+                return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
 def get_console_run(
     thread_id: str, *, outputs_root: Path | None = None
 ) -> dict[str, Any]:
-    """单条详情(record + 调和态);不存在 → 404。"""
+    """单条详情(record + 调和态 + 初始参数);不存在 → 404。"""
     validate_thread_id(thread_id)
     task_dir = _task_dir_for(thread_id, outputs_root)
     record_path = console_run_json_path(task_dir)
@@ -647,6 +667,7 @@ def get_console_run(
         "record": record,
         "task_dir": str(task_dir),
         "state": reconcile_run_state(record, thread_id),
+        "initial_state": _read_initial_state(task_dir, record),
     }
 
 
