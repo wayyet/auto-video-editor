@@ -32,6 +32,7 @@ from draft_ops.version_strategy import resolve_strategy
 from state import WorkflowState
 from storyline.contract import CanonicalTimeline, ContractInvalid
 from storyline.mapper import canonical_to_draft
+from storyline.native_draft import storyline_to_native, write_sidecar
 from storyline.output_isolation import (
     OutputJobPaths,
     build_manifest,
@@ -140,6 +141,16 @@ def generate_initial_jianying_draft(
             "error_log": errors,
         }
 
+    # 3b. 原生转换(2026-11-07 剪映导入修复):三路产物统一转剪映原生 schema
+    # (mapper 4 键格式首页可列但双击必失败);转换失败降级保留 storyline 格式,
+    # 发布链(draft_publisher)会对旧格式再做一次转换兜底。
+    native_sidecar: dict | None = None
+    try:
+        draft_content, native_sidecar = storyline_to_native(draft_content)
+    except Exception as exc:  # noqa: BLE001 — 转换是增强路径,失败不阻断草稿生成
+        native_sidecar = None
+        errors.append(f"[node_05] 原生草稿转换失败,保留 storyline 格式: {exc!r}")
+
     # 4. 原子双写(content + info,Week 5 新增 — 剪映 5.9+ 期望二者一致)
     draft_dir = Path(draft_dir)
     draft_dir.mkdir(parents=True, exist_ok=True)
@@ -150,6 +161,13 @@ def generate_initial_jianying_draft(
     if isinstance(write_result, dict) and write_result.get("jianying_running"):
         log_tags.append("[node_05] 剪映进程在跑,写入仍继续(告警不阻断)")
     draft_file = draft_dir / "draft_content.json"
+    if native_sidecar is not None:
+        # 私有元数据(storyline_meta/shot 映射/未落盘 BGM 占位)随目录存活,
+        # 发布 copytree 自动携带(剪映忽略未知文件)
+        try:
+            write_sidecar(draft_dir, native_sidecar)
+        except Exception as exc:  # noqa: BLE001 — sidecar 失败不阻断草稿
+            errors.append(f"[node_05] sidecar 写入失败(不阻断): {exc!r}")
     _emit_monitor_event(
         "draft.generated", detail={"draft_dir": str(draft_dir)}
     )

@@ -29,17 +29,40 @@ from draft_ops.jianying_registry import (
 
 
 def _make_staging(tmp_path: Path, *, duration_us: int = 1_500_000) -> Path:
-    """构造一个合法 staging 目录(双文件字节级一致 + 一段 1.5s 的视频轨)。"""
+    """构造一个合法 staging 目录(双文件字节级一致 + 一段 1.5s 的视频轨)。
+
+    形状对齐 mapper 真实产出(段带 id/material_id、素材带 duration),发布链
+    会把这种 storyline 旧格式转换为剪映原生格式(2026-11-07 导入修复)。
+    """
     staging = tmp_path / "staging"
     staging.mkdir(parents=True, exist_ok=True)
     content = {
         "canvas_config": {"width": 1080, "height": 1920},
-        "materials": {"videos": [], "audios": [], "texts": []},
+        "materials": {
+            "videos": [
+                {
+                    "id": "video-1",
+                    "type": "video",
+                    "path": "",
+                    "duration": duration_us,
+                    "material_name": "clip_0001",
+                }
+            ],
+            "audios": [],
+            "texts": [],
+        },
         "tracks": [
             {
                 "type": "video",
+                "id": "track-video-1",
                 "segments": [
-                    {"target_timerange": {"start": 0, "duration": duration_us}}
+                    {
+                        "id": "segment-1",
+                        "material_id": "video-1",
+                        "target_timerange": {"start": 0, "duration": duration_us},
+                        "source_timerange": {"start": 0, "duration": duration_us},
+                        "speed": 1.0,
+                    }
                 ],
             }
         ],
@@ -126,17 +149,17 @@ class TestUpsertRootMeta:
         root = validate_draft_root(tmp_path / "root")
         r1 = upsert_root_meta(
             root, draft_name="AutoVideo_a", draft_id="id1",
-            duration_us=1000, draft_dir=root / "AutoVideo_a", ts_ms=111,
+            duration_us=1000, draft_dir=root / "AutoVideo_a", ts_us=111,
         )
         assert r1["mode"] == "created"
         assert not r1["backed_up"]
         data = json.loads((root / "root_meta_info.json").read_text(encoding="utf-8"))
         assert len(data["all_draft_store"]) == 1
 
-        # 同名 upsert:更新、保留 create 时间
+        # 同名 upsert:更新、保留 create 时间(毫秒口径自动升微秒)
         r2 = upsert_root_meta(
             root, draft_name="AutoVideo_a", draft_id="id1",
-            duration_us=2000, draft_dir=root / "AutoVideo_a", ts_ms=222,
+            duration_us=2000, draft_dir=root / "AutoVideo_a", ts_us=222,
         )
         assert r2["mode"] == "merged"
         assert r2["backed_up"], "已存在文件修改前应落 .bak"
@@ -144,15 +167,15 @@ class TestUpsertRootMeta:
         data = json.loads((root / "root_meta_info.json").read_text(encoding="utf-8"))
         entry = data["all_draft_store"][0]
         assert entry["tm_duration"] == 2000
-        assert entry["tm_draft_create"] == 111, "重注册不覆盖既有 create 时间"
-        assert entry["tm_draft_update"] == 222
+        assert entry["tm_draft_create"] == 111_000, "重注册不覆盖既有 create 时间(111ms→111000µs)"
+        assert entry["tm_draft_modified"] == 222
 
     def test_append_new_entry(self, tmp_path: Path) -> None:
         root = validate_draft_root(tmp_path / "root")
         upsert_root_meta(root, draft_name="A", draft_id="i1", duration_us=None,
-                         draft_dir=root / "A", ts_ms=1)
+                         draft_dir=root / "A", ts_us=1)
         upsert_root_meta(root, draft_name="B", draft_id="i2", duration_us=None,
-                         draft_dir=root / "B", ts_ms=2)
+                         draft_dir=root / "B", ts_us=2)
         data = json.loads((root / "root_meta_info.json").read_text(encoding="utf-8"))
         assert [e["draft_name"] for e in data["all_draft_store"]] == ["A", "B"]
 
@@ -178,10 +201,26 @@ class TestRegisterDraft:
         meta = json.loads((target / "draft_meta_info.json").read_text(encoding="utf-8"))
         assert meta["tm_duration"] == 123
         assert meta["draft_id"] == reg["draft_id"]
+        # 原生 34 键 meta(2026-11-07 实机样本对齐)
+        assert set(meta.keys()) >= {
+            "draft_cover", "draft_fold_path", "draft_root_path",
+            "draft_materials", "draft_timeline_materials_size_",
+        }
+        assert meta["tm_draft_create"] > 10**14, "tm_draft_create 原生口径为微秒"
+        assert meta["draft_fold_path"].endswith("AutoVideo_tid-1")
+        assert meta["draft_root_path"] == str(root)
         root_data = json.loads(
             (root / "root_meta_info.json").read_text(encoding="utf-8")
         )
         assert root_data["all_draft_store"][0]["draft_name"] == "AutoVideo_tid-1"
+        entry = root_data["all_draft_store"][0]
+        # 原生 22 键索引条目
+        assert set(entry.keys()) >= {
+            "draft_cover", "draft_json_file", "draft_fold_path",
+            "draft_timeline_materials_size", "tm_draft_modified",
+        }
+        assert entry["draft_fold_path"].endswith("AutoVideo_tid-1")
+        assert entry["draft_json_file"].endswith("draft_content.json")
 
     def test_republish_reuses_draft_id(self, tmp_path: Path) -> None:
         root = validate_draft_root(tmp_path / "root")
@@ -215,9 +254,15 @@ class TestPublishDraft:
         assert (target / "draft_info.json").is_file()
         assert (target / "draft_meta_info.json").is_file()
         assert (jy_root / "root_meta_info.json").is_file()
-        # 回读与 staging 一致
-        assert (target / "draft_content.json").read_text(encoding="utf-8") == (
-            staging / "draft_content.json").read_text(encoding="utf-8")
+        # 回读校验:storyline 旧格式 staging 发布时转换为原生(语义一致)
+        target_content = json.loads(
+            (target / "draft_content.json").read_text(encoding="utf-8")
+        )
+        assert "new_version" in target_content, "旧格式 staging 应转换为原生格式"
+        assert target_content["duration"] == 1_500_000
+        assert target_content == json.loads(
+            (target / "draft_info.json").read_text(encoding="utf-8")
+        ), "双文件保持一致"
 
     def test_idempotent_republish(self, tmp_path: Path, jy_root: Path) -> None:
         staging = _make_staging(tmp_path)
@@ -226,6 +271,32 @@ class TestPublishDraft:
         assert r1["reused"] is False and r2["reused"] is True
         data = json.loads((jy_root / "root_meta_info.json").read_text(encoding="utf-8"))
         assert len(data["all_draft_store"]) == 1, "重发布不产生重复注册条目"
+
+    def test_publish_converts_storyline_staging_to_native(
+        self, tmp_path: Path, jy_root: Path
+    ) -> None:
+        """2026-11-07 导入修复:storyline 旧格式 staging 发布时转原生 + sidecar。"""
+        staging = _make_staging(tmp_path)
+        result = publish_draft(
+            staging, thread_id="tid-native", proc_checker=lambda: False
+        )
+        target = Path(result["published_dir"])
+        content = json.loads((target / "draft_content.json").read_text(encoding="utf-8"))
+        assert "new_version" in content and len(content) >= 28
+        assert (target / "autovideo_storyline_source.json").is_file()
+
+        # 已是原生的 staging:幂等直通(不再转换,内容逐字节不变)
+        text = json.dumps(content, ensure_ascii=False, separators=(",", ":"))
+        (staging / "draft_content.json").write_text(text, encoding="utf-8")
+        (staging / "draft_info.json").write_text(text, encoding="utf-8")
+        result2 = publish_draft(
+            staging, thread_id="tid-native2", proc_checker=lambda: False
+        )
+        target2 = Path(result2["published_dir"])
+        assert (target2 / "draft_content.json").read_text(encoding="utf-8") == text
+        assert not (target2 / "autovideo_storyline_source.json").exists(), (
+            "原生 staging 直通时不应产生 sidecar"
+        )
 
     def test_refuses_when_jianying_running(self, tmp_path: Path, jy_root: Path) -> None:
         staging = _make_staging(tmp_path)

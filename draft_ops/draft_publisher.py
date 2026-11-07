@@ -23,17 +23,27 @@
 仍可走创建台路径排障;smoke 可用 ``JY_DRAFT_PUBLISH_ENABLED=0`` 整体关闭。
 
 ⚠️ 剪映目录结构兼容性(计划 §8 阶段 1):本模块保证"双文件 + 双索引 + 再读
-一致"这些**仓库可验证**的契约;剪映客户端能否识别、首页能否列出、时间轴能否
-渲染,以阶段 5 实机验收为准(本机 5.9.0.11632,草稿库当前为空,无对照样本)。
+一致"这些**仓库可验证**的契约。2026-11-07 实机验收发现仅复制 storyline 4 键
+格式会"首页可列、双击必失败"——本模块现在对旧格式 staging 先做 storyline→
+原生转换(:mod:`storyline.native_draft`)再落正式目录;新链路 node_05 已直接
+产原生格式,此处幂等直通。字段级依据见 :mod:`storyline.native_draft` docstring。
 """
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Callable
+
+from storyline.native_draft import (
+    is_native_draft,
+    storyline_to_native,
+    write_sidecar,
+)
 
 from draft_ops.jianying_registry import (
     JYRegistryError,
@@ -74,8 +84,6 @@ def _load_staging(staging_dir: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     except OSError as e:
         raise DraftPublishError(f"staging 读取失败: {e}") from e
     try:
-        import json
-
         content_obj = json.loads(content)
         info_obj = json.loads(info)
     except ValueError as e:
@@ -100,8 +108,6 @@ def _copy_tree(src: Path, dst: Path) -> None:
 
 def _verify_published(target: Path, staging_content_obj: dict[str, Any]) -> None:
     """发布后再读校验:双文件存在、可解析、与 staging content 语义一致。"""
-    import json
-
     try:
         target_content = json.loads((target / "draft_content.json").read_text(encoding="utf-8"))
         target_info = json.loads((target / "draft_info.json").read_text(encoding="utf-8"))
@@ -111,6 +117,70 @@ def _verify_published(target: Path, staging_content_obj: dict[str, Any]) -> None
         raise DraftPublishError("发布后校验失败:正式目录 draft_content.json 与 staging 不一致")
     if target_content != target_info:
         raise DraftPublishError("发布后校验失败:正式目录双文件不一致")
+
+
+def _write_payload(target: Path, payload_obj: dict[str, Any]) -> None:
+    """把(可能已转换的)payload 原子双写进正式目录,覆盖 copytree 产物。"""
+    serialized = json.dumps(payload_obj, ensure_ascii=False, separators=(",", ":"))
+    for name in ("draft_content.json", "draft_info.json"):
+        p = target / name
+        fd, tmp_path = tempfile.mkstemp(dir=target, prefix=".payload_", suffix=".json")
+        tmp = Path(tmp_path)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(serialized)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, p)
+        except Exception:
+            if tmp.exists():
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+            raise
+
+
+def _materialize_payload(
+    target: Path, native_obj: dict[str, Any], sidecar_obj: dict[str, Any] | None
+) -> None:
+    """staging 为 storyline 旧格式时,把转换产物(双文件+sidecar)落进正式目录。"""
+    if sidecar_obj is not None:
+        try:
+            write_sidecar(target, sidecar_obj)
+        except Exception:  # noqa: BLE001 — sidecar 是元数据存档,失败不阻断发布
+            pass
+    _write_payload(target, native_obj)
+
+
+def _generate_cover(target: Path, payload_obj: dict[str, Any]) -> bool:
+    """best-effort 封面:首个视频素材 ffmpeg 抽帧 → ``draft_cover.jpg``。
+
+    封面只影响首页磁贴(缺失时磁贴黑块,不阻碍打开 —— 参考实现已证),任何
+    失败静默跳过;已有封面直接复用。
+    """
+    try:
+        if shutil.which("ffmpeg") is None:
+            return False
+        videos = ((payload_obj.get("materials") or {}).get("videos") or [])
+        src = next((str(v.get("path")) for v in videos if v.get("path")), None)
+        if not src or not Path(src).is_file():
+            return False
+        out = target / "draft_cover.jpg"
+        if out.is_file():
+            return True
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-ss", "1", "-i", src, "-frames:v", "1", str(out)],
+            capture_output=True,
+            timeout=30,
+        )
+        if result.returncode != 0 or not out.is_file():
+            if out.exists():
+                out.unlink(missing_ok=True)
+            return False
+        return True
+    except Exception:  # noqa: BLE001 — 封面是增强项
+        return False
 
 
 def publish_draft(
@@ -158,8 +228,18 @@ def publish_draft(
         )
 
     content_obj, _info_obj = _load_staging(staging_dir)
+
+    # 2026-11-07 导入修复:staging 若仍是 storyline 4 键格式(旧线程重发布),
+    # 先转剪映原生 schema 再落正式目录;新链路 node_05 已产原生,此处幂等直通。
+    native_obj = content_obj
+    sidecar_obj: dict[str, Any] | None = None
+    if not is_native_draft(content_obj):
+        try:
+            native_obj, sidecar_obj = storyline_to_native(content_obj)
+        except Exception as exc:  # noqa: BLE001
+            raise DraftPublishError(f"storyline→原生草稿转换失败: {exc}") from exc
     if duration_us is None:
-        duration_us = compute_draft_duration_us(content_obj)
+        duration_us = compute_draft_duration_us(native_obj)
 
     if root is not None:
         from draft_ops.jianying_registry import validate_draft_root
@@ -175,6 +255,8 @@ def publish_draft(
     if reused:
         # 重发布:就地覆盖(幂等;复制非原子,但 verify 兜底)
         _copy_tree(staging_dir, target)
+        if native_obj is not content_obj:
+            _materialize_payload(target, native_obj, sidecar_obj)
     else:
         # 首次发布:同盘临时目录复制 → os.replace 原子出现,剪映首页不会看到半成品
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -184,10 +266,15 @@ def publish_draft(
         try:
             os.remove(tmp_dir)  # mkstemp 生成的是文件;要的是同盘空目录名
             _copy_tree(staging_dir, tmp_dir)
+            if native_obj is not content_obj:
+                _materialize_payload(tmp_dir, native_obj, sidecar_obj)
             os.replace(tmp_dir, target)
         except Exception:
             shutil.rmtree(tmp_dir, ignore_errors=True)
             raise
+
+    # 封面 best-effort(注册前生成,registry 的 draft_cover 字段才能引用到)
+    _generate_cover(target, native_obj)
 
     # 元数据补齐 + 根索引注册(重发布复用既有 draft_id,保证幂等)
     existing_meta = read_json_dict(target / "draft_meta_info.json")
@@ -203,7 +290,7 @@ def publish_draft(
     except JYRegistryError as e:
         raise DraftPublishError(f"草稿注册失败: {e}") from e
 
-    _verify_published(target, content_obj)
+    _verify_published(target, native_obj)
 
     return {
         "ok": True,

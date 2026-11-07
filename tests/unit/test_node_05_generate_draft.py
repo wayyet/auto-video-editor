@@ -77,6 +77,9 @@ def test_happy_path_produces_draft_and_uses_atomic_writer(tmp_path: Path) -> Non
     assert loaded["canvas_config"]["width"] == 1080
     assert loaded["canvas_config"]["height"] == 1920
     assert len(loaded["materials"]["videos"]) == 2
+    # 2026-11-07 导入修复:staging 出生即原生 schema + 私有元数据 sidecar
+    assert "new_version" in loaded, "storyline 草稿应转换为剪映原生 schema"
+    assert (tmp_path / "autovideo_storyline_source.json").exists()
     assert out["draft_encryption_status"] == "plaintext"
     assert out["draft_version_strategy"] == "strategy_a_version_lock"
 
