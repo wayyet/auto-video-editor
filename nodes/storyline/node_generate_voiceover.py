@@ -22,6 +22,7 @@ from state import WorkflowState
 from storyline.contract import StorylineErrorCode
 from storyline_capabilities.generate_voiceover import generate_voiceover
 from nodes.storyline._common import append_status_tag, _resolve_outputs_root, extract_user_request
+from nodes.storyline._tts_adapter import install_tts_client_from_env
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,8 @@ def storyline_generate_voiceover_node(state: WorkflowState) -> dict:
         }
 
     try:
+        # P3:TTS_BACKEND=firered 时安装 FireRed 适配器,否则回落 lazy Stub(默认不变)
+        install_tts_client_from_env()
         result = generate_voiceover(
             group_scripts=group_scripts,
             output_dir=out_dir,
