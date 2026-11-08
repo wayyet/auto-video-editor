@@ -37,7 +37,35 @@ def _read_script_dict(state: WorkflowState) -> dict | None:
         return None
 
 
+def _production_tts_backend_violation() -> str | None:
+    """生产环境 fail-closed 校验(阶段 2 任务 1,2026-11-09):``APP_ENV=production``
+    时 ``TTS_BACKEND`` 必须显式为 ``firered``,否则返回违规说明(调用方据此拒绝
+    运行,不让静音 Stub 冒充配音)。开发/测试环境(APP_ENV 非 production)不 gate。
+    """
+    import os
+
+    app_env = (os.environ.get("APP_ENV") or "").strip().lower()
+    if app_env != "production":
+        return None
+    backend = (os.environ.get("TTS_BACKEND") or "mock").strip().lower()
+    if backend == "firered":
+        return None
+    return (
+        f"[storyline:generate_voiceover] 生产环境(APP_ENV=production)TTS_BACKEND="
+        f"{backend or '未设置'}:不允许静音 Stub 冒充真实配音(fail-closed)。"
+        "请在 start_production.ps1 / .env 显式设置 TTS_BACKEND=firered"
+        "(需本地 FireRed TTS 服务 http://127.0.0.1:8010)"
+    )
+
+
 def storyline_generate_voiceover_node(state: WorkflowState) -> dict:
+    violation = _production_tts_backend_violation()
+    if violation:
+        # fail-closed:生产 + 非 firered 后端 → 拒绝合成(不产假音频),经节点
+        # 异常走 run.failed 透出到监控;start_production.ps1 会缺省注入 firered,
+        # 触发本 gate 即为显式配置错误。
+        raise RuntimeError(violation)
+
     outputs_root = _resolve_outputs_root(state)
     out_dir = outputs_root / "storyline"
     out_dir.mkdir(parents=True, exist_ok=True)

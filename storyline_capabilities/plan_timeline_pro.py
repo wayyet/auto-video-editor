@@ -163,6 +163,23 @@ def plan_timeline_pro(
             "voiceover": json.dumps(voiceover_id_map, ensure_ascii=False)
             if voiceover_id_map
             else None,
+            # 阶段 2(2026-11-09 效果缺失修复):结构化配音记录 —— 真实 WAV 路径/
+            # 时长/provider 随 CanonicalTimeline 下发,mapper 据此产出可播放音轨,
+            # 不再把 ID JSON 字符串当文件 ref。失败/空旁白段(path="")原样保留
+            # 供审计,mapper/native 只物化有效段。
+            "voiceovers": [
+                {
+                    "voiceover_id": str(t.get("voiceover_id") or f"voiceover_{i + 1:04d}"),
+                    "group_id": str(t.get("group_id") or ""),
+                    "path": str(t.get("path") or ""),
+                    "duration_ms": int(t.get("duration") or 0),
+                    "provider": str(t.get("provider") or "stub"),
+                    "stub": str(t.get("provider") or "stub") == "stub",
+                    "error": t.get("error"),
+                }
+                for i, t in enumerate(tts_res)
+            ]
+            or None,
         },
         "subtitles": {
             # 2026-10-19(P8 D9):这里是**字幕文本**,不是样式 dict。

@@ -211,11 +211,21 @@ def node_17_inject_english_tts(state: WorkflowState) -> dict:
     # 成功 → 写 en_audio_path + en_dub_audio_path(双写兼容)
     audio_path = result.data.get("audio_path")
 
+    # 阶段 2(2026-11-09 效果缺失修复):时长以 WAV 头为准(与 P3 中文适配器
+    # 同口径)—— 计时权威是落盘文件本身;服务端返回值仅作解析失败时兜底。
+    from storyline_capabilities.tts_runner import read_wav_duration_ms
+
+    duration_ms = int(result.data.get("duration_ms") or 0)
+    if audio_path:
+        header_ms = read_wav_duration_ms(str(audio_path))
+        if header_ms > 0:
+            duration_ms = header_ms
+
     # P3b:把配音写进英文分支草稿(降级不阻塞,说明分流 status_log/error_log)
     status_log = ["node_17_inject_english_tts_done"]
     error_log: list[str] = []
     for note in _write_en_voiceover_track(
-        state, str(audio_path or ""), int(result.data.get("duration_ms") or 0)
+        state, str(audio_path or ""), duration_ms
     ):
         if note == _EN_VOICEOVER_WRITTEN_TAG:
             status_log.append(note)

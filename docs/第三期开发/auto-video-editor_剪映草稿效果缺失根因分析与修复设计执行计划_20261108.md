@@ -902,3 +902,21 @@ flowchart TD
 - 新增 10 例:node_08 ×6(写入/幂等重放/空旁白跳过/无 plan 跳过/**人工调序后跟随新位置**/人工文本保留+旧产物定向替换)+ integrity ×4(空态合法/悬空引用 error/孤儿素材 warning/原生形态+check_draft_dir 接线);集成新增 1 例 `test_zh_draft_gets_native_subtitles`(整图驱动 05→07→08:materials.texts>0、text 轨存在、material_id 全解析、state 段落产出;storyline 桩链用 join/_read_timeline_dict + graph 符号补丁隔离)。
 - 验收:unit **1498 例 0 失败**(基线 1488+10);integration **129 例,新增失败 0/消失 0**(`compare_junit` 对照阶段 0 基线,8 存量不变);`check_imports` 0 未解析。
 - 实机验收(待用户,须新 thread):剪映打开草稿应见字幕轨,保存关闭重开仍在;本 thread(narration 空)仅验证空输入跳过路径。
+
+### 13.3 阶段 2:中文 TTS 和英文 TTS 落入草稿 —— ✅ 已交付
+
+**设计决策(双落点)**:mapper/原生转换把真实 WAV 写进初始草稿(关卡①调序时可听,音画当时对齐),node_08 在 node_07 适配后按当前草稿组区间**权威重写**配音轨(自愈错位)。任务逐项:
+1. **生产门禁**:`node_generate_voiceover` 新增 `_production_tts_backend_violation` —— `APP_ENV=production` 且 `TTS_BACKEND≠firered` 时 fail-closed 拒绝合成(不产假音频,经 run.failed 透出);`start_production.ps1` 缺省注入 `TTS_BACKEND=firered`(仿 CONSOLE_LLM_BACKEND 模式,含传播列表与注入日志行;pwsh 解析校验通过);`.env.example` 登记门禁说明。
+2. **结构化回填**:契约 `TimelineAudio` 新增 `voiceovers: Optional[list[VoiceoverEntry]]`(voiceover_id/group_id/path/duration_ms/provider/stub/error),`storyline/schemas/canonical_timeline.schema.json` 同步(外科手术式 +18 行);`plan_timeline_pro` 用已有 tts_res 填充(失败/空旁白段原样保留供审计);旧 `voiceover` JSON 字符串保留作联调快照。
+3. **mapper 原生映射**:逐段有效 WAV 一条 material(`ref`=本机路径)+ 按 `clip.voiceover_id` 聚组的音频轨段(组首 clip 起 → 组末 clip 止);不再把 ID JSON 字符串当文件 ref。
+4. **WAV 校验**:`_wav_usable`(存在+>44B 头)+ duration>0 + 引用完整性;`draft_integrity.check_material_paths` 扩展 audio 时长≤0 warning。
+5. **英文 TTS 输入源**:`node_16a` 改读 `subtitle_segments_zh`(node_08 阶段 1 产出)优先、`asr_segments_zh` 兜底(旧 checkpoint 兼容)—— 英文链 16a→08b→17 复活。
+6. **node_17 计时口径**:时长以 WAV 头为准(`read_wav_duration_ms`,与 P3 中文适配器同款),服务端返回值仅兜底;`state.py` 补声明 `tts_run_id`/`tts_issue`(此前被 graph 运行时静默丢弃)。
+7. **node_08 权威配音轨重写**:`_write_zh_voiceover_track` —— 有效段按当前草稿组区间重铺(时间自愈),钳制到草稿总时长(node_17 同款);native extract_music 素材 + 34 键段复用 `native_draft` 新公共助手 `build_native_audio_material`/`build_native_audio_segment`(speed 伴随按 id upsert,重放不翻倍);**删除守卫**:只移除轨名 `Voiceover_zh` 或全部素材路径位于本次运行 storyline 输出目录内的音频轨(阶段 0 基线实证:人工 VIP 音乐轨必须保留),废弃我方素材同步清理;产出 `voiceover_summary`(provider/stub 数/写入数/失败数)。
+
+**测试与验收:**
+- 新增 19 例:node_08 配音轨 ×6(组区间落轨/幂等重放/钳制/坏 WAV 计 failed/**人工音乐轨保留+我方旧轨替换**/无产物跳过)+ 16a 源切换 ×1 + plan_timeline_pro→mapper→native 全链 ×1(结构化 voiceovers 物化、旧 JSON ref 不再产生 dropped、speed 伴随无悬空)+ 生产门禁 ×1(production+mock 拒绝/production+firered 放行/dev 不 gate/节点 RuntimeError)+ 契约 schema 对齐修复(既有金样测试回归)。
+- 验收:unit **1507 例 0 失败**(基线 1488+19);integration **129 例,新增失败 0/消失 0**(8 存量不变);`check_imports` 0 未解析;`start_production.ps1` Parser.ParseFile 语法通过。
+- 实机验收(待用户,须新 thread):TTS_BACKEND=firered 且 FireRed :8010 在跑 → 关卡①草稿应可听到旁白;恢复跑完 node_08 后配音与画面对齐;英文分支播放有真人声。
+
+**范围与遗留**:配音轨时间以"组起点+自然时长"铺放,组间溢出按顺序自然延续(不截断语义);`delivery QA` 对 stub 配音的阻断属阶段 6(required-feature gate)不在本次范围;EN 音频镜像悬空 companion 引用(阶段 0 实证)归阶段 5。

@@ -63,7 +63,24 @@
       "additionalProperties": false,
       "properties": {
         "bgm_ref": { "type": ["string", "null"] },
-        "voiceover": { "type": ["string", "null"] }
+        "voiceover": { "type": ["string", "null"] },
+        "voiceovers": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["voiceover_id", "group_id", "path", "duration_ms", "provider", "stub"],
+            "properties": {
+              "voiceover_id": { "type": "string", "minLength": 1 },
+              "group_id": { "type": "string", "minLength": 1 },
+              "path": { "type": "string" },
+              "duration_ms": { "type": "integer", "minimum": 0 },
+              "provider": { "type": "string" },
+              "stub": { "type": "boolean" },
+              "error": { "type": ["string", "null"] }
+            }
+          }
+        }
       }
     },
     "subtitles": {

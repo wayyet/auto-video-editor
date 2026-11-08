@@ -740,3 +740,177 @@ def test_zh_subtitles_preserves_foreign_texts_and_replaces_own(tmp_path: Path) -
             {"id": "old1", "material_id": "text-zh-9",
              "target_timerange": {"start": 0, "duration": 1_000_000}}]},
     )
+
+
+# ---------------------------------------------------------------------------
+# 阶段 2(2026-11-09 效果缺失修复):中文 TTS 落草稿(权威配音轨重写)
+# ---------------------------------------------------------------------------
+import wave
+
+
+def _write_wav(path: Path, duration_ms: int) -> str:
+    """写一段真实静音 WAV(stdlib wave;时长可被 read_wav_duration_ms 读回)。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(b"\x00\x00" * int(16000 * duration_ms / 1000))
+    return str(path)
+
+
+def _vo_state(draft_path: Path, tmp_path: Path, entries: list[dict]) -> dict:
+    vo_dir = tmp_path / "storyline"
+    vo_file = vo_dir / "voiceover.json"
+    vo_file.write_text(
+        json.dumps(
+            {"voiceover": entries, "provider": "firered", "stub_count": 0, "errors": []},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    state = _state(draft_path)
+    state["storyline_plan"] = _zh_plan()  # 组→区间映射依赖 plan(同字幕口径)
+    state["storyline_voiceover_artifact"] = str(vo_file)
+    return state
+
+
+def _vo_entries(tmp_path: Path) -> list[dict]:
+    return [
+        {
+            "voiceover_id": "voiceover_0001", "group_id": "group_0001",
+            "path": _write_wav(tmp_path / "storyline" / "voiceover_0001.wav", 2000),
+            "duration": 2000, "provider": "firered", "error": None,
+        },
+        {
+            "voiceover_id": "voiceover_0002", "group_id": "group_0002",
+            "path": _write_wav(tmp_path / "storyline" / "voiceover_0002.wav", 1500),
+            "duration": 1500, "provider": "firered", "error": None,
+        },
+    ]
+
+
+def test_zh_voiceover_written_at_group_spans(tmp_path: Path) -> None:
+    """有效段按当前草稿组区间落 native extract_music 素材 + Voiceover_zh 轨。"""
+    draft_file = _write_draft(tmp_path, _zh_draft())
+    state = _vo_state(draft_file, tmp_path, _vo_entries(tmp_path))
+
+    out = add_subtitles(state)
+
+    summary = out["voiceover_summary"]
+    assert summary == {"provider": "firered", "stub_count": 0, "total": 2, "written": 2, "failed": 0}
+    draft = json.loads(draft_file.read_text(encoding="utf-8"))
+    vo_tracks = [t for t in draft["tracks"] if t["type"] == "audio"]
+    assert len(vo_tracks) == 1
+    assert vo_tracks[0]["name"] == "Voiceover_zh"
+    # 组1(0-3s)放 2s;组2(3-7s)放 1.5s
+    tr = {s["target_timerange"]["start"]: s["target_timerange"]["duration"] for s in vo_tracks[0]["segments"]}
+    assert tr[0] == 2_000_000 and tr[3_000_000] == 1_500_000
+    audios = draft["materials"]["audios"]
+    assert len(audios) == 2
+    assert all(a["type"] == "extract_music" and a["path"].endswith(".wav") for a in audios)
+    assert any("中文配音已落草稿:2 段" in x for x in out["status_log"])
+
+
+def test_zh_voiceover_replay_is_idempotent(tmp_path: Path) -> None:
+    """重放:同一 state 跑两遍,轨/素材不翻倍。"""
+    draft_file = _write_draft(tmp_path, _zh_draft())
+    state = _vo_state(draft_file, tmp_path, _vo_entries(tmp_path))
+
+    add_subtitles(state)
+    first = json.loads(draft_file.read_text(encoding="utf-8"))
+    add_subtitles(state)
+    second = json.loads(draft_file.read_text(encoding="utf-8"))
+    assert first == second
+    vo_tracks = [t for t in second["tracks"] if t["type"] == "audio"]
+    assert len(vo_tracks) == 1 and len(vo_tracks[0]["segments"]) == 2
+
+
+def test_zh_voiceover_clamped_to_draft_duration(tmp_path: Path) -> None:
+    """配音长于组区间到草稿末尾:钳制到草稿总时长(同 node_17 口径)。"""
+    draft = _zh_draft()
+    draft["duration"] = 4_000_000  # 草稿只有 4s
+    # 组2 从 3s 起,wav 60s → 段时长钳到 1s
+    draft["tracks"][0]["segments"] = [draft["tracks"][0]["segments"][0]]
+    draft["tracks"][0]["segments"].append(
+        {"id": "s2", "material_id": "v1",
+         "source_timerange": {"start": 3_000_000, "duration": 3_000_000},
+         "target_timerange": {"start": 3_000_000, "duration": 1_000_000}}
+    )
+    draft_file = _write_draft(tmp_path, draft)
+    entries = _vo_entries(tmp_path)
+    entries[1]["path"] = _write_wav(tmp_path / "storyline" / "long.wav", 60_000)
+    entries[1]["duration"] = 60_000
+    state = _vo_state(draft_file, tmp_path, entries)
+
+    out = add_subtitles(state)
+
+    draft_after = json.loads(draft_file.read_text(encoding="utf-8"))
+    vo_tracks = [t for t in draft_after["tracks"] if t["type"] == "audio"]
+    seg2 = next(s for s in vo_tracks[0]["segments"] if s["target_timerange"]["start"] == 3_000_000)
+    assert seg2["target_timerange"]["duration"] == 1_000_000
+    assert out["voiceover_summary"]["written"] == 2
+
+
+def test_zh_voiceover_bad_wav_counted_failed(tmp_path: Path) -> None:
+    """WAV 缺失的段跳过并计入 failed;有效段照常写入。"""
+    draft_file = _write_draft(tmp_path, _zh_draft())
+    entries = _vo_entries(tmp_path)
+    entries[1]["path"] = str(tmp_path / "storyline" / "missing.wav")
+    state = _vo_state(draft_file, tmp_path, entries)
+
+    out = add_subtitles(state)
+
+    assert out["voiceover_summary"]["written"] == 1
+    assert out["voiceover_summary"]["failed"] == 1
+    draft = json.loads(draft_file.read_text(encoding="utf-8"))
+    vo_tracks = [t for t in draft["tracks"] if t["type"] == "audio"]
+    assert len(vo_tracks[0]["segments"]) == 1
+
+
+def test_zh_voiceover_preserves_human_music_track(tmp_path: Path) -> None:
+    """删除守卫:人工音乐轨(素材路径在 storyline 目录之外)保留;我方旧轨被替换。"""
+    draft = _zh_draft()
+    human_mat = {"id": "human-music", "type": "audio", "name": "Island Sway 3",
+                 "path": "C:/Music/Cache/abc.mp3", "duration": 25_000_000}
+    draft["materials"]["audios"] = [human_mat]
+    draft["tracks"].append(
+        {"type": "audio", "id": "track-human", "name": "",
+         "segments": [{"id": "hs1", "material_id": "human-music",
+                       "target_timerange": {"start": 0, "duration": 25_000_000}}]}
+    )
+    # 我方上一轮旧配音轨(素材路径在 storyline 目录内 → 属我方,应被替换)
+    old_mat = {"id": "old-vo", "type": "audio", "name": "voiceover_0001.wav",
+               "path": str(tmp_path / "storyline" / "stale.wav"), "duration": 1_000_000}
+    draft["materials"]["audios"].append(old_mat)
+    draft["tracks"].append(
+        {"type": "audio", "id": "track-audio-zh-voiceover", "name": "Voiceover_zh",
+         "segments": [{"id": "os1", "material_id": "old-vo",
+                       "target_timerange": {"start": 0, "duration": 1_000_000}}]}
+    )
+    draft_file = _write_draft(tmp_path, draft)
+    state = _vo_state(draft_file, tmp_path, _vo_entries(tmp_path))
+
+    add_subtitles(state)
+
+    after = json.loads(draft_file.read_text(encoding="utf-8"))
+    vo_tracks = [t for t in after["tracks"] if t["type"] == "audio"]
+    assert {t["id"] for t in vo_tracks} == {"track-human", "track-audio-zh-voiceover"}
+    human_track = next(t for t in vo_tracks if t["id"] == "track-human")
+    assert human_track["segments"][0]["material_id"] == "human-music"
+    ids = {a["id"] for a in after["materials"]["audios"]}
+    assert "human-music" in ids and "old-vo" not in ids
+
+
+def test_zh_voiceover_without_artifact_skips(tmp_path: Path) -> None:
+    """无 voiceover.json → 不写配音轨、不产 voiceover_summary,只记 note。"""
+    draft = _zh_draft()
+    draft_file = _write_draft(tmp_path, draft)
+    state = _state(draft_file)
+
+    out = add_subtitles(state)
+
+    after = json.loads(draft_file.read_text(encoding="utf-8"))
+    assert not [t for t in after["tracks"] if t["type"] == "audio"]
+    assert "voiceover_summary" not in out
+    assert any("中文配音跳过" in x for x in out["status_log"])

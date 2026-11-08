@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from storyline_capabilities.plan_timeline_pro import plan_timeline_pro
 from storyline.native_draft import (
     _MATERIAL_BUCKETS,
     NATIVE_DRAFT_SIDECAR_NAME,
@@ -298,3 +299,81 @@ class TestIdempotenceAndSidecar:
         """sidecar 只进草稿目录,不污染 draft_content。"""
         native, _ = storyline_to_native(_storyline_draft())
         assert "storyline_meta" not in native
+
+
+# ---------------------------------------------------------------------------
+# 阶段 2(2026-11-09 效果缺失修复):结构化 voiceovers → mapper → native 音轨
+# ---------------------------------------------------------------------------
+import wave
+
+
+def _tiny_wav(path, duration_ms: int) -> str:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(b"\x00\x00" * int(16000 * duration_ms / 1000))
+    return str(path)
+
+
+def test_voiceover_structured_chain_converts(tmp_path) -> None:
+    """结构化 voiceovers(真实 WAV)→ mapper 逐段 material+组区间段 → native 音轨。
+
+    双落点第一落(node_05 初稿可听):plan_timeline_pro 填充 voiceovers,
+    mapper 消费真实 path,native 转换解析为 extract_music 素材与音频轨段。
+    """
+    from storyline.contract import CanonicalTimeline
+    from storyline.mapper import canonical_to_draft
+
+    wav1 = _tiny_wav(tmp_path / "storyline" / "voiceover_0001.wav", 2000)
+    wav2 = _tiny_wav(tmp_path / "storyline" / "voiceover_0002.wav", 1500)
+    groups = [
+        {"group_id": "group_0001", "clips": [
+            {"clip_id": "clip_0001", "media_id": "media_0001",
+             "source_in_ms": 0, "source_out_ms": 3000}]},
+        {"group_id": "group_0002", "clips": [
+            {"clip_id": "clip_0002", "media_id": "media_0001",
+             "source_in_ms": 3000, "source_out_ms": 6000}]},
+    ]
+    tts_res = [
+        {"voiceover_id": "voiceover_0001", "group_id": "group_0001",
+         "path": wav1, "duration": 2000, "provider": "firered", "error": None},
+        {"voiceover_id": "voiceover_0002", "group_id": "group_0002",
+         "path": wav2, "duration": 1500, "provider": "stub", "error": None},
+    ]
+    timeline = plan_timeline_pro(
+        groups=groups,
+        voiceover={"voiceover": tts_res, "provider": "firered", "stub_count": 0},
+        source_media=[{"media_id": "media_0001", "file_uri": "file:///C:/v.mp4",
+                       "duration_ms": 6000, "media_type": "video"}],
+        targets={"target_duration_ms": 35000},
+        job_id="j",
+    )
+    # plan_timeline_pro 填充结构化 voiceovers(真实路径随行)
+    vos = timeline["audio"]["voiceovers"]
+    assert [v["path"] for v in vos] == [wav1, wav2]
+    assert [v["stub"] for v in vos] == [False, True]
+
+    plan = CanonicalTimeline.model_validate(timeline)
+    draft = canonical_to_draft(plan)
+    audios = draft["materials"]["audios"]
+    assert [a["id"] for a in audios] == ["voiceover-0001", "voiceover-0002"]
+    assert [a["ref"] for a in audios] == [wav1, wav2]
+    atrack = next(t for t in draft["tracks"] if t["type"] == "audio")
+    # TTS 驱动分配:组区间跟随配音时长(组1 2s、组2 1.5s),非源范围
+    assert [(s["target_start_us"], s["target_end_us"]) for s in atrack["segments"]] == [
+        (0, 2_000_000), (2_000_000, 3_500_000),
+    ]
+
+    native, sidecar = storyline_to_native(draft)
+    native_audio_tracks = [t for t in native["tracks"] if t["type"] == "audio"]
+    assert len(native_audio_tracks) == 1
+    assert len(native_audio_tracks[0]["segments"]) == 2
+    assert len(native["materials"]["audios"]) == 2
+    assert all(a["type"] == "extract_music" for a in native["materials"]["audios"])
+    # 旧口径的 JSON 字符串 ref 不再产生 unresolved 丢弃(段全部落地)
+    assert not sidecar["dropped"].get("dropped_audio_segments")
+    # 引用完整性:音频段 speed 伴随无悬空
+    from draft_ops.draft_integrity import check_track_references
+    assert check_track_references(native, "zh") == []

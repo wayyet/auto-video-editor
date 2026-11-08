@@ -197,6 +197,23 @@ def check_material_paths(draft: dict, tag: str) -> list[dict[str, str]]:
                 issues.append(
                     _issue("素材路径", SEV_ERROR, tag, f"audio material {m.get('id', '?')} 的 {key} 文件不存在: {p}")
                 )
+        # 阶段 2(2026-11-09 效果缺失修复):时长<=0 的音频素材不可播放 ——
+        # 有素材、有路径但时长为 0 是"stub 冒充成功"的典型形态,warning 提示。
+        duration = m.get("duration")
+        duration_ms = m.get("duration_ms")
+        try:
+            us = int(duration) if duration is not None else None
+        except (TypeError, ValueError):
+            us = None
+        try:
+            ms = int(duration_ms) if duration_ms is not None else None
+        except (TypeError, ValueError):
+            ms = None
+        known = us is not None or ms is not None
+        if known and (us or 0) <= 0 and (ms or 0) <= 0:
+            issues.append(
+                _issue("素材路径", SEV_WARNING, tag, f"audio material {m.get('id', '?')} 时长<=0(不可播放,疑为占位)")
+            )
     return issues
 
 

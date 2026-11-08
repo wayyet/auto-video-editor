@@ -111,13 +111,23 @@ def canonical_to_draft(
                 "role": "bgm",
             }
         )
-    if plan.audio.voiceover:
+    # 阶段 2(2026-11-09 效果缺失修复):结构化配音 —— 每段真实 WAV 一条
+    # material(ref=本机路径,原生转换据此解析);旧口径把 group_id→voiceover_id
+    # 的 JSON 字符串当 ref,永远过不了 native 的本地文件检查而被丢弃。失败/空
+    # 旁白段(path 空 / duration 0)不物化,计划数据里保留供审计。
+    for _vo_idx, vo in enumerate(plan.audio.voiceovers or [], start=1):
+        if not vo.path or vo.duration_ms <= 0:
+            continue
         audios.append(
             {
-                "id": "voiceover-1",
+                "id": f"voiceover-{_vo_idx:04d}",
                 "type": "audio",
-                "ref": plan.audio.voiceover,
+                "ref": vo.path,
                 "role": "voiceover",
+                "voiceover_id": vo.voiceover_id,
+                "group_id": vo.group_id,
+                "provider": vo.provider,
+                "stub": vo.stub,
             }
         )
 
@@ -173,20 +183,32 @@ def canonical_to_draft(
                 "loop": True,
             }
         )
-    if plan.audio.voiceover:
-        # 配音随各 group 的 timeline_in_ms/timeline_out_ms 拼
-        # Phase 2 接入 Spark / BGM 卡点精确偏移
-        audio_track["segments"].append(
-            {
-                "id": "segment-voiceover-1",
-                "material_id": "voiceover-1",
-                "target_start_us": 0,
-                "target_end_us": _ms_to_us(
-                    plan.clips[-1].timeline_out_ms if plan.clips else 0
-                ),
-                "speed": 1.0,
-            }
-        )
+    # 阶段 2:配音按 group 的 timeline 区间铺段(组首 clip 起 → 组末 clip 止);
+    # 有配音 material 但组内无 clip(数据不一致)时不铺段,由 native 转换按
+    # "无段素材不转"的既有口径处理。
+    if plan.audio.voiceovers:
+        clips_by_vo: dict[str, list[Any]] = {}
+        for _clip in plan.clips:
+            if _clip.voiceover_id:
+                clips_by_vo.setdefault(_clip.voiceover_id, []).append(_clip)
+        for _vo_idx, vo in enumerate(plan.audio.voiceovers, start=1):
+            if not vo.path or vo.duration_ms <= 0:
+                continue
+            group_clips = sorted(
+                clips_by_vo.get(vo.voiceover_id, []),
+                key=lambda c: c.timeline_in_ms,
+            )
+            if not group_clips:
+                continue
+            audio_track["segments"].append(
+                {
+                    "id": f"segment-voiceover-{_vo_idx:04d}",
+                    "material_id": f"voiceover-{_vo_idx:04d}",
+                    "target_start_us": _ms_to_us(group_clips[0].timeline_in_ms),
+                    "target_end_us": _ms_to_us(group_clips[-1].timeline_out_ms),
+                    "speed": 1.0,
+                }
+            )
 
     # 阶段 1(2026-11-09 效果缺失修复):不再产出内部 text 轨 —— 此前的私有形状
     # (text/target_start_us 等)会被 storyline_to_native 整轨丢弃进 sidecar,从不

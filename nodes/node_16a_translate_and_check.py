@@ -192,7 +192,12 @@ def node_16a_translate_and_check(state: WorkflowState) -> dict:
         - ``subtitle_qc_evidence_frames``: 关卡③ 证据帧路径列表(qc 链成功时)
         - ``status_log``: 仅 delta(由 reducer ``_append_unique`` 合并)
     """
-    segments_zh = list(state.get("asr_segments_zh") or [])
+    # 阶段 2(2026-11-09 效果缺失修复):翻译源 = node_08 产出的中文旁白字幕段
+    # (subtitle_segments_zh,时间取自当前草稿,英文字幕/配音随其同步);旧线程
+    # checkpoint 残留的 asr_segments_zh 按兼容语义兜底(B1 移除后新流程不再产出)。
+    segments_zh = list(
+        state.get("subtitle_segments_zh") or state.get("asr_segments_zh") or []
+    )
     if not segments_zh:
         # B1 ASR 移除(2026-11-08)后"无源字幕"是英文分支的**常态输入**:
         # 正常跳过而非错误(不写 error_log,不污染排障日志);

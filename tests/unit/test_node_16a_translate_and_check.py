@@ -462,3 +462,26 @@ def test_node_16a_qc_chain_layout_issues_field_contract_unchanged(tmp_path: Path
     assert out["layout_issues_detected"] is True
     # 关卡③ 触发条件:layout_issues_detected == True(只要 issues 非空)
     assert out["layout_issues"] == qc_issues
+
+
+# ---------------------------------------------------------------------------
+# 阶段 2(2026-11-09 效果缺失修复):翻译源切换到 subtitle_segments_zh
+# ---------------------------------------------------------------------------
+def test_node_16a_translates_subtitle_segments_zh(tmp_path: Path) -> None:
+    """阶段 2:翻译源 = node_08 产出的 subtitle_segments_zh(优先于已废弃的
+    asr_segments_zh)。B1 后 ASR 段恒空,英文链(16a→08b→17)靠本字段复活。"""
+    draft_dir = _seed_en_branch(tmp_path)
+    set_default_client(MockTranslateClient())
+    state = {
+        "subtitle_segments_zh": _normal_asr(),  # 同形状:node_08 复用 SubtitleSegment
+        "draft_dir_en_branch": str(draft_dir),
+        "status_log": [],
+        "error_log": [],
+    }
+    out = node_16a_translate_and_check(state)
+
+    assert "skipped_no_source_subtitles" not in out["status_log"]
+    assert "node_16a_translate_done" in out["status_log"]
+    segs_en = out.get("subtitle_segments_en") or []
+    assert [s["start_ms"] for s in segs_en] == [0, 2_000]
+    assert all(s.get("text_en") for s in segs_en)

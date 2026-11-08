@@ -350,6 +350,53 @@ def _convert_audio_segment(
     return out
 
 
+# ---------------------------------------------------------------------------
+# 公共构造助手(阶段 2,2026-11-09):node_08 配音轨重写复用原生形状
+# ---------------------------------------------------------------------------
+def build_native_audio_material(
+    *, id_seed: str, path: str, duration_us: int
+) -> dict[str, Any]:
+    """构造原生 audio material(17 键 extract_music 形,id 由 uuid5 确定性生成)。
+
+    与 mapper→native 转换路径产出同一 schema;``id_seed`` 稳定(如
+    ``"zh-voiceover:voiceover_0001"``)则重放幂等。
+    """
+    new_id = _new_id(id_seed, "audio_material")
+    return _convert_audio_material(
+        {"id": id_seed, "type": "audio", "ref": path},
+        new_id,
+        path=path,
+        duration_us=max(0, int(duration_us)),
+    )
+
+
+def build_native_audio_segment(
+    *, id_seed: str, material_id: str, start_us: int, duration_us: int
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """构造原生音频段(34 键,clip/hdr/uniform_scale=None)+ 其 speed 伴随素材。
+
+    返回 ``(segment, companion_materials)``;调用方须把伴随素材并入
+    ``materials.speeds``(与转换路径同口径,避免悬空 extra_material_refs)。
+    """
+    seg_id = _new_id(id_seed, "audio_segment")
+    speed_id = _new_id(seg_id, "audio_speed")
+    seg = _convert_audio_segment(
+        {"target_start_us": int(start_us), "speed": 1.0},
+        seg_id,
+        material_id,
+        speed_id,
+        duration_us=max(0, int(duration_us)),
+    )
+    companion = {
+        "curve_speed": None,
+        "id": speed_id,
+        "mode": 0,
+        "speed": 1.0,
+        "type": "speed",
+    }
+    return seg, [companion]
+
+
 def _companion_materials(
     seg: dict[str, Any], seg_id: str, *, speed: float
 ) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:

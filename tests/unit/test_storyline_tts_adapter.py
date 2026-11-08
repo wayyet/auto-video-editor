@@ -188,3 +188,36 @@ def test_adapter_invalid_speed_falls_back_to_none(
     )
     assert out.error is None
     assert captured[0]["speed"] is None
+
+
+# ---------------------------------------------------------------------------
+# 阶段 2(2026-11-09 效果缺失修复):TTS_BACKEND 生产门禁(fail-closed)
+# ---------------------------------------------------------------------------
+def test_production_tts_backend_gate(monkeypatch) -> None:
+    """APP_ENV=production 时 TTS_BACKEND 必须显式 firered,否则拒绝合成;
+    开发/测试环境(APP_ENV 非 production)不 gate,行为不变。"""
+    from nodes.storyline.node_generate_voiceover import (
+        _production_tts_backend_violation,
+        storyline_generate_voiceover_node,
+    )
+
+    monkeypatch.delenv("TTS_BACKEND", raising=False)
+
+    monkeypatch.setenv("APP_ENV", "production")
+    assert _production_tts_backend_violation() is not None  # 未设置 → 违规
+    monkeypatch.setenv("TTS_BACKEND", "mock")
+    assert _production_tts_backend_violation() is not None  # mock(stub)→ 违规
+    monkeypatch.setenv("TTS_BACKEND", "firered")
+    assert _production_tts_backend_violation() is None      # 显式 firered → 放行
+
+    monkeypatch.setenv("APP_ENV", "dev")
+    monkeypatch.setenv("TTS_BACKEND", "mock")
+    assert _production_tts_backend_violation() is None      # 非 production 不 gate
+
+    # 节点入口 fail-closed:production + mock → RuntimeError(不产假音频)
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("TTS_BACKEND", "mock")
+    import pytest
+
+    with pytest.raises(RuntimeError, match="TTS_BACKEND"):
+        storyline_generate_voiceover_node({})

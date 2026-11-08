@@ -186,6 +186,15 @@ class WorkflowState(TypedDict, total=False):
     # 英文 TTS 音频路径(节点 17 写,Week 4 固定 None)
     en_dub_audio_path: NotRequired[Optional[str]]
 
+    # ===== 2026-11-09 阶段 2(效果缺失修复):TTS/配音可观测字段 =====
+    # 节点 8 写:中文配音落草稿摘要(provider/stub 数/写入数/失败数),
+    # 状态卡与交付 QA 据此区分真实 provider 与静音 Stub。
+    voiceover_summary: NotRequired[Optional[dict]]
+    # 节点 17 写(此前返回但未声明,会被 graph 运行时静默丢弃):
+    # 本次英文 TTS 运行 id 与失败原因(成功为 None 或 empty_text 说明)。
+    tts_run_id: NotRequired[Optional[str]]
+    tts_issue: NotRequired[Optional[str]]
+
     # 汇合节点 QA 闸门结果(join_before_delivery 写)
     join_qa_issues: NotRequired[list[str]]
     # 2026-11-07 阶段 4:结构化 QA 报告(draft_ops.draft_integrity.build_join_qa_report

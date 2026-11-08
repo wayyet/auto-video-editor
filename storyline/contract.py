@@ -102,13 +102,38 @@ class Clip(BaseModel):
         return self
 
 
+class VoiceoverEntry(BaseModel):
+    """单段配音的结构化记录(2026-11-09 阶段 2,效果缺失修复计划)。
+
+    取代"把 group_id→voiceover_id 的 JSON 字符串当文件 ref"的旧口径:
+    mapper/native 转换按这里的真实 ``path`` 产出可播放的配音素材。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    voiceover_id: str = Field(..., description="配音 ID,形如 voiceover_0001")
+    group_id: str = Field(..., description="所属分组 ID,形如 group_0001")
+    path: str = Field("", description="WAV 文件本机路径;空串=未产出(失败/空旁白)")
+    duration_ms: int = Field(0, ge=0, description="音频时长(整数毫秒;WAV 头口径)")
+    provider: str = Field("stub", description="合成方:stub / firered 等")
+    stub: bool = Field(False, description="是否静音占位(StubTTSClient 产物)")
+    error: Optional[str] = Field(None, description="合成失败原因(成功为 null)")
+
+
 class TimelineAudio(BaseModel):
     """音频轨(BGM + 配音)。可选,允许 null。"""
 
     model_config = ConfigDict(extra="forbid")
 
     bgm_ref: Optional[str] = Field(None, description="BGM 资源 ID,形如 bgm_0001")
-    voiceover: Optional[str] = Field(None, description="配音资源 ID,形如 voiceover_0001")
+    voiceover: Optional[str] = Field(
+        None, description="配音资源 ID,形如 voiceover_0001"
+    )
+    # 阶段 2(2026-11-09):结构化配音记录(真实 WAV path/时长/provider);
+    # 旧 ``voiceover`` JSON 字符串保留作联调快照,mapper 不再把它当文件 ref。
+    voiceovers: Optional[list[VoiceoverEntry]] = Field(
+        None, description="逐段配音记录(真实 WAV 路径;阶段 2 起 mapper 消费)"
+    )
 
 
 class TimelineSubtitles(BaseModel):

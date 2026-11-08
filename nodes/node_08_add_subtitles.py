@@ -400,6 +400,203 @@ def _sync_zh_text_track(draft: dict, materials: list[dict]) -> None:
     draft["tracks"] = kept
 
 
+# ---------------------------------------------------------------------------
+# 阶段 2(2026-11-09 效果缺失修复):中文 TTS 落草稿(权威配音轨重写)
+# ---------------------------------------------------------------------------
+#: 本节点拥有的配音轨名(删除守卫的确定性匹配之一)
+_ZH_VOICEOVER_TRACK_NAME = "Voiceover_zh"
+#: 本节点拥有的配音轨 id(重建时的固定 id,重放幂等)
+_ZH_VOICEOVER_TRACK_ID = "track-audio-zh-voiceover"
+#: WAV 头的保守大小(字节);文件不超过它视为空音频
+_WAV_HEADER_MIN_BYTES = 44
+
+
+def _wav_usable(path: str) -> bool:
+    """WAV 文件存在且大于头部的保守校验(阶段 2 任务 4;时长口径信任
+    voiceover.json 的 duration —— P3 适配器即按 WAV 头计算)。"""
+    try:
+        return Path(str(path)).is_file() and Path(str(path)).stat().st_size > _WAV_HEADER_MIN_BYTES
+    except OSError:
+        return False
+
+
+def _voiceover_track_owned(track: dict, audio_path_by_id: dict[str, str], storyline_root: str) -> bool:
+    """音频轨是否属本链产物(删除守卫):轨名为本节点轨名,或其全部段引用的
+    素材路径都位于本次运行 storyline 输出目录内。官方草稿里人工在剪映添加的
+    音乐(剪映 Cache/VIP 库/本地其他路径)一律不满足 → 不删(阶段 0 基线实证
+    AutoVideo_console-d103e894da2b 人工音轨必须保留)。"""
+    if str(track.get("name") or "") == _ZH_VOICEOVER_TRACK_NAME:
+        return True
+    seg_mats = [
+        str(s.get("material_id") or "")
+        for s in track.get("segments") or []
+        if isinstance(s, dict) and s.get("material_id")
+    ]
+    if not seg_mats:
+        return False
+    paths = [audio_path_by_id.get(mid, "") for mid in seg_mats]
+    return bool(paths) and all(
+        p and _norm_path_key(p).startswith(storyline_root) for p in paths
+    )
+
+
+def _write_zh_voiceover_track(draft: dict, state: WorkflowState) -> tuple[dict | None, list[str]]:
+    """把 voiceover.json 的有效段按当前草稿组区间重写成权威配音轨(就地改 draft)。
+
+    双落点的第二落:node_05 初稿的配音按计划时间铺(关卡①调序时可听),node_07
+    压缩/人工调序后时间失效 —— 本函数在 snapshot2(适配后)上按当前草稿组区间
+    重铺并删除我方旧轨,时间自愈。返回 ``(voiceover_summary, notes)``。
+    """
+    from storyline.native_draft import (
+        build_native_audio_material,
+        build_native_audio_segment,
+    )
+
+    notes: list[str] = []
+    raw = state.get("storyline_voiceover_artifact")
+    if not raw:
+        return None, ["中文配音跳过:无 voiceover.json 产物"]
+    try:
+        doc = json.loads(Path(str(raw)).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, ["中文配音跳过:voiceover.json 读取失败"]
+    entries = [e for e in (doc or {}).get("voiceover") or [] if isinstance(e, dict)]
+    if not entries:
+        return None, ["中文配音跳过:voiceover.json 无段落(空旁白/上游断裂)"]
+
+    provider = str(doc.get("provider") or "")
+    stub_count = sum(1 for e in entries if str(e.get("provider") or "") == "stub")
+
+    valid = [
+        e for e in entries
+        if str(e.get("path") or "") and int(e.get("duration") or 0) > 0
+        and not e.get("error") and _wav_usable(str(e["path"]))
+    ]
+    for e in entries:
+        if e in valid:
+            continue
+        if e.get("error") or not e.get("path"):
+            continue  # 合成失败段:由 summary.failed 汇总,不逐条刷屏
+        notes.append(f"中文配音 {e.get('voiceover_id')} 跳过:WAV 文件缺失或过小")
+
+    if valid:
+        spans = _group_spans_from_draft(draft, state)
+        if spans is None:
+            notes.append("中文配音跳过:无法把当前草稿视频段映射到分组(同字幕映射口径)")
+            valid = []
+
+    total_us = int(draft.get("duration") or 0)
+    storyline_root = _norm_path_key(str(Path(str(raw)).parent)) + "/"
+    audio_path_by_id = {
+        str(a.get("id") or ""): str(a.get("path") or a.get("ref") or "")
+        for a in (draft.get("materials") or {}).get("audios") or []
+        if isinstance(a, dict)
+    }
+
+    new_mats: list[dict] = []
+    new_segs: list[dict] = []
+    new_speeds: list[dict] = []
+    for e in valid:
+        vid = str(e.get("voiceover_id") or "")
+        span = spans.get(str(e.get("group_id") or ""))
+        if span is None:
+            notes.append(f"中文配音 {vid} 跳过:组 {e.get('group_id')} 在当前草稿无时间区间")
+            continue
+        start_us = int(span[0])
+        duration_us = int(e["duration"]) * 1000
+        if total_us > 0:
+            duration_us = min(duration_us, max(0, total_us - start_us))
+        if duration_us <= 0:
+            continue
+        mat = build_native_audio_material(
+            id_seed=f"zh-voiceover:{vid}", path=str(e["path"]), duration_us=duration_us
+        )
+        seg, companions = build_native_audio_segment(
+            id_seed=f"zh-voiceover-seg:{vid}",
+            material_id=mat["id"],
+            start_us=start_us,
+            duration_us=duration_us,
+        )
+        new_mats.append(mat)
+        new_segs.append(seg)
+        new_speeds.extend(companions)
+
+    # 删除守卫:只移除我方产物轨;人工音乐轨原样保留
+    tracks = draft.setdefault("tracks", []) or []
+    removed_owned: list[dict] = []
+    kept_tracks: list[dict] = []
+    for t in tracks:
+        if (
+            isinstance(t, dict)
+            and t.get("type") == "audio"
+            and _voiceover_track_owned(t, audio_path_by_id, storyline_root)
+        ):
+            removed_owned.append(t)
+        else:
+            kept_tracks.append(t)
+    kept_tracks.append(
+        {
+            "type": "audio",
+            "id": _ZH_VOICEOVER_TRACK_ID,
+            "name": _ZH_VOICEOVER_TRACK_NAME,
+            "segments": new_segs,
+        }
+    )
+    draft["tracks"] = kept_tracks
+
+    mats = draft.setdefault("materials", {})
+    from nodes._draft_io import upsert_by_id
+
+    for mat in new_mats:
+        upsert_by_id(mats.setdefault("audios", []), mat)
+    # speed 伴随素材按 id upsert(确定性 id,重放覆盖旧值而不是翻倍)
+    speeds_bucket = mats.setdefault("speeds", [])
+    for comp in new_speeds:
+        upsert_by_id(speeds_bucket, comp)
+
+    # 清理被我方旧轨独占、且新轨不再引用的废弃 audio 素材(否则孤儿素材残留)
+    new_mat_ids = {m["id"] for m in new_mats}
+    removed_mat_ids = {
+        str(s.get("material_id") or "")
+        for t in removed_owned
+        for s in t.get("segments") or []
+        if isinstance(s, dict) and s.get("material_id")
+    }
+    kept_mat_ids = {
+        str(s.get("material_id") or "")
+        for t in kept_tracks
+        if isinstance(t, dict) and t.get("id") != _ZH_VOICEOVER_TRACK_ID
+        for s in t.get("segments") or []
+        if isinstance(s, dict) and s.get("material_id")
+    }
+    if removed_mat_ids:
+        mats["audios"] = [
+            a
+            for a in mats.get("audios") or []
+            if not (
+                isinstance(a, dict)
+                and str(a.get("id") or "") in removed_mat_ids
+                and str(a.get("id") or "") not in new_mat_ids
+                and str(a.get("id") or "") not in kept_mat_ids
+            )
+        ]
+
+    written = len(new_segs)
+    summary = {
+        "provider": provider,
+        "stub_count": stub_count,
+        "total": len(entries),
+        "written": written,
+        # 未写入 = 合成失败/空旁白/WAV 缺失/组无区间等一切未落草稿的段
+        "failed": len(entries) - written,
+    }
+    notes.append(
+        f"中文配音已落草稿:{written} 段(provider={provider or '未知'},"
+        f"stub={stub_count},失败={summary['failed']};轨 {_ZH_VOICEOVER_TRACK_NAME},时间取自当前草稿)"
+    )
+    return summary, notes
+
+
 def _scout_style_overrides(scout_report: dict) -> dict:
     """从 scout 报告里抽出可直接喂给 ``sty.resolve_style`` 的 override 字典。
 
@@ -689,6 +886,11 @@ def add_subtitles(state: WorkflowState) -> dict:
         _sync_zh_text_materials(draft, zh_materials)
         _sync_zh_text_track(draft, zh_materials)
 
+    # 阶段 2(2026-11-09 效果缺失修复):中文配音权威轨重写 —— 读 voiceover.json
+    # 有效段,按当前草稿组区间重铺(自愈 node_07 压缩/关卡①调序导致的错位);
+    # 删除守卫保人工音乐轨。空产物(无 voiceover.json/无有效段)→ 不写。
+    vo_summary, vo_notes = _write_zh_voiceover_track(draft, state)
+
     # Week 5:参数从 draft_path 提升为 draft_path.parent,safe_write_draft 双写
     log = list(state.get("status_log", []) or [])
     log.extend(
@@ -717,6 +919,8 @@ def add_subtitles(state: WorkflowState) -> dict:
         log.append(f"[node_08] storyline 推荐样式:{note}")
     for note in zh_notes:
         log.append(f"[node_08] {note}")
+    for note in vo_notes:
+        log.append(f"[node_08] {note}")
     out: dict = {
         **state,
         "status_log": log,
@@ -727,4 +931,7 @@ def add_subtitles(state: WorkflowState) -> dict:
         # 阶段 1:中文字幕段落(state 形状复用 SubtitleSegment),node_16a 英文
         # 翻译以此为源(替代已废弃的 asr_segments_zh,见阶段 2)。
         out["subtitle_segments_zh"] = zh_segments
+    if vo_summary is not None:
+        # 阶段 2:配音摘要(provider/stub 数/写入数/失败数),状态卡与 QA 消费。
+        out["voiceover_summary"] = vo_summary
     return out
