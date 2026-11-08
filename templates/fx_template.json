@@ -9,6 +9,17 @@
     "video_effects": "resource_id (19 位数字,fx_resource_library.json)"
   },
   "asset_resource_map_ref": "jy_common/asset_resource_map.json",
+  "transition_semantic_map": {
+    "_comment": "阶段3:转场推荐语义(recommend_transition 的 transition_in/out 字符串)→ 资源库转场名。null = 硬切,该边界不加转场素材。未收录的语义回落 style_tag 现行逻辑(闪屏故障等)。叠化为免费转场(fx_resource_library.json 已含免费资源)。",
+    "fade": "叠化",
+    "fade_in": "叠化",
+    "fade_out": "叠化",
+    "dissolve": "叠化",
+    "crossfade": "叠化",
+    "cut": null,
+    "none": null,
+    "hard_cut": null
+  },
   "transitions": [
     {
       "name": "闪屏故障",

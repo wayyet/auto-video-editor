@@ -1,9 +1,9 @@
-"""一次性生成器 — 把 pyJianYingDraft metadata 里的 VIP 资源 dump 成 JSON。
+"""一次性生成器 — 把 pyJianYingDraft metadata 里的资源 dump 成 JSON。
 
 设计目标:
 - 只依赖 stdlib(ast + json),不引入 pyJianYingDraft 为运行时依赖(参考对照报告 §3)。
-- 过滤 is_vip == True,产出 templates/fx_resource_library.json(转场 + 视频特效)和
-  templates/text_resource_library.json(文字入场/循环/出场)。
+- 产出 templates/fx_resource_library.json(转场:免费+VIP 都保留;视频特效:VIP)
+  和 templates/text_resource_library.json(文字入场/循环/出场:VIP)。
 - 幂等:同一份源文件再跑,JSON 字节级一致(同名取首条)。
 - 可选 --diff 模式:与已有 JSON 比对,仅打印新增/删除,不写文件(用于代码审查)。
 
@@ -105,7 +105,12 @@ def _parse_ctor_assigns(
 
 
 def extract_transitions(src_dir: Path) -> list[dict[str, Any]]:
-    """从 transition_meta.py 抽 TransitionMeta,过滤 is_vip。"""
+    """从 transition_meta.py 抽 TransitionMeta(免费 + VIP 都保留)。
+
+    2026-11-09 阶段 3 起免费转场也入库:转场推荐语义(fade→叠化等)大多映射到
+    免费资源,只有 VIP 库会让最常见的叠化解析失败。is_vip 取元数据实值,
+    查询方按需过滤(:meth:`TemplateLibrary.list_transitions` vip_only 语义不变)。
+    """
     rows = _parse_ctor_assigns(
         src_dir / "transition_meta.py",
         ctor_names=("TransitionMeta",),
@@ -115,12 +120,10 @@ def extract_transitions(src_dir: Path) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for r in rows:
         # r: f0=name, f1=is_vip, f2=resource_id, f3=effect_id, f4=md5, f5=default_duration(s), f6=is_overlap
-        if r["f1"] is not True:
-            continue
         out.append(
             {
                 "name": r["f0"],
-                "is_vip": True,
+                "is_vip": bool(r["f1"]),
                 "resource_id": r["f2"],
                 "effect_id": r["f3"],
                 "md5": r["f4"],
@@ -337,7 +340,9 @@ def main(argv: list[str] | None = None) -> int:
         "_source_dir": str(src_dir),
         "_generated_at": generated_at,
         "_counts": {
-            "transitions_vip": len(transitions),
+            "transitions_total": len(transitions),
+            "transitions_free": sum(1 for t in transitions if not t.get("is_vip")),
+            "transitions_vip": sum(1 for t in transitions if t.get("is_vip")),
             "video_effects_vip": len(video_effects),
         },
         "transitions": transitions,

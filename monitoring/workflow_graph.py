@@ -199,7 +199,7 @@ _NODE_META: dict[str, dict[str, Any]] = {
     "node_09_inject_fx": {
         "name": "注入特效",
         "group": "fx_delivery",
-        "description": "尾链起点;中英两份草稿同时处理",
+        "description": "转场/视频特效原生绑定到视频段(消费转场推荐计划,边界=段数-1);中英两份草稿同时处理",
     },
     "node_11_inject_sticker": {
         "name": "注入贴纸",

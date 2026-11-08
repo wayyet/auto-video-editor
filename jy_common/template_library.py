@@ -155,6 +155,16 @@ class TemplateLibrary:
         """
         return dict(self._data.get("default_style", {}))
 
+    def transition_semantic_map(self) -> dict[str, str | None]:
+        """转场推荐语义 → 资源库转场名(阶段 3,node_09 消费)。
+
+        数据源 ``fx_template.json`` 的 ``transition_semantic_map``;值为 ``None``
+        表示硬切(该边界不加转场素材)。未配置/缺失时返回空 dict,调用方回落
+        style_tag 现行逻辑。``_comment`` 等下划线键被剔除。
+        """
+        raw = self._data.get("transition_semantic_map") or {}
+        return {k: v for k, v in raw.items() if not k.startswith("_")}
+
     # ---------- 新 API:按 name 精确查询 ----------
 
     def pick_transition_by_name(self, name: str) -> dict[str, Any] | None:

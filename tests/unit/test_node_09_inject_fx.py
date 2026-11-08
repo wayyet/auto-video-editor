@@ -1,4 +1,12 @@
-"""节点 9 转场 + 视频特效单测 — 模板库加载、注入、降级。"""
+"""节点 9 转场 + 视频特效单测 — 语义消费、原生绑定、幂等清理、降级。
+
+2026-11-09 阶段 3 重写后的口径:
+- 转场/特效是原生 material + segment ``extra_material_refs`` 绑定(不再是孤立数组记录);
+- 边界 = max(视频段数 - 1, 0),不依赖 shot_plan;
+- 语义(fade/cut)经 ``fx_template.json`` 的 ``transition_semantic_map`` 解析;
+- 1 段 → not_applicable;资源未解析 → degraded 不写入;
+- 重放幂等(字节级)+ 我方旧产物清理,人工转场不受影响。
+"""
 
 from __future__ import annotations
 
@@ -8,44 +16,47 @@ from pathlib import Path
 
 import pytest
 
-from nodes.node_09_inject_fx import inject_fx
+from draft_ops.draft_integrity import check_track_references
+from nodes.node_09_inject_fx import (
+    _boundary_semantics_plan,
+    inject_fx,
+)
 
 
 _VIP_ID_PATTERN = re.compile(r"^\d{19}$")
 
 
-@pytest.fixture
-def tmp_draft(tmp_path: Path) -> Path:
-    """构造含 3 段视频的草稿。"""
-    draft = {
+def _seg(seg_id: str, start: int, duration: int = 10_000_000) -> dict:
+    return {"id": seg_id, "target_timerange": {"start": start, "duration": duration}}
+
+
+def _draft(segments: list[dict]) -> dict:
+    return {
         "canvas_config": {"width": 1080, "height": 1920},
         "duration": 30_000_000,
         "materials": {},
-        "tracks": [{
-            "type": "video",
-            "segments": [
-                {"id": "s1", "target_timerange": {"start": 0, "duration": 10_000_000}},
-                {"id": "s2", "target_timerange": {"start": 10_000_000, "duration": 10_000_000}},
-                {"id": "s3", "target_timerange": {"start": 20_000_000, "duration": 10_000_000}},
-            ],
-        }],
+        "tracks": [{"type": "video", "segments": segments}],
     }
-    p = tmp_path / "draft" / "draft_content.json"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(draft, ensure_ascii=False, indent=2), encoding="utf-8")
-    return p
+
+
+def _write_draft(path: Path, draft: dict) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(draft, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def tmp_draft(tmp_path: Path) -> Path:
+    """3 段视频的草稿(s1/s2/s3 各 10s)。"""
+    return _write_draft(
+        tmp_path / "draft" / "draft_content.json",
+        _draft([_seg("s1", 0), _seg("s2", 10_000_000), _seg("s3", 20_000_000)]),
+    )
 
 
 def _state(**overrides) -> dict:
     base = {
         "draft_path": "",
-        "shot_plan": {
-            "shots": [
-                {"id": "sh1", "style_tag": "default"},
-                {"id": "sh2", "style_tag": "default"},
-                {"id": "sh3", "style_tag": "default"},
-            ],
-        },
         "status_log": [],
         "error_log": [],
     }
@@ -53,31 +64,130 @@ def _state(**overrides) -> dict:
     return base
 
 
-def test_inject_fx_adds_transitions_and_video_effects(tmp_draft: Path) -> None:
-    """3 段 → 2 个转场;1 个全局视频特效。每个 resource_id 是 19 位数字。"""
+def test_inject_fx_binds_transitions_to_boundaries(tmp_draft: Path) -> None:
+    """3 段 → 2 个转场,原生形态并挂到后一段的 extra_material_refs;s1 无转场 ref。"""
     state = _state(draft_path=str(tmp_draft))
     out = inject_fx(state)
 
     draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
     transitions = draft["materials"]["transitions"]
-    video_effects = draft["materials"]["video_effects"]
+    segments = draft["tracks"][0]["segments"]
 
-    assert len(transitions) == 2  # 3 段有 2 个边界
-    assert all(t.get("resource_id") for t in transitions)
-    assert all(_VIP_ID_PATTERN.match(t["resource_id"]) for t in transitions), (
-        f"resource_id 不是 19 位数字:{[t['resource_id'] for t in transitions]}"
+    assert len(transitions) == 2
+    for t in transitions:
+        assert t["type"] == "transition"
+        assert _VIP_ID_PATTERN.match(t["resource_id"])
+        assert int(t["duration"]) > 0
+    # 绑定:边界 i 的转场挂在 segments[i+1]
+    assert "transition-1" in segments[1]["extra_material_refs"]
+    assert "transition-2" in segments[2]["extra_material_refs"]
+    assert not any(
+        str(r).startswith("transition-") for r in segments[0].get("extra_material_refs", [])
     )
-    assert len(video_effects) >= 1
-    assert all(ve.get("resource_id") for ve in video_effects)
-    assert all(_VIP_ID_PATTERN.match(ve["resource_id"]) for ve in video_effects), (
-        f"video_effect resource_id 不是 19 位数字:{[ve['resource_id'] for ve in video_effects]}"
-    )
+    # 引用完整性:无悬空
+    assert check_track_references(draft, "zh") == []
+    # fx_summary(zh)计数
+    zh_summary = out["fx_summary"]["zh"]
+    assert zh_summary["boundaries"] == 2
+    assert zh_summary["transitions_written"] == 2
+    assert zh_summary["video_effects_written"] == 3  # 每段一个特效
+    assert not zh_summary["not_applicable"]
     assert "node_09_inject_fx_done" in out["status_log"]
+
+
+def test_inject_fx_ignores_shot_plan(tmp_draft: Path) -> None:
+    """阶段3任务4:不再依赖 shot_plan —— 不传它,注入行为不变。"""
+    state = _state(draft_path=str(tmp_draft))
+    assert "shot_plan" not in state
+    out = inject_fx(state)
+    assert out["fx_summary"]["zh"]["transitions_written"] == 2
+
+
+def test_inject_fx_consumes_transition_semantics_fade(tmp_draft: Path) -> None:
+    """storyline_plan clips 的 transition_out='fade_in' → 语义映射到免费转场"叠化"。"""
+    state = _state(
+        draft_path=str(tmp_draft),
+        storyline_plan={
+            "clips": [
+                {"clip_id": "c1", "transition_out": "fade_in"},
+                {"clip_id": "c2", "transition_out": "fade_in"},
+                {"clip_id": "c3"},
+            ],
+        },
+    )
+    inject_fx(state)
+    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
+    transitions = draft["materials"]["transitions"]
+    assert len(transitions) == 2
+    assert all(t["name"] == "叠化" for t in transitions)
+    # 免费资源 19 位 ID(vendor transition_meta 实值)
+    assert transitions[0]["resource_id"] == "6724845717472416269"
+
+
+def test_inject_fx_semantic_cut_writes_nothing(tmp_draft: Path) -> None:
+    """语义 = cut → 该边界硬切,不写转场素材,也不留悬空 ref。"""
+    state = _state(
+        draft_path=str(tmp_draft),
+        storyline_plan={
+            "clips": [
+                {"clip_id": "c1", "transition_out": "cut"},
+                {"clip_id": "c2", "transition_out": "cut"},
+                {"clip_id": "c3"},
+            ],
+        },
+    )
+    out = inject_fx(state)
+    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
+    assert draft["materials"]["transitions"] == []
+    assert all(
+        not any(str(r).startswith("transition-") for r in s.get("extra_material_refs", []))
+        for s in draft["tracks"][0]["segments"]
+    )
+    assert out["fx_summary"]["zh"]["transitions_cut"] == 2
+
+
+def test_boundary_semantics_plan_prefers_out_then_in() -> None:
+    """边界语义取前一 clip 的 transition_out,缺省回落下一 clip 的 transition_in;无语义占位 None(按边界对齐)。"""
+    state = {
+        "storyline_plan": {
+            "clips": [
+                {"clip_id": "c1", "transition_out": "fade_in", "transition_in": "cut"},
+                {"clip_id": "c2", "transition_in": "flash"},
+                {"clip_id": "c3"},
+            ],
+        },
+    }
+    # 边界0(c1→c2):c1.out=fade_in 优先,c2.in=flash 不重复创建;
+    # 边界1(c2→c3):c2.out 缺、c3.in 缺 → None 占位。
+    assert _boundary_semantics_plan(state) == ["fade_in", None]
+
+
+def test_boundary_semantics_plan_falls_back_to_transition_plan() -> None:
+    """storyline_plan 无 clips 时回落 storyline_transition_plan items(组级:两组之间 1 个边界)。"""
+    state = {
+        "storyline_transition_plan": {
+            "items": [
+                {"group_id": "g1", "transition_out": "fade_out"},
+                {"group_id": "g2", "transition_out": "fade_out"},
+            ],
+        },
+    }
+    assert _boundary_semantics_plan(state) == ["fade_out"]
+
+
+def test_inject_fx_not_applicable_single_segment(tmp_path: Path) -> None:
+    """1 段 → 0 边界:not_applicable,不写转场,不伪装成功。"""
+    draft_path = _write_draft(tmp_path / "draft" / "draft_content.json", _draft([_seg("s1", 0)]))
+    state = _state(draft_path=str(draft_path))
+    out = inject_fx(state)
+    draft = json.loads(draft_path.read_text(encoding="utf-8"))
+    assert draft["materials"]["transitions"] == []
+    assert out["fx_summary"]["zh"]["not_applicable"] is True
+    assert "node_09_inject_fx_zh_not_applicable" in out["status_log"]
 
 
 def test_inject_fx_handles_missing_template(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """模板库缺失时,降级通过 — status_log 标记 + error_log 警告,不动草稿。"""
-    # 把节点 9 的 load_resource_libraries 替换为返回空库
     from jy_common import template_library as tl_mod
 
     empty_lib = tl_mod.TemplateLibrary({"_missing": True, "_path": "/nope.json"})
@@ -87,38 +197,26 @@ def test_inject_fx_handles_missing_template(tmp_path: Path, monkeypatch: pytest.
 
     monkeypatch.setattr("nodes.node_09_inject_fx.load_resource_libraries", fake_loader)
 
-    draft = {
-        "canvas_config": {"width": 1080, "height": 1920},
-        "duration": 30_000_000,
-        "materials": {},
-        "tracks": [{"type": "video", "segments": []}],
-    }
-    draft_path = tmp_path / "draft.json"
-    draft_path.write_text(json.dumps(draft), encoding="utf-8")
+    draft_path = _write_draft(tmp_path / "draft" / "draft_content.json", _draft([]))
     state = _state(draft_path=str(draft_path))
     out = inject_fx(state)
 
     assert "node_09_inject_fx_no_template" in out["status_log"]
     assert any("模板库缺失" in e for e in out["error_log"])
-    # 草稿 materials.transitions 应为空或不存在
     draft_after = json.loads(draft_path.read_text(encoding="utf-8"))
     assert not draft_after["materials"].get("transitions")
 
 
 def test_inject_fx_handles_missing_fx_resource(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """fx_resource_library.json 缺失(只有 fx_template):节点仍跑通,转场降级到占位。
-
-    现状 fx_template.json 用 PLACEHOLDER_* — 故 resource_id 不是 19 位数字,会进入
-    warning 路径,但节点不应抛异常。
-    """
+    """fx_resource_library 缺失(只有风格索引):转场/特效 degraded 不写入,不抛异常。"""
     from jy_common import template_library as tl_mod
 
     def fake_loader(**_kwargs):
-        # 仅返回 data,fx_lib / text_lib 都空
+        # 仅返回 data,fx_lib / text_lib 都空 → by_name 查不到 → degraded
         return tl_mod.TemplateLibrary(
             {
-                "transitions": [{"name": "PLACEHOLDER_NAME", "resource_id": "PLACEHOLDER_X"}],
-                "video_effects": [{"name": "PLACEHOLDER_VFX", "resource_id": "PLACEHOLDER_V"}],
+                "transitions": [{"name": "PLACEHOLDER_NAME", "style_tag": "default"}],
+                "video_effects": [{"name": "PLACEHOLDER_VFX", "style_tag": "default"}],
             },
             fx_lib={},
             text_lib={},
@@ -126,56 +224,75 @@ def test_inject_fx_handles_missing_fx_resource(tmp_path: Path, monkeypatch: pyte
 
     monkeypatch.setattr("nodes.node_09_inject_fx.load_resource_libraries", fake_loader)
 
-    draft = {
-        "canvas_config": {"width": 1080, "height": 1920},
-        "duration": 30_000_000,
-        "materials": {},
-        "tracks": [{
-            "type": "video",
-            "segments": [
-                {"id": "s1", "target_timerange": {"start": 0, "duration": 10_000_000}},
-                {"id": "s2", "target_timerange": {"start": 10_000_000, "duration": 10_000_000}},
-            ],
-        }],
-    }
-    draft_path = tmp_path / "draft.json"
-    draft_path.write_text(json.dumps(draft), encoding="utf-8")
-    state = _state(
-        draft_path=str(draft_path),
-        shot_plan={"shots": [
-            {"id": "sh1", "style_tag": "default"},
-            {"id": "sh2", "style_tag": "default"},
-        ]},
+    draft_path = _write_draft(
+        tmp_path / "draft" / "draft_content.json",
+        _draft([_seg("s1", 0), _seg("s2", 10_000_000)]),
     )
+    state = _state(draft_path=str(draft_path))
     out = inject_fx(state)
     assert "node_09_inject_fx_done" in out["status_log"]
-    # 应该至少有一条 warning(关于 resource_id 不是 19 位数字)
-    assert any("不是 19 位数字" in e for e in out["error_log"])
+    assert out["fx_summary"]["zh"]["transitions_degraded"] == 1
+    assert out["fx_summary"]["zh"]["video_effects_degraded"] >= 1
+    draft_after = json.loads(draft_path.read_text(encoding="utf-8"))
+    assert draft_after["materials"]["transitions"] == []
+    assert any("degraded" in e for e in out["error_log"])
 
 
-def test_inject_fx_idempotent_keys_use_avail_assets(tmp_draft: Path) -> None:
-    """两次跑同节点:转场按 id 覆盖,不叠出重复(2026-10 K2=B 幂等加固)。
-
-    本节点现在横跨关卡②,resume 路径变多,纯 append 会让每次重放都多一份转场,
-    所以改为按 ``id`` 覆盖 —— 重放后条数保持不变。
-    """
+def test_inject_fx_replay_is_byte_identical(tmp_draft: Path) -> None:
+    """重放两次:materials 条数不变,整份草稿字节级一致(幂等三件套)。"""
     state = _state(draft_path=str(tmp_draft))
     inject_fx(state)
-    draft_first = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    n_first = len(draft_first["materials"]["transitions"])
-    fx_first = len(draft_first["materials"]["video_effects"])
+    first = tmp_draft.read_bytes()
 
     inject_fx(state)
-    draft_second = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    n_second = len(draft_second["materials"]["transitions"])
+    second = tmp_draft.read_bytes()
 
-    # 第二次跑覆盖同 id,条数不变(改前是 n_first * 2)
-    assert n_second == n_first
-    assert len(draft_second["materials"]["video_effects"]) == fx_first
+    assert first == second
+    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
+    assert len(draft["materials"]["transitions"]) == 2
+    assert len(draft["materials"]["video_effects"]) == 3
+
+
+def test_inject_fx_cleans_stale_after_boundary_shrink(tmp_draft: Path) -> None:
+    """3 段注入后裁成 2 段再重放:旧转场素材/引用被清掉,不留悬空。"""
+    state = _state(draft_path=str(tmp_draft))
+    inject_fx(state)
+
+    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
+    draft["tracks"][0]["segments"] = draft["tracks"][0]["segments"][:2]
+    tmp_draft.write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
+
+    inject_fx(state)
+    draft2 = json.loads(tmp_draft.read_text(encoding="utf-8"))
+    assert len(draft2["materials"]["transitions"]) == 1
+    assert len(draft2["materials"]["video_effects"]) == 2
+    assert check_track_references(draft2, "zh") == []
+    assert "transition-2" not in str(draft2["tracks"][0]["segments"][1].get("extra_material_refs"))
+
+
+def test_inject_fx_preserves_human_transitions(tmp_draft: Path) -> None:
+    """人工在剪映加的转场(uuid id)不落我方模式 → 素材与引用都保留。"""
+    human_transition = {
+        "id": "4F1A2B3C-0000-1111-2222-333344445555",
+        "type": "transition",
+        "name": "人工转场",
+        "resource_id": "8888888888888888888",
+    }
+    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
+    draft["materials"]["transitions"] = [human_transition]
+    draft["tracks"][0]["segments"][1]["extra_material_refs"] = [human_transition["id"]]
+    tmp_draft.write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
+
+    inject_fx(_state(draft_path=str(tmp_draft)))
+
+    draft2 = json.loads(tmp_draft.read_text(encoding="utf-8"))
+    ids = [t["id"] for t in draft2["materials"]["transitions"]]
+    assert human_transition["id"] in ids
+    assert human_transition["id"] in draft2["tracks"][0]["segments"][1]["extra_material_refs"]
 
 
 def test_inject_fx_applies_to_en_draft_when_present(tmp_draft: Path, tmp_path: Path) -> None:
-    """K2=B:英文分支草稿存在时,转场/特效同样注入,且两份条数一致。"""
+    """K2=B:英文分支草稿存在时,转场/特效同样注入,且两份条数与绑定一致。"""
     zh = tmp_draft
     en_file = tmp_path / "en_branch" / "draft_content.json"
     en_file.parent.mkdir(parents=True, exist_ok=True)
@@ -195,6 +312,7 @@ def test_inject_fx_applies_to_en_draft_when_present(tmp_draft: Path, tmp_path: P
     assert len(en_draft["materials"]["video_effects"]) > 0
     assert "node_09_inject_fx_done" in out["status_log"]
     assert "node_09_inject_fx_en_done" in out["status_log"]
+    assert out["fx_summary"]["zh"]["transitions_written"] == out["fx_summary"]["en"]["transitions_written"]
 
 
 def test_inject_fx_degrades_when_en_draft_missing(tmp_draft: Path, tmp_path: Path) -> None:

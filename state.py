@@ -195,6 +195,11 @@ class WorkflowState(TypedDict, total=False):
     tts_run_id: NotRequired[Optional[str]]
     tts_issue: NotRequired[Optional[str]]
 
+    # ===== 2026-11-09 阶段 3(效果缺失修复):转场/特效落草稿可观测字段 =====
+    # 节点 9 写:{zh: {...}, en: {...}}。每份草稿的边界数与转场/特效
+    # written/cut/degraded 计数 + not_applicable(单段无边界)。
+    fx_summary: NotRequired[Optional[dict]]
+
     # 汇合节点 QA 闸门结果(join_before_delivery 写)
     join_qa_issues: NotRequired[list[str]]
     # 2026-11-07 阶段 4:结构化 QA 报告(draft_ops.draft_integrity.build_join_qa_report

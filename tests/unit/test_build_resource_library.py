@@ -18,20 +18,24 @@ from scripts.build_resource_library import (
 FIXTURE_SRC = Path(__file__).resolve().parents[1] / "fixtures" / "build_resource_library_stub"
 
 
-def test_extract_transitions_filters_vip() -> None:
-    """从 fixture 抽 TransitionMeta,只保留 is_vip=True。
+def test_extract_transitions_includes_free_and_vip() -> None:
+    """从 fixture 抽 TransitionMeta,免费 + VIP 都保留(阶段3:fade 语义需要免费"叠化")。
 
-    注:extract_transitions 只做 VIP 过滤,不去重(去重是 main 里的 _dedup_by_name)。
+    注:extract_transitions 不去重(去重是 main 里的 _dedup_by_name)。
     """
     rows = extract_transitions(FIXTURE_SRC)
     names = [r["name"] for r in rows]
-    # 免费A 被过滤
-    assert "免费A" not in names
+    # 免费A 保留,is_vip 取元数据实值
+    assert "免费A" in names
+    free_a = [r for r in rows if r["name"] == "免费A"][0]
+    assert free_a["is_vip"] is False
+    assert free_a["resource_id"] == "1111111111111111111"
     # VIP_A 出现 2 次(原数据有同名重复)
     assert names.count("VIP_A") == 2
     assert "VIP_B" in names
     # 字段映射正确
     vip_a_first = [r for r in rows if r["name"] == "VIP_A"][0]
+    assert vip_a_first["is_vip"] is True
     assert vip_a_first["resource_id"] == "2222222222222222222"
     assert vip_a_first["default_duration_s"] == 1.0
     assert vip_a_first["is_overlap"] is False
@@ -77,12 +81,14 @@ def test_main_writes_json_files(tmp_path: Path) -> None:
     fx = json.loads((tmp_path / "fx_resource_library.json").read_text(encoding="utf-8"))
     text = json.loads((tmp_path / "text_resource_library.json").read_text(encoding="utf-8"))
 
+    assert fx["_counts"]["transitions_total"] == 3
+    assert fx["_counts"]["transitions_free"] == 1
     assert fx["_counts"]["transitions_vip"] == 2
     assert fx["_counts"]["video_effects_vip"] == 2
     assert text["_counts"]["intro_vip"] == 1
     assert text["_counts"]["loop_vip"] == 1
     assert text["_counts"]["outro_vip"] == 1
-    # VIP_A 的 resource_id 是 19 位数字
+    # 所有转场(含免费)的 resource_id 都是 19 位数字
     assert all(len(t["resource_id"]) == 19 for t in fx["transitions"])
     assert all(len(v["resource_id"]) == 19 for v in fx["video_effects"])
 

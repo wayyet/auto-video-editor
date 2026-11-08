@@ -1,12 +1,1184 @@
 {
   "_source": "FireRed-OpenStoryline .claude/skills/jianying-editor/scripts/vendor/pyJianYingDraft/metadata",
-  "_source_dir": "<YOUR_FIRERED_REPO>/.claude/skills/jianying-editor/scripts/vendor/pyJianYingDraft/metadata",
+  "_source_dir": "C:\\Users\\wayyet\\OneDrive\\Downloads\\开发代码\\kuaishou\\auto-video-editor\\vendor\\pyJianYingDraft\\metadata",
   "_generated_at": "2026-09-19T12:48:38+00:00",
   "_counts": {
+    "transitions_total": 433,
+    "transitions_free": 130,
     "transitions_vip": 303,
     "video_effects_vip": 462
   },
   "transitions": [
+    {
+      "name": "3D空间",
+      "is_vip": false,
+      "resource_id": "7049979667406656014",
+      "effect_id": "1506926",
+      "md5": "aaecc038f6543411f601608fc5539f0b",
+      "default_duration_s": 1.5,
+      "is_overlap": true
+    },
+    {
+      "name": "上下翻页",
+      "is_vip": false,
+      "resource_id": "7397337005387944457",
+      "effect_id": "77055399",
+      "md5": "091f7995a43fc66fd0a95b2a6b88834f",
+      "default_duration_s": 1.0,
+      "is_overlap": true
+    },
+    {
+      "name": "上移",
+      "is_vip": false,
+      "resource_id": "6724846395116753416",
+      "effect_id": "2917279",
+      "md5": "df9bc16697464de201a4924de49234a2",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "下移",
+      "is_vip": false,
+      "resource_id": "6724849276100284942",
+      "effect_id": "2917280",
+      "md5": "9c042543d4846e7c17e8f950ce6f91c2",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "中心旋转",
+      "is_vip": false,
+      "resource_id": "6858191434294497805",
+      "effect_id": "878914",
+      "md5": "b43f5b2e59f966a3b110222773c2942d",
+      "default_duration_s": 0.5,
+      "is_overlap": false
+    },
+    {
+      "name": "云朵",
+      "is_vip": false,
+      "resource_id": "6955722927161479694",
+      "effect_id": "2912469",
+      "md5": "283bb4bbe729f19f933cb705024a0983",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "倒影",
+      "is_vip": false,
+      "resource_id": "6748313807031898627",
+      "effect_id": "369691",
+      "md5": "0ee10b771dc0443c41a90bb9fd6b3c25",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "冰雪结晶",
+      "is_vip": false,
+      "resource_id": "6919369228701143559",
+      "effect_id": "1017910",
+      "md5": "a0fd9d6eb0cb5596cac4f54d0ba59eaf",
+      "default_duration_s": 0.5,
+      "is_overlap": false
+    },
+    {
+      "name": "冲鸭",
+      "is_vip": false,
+      "resource_id": "7030714241359286821",
+      "effect_id": "1441672",
+      "md5": "784b284f040f61ae95f4e8e660f3a873",
+      "default_duration_s": 0.5,
+      "is_overlap": false
+    },
+    {
+      "name": "分割",
+      "is_vip": false,
+      "resource_id": "6968372308419285540",
+      "effect_id": "4211683",
+      "md5": "ca45695f29bacf2dc29a6eb959e9e968",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "分割 II",
+      "is_vip": false,
+      "resource_id": "6969782622868214302",
+      "effect_id": "4211740",
+      "md5": "5ba1cb89bcf4a0898f86494864348e13",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "分割 III",
+      "is_vip": false,
+      "resource_id": "6969793843403166215",
+      "effect_id": "4211739",
+      "md5": "942fd71d67ca576384b2cd068157ca45",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "分割 IV",
+      "is_vip": false,
+      "resource_id": "6969793934356648455",
+      "effect_id": "4211738",
+      "md5": "62d08c08542fe62e6a8429f9501e76fa",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "前后对比 II",
+      "is_vip": false,
+      "resource_id": "7299290706277831218",
+      "effect_id": "28895844",
+      "md5": "64e8f4a060901fd4349301f97fbdd172",
+      "default_duration_s": 0.8,
+      "is_overlap": true
+    },
+    {
+      "name": "动漫云朵",
+      "is_vip": false,
+      "resource_id": "6777178865119793678",
+      "effect_id": "2911876",
+      "md5": "e835cbc7fa7b15af90a2a7090bbf68c3",
+      "default_duration_s": 0.5,
+      "is_overlap": false
+    },
+    {
+      "name": "动漫漩涡",
+      "is_vip": false,
+      "resource_id": "6858191448827761160",
+      "effect_id": "878913",
+      "md5": "fa7ba99b13036c0ff167ea3b7d5c31a2",
+      "default_duration_s": 0.5,
+      "is_overlap": false
+    },
+    {
+      "name": "动漫火焰",
+      "is_vip": false,
+      "resource_id": "6777178765643485709",
+      "effect_id": "2911875",
+      "md5": "8e7c247c5ebd58aa5c3582273e9c840b",
+      "default_duration_s": 0.5,
+      "is_overlap": false
+    },
+    {
+      "name": "动漫闪电",
+      "is_vip": false,
+      "resource_id": "6777178696609436174",
+      "effect_id": "2911874",
+      "md5": "3fd5d0c7c48668ba5305c57ac0b5d596",
+      "default_duration_s": 0.5,
+      "is_overlap": false
+    },
+    {
+      "name": "压缩",
+      "is_vip": false,
+      "resource_id": "6751618376780485133",
+      "effect_id": "4212466",
+      "md5": "337d4cd9be4e1860bd1e7e50a9a93841",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "叠加",
+      "is_vip": false,
+      "resource_id": "6914112332205396488",
+      "effect_id": "1003369",
+      "md5": "4f7e4bd421e382860b49e3e34eb4e4aa",
+      "default_duration_s": 1.0,
+      "is_overlap": true
+    },
+    {
+      "name": "叠化",
+      "is_vip": false,
+      "resource_id": "6724845717472416269",
+      "effect_id": "322577",
+      "md5": "2d641adc4bb63e37e3a0067d8c8cc3c3",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "右移",
+      "is_vip": false,
+      "resource_id": "6726711296063967748",
+      "effect_id": "2917287",
+      "md5": "4cfd965c25e33c7df9b2c1b3b4cbdf31",
+      "default_duration_s": 1.0,
+      "is_overlap": true
+    },
+    {
+      "name": "向上",
+      "is_vip": false,
+      "resource_id": "6724227090872275463",
+      "effect_id": "359459",
+      "md5": "349746a951e130fe896415f51c9eb36a",
+      "default_duration_s": 1.0,
+      "is_overlap": false
+    },
+    {
+      "name": "向上擦除",
+      "is_vip": false,
+      "resource_id": "6724849456891564557",
+      "effect_id": "2917281",
+      "md5": "9a2e4ebf7309c80be332e3c62594dcd6",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "向下",
+      "is_vip": false,
+      "resource_id": "6724227330190873100",
+      "effect_id": "359449",
+      "md5": "9c263958ef3b5762db6ffd94a665f9e8",
+      "default_duration_s": 1.0,
+      "is_overlap": false
+    },
+    {
+      "name": "向下擦除",
+      "is_vip": false,
+      "resource_id": "6724849752921346573",
+      "effect_id": "2917282",
+      "md5": "ce1fb8739d1fbff3d86498fc18321933",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "向下流动",
+      "is_vip": false,
+      "resource_id": "6858191469807669773",
+      "effect_id": "878912",
+      "md5": "45f28ed2995ca15cfe027784b55d34f2",
+      "default_duration_s": 0.5,
+      "is_overlap": false
+    },
+    {
+      "name": "向右",
+      "is_vip": false,
+      "resource_id": "6724227599616184836",
+      "effect_id": "359527",
+      "md5": "55af58a9b04ff458c3a9ae3ddb358152",
+      "default_duration_s": 1.0,
+      "is_overlap": false
+    },
+    {
+      "name": "向右上",
+      "is_vip": false,
+      "resource_id": "6724227870559834635",
+      "effect_id": "359567",
+      "md5": "19d72649fe9bc3b272e1d874a93a0e9b",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "向右下",
+      "is_vip": false,
+      "resource_id": "6724228621742903815",
+      "effect_id": "359537",
+      "md5": "4291e21aefc6d87a232441d38cabacc5",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "向右拉伸",
+      "is_vip": false,
+      "resource_id": "6987299127025472031",
+      "effect_id": "4211782",
+      "md5": "6c3d17aa182e6238ee3a48c2fdf4a627",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "向右擦除",
+      "is_vip": false,
+      "resource_id": "6724849898857959950",
+      "effect_id": "2917284",
+      "md5": "a10153bd2b569c49ddd7c055e8c9eba9",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "向右流动",
+      "is_vip": false,
+      "resource_id": "6858191483573375495",
+      "effect_id": "878911",
+      "md5": "8d3508f6e570dc73d3e771d234796cb8",
+      "default_duration_s": 0.5,
+      "is_overlap": false
+    },
+    {
+      "name": "向左",
+      "is_vip": false,
+      "resource_id": "6724227717195108867",
+      "effect_id": "359529",
+      "md5": "323fadc45da03741e6b393b3e3b34e75",
+      "default_duration_s": 0.5,
+      "is_overlap": false
+    },
+    {
+      "name": "向左上",
+      "is_vip": false,
+      "resource_id": "6724230442679013902",
+      "effect_id": "359533",
+      "md5": "4ed73d43829eb496f6885ac0b882a391",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "向左下",
+      "is_vip": false,
+      "resource_id": "6724230577211314695",
+      "effect_id": "359535",
+      "md5": "c76650d4ea9bc4e3b0530c9b9f05f28e",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "向左拉伸",
+      "is_vip": false,
+      "resource_id": "6987201429622493732",
+      "effect_id": "4211781",
+      "md5": "b0dd96c3c203104a2df46d83dd91b7bd",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "向左擦除",
+      "is_vip": false,
+      "resource_id": "6724849999336706573",
+      "effect_id": "2917283",
+      "md5": "316c2a1c1783f51505c793b13381b445",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "吸入",
+      "is_vip": false,
+      "resource_id": "7246288124110705209",
+      "effect_id": "15653345",
+      "md5": "fb75bf696e19a04795ae9a06b43a09f2",
+      "default_duration_s": 1.0,
+      "is_overlap": true
+    },
+    {
+      "name": "回忆下滑",
+      "is_vip": false,
+      "resource_id": "7309840407406318117",
+      "effect_id": "33106283",
+      "md5": "7e8f1b10bb9979d7ed184d29f301b93d",
+      "default_duration_s": 1.0,
+      "is_overlap": true
+    },
+    {
+      "name": "圆形分割 II",
+      "is_vip": false,
+      "resource_id": "7317206886053319194",
+      "effect_id": "37127313",
+      "md5": "05017adee9a3798b4fb207bb3206187e",
+      "default_duration_s": 0.8,
+      "is_overlap": true
+    },
+    {
+      "name": "圆形扫描",
+      "is_vip": false,
+      "resource_id": "6851775006418932238",
+      "effect_id": "813992",
+      "md5": "0260ab98d7a840c3344cb5b3e70b7d4b",
+      "default_duration_s": 1.0,
+      "is_overlap": true
+    },
+    {
+      "name": "圆形遮罩",
+      "is_vip": false,
+      "resource_id": "6725767129519362573",
+      "effect_id": "2916676",
+      "md5": "a7eb1d47f97049b17f49669622d07f3d",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "圆形遮罩 II",
+      "is_vip": false,
+      "resource_id": "6724850215364334083",
+      "effect_id": "2916675",
+      "md5": "2772ad7c8c7e30c6421be7c2e5dd3f15",
+      "default_duration_s": 1.0,
+      "is_overlap": true
+    },
+    {
+      "name": "复古放映",
+      "is_vip": false,
+      "resource_id": "7237068402945167909",
+      "effect_id": "14192091",
+      "md5": "44c3d405f4961d843c74c69e241df643",
+      "default_duration_s": 0.6,
+      "is_overlap": true
+    },
+    {
+      "name": "岁月的痕迹",
+      "is_vip": false,
+      "resource_id": "6982750240663147044",
+      "effect_id": "1185194",
+      "md5": "0b228af1ebde4909bb6ff545ddd89023",
+      "default_duration_s": 1.0,
+      "is_overlap": true
+    },
+    {
+      "name": "左下角 II",
+      "is_vip": false,
+      "resource_id": "7304868316252738098",
+      "effect_id": "30874190",
+      "md5": "e0296196f0ec6666a33b33fead4f63d6",
+      "default_duration_s": 0.7,
+      "is_overlap": true
+    },
+    {
+      "name": "左移",
+      "is_vip": false,
+      "resource_id": "6726711499676455435",
+      "effect_id": "2917286",
+      "md5": "9562c0ea301229d43f9dca6f6590f306",
+      "default_duration_s": 1.0,
+      "is_overlap": true
+    },
+    {
+      "name": "开幕",
+      "is_vip": false,
+      "resource_id": "6750893890712113677",
+      "effect_id": "391781",
+      "md5": "d5f097e701ddaa984a590249896fc51a",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "弹幕转场",
+      "is_vip": false,
+      "resource_id": "7028877116259176974",
+      "effect_id": "1433950",
+      "md5": "7b5385070a42a218f194d9daddb59f32",
+      "default_duration_s": 4.0,
+      "is_overlap": false
+    },
+    {
+      "name": "弹跳",
+      "is_vip": false,
+      "resource_id": "6747865141120864779",
+      "effect_id": "368205",
+      "md5": "4b3b8b53bc1f947d57a30489d81387eb",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "快门",
+      "is_vip": false,
+      "resource_id": "6882983860615778823",
+      "effect_id": "944120",
+      "md5": "2df569fefb5004c041af5509c10d6c53",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "打板转场 I",
+      "is_vip": false,
+      "resource_id": "7028143517570437668",
+      "effect_id": "1432322",
+      "md5": "355d5c4df581f6c4940c9b999e010f81",
+      "default_duration_s": 4.0,
+      "is_overlap": false
+    },
+    {
+      "name": "打板转场 II",
+      "is_vip": false,
+      "resource_id": "7029592645538157086",
+      "effect_id": "1437264",
+      "md5": "021dfc9a6541d8d08bac631749f9e87d",
+      "default_duration_s": 4.0,
+      "is_overlap": false
+    },
+    {
+      "name": "抖动",
+      "is_vip": false,
+      "resource_id": "7252544245444121148",
+      "effect_id": "17223925",
+      "md5": "a1b79bbc99afca7c9e5372cd050ad61d",
+      "default_duration_s": 0.8,
+      "is_overlap": true
+    },
+    {
+      "name": "抖动 II",
+      "is_vip": false,
+      "resource_id": "7252544309830881851",
+      "effect_id": "17223924",
+      "md5": "37319b02a398332e7159f323ea93ba88",
+      "default_duration_s": 0.8,
+      "is_overlap": true
+    },
+    {
+      "name": "抠像旋转",
+      "is_vip": false,
+      "resource_id": "7386584387128660506",
+      "effect_id": "73423370",
+      "md5": "290a8f067f8039b1060df3d1e8d07ca0",
+      "default_duration_s": 0.8,
+      "is_overlap": true
+    },
+    {
+      "name": "拉伸",
+      "is_vip": false,
+      "resource_id": "7231391397717217851",
+      "effect_id": "13402655",
+      "md5": "4fd21b4a2e6382ee8851c51c8f65ed73",
+      "default_duration_s": 1.2,
+      "is_overlap": true
+    },
+    {
+      "name": "拉伸 II",
+      "is_vip": false,
+      "resource_id": "7259735372039459389",
+      "effect_id": "19137130",
+      "md5": "d28fee612c51edf28da804983d220f8d",
+      "default_duration_s": 0.6,
+      "is_overlap": true
+    },
+    {
+      "name": "拉远",
+      "is_vip": false,
+      "resource_id": "6724226338418332167",
+      "effect_id": "359365",
+      "md5": "9661d5321722495c0a98959a0d617b0f",
+      "default_duration_s": 1.0,
+      "is_overlap": false
+    },
+    {
+      "name": "拍摄器",
+      "is_vip": false,
+      "resource_id": "7100849808784495135",
+      "effect_id": "2057168",
+      "md5": "b64bebe75d492161875d4fd54725b31d",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "推近",
+      "is_vip": false,
+      "resource_id": "6724226861666144779",
+      "effect_id": "359359",
+      "md5": "4d5a316f2eae582e7d0604b47feb8c32",
+      "default_duration_s": 1.0,
+      "is_overlap": false
+    },
+    {
+      "name": "撕纸拉屏",
+      "is_vip": false,
+      "resource_id": "7254847807465460280",
+      "effect_id": "17934952",
+      "md5": "c500d2310388b63f3a4e66ff0b15f6dc",
+      "default_duration_s": 0.7,
+      "is_overlap": true
+    },
+    {
+      "name": "放射",
+      "is_vip": false,
+      "resource_id": "6724239584663704071",
+      "effect_id": "4212630",
+      "md5": "06cc8d49c558d57e21207f68a6a7dbc0",
+      "default_duration_s": 1.0,
+      "is_overlap": true
+    },
+    {
+      "name": "故障",
+      "is_vip": false,
+      "resource_id": "6725771847444468236",
+      "effect_id": "2918080",
+      "md5": "7bec08ae5dae8806e3ba0c66622d0fd3",
+      "default_duration_s": 1.0,
+      "is_overlap": false
+    },
+    {
+      "name": "故障拼贴",
+      "is_vip": false,
+      "resource_id": "7397337004507140618",
+      "effect_id": "77055395",
+      "md5": "305fc94470ded4f5b633c80fb4112582",
+      "default_duration_s": 1.0,
+      "is_overlap": true
+    },
+    {
+      "name": "斜向分割",
+      "is_vip": false,
+      "resource_id": "7085250093527339557",
+      "effect_id": "4211687",
+      "md5": "6ae9eb3ee4b08afa67e3d079a2ece505",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "星星",
+      "is_vip": false,
+      "resource_id": "6751564373317128708",
+      "effect_id": "2916678",
+      "md5": "5ad3a484b1784e3f5391bf3fa7b188f4",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "星星 II",
+      "is_vip": false,
+      "resource_id": "6789847494898487822",
+      "effect_id": "2916679",
+      "md5": "16a4697aef243c1524e9581fb2f038c9",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "模糊",
+      "is_vip": false,
+      "resource_id": "6911569618171597320",
+      "effect_id": "4212596",
+      "md5": "fc1352435f88c6f284b6c6dce8552ffe",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "横向分割",
+      "is_vip": false,
+      "resource_id": "7083771238564237861",
+      "effect_id": "4211685",
+      "md5": "aa0aa4a72fc236611d3fd4bf75a12ca3",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "横向拉幕",
+      "is_vip": false,
+      "resource_id": "6724492948144132621",
+      "effect_id": "2917278",
+      "md5": "de63aa2d5225bb6a65b5bab8702aa1f5",
+      "default_duration_s": 1.0,
+      "is_overlap": true
+    },
+    {
+      "name": "横向模糊",
+      "is_vip": false,
+      "resource_id": "7450031573958660645",
+      "effect_id": "97482744",
+      "md5": "38f584c24f4383e9d10037ad4ce6fa00",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "横线",
+      "is_vip": false,
+      "resource_id": "6724845810892149251",
+      "effect_id": "2918076",
+      "md5": "36c1c8edb0171ea082c98d38ffa8bd36",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "气泡转场",
+      "is_vip": false,
+      "resource_id": "7028880945671311903",
+      "effect_id": "1433968",
+      "md5": "66489506132d1314f3c7264bcd947cad",
+      "default_duration_s": 4.0,
+      "is_overlap": false
+    },
+    {
+      "name": "水波卷动",
+      "is_vip": false,
+      "resource_id": "6858191497280360973",
+      "effect_id": "878910",
+      "md5": "cf9bac91349a227a6155eca9d94a8af8",
+      "default_duration_s": 0.5,
+      "is_overlap": false
+    },
+    {
+      "name": "水波向右",
+      "is_vip": false,
+      "resource_id": "6858191510865711629",
+      "effect_id": "878909",
+      "md5": "e9301bacebc6dc444aa4e6f835dd4a31",
+      "default_duration_s": 0.5,
+      "is_overlap": false
+    },
+    {
+      "name": "水波向左",
+      "is_vip": false,
+      "resource_id": "6858191524312650248",
+      "effect_id": "878908",
+      "md5": "6b6499879310b6d29e9595799829cb15",
+      "default_duration_s": 0.5,
+      "is_overlap": false
+    },
+    {
+      "name": "泛光",
+      "is_vip": false,
+      "resource_id": "6914112263645303303",
+      "effect_id": "4202527",
+      "md5": "c978e2e22e9a9768813f5fd8d486b792",
+      "default_duration_s": 1.0,
+      "is_overlap": true
+    },
+    {
+      "name": "泛白",
+      "is_vip": false,
+      "resource_id": "6949828109663212045",
+      "effect_id": "4202528",
+      "md5": "1bf6b83628ff6416a4d87865107b739e",
+      "default_duration_s": 1.0,
+      "is_overlap": false
+    },
+    {
+      "name": "波点向右",
+      "is_vip": false,
+      "resource_id": "6858191541706428941",
+      "effect_id": "878907",
+      "md5": "74c13e6250cdff7a4e860625d1098e0c",
+      "default_duration_s": 0.5,
+      "is_overlap": false
+    },
+    {
+      "name": "渐变擦除",
+      "is_vip": false,
+      "resource_id": "6919369138800431629",
+      "effect_id": "1017911",
+      "md5": "2fff9b60c929559bce574ab8ef2c14a7",
+      "default_duration_s": 1.0,
+      "is_overlap": true
+    },
+    {
+      "name": "滑动",
+      "is_vip": false,
+      "resource_id": "6757982416649851399",
+      "effect_id": "4212349",
+      "md5": "b99916e2936aeb2e56892ca617888694",
+      "default_duration_s": 1.0,
+      "is_overlap": true
+    },
+    {
+      "name": "漩涡",
+      "is_vip": false,
+      "resource_id": "6851810799510360583",
+      "effect_id": "4211780",
+      "md5": "31d2de43e6711a9eeb831d60529d0393",
+      "default_duration_s": 1.0,
+      "is_overlap": false
+    },
+    {
+      "name": "烟雾转场",
+      "is_vip": false,
+      "resource_id": "7450031574923350555",
+      "effect_id": "97482746",
+      "md5": "67dc647cf7b1c45ada91d32bebc2bde7",
+      "default_duration_s": 1.5,
+      "is_overlap": true
+    },
+    {
+      "name": "爱心",
+      "is_vip": false,
+      "resource_id": "6748289440130535947",
+      "effect_id": "2916677",
+      "md5": "2382e2096918b63a0f8e75f720d7d892",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "爱心 II",
+      "is_vip": false,
+      "resource_id": "6789846472343949837",
+      "effect_id": "2916682",
+      "md5": "0c04684566638932cb6f6d86cdfabda6",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "爱心上升",
+      "is_vip": false,
+      "resource_id": "6789846246069637640",
+      "effect_id": "2916681",
+      "md5": "2a3c5439ce79e6113843a2b7135bd21a",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "电视故障 I",
+      "is_vip": false,
+      "resource_id": "7046293801123451405",
+      "effect_id": "2918081",
+      "md5": "feaf2e85b909a123ea71728f9b61fb03",
+      "default_duration_s": 1.6,
+      "is_overlap": true
+    },
+    {
+      "name": "电视故障 II",
+      "is_vip": false,
+      "resource_id": "7042278078415901192",
+      "effect_id": "2918082",
+      "md5": "a082bdaea1122bbf1aba730278d50250",
+      "default_duration_s": 1.6,
+      "is_overlap": true
+    },
+    {
+      "name": "画笔擦除",
+      "is_vip": false,
+      "resource_id": "6789846828788486664",
+      "effect_id": "2912467",
+      "md5": "4fafb5343d5c9e726278e90b5e0c1c93",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "白光快闪",
+      "is_vip": false,
+      "resource_id": "7343136487182963211",
+      "effect_id": "49272367",
+      "md5": "c1f7073a94d22565ace1ab3023d1c154",
+      "default_duration_s": 0.4,
+      "is_overlap": true
+    },
+    {
+      "name": "白色墨花",
+      "is_vip": false,
+      "resource_id": "6858191556055142919",
+      "effect_id": "878906",
+      "md5": "775ccf71576e2b8fb075f0e61e980923",
+      "default_duration_s": 0.5,
+      "is_overlap": false
+    },
+    {
+      "name": "白色烟雾",
+      "is_vip": false,
+      "resource_id": "6885646856672514567",
+      "effect_id": "947664",
+      "md5": "9b679b32ec03c42932fa37b10c141bda",
+      "default_duration_s": 0.5,
+      "is_overlap": false
+    },
+    {
+      "name": "百叶窗",
+      "is_vip": false,
+      "resource_id": "6789847331060584974",
+      "effect_id": "521326",
+      "md5": "9f37c3f6f5e84b37b3a0560803a16c30",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "眨眼",
+      "is_vip": false,
+      "resource_id": "6864867302936941064",
+      "effect_id": "2917719",
+      "md5": "bf695506c8091f7a01ee7b1323a4d601",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "矩形分割",
+      "is_vip": false,
+      "resource_id": "6858191571196580359",
+      "effect_id": "878905",
+      "md5": "82d6235324f8c5f830f8ccf7b1cc036b",
+      "default_duration_s": 0.5,
+      "is_overlap": false
+    },
+    {
+      "name": "窗格",
+      "is_vip": false,
+      "resource_id": "6747989545448378888",
+      "effect_id": "368721",
+      "md5": "cd6a7ff53319efa1c57690f61c8737a0",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "立方体",
+      "is_vip": false,
+      "resource_id": "6785042367498949127",
+      "effect_id": "519784",
+      "md5": "be45578bb628a21eaae268a8d8df868f",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "竖向分割",
+      "is_vip": false,
+      "resource_id": "7083771107706147364",
+      "effect_id": "4211686",
+      "md5": "7cc017d4e1b6ab58ec4b6900432522ff",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "竖向拉幕",
+      "is_vip": false,
+      "resource_id": "6726711903684399619",
+      "effect_id": "2917285",
+      "md5": "84f91be5a43cc6a9d03505a465418206",
+      "default_duration_s": 1.0,
+      "is_overlap": true
+    },
+    {
+      "name": "竖向模糊",
+      "is_vip": false,
+      "resource_id": "7125661387568714247",
+      "effect_id": "3796327",
+      "md5": "cda4099e3f207ef1509f27d0b1ab01c1",
+      "default_duration_s": 0.8,
+      "is_overlap": true
+    },
+    {
+      "name": "竖向模糊 II",
+      "is_vip": false,
+      "resource_id": "7280837008421818936",
+      "effect_id": "23404229",
+      "md5": "85e381982a94778e003f3acc9527d5cf",
+      "default_duration_s": 0.66,
+      "is_overlap": true
+    },
+    {
+      "name": "竖线",
+      "is_vip": false,
+      "resource_id": "6724846536041173511",
+      "effect_id": "2918077",
+      "md5": "75019c1486b2366675d95602f58430e2",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "箭头向右",
+      "is_vip": false,
+      "resource_id": "6858191587554365966",
+      "effect_id": "878904",
+      "md5": "fa0cfb9e822393af86c6df4a8477cd63",
+      "default_duration_s": 0.5,
+      "is_overlap": false
+    },
+    {
+      "name": "粒子",
+      "is_vip": false,
+      "resource_id": "6855565313715474952",
+      "effect_id": "4212632",
+      "md5": "389d08f0700dd3e646a1e92289d84d58",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "翻篇",
+      "is_vip": false,
+      "resource_id": "7034446419641504264",
+      "effect_id": "4212350",
+      "md5": "e3a2c5e0bd63416b5f64e489beb8a702",
+      "default_duration_s": 1.3,
+      "is_overlap": true
+    },
+    {
+      "name": "翻页",
+      "is_vip": false,
+      "resource_id": "6747979085894390279",
+      "effect_id": "368701",
+      "md5": "2f157ee5d78c197efc26f8ed37490573",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "色差逆时针",
+      "is_vip": false,
+      "resource_id": "6940500629013926413",
+      "effect_id": "1069274",
+      "md5": "b235f0bc4c9eb6e090358c09c7b0ffb0",
+      "default_duration_s": 1.0,
+      "is_overlap": false
+    },
+    {
+      "name": "色差顺时针",
+      "is_vip": false,
+      "resource_id": "6940520116035523080",
+      "effect_id": "1069374",
+      "md5": "8661a7a8b19762d35506cd6513d8ed3e",
+      "default_duration_s": 1.0,
+      "is_overlap": false
+    },
+    {
+      "name": "色彩溶解",
+      "is_vip": false,
+      "resource_id": "6724846004274729480",
+      "effect_id": "322583",
+      "md5": "b5f962a334dcc141bbc3dae0f5777564",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "色彩溶解 II",
+      "is_vip": false,
+      "resource_id": "6724866927933526542",
+      "effect_id": "322625",
+      "md5": "8179e342f9b24dd1817c56f7ef1f8f9b",
+      "default_duration_s": 1.0,
+      "is_overlap": true
+    },
+    {
+      "name": "色彩溶解 III",
+      "is_vip": false,
+      "resource_id": "6724867032312975875",
+      "effect_id": "322627",
+      "md5": "293a03bd140d09b0c616f879bda235e1",
+      "default_duration_s": 1.0,
+      "is_overlap": true
+    },
+    {
+      "name": "蓝色线条",
+      "is_vip": false,
+      "resource_id": "6858191605384352263",
+      "effect_id": "878903",
+      "md5": "d4d2996c3f6cf97fb8602f825d98a4da",
+      "default_duration_s": 0.5,
+      "is_overlap": false
+    },
+    {
+      "name": "逆时针旋转",
+      "is_vip": false,
+      "resource_id": "6724226603372515853",
+      "effect_id": "359437",
+      "md5": "048170ae8df06f9d6964691b1e472c6a",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "逆时针旋转 II",
+      "is_vip": false,
+      "resource_id": "7252544659245765179",
+      "effect_id": "17224251",
+      "md5": "1b2c634ea54e81de34cb6d31848908af",
+      "default_duration_s": 0.8,
+      "is_overlap": true
+    },
+    {
+      "name": "镜像翻转",
+      "is_vip": false,
+      "resource_id": "6848792278710882824",
+      "effect_id": "2917288",
+      "md5": "1109c08965141f90b9174c38e85c8cab",
+      "default_duration_s": 1.0,
+      "is_overlap": false
+    },
+    {
+      "name": "闪白",
+      "is_vip": false,
+      "resource_id": "6724845376098013708",
+      "effect_id": "322575",
+      "md5": "9732e719b858a6dbb648d4fb459fde08",
+      "default_duration_s": 0.5,
+      "is_overlap": false
+    },
+    {
+      "name": "闪白 II",
+      "is_vip": false,
+      "resource_id": "7306818286413419017",
+      "effect_id": "31619869",
+      "md5": "9a1089fc9fefe2a79a71c37c1bc5831a",
+      "default_duration_s": 0.3,
+      "is_overlap": true
+    },
+    {
+      "name": "闪黑",
+      "is_vip": false,
+      "resource_id": "6724239388189921806",
+      "effect_id": "321493",
+      "md5": "3bca53e9f3dfa2c184fbee96438ea097",
+      "default_duration_s": 0.5,
+      "is_overlap": false
+    },
+    {
+      "name": "雪花故障",
+      "is_vip": false,
+      "resource_id": "6724866446842663431",
+      "effect_id": "2918079",
+      "md5": "71cabe836d9c88afd44f43654ba67fa7",
+      "default_duration_s": 1.0,
+      "is_overlap": false
+    },
+    {
+      "name": "雾化",
+      "is_vip": false,
+      "resource_id": "7216171159589491259",
+      "effect_id": "11387229",
+      "md5": "945e1560e2c65277b4bd4127cd479746",
+      "default_duration_s": 1.2,
+      "is_overlap": true
+    },
+    {
+      "name": "震动",
+      "is_vip": false,
+      "resource_id": "7198100561235808825",
+      "effect_id": "9261771",
+      "md5": "e46204ca1e4fcf76d1b1c86e852e862d",
+      "default_duration_s": 1.0,
+      "is_overlap": true
+    },
+    {
+      "name": "顺时针旋转",
+      "is_vip": false,
+      "resource_id": "6724226684721041932",
+      "effect_id": "359421",
+      "md5": "d6d0c76fb82ca2a355de138d94a94780",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "顺时针旋转 II",
+      "is_vip": false,
+      "resource_id": "7252544556799889975",
+      "effect_id": "17224317",
+      "md5": "5e81c58bf217a2bdaf479275e412ea93",
+      "default_duration_s": 0.8,
+      "is_overlap": true
+    },
+    {
+      "name": "频闪",
+      "is_vip": false,
+      "resource_id": "7083767957662208549",
+      "effect_id": "1674710",
+      "md5": "35a76b77dd0812f7012911109db35799",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "风车",
+      "is_vip": false,
+      "resource_id": "6748286529921094157",
+      "effect_id": "369485",
+      "md5": "367b8b51b2eeb63eb2009bf5b356bc2f",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "马赛克",
+      "is_vip": false,
+      "resource_id": "6724866519022440967",
+      "effect_id": "4212631",
+      "md5": "eed93b26d9cd6296b10d2f5065ee396e",
+      "default_duration_s": 1.0,
+      "is_overlap": true
+    },
+    {
+      "name": "黑色块",
+      "is_vip": false,
+      "resource_id": "6724866346569437710",
+      "effect_id": "2918078",
+      "md5": "357e865f3bb0c6529ee882ebf279d7c6",
+      "default_duration_s": 0.5,
+      "is_overlap": true
+    },
+    {
+      "name": "黑色烟雾",
+      "is_vip": false,
+      "resource_id": "6885647017452769805",
+      "effect_id": "947663",
+      "md5": "fa02f80c28a9671a206c2ccf17b41c58",
+      "default_duration_s": 0.5,
+      "is_overlap": false
+    },
     {
       "name": "2024回忆流",
       "is_vip": true,
