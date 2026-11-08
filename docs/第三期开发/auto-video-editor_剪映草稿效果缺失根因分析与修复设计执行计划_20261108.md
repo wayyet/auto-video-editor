@@ -950,3 +950,24 @@ flowchart TD
 
 **测试与验收**:node_13 重写 18 例+node_12 新增 3 例(伴随镜像/剥 ref/SHA 落盘)+join QA 更新 2 例+tc07 集成重写 3 例;unit 全 0 失败;`check_imports` 0 未解析。
 **实机验收(待用户,须新 thread)**:关卡② 加 BGM 并恢复后 —— EN 草稿 QA 应零悬空引用;node_13 后 BGM 音量 0.35、淡入 2s/淡出 3s 在剪映真实可听;`audio_fade` 曲线类型/字段名与 GUI 样本 diff 后按需回填 `native_fx.py`。
+
+### 13.7 阶段 6:交付 QA 升级为 required-feature gate + draft_mutations 审计 —— ✅ 已交付
+
+**决策落地(三个设计决策经操作员确认):** ①required_features 走创建台表单复选框+智能默认;②阻断路由走 repair 重试 1 次+失败终止(raise→run.failed);③审计实现形态见下。6a(gate)/6b(审计)合并为一个提交 —— `draft_integrity.py` 的 categories 聚合与 mutations 聚合在同一函数交织,拆分提交会让中间态引用不存在的方法。
+
+- **required_features 通道**:state 新增 `required_features`/`delivery_qa_retry_count`;`draft_integrity.default_required_features`(推导:字幕/转场/动画/淡入淡出默认必选,配音仅 TTS_BACKEND=firered 必选 —— stub 环境不默认阻断联调,表单显式勾选后 stub 即 degraded 阻断,BGM/贴纸默认可选)+`resolve_required_features`(显式声明覆盖推导,旧 checkpoint 零迁移);创建台 9 复选框(默认态由 config 端点 `required_features_defaults` 下发)→ api_console `require_*` 表单 → console_state 白名单落键(非布尔过滤)→ 查看模式回填。
+- **per-category QA**:`build_qa_categories` 13 类(9 必需+video_effects/covers/srt/draft_integrity)逐类 passed/failed/degraded/not_applicable;类别专属新判据(有旁白无字幕→failed、stub 配音→degraded、required BGM 无轨→failed、单镜头转场→n/a、required 贴纸被占位 fail-closed 拦截→degraded);尾链四项检查结构化(带 category),**join_qa_issues 字符串契约与阶段 4 逐字一致**(存量 21 例原样过);`check_resource_ids` 我方 FX 素材 resource_id 必须 19 位(键缺失不报 —— 夹具/旧形态;占位/空串报 error);报告顶层新增 sha256(hash_draft_files 双草稿回读)+required_features 回显+gate_failed。
+- **阻断路由**:新 `nodes/node_delivery_qa_repair.py` —— repair 按阻断类别重跑幂等节点函数(transitions→node_09/text_animation→node_10+10b/stickers→node_11/volume_fades→node_13,阶段 3-5 幂等三件套保证重放安全),字幕/配音/BGM 数据性缺失不可修;failed 节点 raise RuntimeError→runner 发 run.failed(**对照 escalate_guardrail_failure 写 error 连 END 仍被调和为 completed —— 这是真正的失败终止**);graph 条件边 join→{export|repair→回边 join 复检|failed→END},retry 上限 1;workflow_graph 注册两节点+4 边标签。join 节点自身保持"记录不抛"(直接调用的存量测试行为稳定)。
+- **创建台展示**:交付卡 4 行→6 行(+分析产物/效果落盘=QA 逐类聚合"通过 N/降级 M/失败 K/不适用 J");QA 行按 gate_failed 区分 fail/warn,note 带 SHA 短摘要;delivery.qa_repair/qa_failed 事件落卡;console.html inline JS 语法 node 校验过。
+- **draft_mutations 审计(对计划 §7.3.H 的一处偏离)**:明细落草稿目录 `.autovideo_draft_mutations.jsonl`(点前缀剪映不读),join QA 聚合每节点最近一条进 `join_qa_report.mutations` —— 未新增 state 顶层字段,理由:`_draft_io.write_draft` 是纯 IO 层拿不到 state 通道,逐节点转发需改 12 处返回值且 08/08b 同超步并行写同 list 有冲突风险;磁盘 jsonl 按草稿目录天然隔离零竞争。`write_draft` 新增 `audit_node`(写前后 SHA+分桶 before/after 计数,**审计失败降级不阻断**);apply_and_write 自动以 node_tag 审计(08/08b/09/10/11 零改动接入);node_07/12/13/17 显式传参;node_16 从直调 safe_write_draft 改走 _draft_io 汇合点;node_05 记 created。
+- **集成测试适配(记录)**:首跑出现 20 个新增失败 —— 全部整图驱动测试,根因一致:夹具任务多镜头无转场,QA 判 transitions=failed→阻断→delivery_qa_failed raise。**这是新语义在正确工作**(required 缺失不允许静默 END)。修法=设计内通道:5 个整图测试文件的 state 构造显式声明 required_features 全 False(等价用户创建台不勾选;改动点 _seed/_seed_state×3/_legacy_week4_state)。另 check_resource_ids 首版误伤夹具(键缺失报错),收紧为"存在但非法才报"。
+
+**测试与验收**:新增/更新 43 例(draft_integrity 14+join 6+repair 新文件 10+audit 新文件 9+console_state 2+api 2);unit **1582 例 0 失败**(基线 1522+43,另 17 例为 6a 期间 join/integrity 适配扩展);integration **129 例对照基线新增失败 0/消失 0**(8 存量失败信息逐字一致);`check_imports` 0 未解析。
+**实机验收(待操作员,须新 thread)**:必需功能缺失时交付卡显示"必需功能缺失,阻断交付"并出现定向修复行,复检仍失败运行置失败(不静默完成);创建台能指出缺失节点/草稿/material/原因/SHA。
+
+### 13.8 阶段 7:端到端实机回归与版本冻结 —— 自动化部分 ✅ 已交付,实机部分待操作员
+
+- **素材矩阵**:`scripts/make_e2e_test_assets.py` 扩展 `--variant all|base|long|landscape|hevc4k|noaudio`(单镜头 30s 长片/多镜头 a+b/横屏 16:9/4K HEVC libx265 ultrafast/无音轨),生成后逐一 ffprobe 自证(编码/宽高/时长/音轨),本机全变体实跑通过;中英文 narration 由创建任务 lang 参数驱动非素材属性。
+- **全量回归**:unit 1582 例 0 失败;integration 对照基线新增失败 0(8 存量不变);`check_imports` 0 未解析;PG 容器正常,剪映客户端未运行(fail-closed 门禁不误触)。
+- **验收记录**:`docs/第三期开发/auto-video-editor_剪映草稿效果缺失_阶段6-7_交付与实机验收记录_20261109.md` —— §4 操作员实机清单(场景 A 多镜头全功能/B 单镜头/C 横屏/D 4K HEVC/E 无音轨/F 英文任务/G 导出两态/H 阶段 3-5 遗留复核:动画 schema diff/贴纸 resource_id 回填/audio_fade 曲线/转场 category_id;每场景新建 Thread+freeze_run_baseline.py 取证)、§5 回填表、§6 版本冻结条件(unit 0 失败/integration 8 存量不变/实机 A-F 全过/required 全通过/H 项回填/导出两态)。
+- **实机验收(待操作员)**:按 §4 清单逐项执行并回填 §5;全部通过后按 §6.1 冻结。
