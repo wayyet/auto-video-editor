@@ -143,3 +143,38 @@
 - **残留扫描**(计划 §7.1):生产代码无可执行 ASR import/注册/开关;剩余命中仅为——历史注释(config/.env.example/graph.py)、监控展示元数据(`monitoring/workflow_graph.py`,阶段5)、`firered_adapter` ToolSpec 与 docstring 交叉引用(阶段5)、测试负向断言与历史说明、assembly 侧(本轮不动)。
 - **明确遗留**(阶段5~6 范围,本轮不动):`monitoring/workflow_graph.py` 两节点元数据与边标签、`storyline/firered_adapter.py` ToolSpec、`jy_common/provider_contracts.py:51` docstring、`tts_client.py`/`speech_synthesize.py` docstring 对照提及、state.py 四个 ASR 字段声明、README/节点图文档。
 - **旧 checkpoint**:图拓扑已变更(删 2 节点 + 静态边),暂停在旧节点的存量线程不能跨拓扑恢复(计划 §5.3);发布前需由运维侧完成/终止存量任务。
+
+---
+
+## 7. 阶段 4~6 执行结果(2026-11-08 追加)
+
+| 阶段 | 提交 | 内容 |
+|---|---|---|
+| 4 | `87df15e` | assembly 复合节点拆分:新建 `nodes/assembly/node_visual_observe.py`(`assembly_visual_observe_node`,纯视觉观察),删 `node_asr_and_visual_observe.py` / `speech_asr.py` / `test_speech_asr.py`;`graph.py` 注册与两条边改接 `assembly_discover_and_probe → assembly_visual_observe → assembly_build_timeline`;`video_ingest` 去 transcript 输入链(参数忽略、`observation_signature` 去 `transcript_sha256`、删 `transcript_for_inline`);`transcript.py` 只留 `subtitle_build` 复用 4 函数(`load_transcript_data` / `collect_segments` / `first_present` / `coerce_float`),删 6 个失去消费者的 ASR 解析函数;`build_timeline_from_paths` 可选 transcript 入参保留(evaluate_segment_selection 在用),`node_build_timeline` 不再读 `assembly_transcript_artifact`;`transcript_chars` 仅在显式传 transcript 时计入;监控注册表 :72/:99 同步改名;测试/脚本同步(`test_assembly_nodes` 3 例改名+负断言、conftest 去 ASR stub、`test_visual_observe` 换负向用例+签名断言、schema 测试 REMOVED_NODES+新链正断言、qc_graph 去桩改边断言、phase5_e2e/phase5_combined/video_edit_phase56_e2e 去 `--transcript`、产物清单 8→7) |
+| 5 | `f16e963` | `monitoring/workflow_graph.py` 清陈旧条目(node_08 描述、split_shots 描述、local_asr/speech_rough_cut 两节点条目、失效边标签);`state.py` 5 字段(`asr_segments_zh` / `asr_segments_zh_written` / `storyline_asr_artifact` / `storyline_rough_cut_artifact` / `assembly_transcript_artifact`)标 **DEPRECATED 保留声明**(旧 checkpoint 兼容,§3.3 策略);`jy_common/provider_contracts.py` 删 `ASRResult` / `ASRProvider` 死契约(TTS 契约保留)+契约测试同步;`storyline/firered_adapter.py` 删 `local_asr` / `speech_rough_cut` ToolSpec 与 OPTIONAL_TOOLS 条目;docstring 交叉引用清理(`tts_client`×2 / `speech_synthesize` / `media_probe`);README 9 处现行描述更新(目录树、依赖表、P1-2 作废、§4.6 拓扑、§4.10 表+备注+开关示例、Week3 约束表);`agent_gate/README.md:123` 标注作废 |
+
+**设计决策变更说明**:
+
+1. **`tests/fixtures/assembly_phase5/transcript.json` 保留**(计划原列为"删除"):它不只服务 assembly e2e,`tests/unit/video_edit_capabilities/test_subtitle.py` 把它当作 `subtitle_build`(字幕构建,合法保留能力)的输入 fixture;误删导致 5 例静默 skip(skip 3→8),已回滚恢复。教训:删 fixture 前须全仓 grep 消费者。
+2. **`assembly_capabilities/transcript.py` 不整删**:被 `video_edit_capabilities/subtitle_build.py:67-72` 复用 4 个纯函数;只删失去生产消费者的 6 个 ASR 解析函数(`read_transcript_text` / `transcript_data_to_text` / `format_segment` / `fmt_time` / `transcript_text_for_range` / `segment_overlaps_range`)。
+3. **主图不传 transcript、能力层保留可选接口**(计划 §3.5):`build_timeline_from_paths(transcript_artifact=None)` 默认签名不变,评估脚本等非主图调用方不受影响;`transcript_chars` metadata 改为仅在显式传入时计入。
+4. **`video_ingest` 缓存签名变化**:`observation_signature` 去掉 `transcript_sha256` 分量,改动后首次运行会重建一次 contact sheet 缓存(实测多视频第二次运行 0s 命中新签名缓存)。
+5. **state.py 走"保留声明 + DEPRECATED 注释"**,不删字段:与阶段 0-3"asr_segments_zh 取缺省不写"的兼容口径一致,存量任务过期后再单独提交字段删除。
+
+### 7.1 验证结果
+
+- **check_imports**:`未解析的导入: 0 处`(阶段 4/5 后各跑一次)。
+- **全量单元套件**(基线=51ca0d1 冻结 XML,1474 例 0 失败 3 跳过):
+  - 阶段 4 后:**1451 例,1448 通过,0 失败,3 跳过**;`compare_junit` 新增失败 **0**;消失 28 例=预期(13 speech_asr + 11 transcript 死函数用例 + 3 节点改名 + 1 transcript 校验用例);新增 5 例(3 改名 + 2 负向);跳过数与基线持平。
+  - 阶段 5 后:**1447 例,1444 通过,0 失败,3 跳过**;新增失败 **0**;消失 4 例=预期(ASR 契约用例);新增 0。
+- **全量集成套件**(基线=51ca0d1 冻结 XML,127 例 8 存量失败):阶段 6 复跑 **128 例,117 通过,8 失败,3 跳过**;`compare_junit` **新增失败 0、消失用例 0**、新增 1 例(阶段 4 加的 `test_assembly_visual_observe_chain_wiring` 正断言);8 个失败与基线**逐字一致**(wiring×5 + reorder tail_chain + auto_mode split_shots + sequential,均为存量环境/LLM 问题,与 ASR 无关)。
+- **环境插曲(如实记录)**:阶段 6 首轮集成出现 8 例 `Postgres 不可达` 失败——机器重启后 Docker 容器 `edb-postgres16`(唯一 PG 后端)未自启,属环境问题(fixture 阶段 `pytest.fail`,未触及任何项目代码;`postgres` 标记 6 例自检转 skip 佐证)。`docker start edb-postgres16` 拉起后复跑,结果如上,零新增失败。
+- **DoD 运行验证(4 次,stub LLM 后端,assembly 走 fallback_to_placeholder)**:
+  1. assembly 单视频:`scripts/assembly/phase5_e2e.py --case happy` → `all_ok=True`(5 节点 16.4s,7 产物齐、preview 可播放、report 可读、qc=pass)。
+  2. assembly 多视频(media_0001.mov 69s + media_0002.mov 34s,`video_input_paths` 两路):`source_count=2`、`per_source=2`、9 sheet/206 帧合并、逐视频 `video_ingest_0/1.json` 齐、timeline/report 产出、`qc=pass_with_warnings`。
+  3. storyline 带音轨(media_15s_audio.mp4,截自 media_0001):`storyline_split_shots → storyline_understand_clips`(静态主边),无任何 local_asr/speech_rough_cut,assembly 链推进至关卡① interrupt。
+  4. storyline 无音轨(inputs/30s.mp4,无音轨):同上,执行顺序与带音轨完全一致(音轨不再影响图拓扑)。
+- **旧 checkpoint 盘点**(只读查询 `video_workflow` 库):`workflow_runs` 仅 1 行非终态 `video-wiring-001`(2026-10-29 联调残留,video_name='x',0 事件,**非真实在途任务**);`checkpoints` 表 233 个历史 thread_id(多为已完成任务);无等待人工关卡的真实线程 → §6 所述"发布前完成/终止存量任务"运维项确认无待办,验证一律新建任务。
+- **残留扫描**(计划 §7.1 两条):生产代码无可执行 ASR import/注册/开关;剩余命中全部在白名单——删除说明注释(config.py/.env.example/graph.py)、DEPRECATED state 注释、节点/docstring 的 B1 说明、测试负向断言与旧线程兼容播种(week4/week5/state_field/postgres_resume/reorder)、`docs/分析/` 历史快照。`web/node_map/workflow.json` 为旧 14 节点子流程图,无 ASR 内容,无需更新。
+- **依赖确认**:`httpx` 仍被 `jy_common/tts_client.py` 使用,依赖声明未动。
+- **执行环境**:Windows + `.venv`(Python 3.x)、ffmpeg/ffprobe 9.0.2、PG=Docker `edb-postgres16`、LLM=stub(未配置 mcode-cli 后端,storyline smoke 与 assembly fallback 路径均为设计内桩路径);基线与对比 XML/日志存档于 `outputs/b1-p46-baseline/`(git 忽略区)。
