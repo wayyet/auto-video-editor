@@ -1,6 +1,8 @@
 """节点 7:speed_fit — 护栏节点(分叉点,对应原文档 4.2 节)。
 
-把"已存在"草稿的视频时间轴压到不超过目标时长(默认 35s)。
+把"已存在"草稿的视频时间轴压到不超过目标时长 —— 目标读
+``state.storyline_targets.target_duration_ms``(创建台"目标时长(秒)"输入框,
+P1 决定 1 选 B 后可调),缺省 35s(``config.DEFAULT_TARGET_DURATION_MS``)。
 - 帧对齐分配公式借鉴 ``E:\\Documents\\kuaishou\\.claude\\skills\\jianying-speed-fit-35s``
   (该 skill 在 7 段 64.981s → 35s 的真实草稿上已验证)
 - 重试用 **图级条件边** 表达(``graph.route_after_speed_fit``),而非节点内部
@@ -22,9 +24,9 @@ from uuid import uuid4
 from config import (
     NODE_07_DEFAULT_FPS,
     NODE_07_MAX_RETRY,
-    TARGET_DURATION_US,
 )
 from nodes._draft_io import find_video_track, jianying_running_tags, load_draft, write_draft
+from nodes.storyline._common import target_duration_ms
 from state import WorkflowState
 
 
@@ -95,16 +97,19 @@ def speed_fit(state: WorkflowState) -> dict:
     src_segments = list(video_track.get("segments", []))
     fps = video_track.get("fps", NODE_07_DEFAULT_FPS)
 
+    # P1(决定 1 选 B):目标时长读 state(创建台输入框),毫秒 → 微秒;缺省 35s
+    target_us = target_duration_ms(state) * 1000
+
     src_total_us = _compute_total_duration_us(video_track)
     # 已达标:直接返回(由条件边判断后产出 snapshot2 → node_08)
-    if src_total_us <= TARGET_DURATION_US:
+    if src_total_us <= target_us:
         # 仍递增重试计数便于联调断言(Week 3 兼容 Week 2 测试期望)
         retry = dict(state.get("retry_counts") or {})
         retry["node_07"] = retry.get("node_07", 0) + 1
         return {**state, "retry_counts": retry}
 
     src_durations = [int(seg["target_timerange"]["duration"]) for seg in src_segments]
-    new_durations = _frame_aligned_durations(src_durations, TARGET_DURATION_US, fps)
+    new_durations = _frame_aligned_durations(src_durations, target_us, fps)
 
     # 应用速度:写 segment.speed + materials.speeds[].speed + extra_material_refs
     materials = draft.setdefault("materials", {})
@@ -175,7 +180,10 @@ def route_after_speed_fit(state: WorkflowState) -> str:
     draft = load_draft(draft_path)
     duration = draft.get("duration", 0)
 
-    if duration <= TARGET_DURATION_US:
+    # P1(决定 1 选 B):与 speed_fit 同源,目标读 state,缺省 35s
+    target_us = target_duration_ms(state) * 1000
+
+    if duration <= target_us:
         # 产出快照②:cp 草稿目录到 snapshots/snapshot2/
         snap_dir = draft_path.parent.parent / "snapshots" / "snapshot2"
         snap_dir.mkdir(parents=True, exist_ok=True)

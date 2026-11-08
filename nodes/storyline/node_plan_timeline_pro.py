@@ -36,6 +36,7 @@ from nodes.storyline._common import (
     _read_media,
     append_status_tag,
     _resolve_outputs_root,
+    DEFAULT_TARGET_DURATION_MS,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,7 +85,7 @@ def storyline_plan_timeline_pro_node(state: WorkflowState) -> dict:
                     "options": {
                         "enable_ai_transition": False,
                         "enable_voiceover": False,
-                        "max_duration_ms": int(targets.get("target_duration_ms") or 35000),
+                        "max_duration_ms": int(targets.get("target_duration_ms") or DEFAULT_TARGET_DURATION_MS),
                     },
                     "method": "empty",
                     "warnings": [],

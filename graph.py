@@ -102,6 +102,7 @@ from pathlib import Path
 from typing import Optional
 
 from config import (
+    NODE_07_MAX_RETRY,
     resolve_draft_dir,
 )
 from monitoring.heartbeat_writer import start_heartbeat
@@ -181,7 +182,7 @@ from nodes.storyline.node_plan_timeline_ai_transition import (
     storyline_plan_timeline_ai_transition_node,
 )
 from nodes.storyline.node_render_video import storyline_render_video_node
-from nodes.storyline._common import web_topic_query
+from nodes.storyline._common import target_duration_ms, web_topic_query
 from storyline_capabilities.ai_transition_client import is_ai_transition_enabled
 
 
@@ -252,9 +253,14 @@ def route_after_translate(state: WorkflowState) -> str:
 # 升级节点:节点 7 重试超限后的终止点
 # ---------------------------------------------------------------------------
 def escalate_guardrail_failure(state: WorkflowState) -> dict:
-    """节点 7 连续 3 次重试仍未达 35s 时的兜底:写 error_log + 终止。"""
+    """节点 7 连续 NODE_07_MAX_RETRY 次重试仍未达标时的兜底:写 error_log + 终止。
+
+    P1(决定 1 选 B):目标时长读 ``state.storyline_targets.target_duration_ms``
+    (创建台可调,缺省 35s),文案随目标动态化,不再写死 "35s"。
+    """
+    target_s = target_duration_ms(state) / 1000
     errors = list(state.get("error_log", []) or []) + [
-        "[node_07] 护栏节点连续 3 次重试仍未将总时长压到 35s 以内,流程升级",
+        f"[node_07] 护栏节点连续 {NODE_07_MAX_RETRY} 次重试仍未将总时长压到 {target_s:g}s 以内,流程升级",
     ]
     log = list(state.get("status_log", []) or []) + ["guardrail_failed"]
     return {**state, "error_log": errors, "status_log": log}

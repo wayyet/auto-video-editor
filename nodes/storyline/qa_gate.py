@@ -28,7 +28,7 @@ from storyline.contract import (
     ContractInvalid,
     StorylineErrorCode,
 )
-from nodes.storyline._common import append_status_tag
+from nodes.storyline._common import append_status_tag, target_duration_ms
 
 
 def _load_timeline_from_state(state: WorkflowState) -> CanonicalTimeline | None:
@@ -53,15 +53,13 @@ def _load_timeline_from_state(state: WorkflowState) -> CanonicalTimeline | None:
 
 
 def _target_ms(state: WorkflowState) -> int:
-    """目标时长(毫秒)解析;缺省 35000 = 35s(剪映总时长上限)。"""
-    targets = state.get("storyline_targets") or {}
-    raw = targets.get("target_duration_ms") if isinstance(targets, dict) else None
-    if not raw:
-        return 35000
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return 35000
+    """目标时长(毫秒);统一走 ``_common.target_duration_ms``。
+
+    P1(2026-11-08)前本函数自己兜底 35000,且对非正数原样返回;统一后缺省/
+    非正数/非法值一律回落 ``config.DEFAULT_TARGET_DURATION_MS``(35000),
+    与 ``_common`` 解析规则一致(由 test_target_duration_single_source 锁定)。
+    """
+    return target_duration_ms(state)
 
 
 def storyline_qa_gate_node(state: WorkflowState) -> dict:

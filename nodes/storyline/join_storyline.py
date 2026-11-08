@@ -27,7 +27,11 @@ from storyline.contract import (
     ContractInvalid,
     StorylineErrorCode,
 )
-from nodes.storyline._common import append_status_tag, resolve_video_input_paths
+from nodes.storyline._common import (
+    append_status_tag,
+    resolve_video_input_paths,
+    DEFAULT_TARGET_DURATION_MS,
+)
 
 
 def _read_timeline_dict(state: WorkflowState) -> dict | None:
@@ -94,7 +98,7 @@ def storyline_join_node(state: WorkflowState) -> dict:
             "options": {
                 "enable_ai_transition": False,
                 "enable_voiceover": True,
-                "max_duration_ms": 35000,
+                "max_duration_ms": DEFAULT_TARGET_DURATION_MS,
             },
         }
 

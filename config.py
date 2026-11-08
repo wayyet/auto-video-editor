@@ -174,7 +174,12 @@ HEARTBEAT_MONITOR_THRESHOLD_S: int = 120  # 外部监控判定心跳超时的阈
 # ---------------------------------------------------------------------------
 # Week 3 — 步骤 7 护栏常量(对应原文档 3.4 节 + 4.2 节)
 # ---------------------------------------------------------------------------
-TARGET_DURATION_US: int = 35_000_000       # 35s = 35,000,000 微秒(剪映内部单位)
+# P1(2026-11-08,相似功能节点计划):目标时长唯一权威定义。TARGET_DURATION_US 与
+# 控制台默认值均由它派生。决定 1 选 B:node_07 运行时改读
+# state.storyline_targets.target_duration_ms(创建台可调),本常量只是缺省值
+# 的唯一定义点,35s 仍是缺省护栏。
+DEFAULT_TARGET_DURATION_MS: int = 35_000
+TARGET_DURATION_US: int = DEFAULT_TARGET_DURATION_MS * 1000  # 35s = 35,000,000 微秒(剪映内部单位)
 NODE_07_MAX_RETRY: int = 3                 # 护栏节点最大重试次数
 NODE_07_DEFAULT_FPS: int = 30              # 缺省 fps(段上无 fps 字段时兜底)
 
@@ -388,8 +393,8 @@ CONSOLE_PROMPT_MAX_CHARS: int = _console_env_int("CONSOLE_PROMPT_MAX_CHARS", 400
 #: ffprobe 视频探测超时(秒)
 CONSOLE_FFPROBE_TIMEOUT_SEC: float = _console_env_float("CONSOLE_FFPROBE_TIMEOUT_SEC", 30.0)
 
-#: 目标时长默认值/上限(毫秒);上限 10 分钟,防御性配置
-CONSOLE_TARGET_DURATION_MS_DEFAULT: int = _console_env_int("CONSOLE_TARGET_DURATION_MS_DEFAULT", 35000)
+#: 目标时长默认值/上限(毫秒);上限 10 分钟,防御性配置;默认值派生自 DEFAULT_TARGET_DURATION_MS
+CONSOLE_TARGET_DURATION_MS_DEFAULT: int = _console_env_int("CONSOLE_TARGET_DURATION_MS_DEFAULT", DEFAULT_TARGET_DURATION_MS)
 CONSOLE_TARGET_DURATION_MS_MAX: int = _console_env_int("CONSOLE_TARGET_DURATION_MS_MAX", 600000)
 
 #: LLM 后端(阶段 2 起消费):空 = 未配置 → 创建台拒绝启动(不静默 Stub)。

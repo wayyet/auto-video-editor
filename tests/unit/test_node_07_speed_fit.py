@@ -149,3 +149,59 @@ def test_route_after_speed_fit_self_loop(tmp_draft: Path) -> None:
     """未达标 + retry < MAX_RETRY → 自循环。"""
     state = {"draft_path": str(tmp_draft), "retry_counts": {"node_07": 1}}
     assert route_after_speed_fit(state) == "node_07_speed_fit"
+
+
+# ---------------------------------------------------------------------------
+# P1(决定 1 选 B):目标时长读 state.storyline_targets.target_duration_ms
+# ---------------------------------------------------------------------------
+def _write_draft(tmp_path: Path, durations_us: list[int]) -> Path:
+    draft = _make_draft_with_segments(durations_us)
+    p = tmp_path / "draft" / "draft_content.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(draft, ensure_ascii=False, indent=2), encoding="utf-8")
+    return p
+
+
+def test_speed_fit_reads_state_target_no_change(tmp_path: Path) -> None:
+    """60s 草稿 + 用户目标 60s:已达标,不动(旧逻辑会压到 35s)。"""
+    p = _write_draft(tmp_path, [10_000_000] * 6)  # 60s
+    state = {
+        "draft_path": str(p),
+        "retry_counts": {},
+        "status_log": [],
+        "error_log": [],
+        "storyline_targets": {"target_duration_ms": 60000},
+    }
+    out = speed_fit(state)
+    assert out["retry_counts"]["node_07"] == 1
+    draft_after = json.loads(p.read_text(encoding="utf-8"))
+    assert draft_after["duration"] == 60_000_000  # 未被压缩
+    assert "speeds" not in draft_after.get("materials", {})
+
+
+def test_speed_fit_compresses_to_state_target(tmp_path: Path) -> None:
+    """90s 草稿 + 用户目标 60s:压到 ≤60s 且明显大于旧硬上限 35s。"""
+    p = _write_draft(tmp_path, [30_000_000] * 3)  # 90s
+    state = {
+        "draft_path": str(p),
+        "retry_counts": {},
+        "status_log": [],
+        "error_log": [],
+        "storyline_targets": {"target_duration_ms": 60000},
+    }
+    speed_fit(state)
+    draft = json.loads(p.read_text(encoding="utf-8"))
+    assert draft["duration"] <= 60_000_000
+    assert draft["duration"] > 35_000_000  # 不再压回 35s
+    assert draft["materials"]["speeds"]
+
+
+def test_route_after_speed_fit_state_target_passes(tmp_path: Path) -> None:
+    """40s 草稿 + 用户目标 60s:达标放行(旧逻辑按 35s 会自循环)。"""
+    p = _write_draft(tmp_path, [20_000_000, 20_000_000])  # 40s
+    state = {
+        "draft_path": str(p),
+        "retry_counts": {"node_07": 1},
+        "storyline_targets": {"target_duration_ms": 60000},
+    }
+    assert route_after_speed_fit(state) == "node_08_add_subtitles"

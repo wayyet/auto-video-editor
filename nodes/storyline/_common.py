@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from config import DEFAULT_TARGET_DURATION_MS
 from state import WorkflowState
 
 
@@ -181,7 +182,9 @@ def video_input_paths_key(paths: list[str]) -> str:
 # B/C 类能力的 prompt 模板需要 ``{{user_request}}`` / ``{{duration_budget}}`` 等
 # 变量。此前这些变量没人传,占位符原样残留进 prompt(见 D6)。
 # 数据统一从 ``state.storyline_targets`` 取,取不到就用中性默认值。
-DEFAULT_TARGET_DURATION_MS: int = 35000
+# P1(2026-11-08):默认值唯一权威定义在 ``config.DEFAULT_TARGET_DURATION_MS``,
+# 顶部 import re-export 进本模块命名空间,既有 import 路径
+# (``nodes.storyline._common.DEFAULT_TARGET_DURATION_MS``)与 ``__all__`` 不变。
 
 
 def resolve_lang(state: WorkflowState, default: str = "zh") -> str:
