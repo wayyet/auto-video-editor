@@ -131,6 +131,20 @@ CANVAS_HEIGHT: int = 1920
 # "新年打字机"。可用环境变量覆盖。
 TEXT_FX_INTRO_ANIMATION: str = os.environ.get("TEXT_FX_INTRO_ANIMATION", "新年打字机").strip() or "新年打字机"
 
+# ---------------------------------------------------------------------------
+# 节点 13:adjust_volume(阶段 5,2026-11-09)—— 分角色音量与淡入淡出
+# ---------------------------------------------------------------------------
+# 角色识别按轨名:Voiceover_zh(node_08 中文配音)/ en_voiceover(node_17 英文
+# 配音)为配音轨,其余 audio 轨为 BGM,主音轨 = video 轨段。音量写段级
+# volume/last_nonzero_volume(34 键样本实证键);淡入淡出写原生 audio_fades
+# 素材(曲线类型按 linear,待 GUI diff 复核)。注意:节点会按这里的配置覆盖
+# 关卡② 人工在剪映里调过的 BGM 音量 —— 需要人工值时改环境变量或这里。
+NODE13_VOLUME_MAIN: float = float(os.environ.get("NODE13_VOLUME_MAIN", "1.0") or 0)
+NODE13_VOLUME_BGM: float = float(os.environ.get("NODE13_VOLUME_BGM", "0.35") or 0)
+NODE13_VOLUME_VOICEOVER: float = float(os.environ.get("NODE13_VOLUME_VOICEOVER", "1.0") or 0)
+NODE13_FADE_IN_SECONDS: float = float(os.environ.get("NODE13_FADE_IN_SECONDS", "2.0") or 0)
+NODE13_FADE_OUT_SECONDS: float = float(os.environ.get("NODE13_FADE_OUT_SECONDS", "3.0") or 0)
+
 
 # ---------------------------------------------------------------------------
 # 阶段 B:detect_draft_encryption 用到的 capcut CLI

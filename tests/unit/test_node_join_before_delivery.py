@@ -128,6 +128,7 @@ def _healthy_draft(dir_path: Path, *, audio_volume: float | None = 0.35) -> dict
             "transitions": [{"id": "transition-1"}],
             "video_effects": [{"id": "vfx-default"}],
             "stickers": [{"id": "sticker-t1"}],
+            "audio_fades": [{"id": "audio-fade-audio-bgm-1", "type": "audio_fade"}],
             "texts": [
                 {
                     "id": "text-1",
@@ -153,7 +154,11 @@ def _healthy_draft(dir_path: Path, *, audio_volume: float | None = 0.35) -> dict
             {
                 "type": "audio",
                 "id": "track-audio-1",
-                "segments": [{"id": "audio-bgm-1", "material_id": "audio-bgm-1"}],
+                "segments": [{
+                    "id": "audio-bgm-1",
+                    "material_id": "audio-bgm-1",
+                    "extra_material_refs": ["audio-fade-audio-bgm-1"],
+                }],
             },
         ],
     }
@@ -222,17 +227,32 @@ def test_join_en_draft_missing_tail_chain_items(tmp_path: Path) -> None:
     assert "英文草稿贴纸缺失" in joined
 
 
-def test_join_en_draft_audio_track_without_volume(tmp_path: Path) -> None:
-    """英文草稿有音轨但没写音量 → 报"音量未写入"。"""
+def test_join_en_draft_bgm_without_fade_binding(tmp_path: Path) -> None:
+    """阶段 5 口径:英文草稿有 BGM 轨但没绑淡入淡出 → 报"BGM 淡入淡出未绑定"。"""
     state = _state_with_drafts(tmp_path)
     en_dir = Path(state["draft_dir_en_branch"])
     draft = json.loads((en_dir / "draft_content.json").read_text(encoding="utf-8"))
-    draft["materials"]["audios"][0].pop("volume")
+    draft["tracks"][-1]["segments"][0].pop("extra_material_refs")
     serialized = json.dumps(draft, ensure_ascii=False)
     (en_dir / "draft_content.json").write_text(serialized, encoding="utf-8")
     (en_dir / "draft_info.json").write_text(serialized, encoding="utf-8")
     out = join_before_delivery(state)
-    assert any("音量未写入" in i for i in out["join_qa_issues"]), out["join_qa_issues"]
+    assert any("BGM 淡入淡出未绑定" in i for i in out["join_qa_issues"]), out["join_qa_issues"]
+
+
+def test_join_voiceover_track_exempt_from_fade_check(tmp_path: Path) -> None:
+    """阶段 5 口径:配音轨(按轨名)不算 BGM,没有 fade 绑定也不报 issue。"""
+    state = _state_with_drafts(tmp_path)
+    zh_dir = Path(state["draft_path"]).parent
+    draft = json.loads((zh_dir / "draft_content.json").read_text(encoding="utf-8"))
+    # 把 BGM 轨换成配音轨(轨名标记)并摘掉 fade refs
+    draft["tracks"][-1]["name"] = "Voiceover_zh"
+    draft["tracks"][-1]["segments"][0].pop("extra_material_refs")
+    serialized = json.dumps(draft, ensure_ascii=False)
+    (zh_dir / "draft_content.json").write_text(serialized, encoding="utf-8")
+    (zh_dir / "draft_info.json").write_text(serialized, encoding="utf-8")
+    out = join_before_delivery(state)
+    assert not any("BGM 淡入淡出未绑定" in i for i in out["join_qa_issues"]), out["join_qa_issues"]
 
 
 def test_join_sticker_unbound_reported(tmp_path: Path) -> None:

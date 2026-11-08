@@ -49,6 +49,7 @@ from draft_ops.draft_integrity import (
     issue_text,
 )
 from nodes._dual_draft import dual_draft_targets, en_draft_file_missing_path
+from nodes.node_13_adjust_volume import is_voiceover_track
 from state import WorkflowState
 
 #: delivery.qa 事件里 issue 明细的条数上限(事件载荷不无限膨胀;全量在 state 里)
@@ -124,8 +125,10 @@ def _tail_chain_issues(draft: dict, label: str) -> list[str]:
                 f"{label}我方字幕缺入场动画绑定({len(missing_anim)} 条:node_10 降级或未生效?)"
             )
 
-    # BGM 轨 + 音量:草稿**可能**没有音轨(关卡② 未加 / 镜像失败),那时不报;
-    # 有音轨却没音量才是真问题(尾链 node_13 该写没写)。
+    # BGM 轨 + 淡入淡出绑定:草稿**可能**没有音轨(关卡② 未加 / 镜像失败),那时不报;
+    # 有 BGM 轨(非配音轨)却没有 fade 绑定,才是 node_13 该写没写
+    # (阶段 5:音量在段级 volume 上,人工/原生段天然带 1.0,不可判"未写入";
+    # fade 只由 node_13 写,绑定与否是可判据)。
     audio_tracks = [t for t in (draft.get("tracks", []) or []) if t.get("type") == "audio"]
     if audio_tracks:
         # 匹配键双口径:原生草稿用 segment.material_id 引用素材;旧约定
@@ -140,8 +143,23 @@ def _tail_chain_issues(draft: dict, label: str) -> list[str]:
         audios = [m for m in (materials.get("audios", []) or []) if m.get("id") in seg_ids]
         if seg_ids and not audios:
             issues.append(f"{label}音轨引用的 audio material 缺失(BGM 镜像不完整?)")
-        elif audios and not any("volume" in m for m in audios):
-            issues.append(f"{label}音量未写入(尾链 node_13 未对{label}生效?)")
+        else:
+            bgm_segments = [
+                seg
+                for track in audio_tracks
+                if not is_voiceover_track(track)
+                for seg in (track.get("segments", []) or [])
+            ]
+            fade_ids = {
+                str(m.get("id")) for m in (materials.get("audio_fades") or [])
+            }
+            fade_bound = any(
+                str(r) in fade_ids
+                for seg in bgm_segments
+                for r in (seg.get("extra_material_refs") or [])
+            )
+            if bgm_segments and not fade_bound:
+                issues.append(f"{label}BGM 淡入淡出未绑定(尾链 node_13 未对{label}生效?)")
 
     return issues
 

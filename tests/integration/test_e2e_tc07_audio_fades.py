@@ -1,13 +1,13 @@
-"""E2E TC07 — 节点 13 真实实现后的端到端验收。
+"""E2E TC07 — 节点 13 阶段 5(角色化音量 + 原生淡入淡出)端到端验收。
 
-验证目标(对应验证报告 §12 验收标准 [5]):
-- 走到节点 13 后 ``draft["materials"]["audio_fades"]`` 非空
-- ``state["volume_adjusted"] is True``
-- ``state["audio_fade_targets"]`` 至少 2 条(main + bgm)
+验证目标(对齐计划 §8 阶段 5):
+- 走到节点 13 后 ``draft["materials"]["audio_fades"]`` 为原生条目且绑定到 BGM 段
+- BGM 段级 volume=0.35(config.NODE13_VOLUME_BGM),配音/主音轨角色互不干扰
+- ``state["volume_adjusted"] is True``、``state["audio_fade_targets"]`` 至少 1 条
+- 重放幂等:整份草稿字节级一致(fade 按 id 覆盖,不翻倍)
 
-依赖:既有 fixtures (conftest) + 单测覆盖过的 _seed_draft 风格 fixture。
-为不依赖真实剪映客户端,本测试不启动 LangGraph 图,而是直接调用节点函数 +
-单元测试覆盖的 jianying_adjust_volume 入口,与既有集成测试策略保持一致。
+依赖:既有 fixtures (conftest) + 单测覆盖过的角色化入口;为不依赖真实剪映
+客户端,本测试不启动 LangGraph 图,而是直接调用节点函数(与既有集成测试策略一致)。
 """
 
 from __future__ import annotations
@@ -17,52 +17,25 @@ from pathlib import Path
 
 import pytest
 
-from nodes.node_13_adjust_volume import (
-    _PLACEHOLDER_FADE_IN_KEY,
-    _PLACEHOLDER_FADE_OUT_KEY,
-    _PLACEHOLDER_VOLUME_KEY,
-    adjust_volume,
-    jianying_adjust_volume,
-)
+from nodes.node_13_adjust_volume import adjust_volume
 
 
 @pytest.fixture
 def audio_draft(tmp_path: Path) -> Path:
-    """构造含 audio_main + audio_bgm 两段的草稿,模拟节点 12 之后的状态。"""
+    """构造 BGM 轨 + 中文配音轨 + video 段的草稿,模拟关卡② 之后的状态。"""
     draft = {
         "canvas_config": {"width": 1080, "height": 1920},
         "duration": 35_000_000,
-        "materials": {
-            "audios": [
-                {"id": "audio-main-1", _PLACEHOLDER_VOLUME_KEY: 0.5},
-                {"id": "audio-bgm-1", _PLACEHOLDER_VOLUME_KEY: 0.8},
-            ],
-            "audio_fades": [],
-        },
+        "materials": {"audio_fades": []},
         "tracks": [
-            {
-                "type": "video",
-                "segments": [
-                    {"id": "v1", "target_timerange": {"start": 0, "duration": 35_000_000}},
-                ],
-            },
-            {
-                "type": "audio",
-                "segments": [
-                    {
-                        "id": "audio-main-1",
-                        "name": "audio_main",
-                        "type": "audio_main",
-                        "target_timerange": {"start": 0, "duration": 35_000_000},
-                    },
-                    {
-                        "id": "audio-bgm-1",
-                        "name": "audio_bgm",
-                        "type": "audio_bgm",
-                        "target_timerange": {"start": 0, "duration": 35_000_000},
-                    },
-                ],
-            },
+            {"type": "video", "segments": [
+                {"id": "v1", "target_timerange": {"start": 0, "duration": 35_000_000}}]},
+            {"type": "audio", "id": "track-audio-bgm", "segments": [
+                {"id": "audio-bgm-1", "material_id": "audio-bgm-1",
+                 "target_timerange": {"start": 0, "duration": 35_000_000}}]},
+            {"type": "audio", "id": "track-audio-zh-voiceover", "name": "Voiceover_zh", "segments": [
+                {"id": "audio-vo-1", "material_id": "audio-vo-1",
+                 "target_timerange": {"start": 0, "duration": 35_000_000}}]},
         ],
     }
     p = tmp_path / "draft" / "draft_content.json"
@@ -71,16 +44,9 @@ def audio_draft(tmp_path: Path) -> Path:
     return p
 
 
-def test_tc07_node_13_writes_audio_fades_and_volume(audio_draft: Path) -> None:
-    """TC07:节点 13 后 audio_fades + volume 字段均生效,state 标记 volume_adjusted。"""
-    state = {
-        "draft_path": str(audio_draft),
-        "status_log": [],
-        "error_log": [],
-    }
-
-    # 直接调节点函数
-    out_state = adjust_volume(state)
+def test_tc07_node_13_writes_native_fades_and_role_volumes(audio_draft: Path) -> None:
+    """TC07:节点 13 后原生 audio_fades 绑定 BGM 段,分角色段级 volume 生效。"""
+    out_state = adjust_volume({"draft_path": str(audio_draft), "status_log": [], "error_log": []})
 
     # 验证 1 — state 标记
     assert out_state["volume_adjusted"] is True
@@ -88,55 +54,43 @@ def test_tc07_node_13_writes_audio_fades_and_volume(audio_draft: Path) -> None:
     assert len(out_state["audio_fade_targets"]) >= 1, \
         "audio_fade_targets 应至少含 BGM 一条 fade"
 
-    # 验证 2 — draft_content.json 已写入 audio_fades + volume
+    # 验证 2 — 原生 fade 条目 + 段绑定
     draft = json.loads(audio_draft.read_text(encoding="utf-8"))
-    assert draft["materials"]["audio_fades"], "materials.audio_fades 应非空"
+    fades = draft["materials"]["audio_fades"]
+    assert fades, "materials.audio_fades 应非空"
+    (bgm_fade, *rest) = fades
+    assert bgm_fade["type"] == "audio_fade"
+    assert bgm_fade["fade_in_duration"] == 2_000_000
+    assert bgm_fade["fade_out_duration"] == 3_000_000
+    assert not rest, "fade 不应翻倍"
 
-    # 验证 3 — BGM 音量 0.35 + fade_in 2s + fade_out 3s
-    audios_by_id = {a["id"]: a for a in draft["materials"]["audios"]}
-    bgm = audios_by_id["audio-bgm-1"]
-    assert bgm[_PLACEHOLDER_VOLUME_KEY] == 0.35
-
-    bgm_fade = next(
-        (f for f in draft["materials"]["audio_fades"] if f.get("track_id") == "audio-bgm-1"),
-        None,
-    )
-    assert bgm_fade is not None, "BGM 应有对应 audio_fade 条目"
-    assert bgm_fade[_PLACEHOLDER_FADE_IN_KEY] == 2_000_000
-    assert bgm_fade[_PLACEHOLDER_FADE_OUT_KEY] == 3_000_000
+    # 验证 3 — 分角色段级音量:BGM 0.35,配音/主音轨 1.0;fade 只绑 BGM 段
+    bgm_seg = draft["tracks"][1]["segments"][0]
+    vo_seg = draft["tracks"][2]["segments"][0]
+    video_seg = draft["tracks"][0]["segments"][0]
+    assert bgm_seg["volume"] == 0.35
+    assert bgm_fade["id"] in bgm_seg["extra_material_refs"]
+    assert vo_seg["volume"] == 1.0
+    assert not any(str(r).startswith("audio-fade-") for r in vo_seg.get("extra_material_refs", []))
+    assert video_seg["volume"] == 1.0
 
 
-def test_tc07_node_13_then_resume_keeps_state_idempotent(audio_draft: Path) -> None:
-    """TC07 幂等性:第二次 invoke(模拟 resume)不应重复写 audio_fades。
-
-    节点 13 默认每次都追加 audio_fades 条目,与既有节点 9 行为一致(Week 3 占位);
-    Week 4 应改为按 audio_segment_id 去重。本测试记录当前行为以便回归。
-    """
-    state = {
-        "draft_path": str(audio_draft),
-        "status_log": [],
-        "error_log": [],
-    }
+def test_tc07_node_13_replay_is_idempotent(audio_draft: Path) -> None:
+    """TC07 幂等:重放(模拟 resume)整份草稿字节级一致,fade/refs 不翻倍。"""
+    state = {"draft_path": str(audio_draft), "status_log": [], "error_log": []}
 
     out1 = adjust_volume(state)
-    fade_count_1 = len(out1["audio_fade_targets"])
+    first = audio_draft.read_bytes()
 
-    # 第二次调:volume_adjusted 仍 True,但 audio_fade_targets 会再追加(Week 4 待优化)
-    out2 = adjust_volume(out1)
-    fade_count_2 = len(out2["audio_fade_targets"])
+    out2 = adjust_volume({**out1, "audio_fade_targets": []})
+    second = audio_draft.read_bytes()
 
-    # 当前行为:追加(Week 4 应改为"已有则跳过"幂等优化)
-    assert fade_count_2 >= fade_count_1
+    assert first == second
+    assert out2["volume_adjusted"] is True
 
 
 def test_tc07_node_13_uses_safe_write_draft_entry_point(audio_draft: Path) -> None:
-    """TC07:节点 13 走 ``draft_ops.atomic_writer.safe_write_draft`` 入口(Week 5 双写契约)。
-
-    升级历史:
-    - Week 3/4:节点 13 走 ``jy_common.draft_writer.atomic_write_draft_json``(单写)。
-    - Week 5(本计划 §6.2):节点 13 切到 ``safe_write_draft``(双写 + 校验 + 失败回退),
-      与节点 5/7/8/9/10/11/16 保持一致。
-    """
+    """TC07:节点 13 走 ``draft_ops.atomic_writer.safe_write_draft`` 入口(Week 5 双写契约)。"""
     import inspect
 
     from nodes import node_13_adjust_volume

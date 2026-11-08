@@ -1,150 +1,172 @@
-"""节点 13:adjust_volume — 音量 / 淡入淡出真实实现(Week 3 补全)。
+"""节点 13:adjust_volume — 分角色音量 / 原生淡入淡出(阶段 5,2026-11-09 重写)。
 
-参考计划文档 §4.8 的 `/jianying-adjust-volume` 从零设计 Skill。本实现把
-"placeholder → real"的字段名标定责任显式留给用户:
+旧实现的两处根因(阶段 0 基线实证 ``node_13_adjust_volume_no_audio_track``):
 
-# FIXME 字段名逆向 TODO(Week 4 用户行动项):
-#   本机当前无法启动剪映 v5.9.0 客户端做 ``draft_content.json`` diff 逆向,
-#   因此本文件中 ``materials.audio_fades[]`` 与 audio_material.volume 字段
-#   名为**设计占位**。Week 4 用户需:
-#     1. 备份 ``drafts/default/draft_content.json``
-#     2. 剪映 v5.9.0 客户端内手工给音频片段加淡入 2s / 淡出 3s / 音量 -6dB,保存
-#     3. ``diff`` 出真实字段名
-#     4. 把 ``_PLACEHOLDER_FADE_IN_KEY`` / ``_PLACEHOLDER_FADE_OUT_KEY``
-#        / ``_PLACEHOLDER_VOLUME_KEY`` / ``_PLACEHOLDER_TRACK_ID_KEY`` 替换为
-#        实际键名(详见下文)。
+1. **selector 匹配永远落空**:按段的 ``name``/``type``/``audio_kind`` 匹配
+   "audio_main"/"audio_bgm",但真实原生段(34 键)根本没有这些键 → 节点空转。
+   现改为**按轨名识别角色**(轨名是剪映保存后仍在的字段):
+   - 配音轨:``Voiceover_zh``(node_08 中文配音)/ ``en_voiceover``(node_17 标记);
+   - BGM:其余全部 audio 轨(人工在剪映拖的 BGM 轨名不可控,不按名匹配);
+   - 主音轨:video 轨段(原始画面自带声音)。
+2. **字段是设计占位**:``audio_fades[].fade_in_duration_us/track_id`` 与
+   audio material ``volume`` 均为 FIXME,剪映不识别。现改为仓库内已实证的
+   原生口径:
+   - 音量:段级 ``volume`` + ``last_nonzero_volume``(34 键样本原值,唯一经
+     真实剪映 5.9.0.11632 样本验证的音量键);
+   - 淡入淡出:原生 ``materials.audio_fades`` 条目
+     (``jy_common/native_fx.build_native_audio_fade_material``,µs)+
+     音频段 ``extra_material_refs`` 绑定(与转场/特效/贴纸同通道)。
+     曲线类型按 linear,待 GUI diff 复核。
 
-设计占位字段名:
-- audio_fades[].fade_in_duration_us  →  实际剪映键名待逆向
-- audio_fades[].fade_out_duration_us →  实际剪映键名待逆向
-- audio_fades[].track_id             →  实际剪映键名待逆向
-- audio_material.volume              →  实际剪映键名待逆向
+数值来源 ``config.NODE13_VOLUME_*`` / ``NODE13_FADE_*_SECONDS``(env 可覆盖)。
+注意:节点按配置覆盖关卡② 人工调过的 BGM 音量(需要人工值时改配置)。
 
-降级策略:
-- 草稿无 ``tracks[type="audio"]`` → 写 error_log + volume_adjusted=False,通过
-- audio material 缺失 → 写 error_log + 通过
-- 写入失败 → 抛异常(原子写入契约:目标文件不被污染)
-
-调用入口与计划文档 §4.8 一致:
-    jianying_adjust_volume(state["draft_path"], "audio_main", volume_level=1.0)
-    jianying_adjust_volume(state["draft_path"], "audio_bgm",  volume_level=0.35,
-                            fade_in_seconds=2.0, fade_out_seconds=3.0)
+幂等:fade id 确定性(``audio-fade-{segment_id}``)+ upsert 覆盖;重放先剥离
+我方旧 fade refs、清理孤儿 fade 素材。**守卫**:只改段的音量字段与 fade 引用,
+不删轨、不移动/替换任何素材 —— 人工 BGM 轨本体不受影响。
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from nodes._draft_io import jianying_running_tags, load_draft, write_draft
-from nodes._dual_draft import dual_draft_targets, missing_en_note
+from config import (
+    NODE13_FADE_IN_SECONDS,
+    NODE13_FADE_OUT_SECONDS,
+    NODE13_VOLUME_BGM,
+    NODE13_VOLUME_MAIN,
+    NODE13_VOLUME_VOICEOVER,
+)
+from jy_common.native_fx import (
+    OUR_AUDIO_FADE_PREFIX,
+    build_native_audio_fade_material,
+)
+from nodes._draft_io import (
+    jianying_running_tags,
+    load_draft,
+    upsert_by_id,
+    write_draft,
+)
+from nodes._dual_draft import EN_VOICEOVER_TRACK_NAME, dual_draft_targets, missing_en_note
 from state import WorkflowState
 
 
-# ---------------------------------------------------------------------------
-# 设计占位字段名 — 用户完成剪映客户端逆向后回填
-# ---------------------------------------------------------------------------
-_PLACEHOLDER_FADE_IN_KEY = "fade_in_duration_us"        # FIXME 字段名待逆向
-_PLACEHOLDER_FADE_OUT_KEY = "fade_out_duration_us"      # FIXME 字段名待逆向
-_PLACEHOLDER_VOLUME_KEY = "volume"                     # FIXME 字段名待逆向
-_PLACEHOLDER_TRACK_ID_KEY = "track_id"                 # FIXME 字段名待逆向
+#: 配音轨名标记(node_08 中文配音轨 / node_17 英文配音轨)
+VOICEOVER_TRACK_NAMES = ("Voiceover_zh", EN_VOICEOVER_TRACK_NAME)
 
 
-# ---------------------------------------------------------------------------
-# 辅助函数
-# ---------------------------------------------------------------------------
-def _find_audio_segments(draft: dict) -> list[dict]:
-    """返回**所有** audio 轨的 segments 合并列表;无音频轨时返回空列表。
-
-    P3b(2026-11-08)后英文草稿可能同时有 BGM 镜像轨与英文配音轨两条:
-    必须聚合全部音轨再按 selector 匹配,否则配音轨排在前面时 BGM 的
-    音量/淡入淡出会被静默跳过。
-    """
-    segments: list[dict] = []
-    for track in draft.get("tracks", []):
-        if track.get("type") == "audio":
-            segments.extend(track.get("segments", []) or [])
-    return segments
+def is_voiceover_track(track: dict) -> bool:
+    """轨道是否为工作流配音轨(按轨名标记;node_12 镜像与 join QA 同口径)。"""
+    return str(track.get("name") or "") in VOICEOVER_TRACK_NAMES
 
 
-def _find_audio_material_by_segment(draft: dict, segment: dict) -> dict | None:
-    """按 segment 找对应 audio material,匹配键双口径。
-
-    原生草稿(人工在剪映加的 BGM)segment 用 ``material_id`` 引用素材;旧约定
-    (mapper 自产段)``segment.id == material.id``。两个键都试,兼容两者。
-    """
-    wanted = {str(segment.get("material_id") or ""), str(segment.get("id") or "")}
-    for mat in draft.get("materials", {}).get("audios", []) or []:
-        if str(mat.get("id") or "") in wanted:
-            return mat
-    return None
+def _audio_tracks_by_role(draft: dict) -> dict[str, list[dict]]:
+    """audio 轨按角色分组:voiceover(按轨名)/ bgm(其余)。"""
+    voiceover: list[dict] = []
+    bgm: list[dict] = []
+    for track in draft.get("tracks", []) or []:
+        if track.get("type") != "audio":
+            continue
+        (voiceover if is_voiceover_track(track) else bgm).append(track)
+    return {"voiceover": voiceover, "bgm": bgm}
 
 
-def _audio_fades_list(draft: dict) -> list[dict]:
-    return draft.setdefault("materials", {}).setdefault("audio_fades", [])
+def _role_segments(draft: dict, role: str) -> list[dict]:
+    """角色的全部 segments:main = video 轨段;bgm/voiceover = 对应 audio 轨段。"""
+    if role == "main":
+        for track in draft.get("tracks", []) or []:
+            if track.get("type") == "video":
+                return list(track.get("segments", []) or [])
+        return []
+    tracks = _audio_tracks_by_role(draft).get(role, [])
+    return [seg for track in tracks for seg in (track.get("segments", []) or [])]
 
 
-def _apply_volume(audio_material: dict, volume_level: float) -> None:
-    """设置 audio material 的 volume 字段(占位字段名)。"""
-    audio_material[_PLACEHOLDER_VOLUME_KEY] = float(volume_level)
+def _apply_volume_to_segment(seg: dict, volume_level: float) -> None:
+    """段级音量(34 键样本实证键);last_nonzero_volume 仅在非零时同步。"""
+    seg["volume"] = float(volume_level)
+    if float(volume_level) > 0:
+        seg["last_nonzero_volume"] = float(volume_level)
 
 
-def _apply_fade(
-    audio_fades: list[dict],
-    audio_segment_id: str,
+def _apply_fade_to_segment(
+    draft: dict,
+    seg: dict,
     fade_in_seconds: float,
     fade_out_seconds: float,
-) -> dict:
-    """写入一条 audio_fade 条目(按 ``track_id`` 覆盖而非 append),返回该条目。
-
-    2026-10 K2=B 幂等加固:本节点现在横跨关卡②,resume 后可能重跑;原实现用
-    ``uuid4()`` 生成 id 且纯 append,重放会让同一音轨叠出多条 fade。改为**按
-    ``track_id`` 覆盖**,同一条音轨永远只有一条 fade 配置。
-    """
-    entry = {
-        "id": f"audio-fade-{audio_segment_id}",
-        _PLACEHOLDER_TRACK_ID_KEY: audio_segment_id,
-        _PLACEHOLDER_FADE_IN_KEY: int(fade_in_seconds * 1_000_000),
-        _PLACEHOLDER_FADE_OUT_KEY: int(fade_out_seconds * 1_000_000),
-        "_fade_in_curve_type": "linear",     # FIXME 曲线类型枚举待逆向
-        "_fade_out_curve_type": "linear",    # FIXME 曲线类型枚举待逆向
-    }
-    for idx, existing in enumerate(audio_fades):
-        if existing.get(_PLACEHOLDER_TRACK_ID_KEY) == audio_segment_id:
-            audio_fades[idx] = entry
-            return entry
-    audio_fades.append(entry)
+) -> dict | None:
+    """为音频段写原生 fade 素材并绑定 ref;返回 fade 条目(段无 id 时 None)。"""
+    seg_id = str(seg.get("id") or "")
+    if not seg_id:
+        return None
+    fade_in_us = int(round(float(fade_in_seconds) * 1_000_000))
+    fade_out_us = int(round(float(fade_out_seconds) * 1_000_000))
+    # 钳制:淡入/淡出不超过段长(超长的 fade 剪映不生效)
+    seg_duration_us = int((seg.get("target_timerange") or {}).get("duration") or 0)
+    if seg_duration_us > 0:
+        fade_in_us = min(fade_in_us, seg_duration_us)
+        fade_out_us = min(fade_out_us, seg_duration_us)
+    entry = build_native_audio_fade_material(
+        material_id=f"{OUR_AUDIO_FADE_PREFIX}{seg_id}",
+        fade_in_us=fade_in_us,
+        fade_out_us=fade_out_us,
+    )
+    bucket = draft.setdefault("materials", {}).setdefault("audio_fades", [])
+    upsert_by_id(bucket, entry)
+    refs = seg.setdefault("extra_material_refs", [])
+    if entry["id"] not in refs:
+        refs.append(entry["id"])
     return entry
 
 
-# ---------------------------------------------------------------------------
-# 公开 API:与计划文档 §4.8 签名一致
-# ---------------------------------------------------------------------------
+def _cleanup_stale_fades(draft: dict, kept_ids: set[str]) -> int:
+    """清理未续用的我方 fade(素材 + BGM 段上的旧 refs),返回清理数。"""
+    bucket = draft.setdefault("materials", {}).setdefault("audio_fades", [])
+    removed = 0
+    kept: list[dict] = []
+    for item in bucket:
+        item_id = str(item.get("id") or "")
+        if item_id.startswith(OUR_AUDIO_FADE_PREFIX) and item_id not in kept_ids:
+            removed += 1
+            continue
+        kept.append(item)
+    bucket[:] = kept
+
+    for track in _audio_tracks_by_role(draft).get("bgm", []):
+        for seg in track.get("segments", []) or []:
+            refs = seg.get("extra_material_refs")
+            if not isinstance(refs, list):
+                continue
+            seg["extra_material_refs"] = [
+                r for r in refs
+                if not (str(r).startswith(OUR_AUDIO_FADE_PREFIX) and str(r) not in kept_ids)
+            ]
+    return removed
+
+
 def jianying_adjust_volume(
     draft_path: str,
-    track_selector: str,
-    volume_level: float = 1.0,
-    fade_in_seconds: float = 0.0,
-    fade_out_seconds: float = 0.0,
+    role: str,
+    volume_level: float | None = None,
+    fade_in_seconds: float | None = None,
+    fade_out_seconds: float | None = None,
 ) -> dict | None:
-    """应用音量与淡入淡出到指定音轨;返回实际写入的 audio_fade 条目(或 None)。
+    """按角色应用音量与淡入淡出;返回实际写入的 audio_fade 条目(或 None)。
 
     Args:
         draft_path: 草稿 JSON 文件路径。
-        track_selector: "audio_main" / "audio_bgm" — 按 ``segments[].name`` 匹配。
-        volume_level: 0.0~1.0 线性音量(占位口径,实际剪映口径待逆向)。
-        fade_in_seconds: 淡入时长(秒)。
-        fade_out_seconds: 淡出时长(秒)。
-
-    Returns:
-        实际写入的 audio_fades 条目 dict(便于 state 记录);无匹配音轨时返回 None。
+        role: ``"main"``(video 轨段)/ ``"bgm"``(非配音 audio 轨)/
+            ``"voiceover"``(配音轨)。
+        volume_level / fade_in_seconds / fade_out_seconds: None 时按角色取
+            config 缺省(main 1.0 无 fade;bgm 0.35 + 2s/3s;voiceover 1.0)。
 
     Raises:
         FileNotFoundError: draft_path 不存在。
-        json.JSONDecodeError: 草稿不是合法 JSON(原子写入前的合法性校验捕获)。
+        json.JSONDecodeError: 草稿不是合法 JSON。
     """
     entry, _write_result = _adjust_volume_with_write(
         draft_path,
-        track_selector,
+        role,
         volume_level=volume_level,
         fade_in_seconds=fade_in_seconds,
         fade_out_seconds=fade_out_seconds,
@@ -152,52 +174,64 @@ def jianying_adjust_volume(
     return entry
 
 
+#: 角色缺省音量/淡入淡出(计划文档 §4.8 口径:main 1.0 无 fade,bgm 0.35 + 2s/3s)
+_ROLE_DEFAULTS: dict[str, dict] = {
+    "main": {"volume": NODE13_VOLUME_MAIN, "fade_in": 0.0, "fade_out": 0.0},
+    "bgm": {
+        "volume": NODE13_VOLUME_BGM,
+        "fade_in": NODE13_FADE_IN_SECONDS,
+        "fade_out": NODE13_FADE_OUT_SECONDS,
+    },
+    "voiceover": {"volume": NODE13_VOLUME_VOICEOVER, "fade_in": 0.0, "fade_out": 0.0},
+}
+
+
 def _adjust_volume_with_write(
     draft_path: str,
-    track_selector: str,
-    volume_level: float = 1.0,
-    fade_in_seconds: float = 0.0,
-    fade_out_seconds: float = 0.0,
+    role: str,
+    volume_level: float | None = None,
+    fade_in_seconds: float | None = None,
+    fade_out_seconds: float | None = None,
 ) -> tuple[dict | None, dict | None]:
     """:func:`jianying_adjust_volume` 的内部实现,额外回传 ``safe_write_draft`` 结果。
 
-    拆分原因:``safe_write_draft`` 的返回值里有 ``jianying_running`` 标志,节点层要靠它
-    写"剪映在跑"告警到 ``status_log``(节点 08/09/10/11 都有,唯独本节点原先漏了)。
-    而 :func:`jianying_adjust_volume` 的对外返回契约是 ``dict | None`` 且被单测与
-    集成测试直接断言,不能改成元组,所以让本私有实现同时回传两者,公开 API 只取第一个。
+    拆分原因见旧版注释:节点层要读 ``safe_write_draft`` 的 ``jianying_running``
+    标志写告警,而公开 API 的返回契约(被单测/集成测试直接断言)不能改成元组。
 
     Returns:
-        ``(written_entry, write_result)``。无匹配音轨时 ``written_entry`` 为 None 且
-        **不发生写入**,此时 ``write_result`` 也是 None。
+        ``(written_entry, write_result)``。角色无任何 segment 时 ``written_entry``
+        为 None 且**不发生写入**,``write_result`` 也是 None。
     """
+    defaults = _ROLE_DEFAULTS.get(role)
+    if defaults is None:
+        raise ValueError(f"[node_13] 未知角色: {role!r}(可选 main/bgm/voiceover)")
+    level = float(defaults["volume"] if volume_level is None else volume_level)
+    fade_in = float(defaults["fade_in"] if fade_in_seconds is None else fade_in_seconds)
+    fade_out = float(defaults["fade_out"] if fade_out_seconds is None else fade_out_seconds)
+
     draft_file = Path(draft_path)
     draft = load_draft(draft_file)
 
-    segments = _find_audio_segments(draft)
-    # 优先按 segment.name 匹配;无 name 时退到按 type 字符串匹配 selector
-    matched: list[dict] = [
-        s for s in segments
-        if s.get("name") == track_selector
-        or s.get("type") == track_selector
-        or s.get("audio_kind") == track_selector
-    ]
-    if not matched:
+    segments = _role_segments(draft, role)
+    if not segments and role != "bgm":
         return None, None
 
-    audio_fades = _audio_fades_list(draft)
     written_entry: dict | None = None
+    kept_fade_ids: set[str] = set()
+    for seg in segments:
+        _apply_volume_to_segment(seg, level)
+        if role == "bgm" and (fade_in > 0 or fade_out > 0):
+            entry = _apply_fade_to_segment(draft, seg, fade_in, fade_out)
+            if entry is not None:
+                kept_fade_ids.add(entry["id"])
+                written_entry = entry
 
-    for seg in matched:
-        seg_id = seg.get("id")
-        audio_mat = _find_audio_material_by_segment(draft, seg)
-        if audio_mat is not None:
-            _apply_volume(audio_mat, volume_level)
-        if fade_in_seconds > 0 or fade_out_seconds > 0:
-            if seg_id is None:
-                continue
-            written_entry = _apply_fade(audio_fades, seg_id, fade_in_seconds, fade_out_seconds)
+    if role == "bgm":
+        # fade 管理权只在 bgm 角色:即使 BGM 段被删空也要清掉孤儿 fade
+        removed = _cleanup_stale_fades(draft, kept_fade_ids)
+        if not segments and removed == 0:
+            return None, None
 
-    # Week 5:从旧单写入口切到 safe_write_draft 双写(draft_dir 由 draft_file.parent 提供)。
     write_result = write_draft(draft_file, draft)
     return written_entry, write_result
 
@@ -205,34 +239,16 @@ def _adjust_volume_with_write(
 # ---------------------------------------------------------------------------
 # LangGraph 节点包装
 # ---------------------------------------------------------------------------
-def _try_audio_track(
+def _try_role(
     state: WorkflowState,
-    track_selector: str,
-    volume_level: float,
-    fade_in_seconds: float = 0.0,
-    fade_out_seconds: float = 0.0,
+    role: str,
     draft_file: str | Path | None = None,
     log_prefix: str = "node_13",
 ) -> tuple[dict | None, dict | None]:
-    """包装音量调整,失败时把错误写到 state.error_log。
-
-    Args:
-        draft_file: 目标草稿文件。``None`` 时用 ``state["draft_path"]``(保持
-            重构前行为,单测可直接调本函数)。K2=B 用它对英文草稿复用同一逻辑。
-
-    Returns:
-        ``(written_entry, write_result)``;草稿文件不存在时返回 ``(None, None)``
-        并已把错误写进 ``state.error_log``。
-    """
+    """包装单角色调整,草稿文件不存在时把错误写进 ``state.error_log``。"""
     target = draft_file if draft_file is not None else state.get("draft_path")
     try:
-        return _adjust_volume_with_write(
-            target,
-            track_selector,
-            volume_level=volume_level,
-            fade_in_seconds=fade_in_seconds,
-            fade_out_seconds=fade_out_seconds,
-        )
+        return _adjust_volume_with_write(target, role)
     except FileNotFoundError:
         err = list(state.get("error_log", []) or [])
         err.append(f"[{log_prefix}] 草稿文件不存在: {target}")
@@ -241,23 +257,18 @@ def _try_audio_track(
 
 
 def adjust_volume(state: WorkflowState) -> dict:
-    """LangGraph 节点函数:对主音轨 + BGM 各执行一次音量/淡入淡出。
+    """LangGraph 节点函数:对 main / bgm / voiceover 三个角色各执行一次。
 
-    K2=B(2026-10):对**中文主草稿 + 英文分支草稿**各跑一遍
-    (见 ``nodes/_dual_draft.py``)。两份草稿在同一节点内顺序处理,不跨超步,
+    K2=B(2026-10):对**中文主草稿 + 英文分支草稿**各跑一遍(见
+    ``nodes/_dual_draft.py``)。两份草稿在同一节点内顺序处理,不跨超步,
     ``volume_adjusted`` / ``status_log`` / ``audio_fade_targets`` 的语义不变。
-
-    R2 已知限制:英文草稿目前**没有** ``audio_main`` 音轨(``node_17`` 只合成音频
-    文件、不写草稿,见计划 §6 R2),所以本轮英文草稿上**只有关卡② 镜像过去的 BGM 轨
-    会被调音量**;英文主音轨音量要等 ``node_17`` 写草稿后才生效。无音轨时降级通过 +
-    ``error_log``,不抛异常。
+    无任何可调段时降级通过 + error_log,不抛异常。
     """
     draft_path = state.get("draft_path")
     audio_fade_targets: list[dict] = list(state.get("audio_fade_targets", []) or [])
     status_log = list(state.get("status_log", []) or [])
 
     if not draft_path:
-        # 在 state 上直接追加,避免与 _try_audio_track 重复写 error_log
         state.setdefault("error_log", []).append("[node_13] state.draft_path 缺失,跳过音量调整")
         status_log.append("node_13_adjust_volume_skipped")
         return {
@@ -283,31 +294,20 @@ def adjust_volume(state: WorkflowState) -> dict:
     write_results: list[dict | None] = []
 
     for tag, draft_file in targets:
-        # 主音轨:音量 1.0,无淡入淡出(占位惯例 — 计划文档 §4.8)
-        main_entry, main_write = _try_audio_track(
-            state, "audio_main", volume_level=1.0,
-            draft_file=draft_file, log_prefix=f"node_13_{tag}",
-        )
-        # BGM:音量 0.35,fade-in 2s,fade-out 3s(计划文档 §4.8)
-        bgm_entry, bgm_write = _try_audio_track(
-            state,
-            "audio_bgm",
-            volume_level=0.35,
-            fade_in_seconds=2.0,
-            fade_out_seconds=3.0,
-            draft_file=draft_file,
-            log_prefix=f"node_13_{tag}",
-        )
-        if bgm_entry is not None:
-            audio_fade_targets.append(bgm_entry)
-        adjusted_any = adjusted_any or main_entry is not None or bgm_entry is not None
-        write_results.extend((main_write, bgm_write))
+        prefix = f"node_13_{tag}"
+        # 角色与缺省值(计划文档 §4.8):main 1.0 无 fade;bgm 0.35 + 2s/3s;voiceover 1.0
+        for role in ("main", "bgm", "voiceover"):
+            entry, write_result = _try_role(
+                state, role, draft_file=draft_file, log_prefix=prefix
+            )
+            if entry is not None:
+                audio_fade_targets.append(entry)
+            adjusted_any = adjusted_any or entry is not None
+            write_results.append(write_result)
 
-    adjusted = adjusted_any
-    if not adjusted:
-        # 不覆盖 _try_audio_track 已写入的错误信息(如 FileNotFoundError)
+    if not adjusted_any:
         existing_errors = list(state.get("error_log", []) or [])
-        if not any("audio track" in e for e in existing_errors):
+        if not any("audio" in e or "video" in e for e in existing_errors):
             existing_errors.append("[node_13] 草稿无 audio track(可能关卡②未添加),降级通过")
             state["error_log"] = existing_errors  # type: ignore[index]
 
@@ -317,16 +317,15 @@ def adjust_volume(state: WorkflowState) -> dict:
         state["error_log"] = err  # type: ignore[index]
 
     status_log.append(
-        "node_13_adjust_volume_done" if adjusted else "node_13_adjust_volume_no_audio_track"
+        "node_13_adjust_volume_done" if adjusted_any else "node_13_adjust_volume_no_audio_track"
     )
-    if len(targets) == 2 and adjusted:
+    if len(targets) == 2 and adjusted_any:
         status_log.append("node_13_adjust_volume_en_done")
-    # R2 行为对齐:本节点此前做了同样的 safe_write_draft 双写,却漏了这条告警 ——
-    # 节点 08/09/10/11 都有。多次写入(主音轨 + BGM × 中英两份)只产出一条告警。
+    # 本节点多次写入(3 角色 × 中英两份)只产出一条剪映在跑告警。
     status_log.extend(jianying_running_tags("node_13", write_results))
     return {
         **state,
-        "volume_adjusted": adjusted,
+        "volume_adjusted": adjusted_any,
         "status_log": status_log,
         "audio_fade_targets": audio_fade_targets,
     }

@@ -25,6 +25,8 @@ from typing import Any
 
 from langgraph.types import interrupt
 
+from draft_ops.draft_integrity import check_track_references
+from draft_ops.draft_lock import hash_draft_files
 from nodes._checkpoint import build_interrupt_payload, post_resume
 from nodes._draft_io import load_draft, write_draft
 from nodes._dual_draft import EN_VOICEOVER_TRACK_NAME, en_draft_file, missing_en_note
@@ -128,32 +130,125 @@ def mirror_bgm_to_en_draft(state: WorkflowState) -> list[str]:
         for key in ("material_id", "id")
         if seg.get(key)
     }
+    en_materials = en_draft.setdefault("materials", {})
+    zh_materials = zh_draft.get("materials", {}) or {}
     if referenced_ids:
-        zh_materials = zh_draft.get("materials", {}) or {}
         wanted = [
             m for m in (zh_materials.get("audios", []) or [])
             if m.get("id") in referenced_ids
         ]
-        en_materials = en_draft.setdefault("materials", {})
         existing_audios = en_materials.setdefault("audios", [])
         kept = [m for m in existing_audios if m.get("id") not in referenced_ids]
         en_materials["audios"] = kept + [dict(m) for m in wanted]
 
+    # 3) 伴随素材(阶段 5 修复,阶段 0 基线实证 ×4 悬空):镜像段引用的
+    #    speeds/canvases/sound_channel_mappings/vocal_separations/audio_fades
+    #    一并复制 —— 旧实现只镜像 audios 桶,整轨深拷把 companion refs 带到
+    #    英文侧却无处解析。
+    companion_refs = {
+        str(r)
+        for track in audio_tracks
+        for seg in (track.get("segments", []) or [])
+        for r in (seg.get("extra_material_refs") or [])
+    }
+    companion_buckets = (
+        "speeds",
+        "canvases",
+        "sound_channel_mappings",
+        "vocal_separations",
+        "audio_fades",
+    )
+    for bucket_name in companion_buckets:
+        if not companion_refs:
+            break
+        wanted = [
+            m
+            for m in (zh_materials.get(bucket_name) or [])
+            if str(m.get("id") or "") in companion_refs
+        ]
+        if not wanted:
+            continue
+        en_bucket = en_materials.setdefault(bucket_name, [])
+        existing_ids = {m.get("id") for m in en_bucket}
+        for m in wanted:
+            if m.get("id") not in existing_ids:
+                en_bucket.append(dict(m))
+
+    # 4) 尽力剥离无法镜像的 refs(指向未复制桶的引用会变成悬空,QA error):
+    #    只处理镜像轨上的段,人工素材不受影响。
+    known_ids = {
+        str(m.get("id"))
+        for bucket in en_materials.values()
+        if isinstance(bucket, list)
+        for m in bucket
+        if isinstance(m, dict) and m.get("id")
+    }
+    stripped = 0
+    for track in tracks:
+        if track.get("type") != "audio" or track.get("name") == EN_VOICEOVER_TRACK_NAME:
+            continue
+        for seg in (track.get("segments", []) or []):
+            refs = seg.get("extra_material_refs")
+            if not isinstance(refs, list):
+                continue
+            kept_refs = [r for r in refs if str(r) in known_ids]
+            stripped += len(refs) - len(kept_refs)
+            seg["extra_material_refs"] = kept_refs
+    if stripped:
+        notes.append(
+            f"[node_12] 镜像段有 {stripped} 个无法镜像的 companion ref,已剥离(防悬空)"
+        )
+
     try:
         write_draft(en_file, en_draft)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RuntimeError) as exc:
+        # RuntimeError = 剪映在跑且严格模式拒写(JY_WRITE_FAIL_ON_JIANYING_RUNNING)
+        # —— 关卡② resume 后剪映很可能还开着,降级不崩(阶段 5 加固)。
         notes.append(f"[node_12] BGM 镜像到英文草稿失败: {exc}")
+        return notes
+
+    # 5) 镜像后校验(阶段 5 任务 2):重读英文草稿跑引用完整性,失败不留假成功。
+    try:
+        reloaded = load_draft(en_file)
+    except (OSError, ValueError) as exc:
+        notes.append(f"[node_12] 镜像后回读英文草稿失败: {exc}")
+        return notes
+    ref_issues = check_track_references(reloaded, "en")
+    errors = [i for i in ref_issues if i.get("severity") == "error"]
+    if errors:
+        notes.append(
+            f"[node_12] 镜像后英文草稿引用完整性校验失败({len(errors)} 项):"
+            f"{errors[0].get('message', '')}"
+        )
         return notes
 
     notes.append(f"node_12_bgm_mirrored_en_done:{len(audio_tracks)}")
     return notes
 
 
+def _record_manual_draft_sha(state: WorkflowState) -> dict:
+    """关卡② 恢复时记录人工修改后的草稿 SHA-256(计划阶段 5 任务 1)。
+
+    zh 是人工编辑过的权威草稿;en 记录的是**镜像前**快照(随后会被 mirror
+    改写,留此值用于审计人工时点的英文侧状态)。任一文件缺失则少一个键。
+    """
+    out: dict[str, dict[str, str]] = {}
+    zh_path = state.get("draft_path")
+    if zh_path:
+        out["zh"] = hash_draft_files(zh_path)
+    en_file = en_draft_file(state)
+    if en_file is not None:
+        out["en_pre_mirror"] = hash_draft_files(en_file)
+    return out
+
+
 def _post_resume(state: WorkflowState, notifier=_send_notification) -> dict:
     """薄封装:样板见 ``nodes._checkpoint.post_resume``(notifier 保持可注入)。
 
-    K2=B:在样板收尾之后追加"BGM 镜像到英文草稿"。镜像失败只写 error_log 降级通过,
-    不影响关卡② 本身的 resume 语义。
+    K2=B:在样板收尾之后追加
+    1) 人工修改后草稿 SHA-256 落 ``bgm_manual_draft_sha``(阶段 5 任务 1);
+    2) "BGM 镜像到英文草稿"。镜像失败只写 error_log 降级通过,
+       不影响关卡② 本身的 resume 语义。
     """
     out: dict[str, Any] = post_resume(
         state,
@@ -164,6 +259,12 @@ def _post_resume(state: WorkflowState, notifier=_send_notification) -> dict:
 
     status_log = list(out.get("status_log", []) or [])
     error_log = list(out.get("error_log", []) or [])
+
+    manual_sha = _record_manual_draft_sha(state)
+    if manual_sha:
+        out["bgm_manual_draft_sha"] = manual_sha
+        status_log.append("node_12_manual_draft_sha_recorded")
+
     for note in mirror_bgm_to_en_draft(state):
         if note.startswith("node_12_bgm_mirrored_en_done"):
             status_log.append(note)

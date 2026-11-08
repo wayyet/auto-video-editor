@@ -209,13 +209,13 @@ _NODE_META: dict[str, dict[str, Any]] = {
     "node_12_human_add_bgm": {
         "name": "人工添加 BGM②",
         "group": "fx_delivery",
-        "description": "interrupt:关卡②,人工选曲一次,post_resume 按角色合并到英文草稿(保留英文配音轨)",
+        "description": "interrupt:关卡②,人工选曲一次;post_resume 记录人工稿 SHA+按角色合并到英文草稿(含伴随素材,保留英文配音轨)",
         "checkpoint": "②",
     },
     "node_13_adjust_volume": {
         "name": "音量调节",
         "group": "fx_delivery",
-        "description": "各音轨音量调整",
+        "description": "分角色音量(main/bgm/voiceover 按轨名识别)+ 原生 audio_fades 淡入淡出绑定(不删轨不覆盖人工 BGM)",
     },
     "join_before_delivery": {
         "name": "交付前 QA 闸门",

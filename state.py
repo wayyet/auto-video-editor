@@ -144,7 +144,10 @@ class WorkflowState(TypedDict, total=False):
     retry_counts: dict[str, int]      # 护栏节点重试计数,键如 "node_07"
     # Week 4:加 reducer,允许 fan-in 双分支同时写
     status_log: Annotated[list[str], _append_unique]
-    volume_adjusted: bool             # 步骤13 占位节点标记:Week 3 永远 False
+    volume_adjusted: bool             # 步骤13 写:任一角色实际写入过音量/fade(阶段 5 起为真实值)
+    # 节点 13 写:实际写入的 audio_fades 条目(原生形态;此前未声明被运行时静默丢弃,
+    # 阶段 5 修复声明)。
+    audio_fade_targets: NotRequired[list[dict]]
     _draft_dir_override: str          # 内部:节点 5 wrapper 用,从 state 读 draft_dir(测试用)
 
     # ===== 2026-11-06 阶段 1:剪映草稿发布注册(人工关卡与剪映草稿导入计划)=====
@@ -206,6 +209,10 @@ class WorkflowState(TypedDict, total=False):
     text_fx_summary: NotRequired[Optional[dict]]
     # 节点 11 写:{zh: {...}, en: {...}}。匹配数/原生写入数/占位降级数。
     sticker_summary: NotRequired[Optional[dict]]
+
+    # ===== 2026-11-09 阶段 5(效果缺失修复):关卡② 审计与音量可观测字段 =====
+    # 节点 12 恢复时写:人工修改后草稿 SHA-256(zh 权威稿 + en 镜像前快照)。
+    bgm_manual_draft_sha: NotRequired[Optional[dict]]
 
     # 汇合节点 QA 闸门结果(join_before_delivery 写)
     join_qa_issues: NotRequired[list[str]]

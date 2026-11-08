@@ -242,3 +242,92 @@ def test_mirror_zh_no_audio_keeps_voiceover(tmp_path: Path) -> None:
     audio_tracks = [t for t in en_draft["tracks"] if t["type"] == "audio"]
     assert len(audio_tracks) == 1
     assert audio_tracks[0].get("name") == "en_voiceover"
+
+
+# ---------------------------------------------------------------------------
+# 阶段 5:伴随素材镜像(阶段 0 基线实证 EN 侧悬空 companion ×4 的修复)
+# ---------------------------------------------------------------------------
+def _zh_draft_with_bgm_and_companions() -> dict:
+    draft = _zh_draft_with_bgm()
+    # 剪映客户端生成的 BGM 段带 4 伴随 + fade 引用;对应素材在 zh materials 里
+    draft["materials"]["audios"] = [{"id": "audio-bgm-1", "name": "user_picked_bgm"}]
+    draft["materials"]["speeds"] = [{"id": "speed-1", "mode": 0, "speed": 1.0, "type": "speed"}]
+    draft["materials"]["canvases"] = [{"id": "canvas-1", "type": "canvas"}]
+    draft["materials"]["sound_channel_mappings"] = [{"id": "scm-1", "type": "sound_channel_mapping"}]
+    draft["materials"]["vocal_separations"] = [{"id": "vocal-1", "type": "vocal_separation"}]
+    draft["materials"]["audio_fades"] = [{
+        "id": "audio-fade-audio-bgm-1", "type": "audio_fade",
+        "fade_in_duration": 2_000_000, "fade_out_duration": 3_000_000,
+    }]
+    draft["tracks"][1]["segments"][0]["extra_material_refs"] = [
+        "speed-1", "canvas-1", "scm-1", "vocal-1", "audio-fade-audio-bgm-1",
+    ]
+    return draft
+
+
+def test_mirror_copies_companion_materials(tmp_path: Path) -> None:
+    """镜像段引用的伴随素材(speeds/canvases/scm/vocal/audio_fades)一并复制到英文草稿。"""
+    from draft_ops.draft_integrity import check_track_references
+
+    zh = _write_json(tmp_path / "zh" / "draft_content.json", _zh_draft_with_bgm_and_companions())
+    en = _write_json(tmp_path / "en" / "draft_content.json", _en_draft_without_audio())
+
+    notes = mirror_bgm_to_en_draft(
+        {"draft_path": str(zh), "draft_dir_en_branch": str(en.parent)}
+    )
+
+    assert any(n.startswith("node_12_bgm_mirrored_en_done") for n in notes), notes
+    en_draft = json.loads(en.read_text(encoding="utf-8"))
+    materials = en_draft["materials"]
+    for bucket, item_id in (
+        ("speeds", "speed-1"),
+        ("canvases", "canvas-1"),
+        ("sound_channel_mappings", "scm-1"),
+        ("vocal_separations", "vocal-1"),
+        ("audio_fades", "audio-fade-audio-bgm-1"),
+    ):
+        assert any(m["id"] == item_id for m in materials.get(bucket, [])), (
+            f"{bucket} 应镜像 {item_id}"
+        )
+    # 镜像后引用完整性:零悬空(阶段 0 基线的 ×4 悬空不再出现)
+    assert check_track_references(en_draft, "en") == []
+
+
+def test_mirror_strips_unmirrorable_refs(tmp_path: Path) -> None:
+    """镜像段引用了未复制桶的素材 → 剥离该 ref + 告警(防悬空)。"""
+    zh = _write_json(tmp_path / "zh" / "draft_content.json", _zh_draft_with_bgm_and_companions())
+    zh_draft = json.loads(zh.read_text(encoding="utf-8"))
+    zh_draft["tracks"][1]["segments"][0]["extra_material_refs"].append("ghost-companion")
+    zh.write_text(json.dumps(zh_draft, ensure_ascii=False), encoding="utf-8")
+    en = _write_json(tmp_path / "en" / "draft_content.json", _en_draft_without_audio())
+
+    notes = mirror_bgm_to_en_draft(
+        {"draft_path": str(zh), "draft_dir_en_branch": str(en.parent)}
+    )
+
+    assert any("无法镜像的 companion ref" in n for n in notes), notes
+    en_draft = json.loads(en.read_text(encoding="utf-8"))
+    mirrored_seg = next(
+        t for t in en_draft["tracks"] if t["type"] == "audio"
+    )["segments"][0]
+    assert "ghost-companion" not in mirrored_seg.get("extra_material_refs", [])
+
+
+def test_post_resume_records_manual_draft_sha(tmp_path: Path) -> None:
+    """阶段 5 任务 1:resume 时记录人工修改后草稿 SHA-256(bgm_manual_draft_sha)。"""
+    zh = _write_json(tmp_path / "zh" / "draft_content.json", _zh_draft_with_bgm())
+    en = _write_json(tmp_path / "en" / "draft_content.json", _en_draft_without_audio())
+
+    result = _post_resume(
+        {"session_id": "t1", "draft_path": str(zh), "draft_dir_en_branch": str(en.parent),
+         "status_log": [], "error_log": []},
+        notifier=lambda s, c: None,
+    )
+
+    sha = result.get("bgm_manual_draft_sha")
+    assert sha, "应记录人工修改后草稿 SHA"
+    # fixture 只写了 draft_content.json:缺哪个文件就少一个键(hash_draft_files 契约)
+    assert "draft_content.json" in sha["zh"]
+    assert all(len(v) == 64 for v in sha["zh"].values())  # sha256 hex
+    assert "en_pre_mirror" in sha
+    assert "node_12_manual_draft_sha_recorded" in result["status_log"]
