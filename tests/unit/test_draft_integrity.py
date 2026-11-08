@@ -108,3 +108,31 @@ def test_registered_expected_requires_publish_enabled(monkeypatch, tmp_path: Pat
     outside = tmp_path / "elsewhere"
     outside.mkdir()
     assert registered_expected_for(outside) is False
+
+
+# ---------------------------------------------------------------------------
+# P3b:英文配音轨不参与镜像一致性比对
+# ---------------------------------------------------------------------------
+def test_mirror_en_voiceover_track_is_allowed() -> None:
+    """P3b:英文草稿多出 node_17 的配音轨 → 不算镜像不一致。"""
+    zh = {"tracks": [{"type": "audio", "segments": [
+        {"id": "audio-bgm-1", "material_id": "m-bgm"}]}]}
+    en = {"tracks": [
+        {"type": "audio", "name": "en_voiceover", "segments": [
+            {"id": "segment-en-dub-1", "material_id": "en-dub-1"}]},
+        {"type": "audio", "segments": [
+            {"id": "audio-bgm-1", "material_id": "m-bgm"}]},
+    ]}
+    result = check_audio_mirror(zh, en)
+    assert result["issues"] == []
+    assert result["summary"]["matched"] is True
+
+
+def test_mirror_en_voiceover_only_with_zh_empty_passes() -> None:
+    """zh 没加 BGM + en 只有配音轨 → 不再误报「英文有音频轨但中文没有」。"""
+    zh = {"tracks": []}
+    en = {"tracks": [{"type": "audio", "name": "en_voiceover", "segments": [
+        {"id": "segment-en-dub-1", "material_id": "en-dub-1"}]}]}
+    result = check_audio_mirror(zh, en)
+    assert result["issues"] == []
+    assert result["summary"]["matched"] is True

@@ -357,3 +357,66 @@ def test_audio_fades_idempotent_on_replay(draft_with_audio: Path) -> None:
                            fade_in_seconds=2.0, fade_out_seconds=3.0)
     second = json.loads(draft_with_audio.read_text(encoding="utf-8"))
     assert len(second["materials"]["audio_fades"]) == n_first
+
+# ---------------------------------------------------------------------------
+# (i) P3b:多音轨聚合 —— 配音轨排在 BGM 轨前面也不影响 BGM 调整
+# ---------------------------------------------------------------------------
+def test_adjust_volume_aggregates_all_audio_tracks(tmp_path: Path) -> None:
+    """P3b 后英文草稿可能有 BGM 镜像轨 + 配音轨两条:_find_audio_segments
+    必须聚合全部音轨,配音轨排在前面时 BGM 的音量/淡入淡出仍生效。
+    """
+    zh_file = tmp_path / "zh" / "draft_content.json"
+    zh_file.parent.mkdir(parents=True)
+    zh_file.write_text(json.dumps({
+        "canvas_config": {"width": 1080, "height": 1920},
+        "duration": 35_000_000,
+        "materials": {
+            "audios": [{"id": "audio-bgm-1", _PLACEHOLDER_VOLUME_KEY: 0.8}],
+            "audio_fades": [],
+        },
+        "tracks": [{
+            "type": "audio",
+            "segments": [{
+                "id": "audio-bgm-1", "name": "audio_bgm", "type": "audio_bgm",
+                "target_timerange": {"start": 0, "duration": 35_000_000},
+            }],
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    en_dir = tmp_path / "en_branch"
+    en_dir.mkdir(parents=True)
+    (en_dir / "draft_content.json").write_text(json.dumps({
+        "canvas_config": {"width": 1080, "height": 1920},
+        "duration": 35_000_000,
+        "materials": {
+            "audios": [
+                {"id": "en-dub-1", "name": "en_voiceover", "path": "C:/tts/en.wav"},
+                {"id": "audio-bgm-1", _PLACEHOLDER_VOLUME_KEY: 0.8},
+            ],
+            "audio_fades": [],
+        },
+        "tracks": [
+            # 配音轨在前(merge 后保留轨排在镜像轨之前的实现细节),BGM 镜像轨在后
+            {"type": "audio", "name": "en_voiceover", "segments": [{
+                "id": "segment-en-dub-1", "material_id": "en-dub-1", "name": "en_voiceover",
+                "target_timerange": {"start": 0, "duration": 30_000_000},
+            }]},
+            {"type": "audio", "segments": [{
+                "id": "audio-bgm-1", "name": "user_picked_bgm", "type": "audio_bgm",
+                "target_timerange": {"start": 0, "duration": 35_000_000},
+            }]},
+        ],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    state = {"draft_path": str(zh_file), "draft_dir_en_branch": str(en_dir),
+             "status_log": [], "error_log": []}
+    out = adjust_volume(state)
+
+    en = json.loads((en_dir / "draft_content.json").read_text(encoding="utf-8"))
+    audios = {a["id"]: a for a in en["materials"]["audios"]}
+    # BGM 调整生效(不被排在它前面的配音轨挡住)
+    assert audios["audio-bgm-1"][_PLACEHOLDER_VOLUME_KEY] == 0.35
+    assert len(en["materials"]["audio_fades"]) >= 1
+    # 配音 material 不被触碰
+    assert _PLACEHOLDER_VOLUME_KEY not in audios["en-dub-1"]
+    assert out["volume_adjusted"] is True

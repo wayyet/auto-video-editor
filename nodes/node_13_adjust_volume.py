@@ -53,11 +53,17 @@ _PLACEHOLDER_TRACK_ID_KEY = "track_id"                 # FIXME 字段名待逆�
 # 辅助函数
 # ---------------------------------------------------------------------------
 def _find_audio_segments(draft: dict) -> list[dict]:
-    """返回 ``tracks[type='audio'].segments`` 列表;无音频轨时返回空列表。"""
+    """返回**所有** audio 轨的 segments 合并列表;无音频轨时返回空列表。
+
+    P3b(2026-11-08)后英文草稿可能同时有 BGM 镜像轨与英文配音轨两条:
+    必须聚合全部音轨再按 selector 匹配,否则配音轨排在前面时 BGM 的
+    音量/淡入淡出会被静默跳过。
+    """
+    segments: list[dict] = []
     for track in draft.get("tracks", []):
         if track.get("type") == "audio":
-            return list(track.get("segments", []) or [])
-    return []
+            segments.extend(track.get("segments", []) or [])
+    return segments
 
 
 def _find_audio_material_by_segment(draft: dict, segment: dict) -> dict | None:

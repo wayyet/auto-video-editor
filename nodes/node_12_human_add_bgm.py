@@ -10,8 +10,10 @@ Week 5 改动(对齐第 5 周计划 §1.1):
 
 2026-10 K2=B 改动:一次选曲、两份草稿。
 人工只在**中文主草稿**里加一次 BGM(尾链整体推迟到 ``node_17`` 之后,人工不必
-在两份草稿间来回切),resume 后本节点把中文草稿的音轨整体镜像进英文分支草稿 ——
-关卡② 的挂起次数仍是 1 次。
+在两份草稿间来回切),resume 后本节点把中文草稿的音轨镜像进英文分支草稿 ——
+关卡② 的挂起次数仍是 1 次。P3b(2026-11-08)起镜像改**按角色合并**:
+``node_17`` 写入英文分支草稿的配音轨(``EN_VOICEOVER_TRACK_NAME`` 标记)原样
+保留,只替换其余 audio 轨。
 
 测试策略:与 node_06 一致 — 纯函数单测覆盖 payload + post_resume,
 真实 interrupt() 行为由集成测试覆盖。
@@ -25,7 +27,7 @@ from langgraph.types import interrupt
 
 from nodes._checkpoint import build_interrupt_payload, post_resume
 from nodes._draft_io import load_draft, write_draft
-from nodes._dual_draft import en_draft_file, missing_en_note
+from nodes._dual_draft import EN_VOICEOVER_TRACK_NAME, en_draft_file, missing_en_note
 from state import WorkflowState
 
 
@@ -63,9 +65,10 @@ def mirror_bgm_to_en_draft(state: WorkflowState) -> list[str]:
     id 不 remap:两份草稿的视频时间轴完全一致(英文草稿 fork 自同一份快照②),
     segment id 与 audio material id 可以直接复用。
 
-    **幂等**:英文草稿里已有的 audio 轨被**整体替换**而非追加,重放得到同一结果。
-    英文草稿本来就没有音频轨(``node_17`` 只合成音频文件、不写草稿),所以替换
-    不会丢掉任何东西。
+    **幂等**:英文草稿里的镜像轨被**替换**而非追加,重放得到同一结果。
+    P3b(2026-11-08)起改**按角色合并**:``node_17`` 会把英文配音写进英文分支
+    草稿(``name=EN_VOICEOVER_TRACK_NAME`` 标记轨),镜像时只替换其余 audio 轨,
+    配音轨原样保留;materials 侧本就按 id 保留英文特有素材,无需改动。
 
     Returns:
         要追加进 ``status_log`` / ``error_log`` 的说明列表(空列表=一切正常)。
@@ -105,11 +108,14 @@ def mirror_bgm_to_en_draft(state: WorkflowState) -> list[str]:
         notes.append(f"[node_12] 读取英文草稿失败,BGM 未镜像: {exc}")
         return notes
 
-    # 1) 音轨:整体替换英文草稿里的 audio 轨(幂等:不 append)
+    # 1) 音轨:按角色合并(P3b)—— 只替换镜像轨,保留 node_17 写入的
+    #    英文配音轨(name=EN_VOICEOVER_TRACK_NAME);幂等:镜像轨不 append。
     tracks = en_draft.setdefault("tracks", [])
-    tracks[:] = [t for t in tracks if t.get("type") != "audio"] + [
-        dict(t) for t in audio_tracks
-    ]
+    tracks[:] = [
+        t
+        for t in tracks
+        if t.get("type") != "audio" or t.get("name") == EN_VOICEOVER_TRACK_NAME
+    ] + [dict(t) for t in audio_tracks]
 
     # 2) audio materials:把中文草稿里被这些 segment 引用的 material 一并复制。
     # 匹配键双口径:原生草稿(人工在剪映加的 BGM)用 segment.material_id 引用

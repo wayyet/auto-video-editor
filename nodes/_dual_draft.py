@@ -40,6 +40,11 @@ _DRAFT_FILENAME = "draft_content.json"
 ZH = "zh"
 EN = "en"
 
+# P3b(2026-11-08):node_17 写入英文分支草稿的配音轨标记(track 与 segment 同名)。
+# node_12 镜像按此标记做"按角色合并"(只替换镜像轨,保留配音轨);
+# draft_ops.draft_integrity.check_audio_mirror 据此把配音轨排除出镜像一致性比对。
+EN_VOICEOVER_TRACK_NAME = "en_voiceover"
+
 
 def en_draft_file(state: dict[str, Any]) -> Path | None:
     """返回英文分支草稿文件路径;``draft_dir_en_branch`` 缺失或文件不存在时返回 ``None``。
@@ -99,6 +104,7 @@ def en_draft_file_missing_path(state: dict[str, Any]) -> str:
 __all__ = [
     "ZH",
     "EN",
+    "EN_VOICEOVER_TRACK_NAME",
     "dual_draft_targets",
     "en_draft_file",
     "missing_en_note",

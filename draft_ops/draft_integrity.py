@@ -325,24 +325,34 @@ def registered_expected_for(draft_dir: Path) -> bool:
 def check_audio_mirror(zh_draft: dict, en_draft: dict) -> dict[str, Any]:
     """校验中文音频轨(含引用的 audio materials)完整镜像到英文草稿。
 
-    与 :func:`nodes.node_12_human_add_bgm.mirror_bgm_to_en_draft` 的"整轨替换"
-    语义对齐:镜像成功 = 英文侧的 audio 轨段集合与中文侧一致,且这些段引用的
-    audio materials 在英文侧都能解析到。
+    与 :func:`nodes.node_12_human_add_bgm.mirror_bgm_to_en_draft` 的"按角色
+    合并"语义对齐(P3b,2026-11-08):镜像成功 = 英文侧**镜像轨**(排除
+    ``node_17`` 写入的英文配音轨,即 ``name=EN_VOICEOVER_TRACK_NAME`` 标记轨)
+    的 audio 段集合与中文侧一致,且这些段引用的 audio materials 在英文侧都能
+    解析到。英文配音轨是英文版合法的特有内容,不参与比对、不触发告警。
 
     Returns:
         ``{"issues": [...], "summary": {...}}``;中文无音频轨时无事可查(镜像
         本来就不产生内容),不算问题。
     """
     issues: list[dict[str, str]] = []
+    # P3b:英文配音轨标记(权威定义 nodes/_dual_draft.py)。延迟 import:
+    # draft_ops 不做包级反向依赖 nodes(nodes 侧 node_join_before_delivery
+    # 正向 import 本模块),函数内取值无初始化顺序风险。
+    from nodes._dual_draft import EN_VOICEOVER_TRACK_NAME
 
     def _audio_tracks(draft: dict) -> list[dict]:
         return [t for t in (draft.get("tracks") or []) if isinstance(t, dict) and t.get("type") == "audio"]
 
     zh_tracks = _audio_tracks(zh_draft)
-    en_tracks = _audio_tracks(en_draft)
+    en_tracks_all = _audio_tracks(en_draft)
+    # P3b:英文配音轨不参与镜像比对
+    en_voiceover_tracks = [t for t in en_tracks_all if t.get("name") == EN_VOICEOVER_TRACK_NAME]
+    en_tracks = [t for t in en_tracks_all if t.get("name") != EN_VOICEOVER_TRACK_NAME]
     summary: dict[str, Any] = {
         "zh_audio_tracks": len(zh_tracks),
         "en_audio_tracks": len(en_tracks),
+        "en_voiceover_tracks": len(en_voiceover_tracks),
         "zh_segments": sum(len(t.get("segments") or []) for t in zh_tracks),
         "en_segments": sum(len(t.get("segments") or []) for t in en_tracks),
         "matched": False,
@@ -352,7 +362,9 @@ def check_audio_mirror(zh_draft: dict, en_draft: dict) -> dict[str, Any]:
             issues.append(_issue("BGM镜像", SEV_WARNING, "-", "英文草稿有音频轨但中文主草稿没有(镜像来源缺失?)"))
             summary["matched"] = False
         else:
-            summary["matched"] = True  # 两侧都没有:关卡② 未加 BGM,无事可查
+            # 两侧镜像轨都没有:关卡② 未加 BGM,无事可查
+            # (英文侧只有配音轨时,P3b 起同样不算问题)
+            summary["matched"] = True
         return {"issues": issues, "summary": summary}
 
     if not en_tracks:

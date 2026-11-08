@@ -114,7 +114,7 @@ def test_mirror_bgm_copies_audio_track_to_en_draft(tmp_path: Path) -> None:
 
 
 def test_mirror_bgm_is_idempotent(tmp_path: Path) -> None:
-    """K2=B 幂等:重放不会叠出重复音轨(整体替换,不是 append)。"""
+    """K2=B 幂等:重放不会叠出重复音轨(按角色合并:替换镜像轨;P3b 起英文配音轨另行保留)。"""
     zh = _write_json(tmp_path / "zh" / "draft_content.json", _zh_draft_with_bgm())
     en = _write_json(tmp_path / "en" / "draft_content.json", _en_draft_without_audio())
     state = {"draft_path": str(zh), "draft_dir_en_branch": str(en.parent)}
@@ -166,3 +166,79 @@ def test_post_resume_mirrors_bgm_and_keeps_legacy_contract(tmp_path: Path) -> No
     assert any(t.startswith("node_12_bgm_mirrored_en_done") for t in result["status_log"])
     en_draft = json.loads(en.read_text(encoding="utf-8"))
     assert [t for t in en_draft["tracks"] if t["type"] == "audio"]
+
+
+# ---------------------------------------------------------------------------
+# P3b:按角色合并 —— 保留 node_17 写入的英文配音轨
+# ---------------------------------------------------------------------------
+def _en_draft_with_voiceover() -> dict:
+    draft = _en_draft_without_audio()
+    draft["materials"] = {
+        "audios": [{"id": "en-dub-1", "name": "en_voiceover", "path": "C:/tts/en.wav"}],
+        "audio_fades": [],
+    }
+    draft["tracks"].append({
+        "type": "audio",
+        "id": "track-audio-en-dub",
+        "name": "en_voiceover",
+        "segments": [{
+            "id": "segment-en-dub-1", "material_id": "en-dub-1", "name": "en_voiceover",
+            "target_timerange": {"start": 0, "duration": 30_000_000},
+        }],
+    })
+    return draft
+
+
+def test_mirror_keeps_en_voiceover_track(tmp_path: Path) -> None:
+    """P3b 验收:英文草稿里 node_17 写的配音轨,经过 node_12 镜像后仍在。"""
+    zh = _write_json(tmp_path / "zh" / "draft_content.json", _zh_draft_with_bgm())
+    en = _write_json(tmp_path / "en" / "draft_content.json", _en_draft_with_voiceover())
+
+    notes = mirror_bgm_to_en_draft(
+        {"draft_path": str(zh), "draft_dir_en_branch": str(en.parent)}
+    )
+
+    assert any(n.startswith("node_12_bgm_mirrored_en_done") for n in notes), notes
+    en_draft = json.loads(en.read_text(encoding="utf-8"))
+    audio_tracks = [t for t in en_draft["tracks"] if t["type"] == "audio"]
+    assert len(audio_tracks) == 2
+    # 配音轨原样保留
+    voiceover = next(t for t in audio_tracks if t.get("name") == "en_voiceover")
+    assert voiceover["segments"][0]["id"] == "segment-en-dub-1"
+    assert voiceover["segments"][0]["target_timerange"]["duration"] == 30_000_000
+    # BGM 镜像轨也在
+    bgm = next(t for t in audio_tracks if t.get("name") != "en_voiceover")
+    assert bgm["segments"][0]["id"] == "audio-bgm-1"
+    # materials 两边素材都在
+    material_ids = {m["id"] for m in en_draft["materials"]["audios"]}
+    assert material_ids == {"en-dub-1", "audio-bgm-1"}
+
+
+def test_mirror_idempotent_with_voiceover(tmp_path: Path) -> None:
+    """带配音轨时重放:配音轨不丢,镜像轨不翻倍。"""
+    zh = _write_json(tmp_path / "zh" / "draft_content.json", _zh_draft_with_bgm())
+    en = _write_json(tmp_path / "en" / "draft_content.json", _en_draft_with_voiceover())
+    state = {"draft_path": str(zh), "draft_dir_en_branch": str(en.parent)}
+
+    mirror_bgm_to_en_draft(state)
+    mirror_bgm_to_en_draft(state)
+
+    en_draft = json.loads(en.read_text(encoding="utf-8"))
+    assert len([t for t in en_draft["tracks"] if t["type"] == "audio"]) == 2
+    assert len(en_draft["materials"]["audios"]) == 2
+
+
+def test_mirror_zh_no_audio_keeps_voiceover(tmp_path: Path) -> None:
+    """P3b 后的新降级语义:zh 没加 BGM 但 en 有配音轨 → en 不动,配音轨保留。"""
+    zh = _write_json(tmp_path / "zh" / "draft_content.json", _en_draft_without_audio())
+    en = _write_json(tmp_path / "en" / "draft_content.json", _en_draft_with_voiceover())
+
+    notes = mirror_bgm_to_en_draft(
+        {"draft_path": str(zh), "draft_dir_en_branch": str(en.parent)}
+    )
+
+    assert any("无 audio track" in n for n in notes), notes
+    en_draft = json.loads(en.read_text(encoding="utf-8"))
+    audio_tracks = [t for t in en_draft["tracks"] if t["type"] == "audio"]
+    assert len(audio_tracks) == 1
+    assert audio_tracks[0].get("name") == "en_voiceover"

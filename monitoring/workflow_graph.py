@@ -188,7 +188,7 @@ _NODE_META: dict[str, dict[str, Any]] = {
     "node_17_inject_english_tts": {
         "name": "注入英文 TTS",
         "group": "subtitles_covers",
-        "description": "调 FireRedTTS2 生成英文配音;与 node_15 列表 fan-in 汇合后才触发尾链",
+        "description": "调 FireRedTTS2 生成英文配音并写入英文分支草稿;与 node_15 列表 fan-in 汇合后才触发尾链",
     },
     "fork_draft_for_english_branch": {
         "name": "复制英文分支草稿",
@@ -209,7 +209,7 @@ _NODE_META: dict[str, dict[str, Any]] = {
     "node_12_human_add_bgm": {
         "name": "人工添加 BGM②",
         "group": "fx_delivery",
-        "description": "interrupt:关卡②,人工选曲一次,post_resume 镜像到英文草稿",
+        "description": "interrupt:关卡②,人工选曲一次,post_resume 按角色合并到英文草稿(保留英文配音轨)",
         "checkpoint": "②",
     },
     "node_13_adjust_volume": {
