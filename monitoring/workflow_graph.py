@@ -157,12 +157,12 @@ _NODE_META: dict[str, dict[str, Any]] = {
     "node_10_inject_text_fx": {
         "name": "注入中文花字",
         "group": "subtitles_covers",
-        "description": "中文字幕花字/描边/入场动画",
+        "description": "中文字幕入场动画原生落草稿(material_animations+轨段引用,只动我方字幕)",
     },
     "node_10b_inject_text_fx_en": {
         "name": "注入英文花字",
         "group": "subtitles_covers",
-        "description": "英文花字先于关卡③落地,人工校对看到最终效果(K3=B)",
+        "description": "英文字幕入场动画原生落草稿;先于关卡③落地,人工校对看到最终效果(K3=B)",
     },
     "node_14_make_covers": {
         "name": "生成封面",
@@ -204,7 +204,7 @@ _NODE_META: dict[str, dict[str, Any]] = {
     "node_11_inject_sticker": {
         "name": "注入贴纸",
         "group": "fx_delivery",
-        "description": "贴纸注入,同时作用于中英两份草稿",
+        "description": "贴纸原生注入(占位资源 fail-closed 不落草稿,实机回填真实 ID 后生效);中英两份草稿同时处理",
     },
     "node_12_human_add_bgm": {
         "name": "人工添加 BGM②",

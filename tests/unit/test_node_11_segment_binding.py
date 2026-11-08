@@ -106,8 +106,17 @@ def _state(draft_path: Path) -> dict:
     return {"draft_path": str(draft_path), "status_log": [], "error_log": []}
 
 
-def test_inject_sticker_attaches_to_overlapping_segment(tmp_path: Path) -> None:
-    """字幕 timerange 与 seg-2 重叠 → 贴纸挂到 seg-2(不是 seg-0)。"""
+def test_inject_sticker_attaches_to_overlapping_segment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """字幕 timerange 与 seg-2 重叠 → 贴纸挂到 seg-2(不是 seg-0)。
+
+    贴纸解析结果替换成 19 位真实形态 ID(模板占位资源 fail-closed,见阶段 4)。
+    """
+    monkeypatch.setattr(
+        "nodes.node_11_inject_sticker.resolve_sticker_resource_id",
+        lambda _content: "7325648367747338802",
+    )
     draft_dict = _build_draft_with_video_segments([
         _seg("seg-0", 0, 3_000_000),
         _seg("seg-1", 3_000_000, 1_000_000),       # [3s, 4s]
@@ -130,8 +139,14 @@ def test_inject_sticker_attaches_to_overlapping_segment(tmp_path: Path) -> None:
     assert "node_11_inject_sticker_done" in out["status_log"]
 
 
-def test_inject_sticker_falls_back_to_first_segment_when_no_overlap(tmp_path: Path) -> None:
+def test_inject_sticker_falls_back_to_first_segment_when_no_overlap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """字幕 timerange 与任何 segment 都不重叠 → 退回 seg-0 + error_log。"""
+    monkeypatch.setattr(
+        "nodes.node_11_inject_sticker.resolve_sticker_resource_id",
+        lambda _content: "7325648367747338802",
+    )
     draft_dict = _build_draft_with_video_segments([
         _seg("seg-0", 0, 1_000_000),               # [0s, 1s]
         _seg("seg-1", 8_000_000, 1_000_000),       # [8s, 9s] — 字幕 [4s, 6s] 与两段都不重叠

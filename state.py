@@ -200,6 +200,13 @@ class WorkflowState(TypedDict, total=False):
     # written/cut/degraded 计数 + not_applicable(单段无边界)。
     fx_summary: NotRequired[Optional[dict]]
 
+    # ===== 2026-11-09 阶段 4(效果缺失修复):花字动画/贴纸可观测字段 =====
+    # 节点 10 写(zh 条目;en 分支同超步并行只走 status_log 标签,避免键冲突):
+    # 我方字幕扫描数/动画写入数/降级数/无轨段数。
+    text_fx_summary: NotRequired[Optional[dict]]
+    # 节点 11 写:{zh: {...}, en: {...}}。匹配数/原生写入数/占位降级数。
+    sticker_summary: NotRequired[Optional[dict]]
+
     # 汇合节点 QA 闸门结果(join_before_delivery 写)
     join_qa_issues: NotRequired[list[str]]
     # 2026-11-07 阶段 4:结构化 QA 报告(draft_ops.draft_integrity.build_join_qa_report

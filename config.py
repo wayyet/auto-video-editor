@@ -122,6 +122,15 @@ JIANYING_VERSION: str = "5.9.0"
 CANVAS_WIDTH: int = 1080
 CANVAS_HEIGHT: int = 1920
 
+# ---------------------------------------------------------------------------
+# 节点 10:inject_text_fx(阶段 4,2026-11-09)—— 字幕默认入场动画
+# ---------------------------------------------------------------------------
+# 默认入场动画名:按 templates/text_resource_library.json(VIP 库)精确匹配;
+# 未命中回落库内第一个 VIP intro。旧默认("居中打字机/渐次出现/渐显/打字机 II")
+# 经实证全不在库内,静默落到第一个 VIP("乱码故障"),故改为库内实证存在的
+# "新年打字机"。可用环境变量覆盖。
+TEXT_FX_INTRO_ANIMATION: str = os.environ.get("TEXT_FX_INTRO_ANIMATION", "新年打字机").strip() or "新年打字机"
+
 
 # ---------------------------------------------------------------------------
 # 阶段 B:detect_draft_encryption 用到的 capcut CLI

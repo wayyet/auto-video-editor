@@ -146,6 +146,7 @@ def _healthy_draft(dir_path: Path, *, audio_volume: float | None = 0.35) -> dict
                         "material_id": "video-1",
                         "source_timerange": {"start": 0, "duration": 1_000_000},
                         "target_timerange": {"start": 0, "duration": 1_000_000},
+                        "extra_material_refs": ["sticker-t1"],
                     }
                 ],
             },
@@ -232,6 +233,67 @@ def test_join_en_draft_audio_track_without_volume(tmp_path: Path) -> None:
     (en_dir / "draft_info.json").write_text(serialized, encoding="utf-8")
     out = join_before_delivery(state)
     assert any("音量未写入" in i for i in out["join_qa_issues"]), out["join_qa_issues"]
+
+
+def test_join_sticker_unbound_reported(tmp_path: Path) -> None:
+    """阶段 4:贴纸 material 存在但没有任何视频段引用 → 报"贴纸未挂到任何视频段"。"""
+    state = _state_with_drafts(tmp_path)
+    zh_dir = Path(state["draft_path"]).parent
+    draft = json.loads((zh_dir / "draft_content.json").read_text(encoding="utf-8"))
+    draft["tracks"][0]["segments"][0]["extra_material_refs"] = []  # 摘掉贴纸引用
+    serialized = json.dumps(draft, ensure_ascii=False)
+    (zh_dir / "draft_content.json").write_text(serialized, encoding="utf-8")
+    (zh_dir / "draft_info.json").write_text(serialized, encoding="utf-8")
+    out = join_before_delivery(state)
+    assert any("贴纸未挂到任何视频段" in i for i in out["join_qa_issues"]), out["join_qa_issues"]
+
+
+def test_join_zh_text_missing_animation_reported(tmp_path: Path) -> None:
+    """阶段 4:我方字幕(text-zh-*)没有入场动画绑定 → 报"缺入场动画绑定"。"""
+    state = _state_with_drafts(tmp_path)
+    zh_dir = Path(state["draft_path"]).parent
+    draft = json.loads((zh_dir / "draft_content.json").read_text(encoding="utf-8"))
+    draft["materials"]["texts"].append(
+        {"id": "text-zh-1", "type": "text", "content": "你好", "target_timerange": {"start": 0, "duration": 1_000_000}}
+    )
+    draft["tracks"].append(
+        {
+            "type": "text",
+            "id": "track-text-1",
+            "segments": [{"id": "text-seg-1", "material_id": "text-zh-1",
+                          "target_timerange": {"start": 0, "duration": 1_000_000}}],
+        }
+    )
+    serialized = json.dumps(draft, ensure_ascii=False)
+    (zh_dir / "draft_content.json").write_text(serialized, encoding="utf-8")
+    (zh_dir / "draft_info.json").write_text(serialized, encoding="utf-8")
+    out = join_before_delivery(state)
+    assert any("缺入场动画绑定" in i for i in out["join_qa_issues"]), out["join_qa_issues"]
+
+
+def test_join_zh_text_with_animation_no_issue(tmp_path: Path) -> None:
+    """阶段 4:我方字幕有 material_animations 绑定 → 不报动画 issue。"""
+    state = _state_with_drafts(tmp_path)
+    zh_dir = Path(state["draft_path"]).parent
+    draft = json.loads((zh_dir / "draft_content.json").read_text(encoding="utf-8"))
+    draft["materials"]["texts"].append(
+        {"id": "text-zh-1", "type": "text", "content": "你好", "target_timerange": {"start": 0, "duration": 1_000_000}}
+    )
+    draft["materials"]["material_animations"] = [{"id": "text-anim-text-zh-1", "type": "sticker_animation"}]
+    draft["tracks"].append(
+        {
+            "type": "text",
+            "id": "track-text-1",
+            "segments": [{"id": "text-seg-1", "material_id": "text-zh-1",
+                          "target_timerange": {"start": 0, "duration": 1_000_000},
+                          "extra_material_refs": ["text-anim-text-zh-1"]}],
+        }
+    )
+    serialized = json.dumps(draft, ensure_ascii=False)
+    (zh_dir / "draft_content.json").write_text(serialized, encoding="utf-8")
+    (zh_dir / "draft_info.json").write_text(serialized, encoding="utf-8")
+    out = join_before_delivery(state)
+    assert not any("缺入场动画绑定" in i for i in out["join_qa_issues"]), out["join_qa_issues"]
 
 
 def test_join_en_draft_missing_file_is_reported(tmp_path: Path) -> None:

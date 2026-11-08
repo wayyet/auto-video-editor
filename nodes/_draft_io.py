@@ -143,6 +143,21 @@ def find_video_track(draft: dict) -> dict:
     return tracks[0] if tracks else {"type": "video", "segments": []}
 
 
+def find_text_segment_by_material_id(draft: dict, material_id: str) -> dict | None:
+    """在所有 text 轨里找引用该字幕素材的段(原生轨道段 ``material_id`` 键)。
+
+    node_10(动画绑定)/ node_11(贴纸时间范围)共用。找不到返回 None
+    (私有形态草稿或字幕没有落轨)。
+    """
+    for track in draft.get("tracks", []) or []:
+        if track.get("type") != "text":
+            continue
+        for seg in track.get("segments", []) or []:
+            if str(seg.get("material_id") or "") == material_id:
+                return seg
+    return None
+
+
 def upsert_by_id(items: list[dict], item: dict) -> bool:
     """按 ``id`` 覆盖写入;没有同 id 条目才追加。返回 True 表示本次是新增。
 
@@ -165,5 +180,6 @@ __all__ = [
     "jianying_running_tags",
     "apply_and_write",
     "find_video_track",
+    "find_text_segment_by_material_id",
     "upsert_by_id",
 ]

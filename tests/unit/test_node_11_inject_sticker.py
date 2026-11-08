@@ -1,4 +1,8 @@
-"""节点 11 贴纸 resource_id 关联单测。"""
+"""节点 11 贴纸单测(阶段 4:原生素材 + 占位资源 fail-closed)。
+
+真实 resource_id 在模板回填前不可得,正向路径用 monkeypatch 把解析结果替换成
+19 位真实形态 ID 模拟"已回填";占位 fail-closed 用真实模板断言。
+"""
 
 from __future__ import annotations
 
@@ -7,7 +11,11 @@ from pathlib import Path
 
 import pytest
 
+import nodes.node_11_inject_sticker as node_11_mod
 from nodes.node_11_inject_sticker import inject_sticker
+
+
+_REAL_ID = "7325648367747338802"  # 19 位真实形态(模拟已回填)
 
 
 @pytest.fixture
@@ -52,51 +60,77 @@ def _state(draft_path: Path) -> dict:
     return {"draft_path": str(draft_path), "status_log": [], "error_log": []}
 
 
-def test_inject_sticker_matches_keywords(tmp_draft_with_texts: Path) -> None:
-    """字幕文本含 "赞" / "加油" → 贴纸 material 应被创建。"""
-    state = _state(tmp_draft_with_texts)
-    out = inject_sticker(state)
+@pytest.fixture
+def real_id_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
+    """把解析结果替换成 19 位真实形态 ID(模拟操作员完成实机回填)。"""
+    monkeypatch.setattr(
+        node_11_mod, "resolve_sticker_resource_id", lambda _content: _REAL_ID
+    )
+
+
+def test_inject_sticker_placeholder_fail_closed(tmp_draft_with_texts: Path) -> None:
+    """模板仍是 PLACEHOLDER_*(现状):不落任何贴纸素材/引用,degraded 计数 + 回填指引。"""
+    out = inject_sticker(_state(tmp_draft_with_texts))
 
     draft = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
-    stickers = draft["materials"]["stickers"]
-    # 至少 2 个贴纸被创建(关键词 "赞" + "加油")
-    assert len(stickers) >= 2
-    # 每个贴纸应含 resource_id + target_timerange
-    for sticker in stickers:
-        assert sticker.get("resource_id")
-        assert "start" in sticker["target_timerange"]
-        assert "duration" in sticker["target_timerange"]
+    assert draft["materials"]["stickers"] == []
+    assert all(
+        not any(str(r).startswith("sticker-") for r in s.get("extra_material_refs", []))
+        for s in draft["tracks"][0]["segments"]
+    )
+    # 匹配 3 条:"赞"/"加油" 命中 + 第 3 条走"默认"兜底(Week 3 既有行为)
+    assert out["sticker_summary"]["zh"]["matched"] == 3
+    assert out["sticker_summary"]["zh"]["degraded_placeholder"] == 3
+    assert out["sticker_summary"]["zh"]["written"] == 0
+    assert any("PLACEHOLDER" in e and "回填" in e for e in out["error_log"])
     assert "node_11_inject_sticker_done" in out["status_log"]
 
 
-def test_inject_sticker_preserves_timerange_zero_deviation(tmp_draft_with_texts: Path) -> None:
-    """贴纸 timerange 应与对应字幕 timerange 偏差为 0(精确复制)。"""
-    state = _state(tmp_draft_with_texts)
-    inject_sticker(state)
+def test_inject_sticker_matches_keywords(
+    tmp_draft_with_texts: Path, real_id_resolver: None
+) -> None:
+    """(已回填)字幕文本命中关键词 → 原生贴纸 material 创建并挂到视频段。"""
+    out = inject_sticker(_state(tmp_draft_with_texts))
+
+    draft = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    stickers = draft["materials"]["stickers"]
+    assert len(stickers) >= 2
+    for sticker in stickers:
+        assert sticker["type"] == "sticker"
+        assert sticker["resource_id"] == _REAL_ID
+        assert int(sticker["duration"]) > 0
+    seg_refs = draft["tracks"][0]["segments"][0].get("extra_material_refs", [])
+    assert {s["id"] for s in stickers} <= set(seg_refs)
+    assert out["sticker_summary"]["zh"]["written"] >= 2
+    assert "node_11_inject_sticker_done" in out["status_log"]
+
+
+def test_inject_sticker_preserves_timerange_zero_deviation(
+    tmp_draft_with_texts: Path, real_id_resolver: None
+) -> None:
+    """贴纸时长应与对应字幕 timerange 偏差为 0(精确复制)。"""
+    inject_sticker(_state(tmp_draft_with_texts))
 
     draft = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
     texts = draft["materials"]["texts"]
     stickers = draft["materials"]["stickers"]
 
-    # 取出含关键词的前两条字幕
     target_texts = [t for t in texts if "赞" in t["content"] or "加油" in t["content"]]
-
-    # 每条字幕对应的贴纸 timerange 应精确匹配
     for t in target_texts:
         matching = [
             s for s in stickers
-            if s["target_timerange"]["start"] == t["target_timerange"]["start"]
-            and s["target_timerange"]["duration"] == t["target_timerange"]["duration"]
+            if s["id"] == f"sticker-{t['id']}"
         ]
-        assert matching, f"未找到 timerange 匹配的贴纸 for {t['content']}"
+        assert matching, f"未找到对应贴纸 for {t['content']}"
+        assert matching[0]["duration"] == t["target_timerange"]["duration"]
 
 
-def test_inject_sticker_handles_missing_template(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """模板库缺失时:不创建贴纸 material,节点通过。"""
-    # 把 sticker_resolver 替换为返回 None
+def test_inject_sticker_handles_missing_template(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """解析不出资源(None)时:不创建贴纸 material,节点通过。"""
     monkeypatch.setattr(
-        "nodes.node_11_inject_sticker.resolve_sticker_resource_id",
-        lambda _content: None,
+        node_11_mod, "resolve_sticker_resource_id", lambda _content: None
     )
 
     draft = {
@@ -105,33 +139,53 @@ def test_inject_sticker_handles_missing_template(tmp_path: Path, monkeypatch: py
         "materials": {"texts": [{"id": "t1", "content": "赞", "target_timerange": {"start": 0, "duration": 1_000_000}}]},
         "tracks": [{"type": "video", "segments": []}],
     }
-    p = tmp_path / "draft.json"
+    p = tmp_path / "draft" / "draft_content.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(draft), encoding="utf-8")
-    state = {"draft_path": str(p), "status_log": [], "error_log": []}
-    out = inject_sticker(state)
+    out = inject_sticker(_state(p))
     assert "node_11_inject_sticker_done" in out["status_log"]
-    # stickers 应为空或不存在
     draft_after = json.loads(p.read_text(encoding="utf-8"))
     assert not draft_after["materials"].get("stickers")
 
 
-def test_inject_sticker_idempotent_on_replay(tmp_draft_with_texts: Path) -> None:
-    """K2=B 幂等:重放不叠出重复贴纸,extra_material_refs 也不重复追加。"""
-    state = _state(tmp_draft_with_texts)
-    inject_sticker(state)
-    first = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
-    n_first = len(first["materials"]["stickers"])
+def test_inject_sticker_idempotent_on_replay(
+    tmp_draft_with_texts: Path, real_id_resolver: None
+) -> None:
+    """K2=B 幂等:重放整份草稿字节级一致,extra_material_refs 不重复追加。"""
+    inject_sticker(_state(tmp_draft_with_texts))
+    first = tmp_draft_with_texts.read_bytes()
 
-    inject_sticker(state)
-    second = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
-    assert len(second["materials"]["stickers"]) == n_first
-    seg = second["tracks"][0]["segments"][0]
+    inject_sticker(_state(tmp_draft_with_texts))
+    second = tmp_draft_with_texts.read_bytes()
+
+    assert first == second
+    second_draft = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    seg = second_draft["tracks"][0]["segments"][0]
     refs = seg.get("extra_material_refs", [])
-    assert len(refs) == len(set(refs)), f"extra_material_refs 有重复:{refs}"
+    assert len(refs) == len(set(refs))
+
+
+def test_inject_sticker_cleans_stale_after_text_removed(
+    tmp_draft_with_texts: Path, real_id_resolver: None
+) -> None:
+    """字幕被删后重放:其贴纸素材与引用被清理。"""
+    inject_sticker(_state(tmp_draft_with_texts))
+
+    draft = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    draft["materials"]["texts"] = [t for t in draft["materials"]["texts"] if t["id"] != "t2"]
+    tmp_draft_with_texts.write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
+
+    inject_sticker(_state(tmp_draft_with_texts))
+    draft2 = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    sticker_ids = {s["id"] for s in draft2["materials"]["stickers"]}
+    assert "sticker-t2" not in sticker_ids
+    assert "sticker-t1" in sticker_ids
+    refs = draft2["tracks"][0]["segments"][0].get("extra_material_refs", [])
+    assert "sticker-t2" not in refs
 
 
 def test_inject_sticker_applies_to_en_draft_when_present(
-    tmp_draft_with_texts: Path, tmp_path: Path
+    tmp_draft_with_texts: Path, tmp_path: Path, real_id_resolver: None
 ) -> None:
     """K2=B:英文分支草稿存在时同样注入贴纸。"""
     en_dir = tmp_path / "en_branch"

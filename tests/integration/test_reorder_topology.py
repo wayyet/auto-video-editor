@@ -209,7 +209,14 @@ def test_english_draft_gets_subtitles_and_text_fx(tmp_path, monkeypatch):
         seg["material_id"] == mat["id"]
         for seg, mat in zip(text_tracks[0]["segments"], texts)
     )
-    assert all(t["style"].get("outline") for t in texts)          # 10b 的花字已生效
+    # 10b 的花字已生效(阶段 4:原生 material_animations + text 轨段引用绑定)
+    anim_ids = {a["id"] for a in (en["materials"].get("material_animations") or [])}
+    assert anim_ids, "英文草稿应有 material_animations"
+    en_text_segs = [s for t in en["tracks"] if t.get("type") == "text" for s in t["segments"]]
+    assert all(
+        any(r in anim_ids for r in (s.get("extra_material_refs") or []))
+        for s in en_text_segs
+    )
     # 中文草稿不受英文节点影响;B1 ASR 移除后 node_08 不再产中文字幕
     zh = json.loads(Path(final["draft_path"]).read_text(encoding="utf-8"))
     assert not (zh.get("materials", {}).get("texts") or [])
@@ -235,10 +242,10 @@ def test_checkpoint3_path_no_parallel_conflict_and_human_edit_survives(tmp_path,
 
 
 def test_tail_chain_applies_to_both_drafts(tmp_path, monkeypatch):
-    """K2=B:尾链 09/11 的产物在中英两份草稿上都存在,且条数一致 >0。
+    """K2=B:尾链 09/11 的产物在中英两份草稿上都存在,且条数一致。
 
-    - transitions / video_effects:node_09 对两份草稿各注入一次
-    - stickers:node_11 对两份草稿各注入一次
+    - transitions / video_effects:node_09 对两份草稿各注入一次(>0)
+    - stickers:node_11 对两份草稿各注入一次(占位资源 fail-closed,当前 0;一致即对称)
     - 中文草稿不含 ``Subtitles_en`` 轨,英文草稿不含 ``Subtitles`` 轨(字幕不串台)
     """
     _, _, final = _drive(_seed(tmp_path, monkeypatch))
@@ -248,11 +255,15 @@ def test_tail_chain_applies_to_both_drafts(tmp_path, monkeypatch):
     zh_m = zh["materials"]
     en_m = en["materials"]
 
-    for key in ("transitions", "video_effects", "stickers"):
+    for key in ("transitions", "video_effects"):
         assert len(en_m[key]) > 0, f"英文草稿 {key} 为空:尾链未对英文草稿生效"
         assert len(en_m[key]) == len(zh_m[key]), (
             f"{key} 条数不一致:zh={len(zh_m[key])} en={len(en_m[key])}"
         )
+
+    # 贴纸(阶段 4):模板占位资源 fail-closed → 两侧一致(当前为 0);
+    # 真实 ID 实机回填后自然转正。条数一致仍验证 node_11 双草稿对称性。
+    assert len(en_m["stickers"]) == len(zh_m["stickers"])
 
     # 字幕轨不串台(B1 ASR 移除后本用例无源字幕,两侧 texts 为空,断言自然空真)
     assert all(t["track_name"] == "Subtitles" for t in zh_m.get("texts") or [])

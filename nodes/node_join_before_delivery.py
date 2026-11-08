@@ -78,6 +78,52 @@ def _tail_chain_issues(draft: dict, label: str) -> list[str]:
     if stickers == 0:
         issues.append(f"{label}贴纸缺失(尾链 node_11 未对{label}生效?)")
 
+    # 阶段 4:贴纸必须真实挂到视频段(material 在、引用悬空 = 挂载失败;
+    # 根因分析 §D——不能只数 materials.stickers 数量)。
+    if stickers:
+        bound_refs = {
+            str(r)
+            for track in (draft.get("tracks", []) or []) if track.get("type") == "video"
+            for seg in (track.get("segments", []) or [])
+            for r in (seg.get("extra_material_refs") or [])
+        }
+        unbound = [
+            str(m.get("id"))
+            for m in (materials.get("stickers") or [])
+            if str(m.get("id")) not in bound_refs
+        ]
+        if unbound:
+            issues.append(
+                f"{label}贴纸未挂到任何视频段({len(unbound)} 个:node_11 挂载失败?)"
+            )
+
+    # 阶段 4:我方字幕(text-zh-/text-en-)应有原生入场动画绑定
+    # (material_animations 素材 + text 轨段 extra_material_refs)。
+    our_text_ids = [
+        str(m.get("id"))
+        for m in (materials.get("texts") or [])
+        if str(m.get("id")).startswith(("text-zh-", "text-en-"))
+    ]
+    if our_text_ids:
+        text_segments = {
+            str(seg.get("material_id")): seg
+            for track in (draft.get("tracks", []) or []) if track.get("type") == "text"
+            for seg in (track.get("segments", []) or [])
+        }
+        anim_bucket_ids = {
+            str(a.get("id")) for a in (materials.get("material_animations") or [])
+        }
+        missing_anim = []
+        for tid in our_text_ids:
+            seg = text_segments.get(tid)
+            refs = {str(r) for r in ((seg or {}).get("extra_material_refs") or [])}
+            if not (refs & anim_bucket_ids):
+                missing_anim.append(tid)
+        if missing_anim:
+            issues.append(
+                f"{label}我方字幕缺入场动画绑定({len(missing_anim)} 条:node_10 降级或未生效?)"
+            )
+
     # BGM 轨 + 音量:草稿**可能**没有音轨(关卡② 未加 / 镜像失败),那时不报;
     # 有音轨却没音量才是真问题(尾链 node_13 该写没写)。
     audio_tracks = [t for t in (draft.get("tracks", []) or []) if t.get("type") == "audio"]
