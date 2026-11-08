@@ -147,7 +147,7 @@ _NODE_META: dict[str, dict[str, Any]] = {
     "node_08_add_subtitles": {
         "name": "添加中文字幕",
         "group": "subtitles_covers",
-        "description": "同步写 asr_segments_zh 到 state;英文线 16a 显式依赖它",
+        "description": "字幕主干兼容节点(B1 ASR 移除后不再转写语音);英文线 16a 依赖它",
     },
     "node_08b_add_subtitles_en": {
         "name": "添加英文字幕",
@@ -246,17 +246,7 @@ _NODE_META: dict[str, dict[str, Any]] = {
     "storyline_split_shots": {
         "name": "分镜切分",
         "group": "storyline_media",
-        "description": "按镜头切分素材;ASR 分支开启且有音轨时并行 fan-out 出 local_asr",
-    },
-    "storyline_local_asr": {
-        "name": "本地 ASR",
-        "group": "storyline_asr",
-        "description": "funasr 本地识别;死胡同分支,产物经 state 回填 plan_timeline_pro",
-    },
-    "storyline_speech_rough_cut": {
-        "name": "语音粗剪",
-        "group": "storyline_asr",
-        "description": "基于 ASR 的粗剪;死胡同分支,不进任何 fan-in 屏障(D10)",
+        "description": "按镜头切分素材;切完静态直连 understand_clips(B1 ASR 移除)",
     },
     "storyline_understand_clips": {
         "name": "理解片段",
@@ -365,7 +355,6 @@ _EDGE_LABELS: dict[tuple[str, str], str] = {
     ("storyline_load_media", "storyline_split_shots"): "未配检索源",
     ("storyline_load_media", "storyline_search_web_topic"): "WEB_TOPIC 开启且有 query",
     ("storyline_split_shots", "storyline_understand_clips"): "主干",
-    ("storyline_split_shots", "storyline_local_asr"): "ASR 分支开启且有音轨",
     ("storyline_group_clips", "storyline_plan_timeline_pro"): "列表 fan-in(4 源屏障)",
     ("storyline_generate_script", "storyline_plan_timeline_pro"): "列表 fan-in(4 源屏障)",
     ("storyline_generate_voiceover", "storyline_plan_timeline_pro"): "列表 fan-in(4 源屏障)",

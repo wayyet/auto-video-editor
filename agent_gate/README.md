@@ -120,5 +120,6 @@ Set-Location $REPO
 
 2. **项目既有缺陷(审查版 §4.2),本次只记录不修**:
    - `understand_clips()` 成功路径丢弃 `aes_score`(`understand_clips.py:174-176`)
-   - `storyline_local_asr` / `storyline_speech_rough_cut` 路由可能不可达
+   - ~~`storyline_local_asr` / `storyline_speech_rough_cut` 路由可能不可达~~
+     (2026-11-08 B1 ASR 移除:两节点已整体删除,此条随之作废)
    - 多个 JSON schema 只有 `properties` 没有 `required`

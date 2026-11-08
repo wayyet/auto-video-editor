@@ -1,7 +1,7 @@
 """TTS 客户端 — Week 6+ 阶段三使用(对照 9 工具迁移计划 §6.3)。
 
 Week 6+ 默认 ``MockTTSClient``(写空 wav 占位),新增 ``FireRedTTS2Client`` 真
-实骨架;通过环境变量 ``TTS_BACKEND=firered`` 切换(对照 ``ASR_BACKEND=firered``)。
+实骨架;通过环境变量 ``TTS_BACKEND=firered`` 切换。
 
 接口约定:返回值是 ``dict``:
 - ``audio_path: str`` — 合成的音频文件绝对路径
@@ -226,7 +226,7 @@ def set_default_client(client: TTSClient) -> None:
 def call_firered_tts(
     text: str, *, voice: Optional[str] = None, speed: Optional[float] = None
 ) -> dict:
-    """便捷调用 — 节点 17 的统一入口(对照 ``call_asr2s``)。
+    """便捷调用 — 节点 17 的统一入口。
 
     若默认 client 是 ``FireRedTTS2Client`` 且服务不可达,此处直接抛
     ``TTSUnavailable``,由调用方(节点 17)决定是否降级为 ``en_audio_path=None``。

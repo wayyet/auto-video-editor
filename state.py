@@ -155,9 +155,11 @@ class WorkflowState(TypedDict, total=False):
     draft_publish_error: NotRequired[Optional[str]]
 
     # ===== Week 4 新增字段(对应原文档 3.1 节)=====
-    # 节点 8 把 ASR 结果**同时**写进 state,供节点 16 翻译使用(不依赖 materials.texts)
+    # DEPRECATED(2026-11-08 B1 ASR 移除):新流程不再产生 ASR 段,节点 8 取缺省
+    # 不写、节点 16a 兼容读取(``state.get("asr_segments_zh") or []`` 空则跳过)。
+    # 声明仅为旧 checkpoint / 旧 state 兼容保留,存量任务过期后再删。
     asr_segments_zh: list[SubtitleSegment]
-    asr_segments_zh_written: bool      # 幂等标记:节点 8 已写过 ASR 结果到 state
+    asr_segments_zh_written: bool      # DEPRECATED(同上):新流程不再写入
 
     # 英文分支:从 snapshot② 复制独立草稿副本的目录路径
     draft_dir_en_branch: NotRequired[Optional[str]]
@@ -244,8 +246,8 @@ class WorkflowState(TypedDict, total=False):
     storyline_transition_plan: Annotated[Optional[dict], _last_wins]          # recommend_transition
     storyline_text_style_plan: Annotated[Optional[dict], _last_wins]          # recommend_text
     storyline_timeline_plan: Annotated[Optional[str], _last_wins]             # plan_timeline_pro / join
-    storyline_asr_artifact: Annotated[Optional[str], _last_wins]              # local_asr(条件)
-    storyline_rough_cut_artifact: Annotated[Optional[str], _last_wins]        # speech_rough_cut(条件)
+    storyline_asr_artifact: Annotated[Optional[str], _last_wins]              # DEPRECATED(2026-11-08 B1):local_asr 节点已删,仅旧 checkpoint 兼容
+    storyline_rough_cut_artifact: Annotated[Optional[str], _last_wins]        # DEPRECATED(2026-11-08 B1):speech_rough_cut 节点已删,仅旧 checkpoint 兼容
     storyline_ai_transition_artifact: Annotated[Optional[str], _last_wins]    # generate_ai_transition(ADR-005 默认关闭)
     storyline_web_topic_artifact: Annotated[Optional[str], _last_wins]        # search_web_topic(条件)
     storyline_render_smoke_test_path: Annotated[Optional[str], _last_wins]    # render_video(旁支)
@@ -264,7 +266,7 @@ class WorkflowState(TypedDict, total=False):
     # ``assembly_validate_render_qc`` 各自在自己节点的早退/正常路径上整体覆盖
     # 写入(不会在同一 superstep 内并发写两次),故仍无需 reducer。
     assembly_media_artifact: Annotated[Optional[str], _last_wins]            # inspect_media/analyze_media 汇总结果
-    assembly_transcript_artifact: Annotated[Optional[str], _last_wins]       # speech_transcribe 结果
+    assembly_transcript_artifact: Annotated[Optional[str], _last_wins]       # DEPRECATED(2026-11-08 B1):不再读写,仅旧 checkpoint 兼容
     assembly_ingest_artifact: Annotated[Optional[str], _last_wins]           # video_ingest 结果(contact sheet)
     assembly_timeline_path: Annotated[Optional[str], _last_wins]             # 组装出的 timeline.json(plan §第七节 7.3)
     assembly_timeline_validation_path: Annotated[Optional[str], _last_wins]  # validate_timeline 输出

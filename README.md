@@ -22,7 +22,7 @@ auto-video-editor/
 │   ├── node_05_generate_draft.py       草稿生成(storyline_plan 优先,shot_plan 兜底)
 │   ├── node_06_human_reorder.py        关卡① interrupt
 │   ├── node_07_speed_fit.py            护栏节点 + 帧对齐分配公式
-│   ├── node_08_add_subtitles.py        ASR + 字幕样式注入
+│   ├── node_08_add_subtitles.py        字幕主干兼容节点(样式注入;B1 ASR 移除后不再转写语音)
 │   ├── node_08b_add_subtitles_en.py    英文字幕
 │   ├── node_09_inject_fx.py            转场 + 视频特效
 │   ├── node_10_inject_text_fx.py       花字(中/英)
@@ -32,7 +32,7 @@ auto-video-editor/
 │   ├── node_14..17 / node_16a / checkpoint3 / fork / join   英文线 + 尾链 + 交付 QA
 │   ├── assembly/                       assembly QC 六节点(QC 通道,可开关)
 │   └── storyline/                      auto 链 19 节点(load_media → … → join)
-├── storyline_capabilities/             auto 链本地能力层(ASR stub/BGM/配音/转场/提示词)
+├── storyline_capabilities/             auto 链本地能力层(BGM/配音/转场/提示词)
 ├── assembly_capabilities/              assembly QC 能力层
 ├── agent_gate/                         Agent 调度:MCP server / worker / 信箱 / drive / resume
 ├── monitoring/                         事件存储 / 统一 runner / 图 schema / 心跳
@@ -149,7 +149,7 @@ $env:WORKFLOW_ENV = "production"
 
 | 依赖 | 缺了会怎样 | 怎么确认 |
 |---|---|---|
-| `numpy`(已在 `requirements.txt` 钉 `2.5.3`) | `video_ingest` 抽帧抛 `ModuleNotFoundError` → `assembly_asr_and_visual_observe` 节点早退 → **`video_ingest.json` 永不落盘** | `python -c "import numpy; print(numpy.__version__)"` |
+| `numpy`(已在 `requirements.txt` 钉 `2.5.3`) | `video_ingest` 抽帧抛 `ModuleNotFoundError` → `assembly_visual_observe` 节点早退 → **`video_ingest.json` 永不落盘** | `python -c "import numpy; print(numpy.__version__)"` |
 | `opencv-python-headless`(钉 `4.10.0.84`) | 抽帧 / 编码静默失败 | `python -c "import cv2; print(cv2.__version__)"` |
 | `ffmpeg` + `ffprobe` 在 `PATH` | 慢用例直接 skip | `ffmpeg -version` |
 | `inputs/30s.mp4` | 慢用例直接 skip | `Test-Path inputs\30s.mp4` |
@@ -406,7 +406,7 @@ python -m pytest tests/integration/test_interrupt_resume.py::test_checkpoint1_in
 | P0-1 | 节点 13 真实实现(volume/fade/audio_fades) | `nodes/node_13_adjust_volume.py` | ✅ 逻辑完整,字段名待剪映客户端逆向 |
 | P0-2 | 占位 resource_id 标注升级 | `templates/*.json` + `jy_common/asset_resource_map.json` + `scripts/build_resource_library.py` | ✅ 已迁移自 pyJianYingDraft metadata(转场 303 / 视频特效 462 / 文字入场 78 / 循环 52 / 出场 46,均为 VIP);贴纸仍是占位,见 §4.3 |
 | P1-1 | 节点 11 按 timerange 绑 segment | `nodes/node_11_inject_sticker.py` | ✅ |
-| P1-2 | FireRedASR2S client | `jy_common/asr_client.py` | ✅ client 骨架完整,服务启端由用户做 |
+| P1-2 | ~~FireRedASR2S client~~ | `jy_common/asr_client.py` | ⚠️ 已随 2026-11-08 B1 ASR 移除整体删除,本行作废 |
 | P1-3 | 两级超时接入(默认关闭) | `monitoring/timeout_watchdog.py` + `config.ENABLE_TWO_LEVEL_TIMEOUT` | ✅ 接入完整,默认 false 避免破坏既有 24 条集成测试 |
 | P2 | 原子写入入口统一 | `jy_common/draft_writer.py` | ✅ 薄包装 re-export |
 
@@ -418,12 +418,8 @@ python -m pytest tests/integration/test_interrupt_resume.py::test_checkpoint1_in
    - `nodes/node_13_adjust_volume.py` 的 `_PLACEHOLDER_*_KEY` 常量
    - `templates/*.json` 的 `_reverse_engineering_pending` 改为 `false` 并填入真实 ID
 
-2. **真实 FireRedASR2S 服务启端(P1-2)**:启 `E:\Documents\kuaishou\FireRed-OpenStoryline` ASR 服务,
-   设置:
-   ```powershell
-   $env:ASR_BACKEND = "firered"
-   $env:FIRERED_ASR_ENDPOINT = "http://127.0.0.1:8009/transcribe"
-   ```
+2. **~~真实 FireRedASR2S 服务启端(P1-2)~~**:已作废 —— 2026-11-08 B1 ASR 移除后,
+   工作流不再有任何 ASR 调用,无需配置 `ASR_BACKEND` / `FIRERED_ASR_ENDPOINT`。
 
 ### 4.1 持久化 checkpointer(PostgreSQL 唯一后端)
 
@@ -533,7 +529,7 @@ Week 5 把 `node_16_translate_subtitles`(翻译 + interrupt + 写 SRT 三合一)
 bridge_snapshot2
   ├─→ [中文线] node_08_add_subtitles → node_10_inject_text_fx → node_14_make_covers
   │                                      → node_15_localize_covers_en ───────────┐
-  └─→ [英文线] fork_draft_for_english_branch(显式依赖 08 产出的 asr_segments_zh)  │
+  └─→ [英文线] fork_draft_for_english_branch                                    │
                → node_16a_translate_and_check                                     │
                → node_08b_add_subtitles_en    (英文字幕写入英文分支草稿)          │
                → node_10b_inject_text_fx_en   (英文花字,先于人工校对)             │
@@ -666,8 +662,7 @@ PostgreSQL 统一改造方案(阶段 A / B)新增的应用层数据访问层。*
 |---|---|---|---|
 | ~~`clean_cache`~~ | **已删除**(2026-11-04 阶段3,R-10:唯一触发入口 clean-cache 端点随旧聊天运行时删除) | — | — |
 | `storyline_search_web_topic` | `storyline_load_media` 之后,与 `storyline_search_media` / `storyline_split_shots` 并行的旁支(走到 END) | `STORYLINE_MODE=auto` + `storyline_targets.query` 非空 | `STORYLINE_ENABLE_WEB_TOPIC` |
-| `storyline_local_asr` | `storyline_split_shots` 之后,与 `storyline_understand_clips` 并行的旁支 | `STORYLINE_MODE=auto` + 素材有音轨 | `STORYLINE_ENABLE_ASR_BRANCH` |
-| `storyline_speech_rough_cut` | 紧跟 `storyline_local_asr`(走到 END) | 随 `local_asr` | 同上 |
+| ~~`storyline_local_asr`~~ / ~~`storyline_speech_rough_cut`~~ | **已删除**(2026-11-08 B1 ASR 移除:切镜后静态直连 `storyline_understand_clips`,开关删除) | — | — |
 | `storyline_generate_ai_transition` | 与 `storyline_plan_timeline_pro` 并排(同一道 4 源屏障) | `STORYLINE_MODE=auto` | `STORYLINE_ENABLE_AI_TRANSITION` |
 | `storyline_plan_timeline_ai_transition` | 在 `plan_timeline_pro` + `generate_ai_transition` 之后、`qa_gate` 之前(`qa_gate` 的屏障里用它替换 `plan_timeline_pro`) | 同上 | 同上 |
 
@@ -677,19 +672,18 @@ PostgreSQL 统一改造方案(阶段 A / B)新增的应用层数据访问层。*
   清理能力已于 2026-11-06 以创建台手动入口形式回归(「清除缓存」按钮 →
   `POST /api/console/cache/clear` → `web/cache_cleaner.py`,仍不接图)。
 - 网页话题:标题作为"外部不可信参考"软注入 `storyline_generate_script` 的 `overall`;失败 / 无结果不影响主线。
-- ASR:只回填 `Clip.transcript`,不改镜头和时长;默认 `STORYLINE_ASR_MODE=stub` 时转写为空,无可见变化。
-- ASR 已知限制(接入前就存在,本次没改):配了 `STORYLINE_PEXELS_API_KEY` 时,`storyline_search_media` 会把 `storyline_media_artifact` 整个换成搜索结果清单,
-  素材的 `has_audio` 随之丢失 → ASR 分支保守不触发(不会报错,只是不跑)。
+- ~~ASR~~:`storyline_local_asr` / `storyline_speech_rough_cut` 与 `STORYLINE_ENABLE_ASR_BRANCH`
+  开关已随 **2026-11-08 B1 ASR 移除**整体删除(切镜后静态直连 `storyline_understand_clips`);
+  旧文档中"只回填 `Clip.transcript` / `STORYLINE_ASR_MODE=stub` / Pexels 覆盖 `has_audio` 导致 ASR 不触发"等描述均已作废。
 - AI 转场:当前只有 stub;只挂 `ai_transitions` 清单,不改 clips。两个节点在 qa 重试回路**里面**,每轮各跑 1 次。
-- **读取时机不同**:前两个开关在**运行时**读取;`STORYLINE_ENABLE_AI_TRANSITION` 在**建图时**读取(决定图里接不接这两个节点),修改后须重启进程。
-- 开发约定:条件触发的节点(`web_topic` / `local_asr` / `speech_rough_cut`)**不能**放进 `add_edge([...], X)` 屏障,否则 qa 重试时会静默 END;
+- **读取时机不同**:`STORYLINE_ENABLE_WEB_TOPIC` 在**运行时**读取;`STORYLINE_ENABLE_AI_TRANSITION` 在**建图时**读取(决定图里接不接这两个节点),修改后须重启进程。
+- 开发约定:条件触发的节点(`web_topic`)**不能**放进 `add_edge([...], X)` 屏障,否则 qa 重试时会静默 END;
   qa 重试回路里的节点,状态标签必须是固定值(不能带条数),否则 qa 路由会悄悄跳过重试。
 
 PowerShell 临时关闭(须在启动 Python 进程之前设置):
 
 ```powershell
 $env:STORYLINE_ENABLE_WEB_TOPIC = "0"
-$env:STORYLINE_ENABLE_ASR_BRANCH = "0"
 $env:STORYLINE_ENABLE_AI_TRANSITION = "0"
 ```
 
@@ -704,7 +698,7 @@ $env:STORYLINE_ENABLE_AI_TRANSITION = "0"
 | 约束 | 当前处理 |
 |---|---|
 | VIP 资源模板库(transition / effect / sticker)为占位 | **Week 4 已迁移**:转场 + 视频特效 + 文字动画的真实 VIP resource_id 已从 `pyJianYingDraft` metadata 导入 `templates/fx_resource_library.json` / `templates/text_resource_library.json`,由 `scripts/build_resource_library.py` 一键生成。**贴纸仍是占位**(§4.3 — 技能库无公开 ID)。 |
-| ASR 真实接入未完成 | 节点 8 用 `jy_common.asr_client.MockASRClient`;Week 4 替换为 `FireRedASR2S` |
+| ~~ASR 真实接入未完成~~ | 已作废 —— 2026-11-08 B1 ASR 移除:`jy_common/asr_client.py` 与节点 8 内部 ASR 整体删除,字幕主干保留 |
 | 步骤 13 真实音量/淡入淡出未实现 | 本周 `node_13_adjust_volume` 仅占位(写 status_log);Week 4 先做字段逆向工程再实现 |
 | `capcut decrypt` 返回码语义未实测 | Week 2 PoC 报告 §2.5 占位约定;`detect_draft_encryption` 接受 `decrypt_runner` 注入 |
 | 心跳告警渠道(企业微信/邮件)未对接 | 本周仅本地日志 `heartbeat_monitor.log`;Week 4 对接 |

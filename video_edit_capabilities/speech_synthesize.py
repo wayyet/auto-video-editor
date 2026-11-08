@@ -3,8 +3,7 @@
 骨架搬自 ``video-agent-kit 0.4.3 mcp/ve_tools/tts.py``(函数体 46-119 行),
 **已删除**原 ``call_tts_provider()`` 三选一分支
 (``remote_speech_synthesize`` / ``zcode_official_speech_synthesize`` /
-``cloud_tts_tts``),改为唯一一条 ``call_firered_tts`` 直连(对照
-``call_asr2s``)。
+``cloud_tts_tts``),改为唯一一条 ``call_firered_tts`` 直连。
 
 接口约定(对照 video-agent-kit):
 - 输入 ``args: dict``,key 见下文

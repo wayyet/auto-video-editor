@@ -8,7 +8,8 @@
 裁剪:
 - 删除 ``transcribe`` / ``speech_transcribe`` / ``remote_speech_transcribe`` /
   ``local_speech_transcribe`` / ``cloud_asr_*`` / ``zcode_speech_*`` 等云端
-  ASR 链路(详见 ``speech_asr.py``,本仓库只放本地透传 + 清晰错误)。
+  ASR 链路(2026-11-08 B1 ASR 移除:``speech_asr.py`` 亦已删除,仓库无任何
+  ASR 实现入口)。
 - 删除 ``prepare_asr_audio`` / ``sanitize_transcript_payload`` 等 ASR-only helper。
 - 保留 ``safe_float`` / ``safe_int`` / ``coerce_threshold`` / ``run_json`` 等
   本地 ffprobe + ffmpeg scan 用的纯 helper。
