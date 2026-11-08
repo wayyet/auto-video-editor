@@ -920,3 +920,33 @@ flowchart TD
 - 实机验收(待用户,须新 thread):TTS_BACKEND=firered 且 FireRed :8010 在跑 → 关卡①草稿应可听到旁白;恢复跑完 node_08 后配音与画面对齐;英文分支播放有真人声。
 
 **范围与遗留**:配音轨时间以"组起点+自然时长"铺放,组间溢出按顺序自然延续(不截断语义);`delivery QA` 对 stub 配音的阻断属阶段 6(required-feature gate)不在本次范围;EN 音频镜像悬空 companion 引用(阶段 0 实证)归阶段 5。
+
+### 13.4 阶段 3:转场计划和视频特效原生映射 —— ✅ 已交付(956f4a5)
+
+**设计决策**:绑定时机在 node_09(关卡①调序与 node_07 变速之后),mapper/初始转换不写转场 —— 与阶段 1 字幕同理由;segment 引用素材的唯一通道沿用已实证的 `extra_material_refs`(贴纸 node_11 先例),引用完整性由 `check_track_references` 把关。**新模块 `jy_common/native_fx.py`** 集中五种 FX 原生素材构造器,来源分层标注(已实证通道+vendor pyJianYingDraft 元数据 / 序列化惯例 / 待 GUI diff 复核字段清单见模块 docstring)。
+
+- **node_09 重写**:①边界只认草稿视频段 `max(n-1,0)`,删除 shot_plan 隐式依赖;②消费 `storyline_plan.clips` 与 `storyline_transition_plan.items` 的 `transition_in/out`(边界取前 clip `transition_out`,缺省回落下 clip `transition_in`,两端并存以 out 为准防重复;无语义占位 None 按边界对齐);③语义→资源映射 `fx_template.json.transition_semantic_map`(fade*→叠化、cut/none→硬切不写),未收录语义回落 style_tag 现行逻辑,语义命中但资源解析失败→degraded 不静默换片;④转场挂后一段(与 pyJianYingDraft "转场在本段开头播放"语义一致),时长钳制相邻两段较短者;⑤特效每段一个素材(`vfx-{k}`)绑定;⑥1 段→`not_applicable`(status tag+summary),资源未解析→degraded 不写;⑦新 state 字段 `fx_summary`(zh/en 各 counts)。
+- **免费转场入库**:`build_resource_library.py` 放开 transitions 的 is_vip 过滤(+130 免费,叠化/3D空间等可解析),`_counts` 加 transitions_total/free/vip;text_resource_library 再生成仅 _source_dir 归一 2 行。
+- **幂等三件套**:确定性模式 id `transition-{k}`/`vfx-{k}` + 重放剥我方旧 refs + 清孤儿 material;人工转场/特效(uuid id)守卫保留。
+
+**测试与验收**:新增/更新 24 例(test_native_fx 7+node_09 重写 14+build_resource_library 适配 3 处断言);unit **1522 例 0 失败**;`check_imports` 0 未解析。
+**实机验收(待用户,须新 thread)**:多镜头任务在剪映时间轴应见每边界一个转场(推荐 fade 时为免费"叠化")、每段视频特效可在预览看到;`category_id`/`apply_target_type` 等待复核字段如与 GUI 样本有出入,按样本回填 `jy_common/native_fx.py`。
+
+### 13.5 阶段 4:花字动画和贴纸资源实机校准 —— ✅ 已交付(f2f7894)
+
+- **node_10 重写**:入场动画从私有 `style.entrance_animation`(剪映保存即丢、从不渲染)切到原生 `materials.material_animations` 条目 + text 轨段 `extra_material_refs` 绑定;只处理我方 `text-zh-*`/`text-en-*`(人工文本守卫);默认动画名修正为库内实证存在的"新年打字机"(`config.TEXT_FX_INTRO_ANIMATION` 可覆盖;旧默认四名全不命中曾静默落到"乱码故障");确定性 id `text-anim-{material_id}`+重放清理;zh 写 `text_fx_summary`(en 分支同超步只走 status_log 标签避免键冲突)。描边已由 node_08 content JSON strokes 原生生效;阴影/背景原生字段待校准。
+- **node_11 重写**:`PLACEHOLDER_*`/非 19 位 resource_id **fail-closed 不落草稿**(degraded 计数+回填指引,步骤在模板 `_reverse_engineering_steps`);真实 ID 走 `build_native_sticker_material` 原生形态(type:"sticker");显式取文本 `text_display_text`(不再隐式依赖 content 字符串含中文);时间范围 text 轨段原生 `target_timerange` 优先;`sticker_summary` 落 state。
+- **join QA 增补**(§D):贴纸 material 未挂任何视频段引用→issue;我方字幕缺动画绑定→issue。
+- `_draft_io` 新增共用助手 `find_text_segment_by_material_id`。
+
+**测试与验收**:node_10 重写 10 例+node_11 重写 9 例+segment_binding 桩化(占位 fail-closed)+join QA 3 例+集成断言迁移(动画绑定替代私有 style 断言、尾链贴纸断言改对称性);unit 全 0 失败;`check_imports` 0 未解析。
+**实机校准(待操作员)**:①剪映 5.9.0.11632 手工给字幕加"入场动画"前后各存一版草稿,diff 得 `material_animations` 真实字段(重点 animations[].start/duration 单位),回填 `native_fx.py`;②按 `sticker_template.json` `_reverse_engineering_steps` 手工创建贴纸样本,把真实 19 位 resource_id 回填 `sticker_by_keyword` 并置 `_reverse_engineering_pending: false` —— 回填后 node_11 自动转正常写入,无需改码。
+
+### 13.6 阶段 5:BGM、音量、淡入淡出闭环 —— ✅ 已交付(5a80a9f)
+
+- **node_12**:①镜像段引用的伴随素材桶(speeds/canvases/sound_channel_mappings/vocal_separations/audio_fades)随 BGM 一并镜像 —— 修复阶段 0 基线实证的 EN 侧悬空 companion ×4;无法镜像的 ref 剥离+告警防悬空;②镜像后重读英文草稿跑 `check_track_references` 引用完整性校验,失败不留假成功;③`_post_resume` 用 `hash_draft_files` 记录人工修改后草稿 SHA-256 → 新 state 字段 `bgm_manual_draft_sha`(zh 权威稿+en 镜像前快照;计划任务 1);④`write_draft` 补 RuntimeError 捕获(关卡② resume 后剪映很可能还开着,严格模式拒写降级不崩,node_17 同步加固)。
+- **node_13 重写**:①角色按**轨名**识别 —— `Voiceover_zh`/`en_voiceover` 为配音,其余 audio 轨为 BGM(人工轨名不可控,不按名匹配),video 轨段为主音轨;旧 selector 按段 name/type/audio_kind 匹配在原生 34 键段上永远落空(阶段 0 实证 no_audio_track);②音量写段级 `volume`+`last_nonzero_volume`(唯一经真实样本验证的键,废除 audio_material.volume 占位);③淡入淡出写原生 audio_fades 素材(`fade_in/out_duration` µs,linear 曲线待 GUI 复核)+ 音频段 `extra_material_refs` 绑定(废除 fade_in_duration_us/track_id 占位);④fade id 确定性 `audio-fade-{seg_id}`+重放剥离旧 refs 清孤儿(BGM 段删空也清理),时长钳制到段长;⑤**只改音量/fade,不删轨不移动素材** —— 人工 BGM 轨本体保留;⑥config 新增 `NODE13_VOLUME_MAIN/BGM/VOICEOVER`+`NODE13_FADE_IN/OUT_SECONDS`(缺省 1.0/0.35/1.0、2s/3s;注意节点按配置覆盖人工调过的 BGM 音量)。
+- **join QA 口径**:段级 volume 天然 1.0 不可判"未写入",改为 BGM(非配音轨)fade 绑定判据,配音轨豁免;`state.py` 声明 `audio_fade_targets`(此前被运行时静默丢弃)、`volume_adjusted` 注释转真。
+
+**测试与验收**:node_13 重写 18 例+node_12 新增 3 例(伴随镜像/剥 ref/SHA 落盘)+join QA 更新 2 例+tc07 集成重写 3 例;unit 全 0 失败;`check_imports` 0 未解析。
+**实机验收(待用户,须新 thread)**:关卡② 加 BGM 并恢复后 —— EN 草稿 QA 应零悬空引用;node_13 后 BGM 音量 0.35、淡入 2s/淡出 3s 在剪映真实可听;`audio_fade` 曲线类型/字段名与 GUI 样本 diff 后按需回填 `native_fx.py`。
