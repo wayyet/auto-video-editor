@@ -435,3 +435,103 @@ def test_scout_style_with_real_resolve_style() -> None:
     assert style["size"] == 7.62
     assert style["border"]["width"] == 100.0
     assert len(notes) == 3
+
+# ---------------------------------------------------------------------------
+# P4(决定 2 选 A):storyline 推荐(storyline_text_style_plan)叠加
+# ---------------------------------------------------------------------------
+def test_overlay_storyline_plan_absent_is_noop() -> None:
+    """文档例 1「无推荐时行为不变」:plan 缺失/空/非法 → 样式原样、无 note。"""
+    from nodes.node_08_add_subtitles import (
+        _JIANYING_DEFAULT_STYLE,
+        _overlay_storyline_style,
+    )
+
+    base = _JIANYING_DEFAULT_STYLE
+    for plan in (None, {}, "not-a-dict", {"items": []}, {"default": "not-a-dict"}):
+        style, notes = _overlay_storyline_style(dict(base), plan, lang="zh")
+        assert style == base, plan
+        assert notes == [], plan
+
+
+def test_overlay_storyline_plan_overrides_size_position_color() -> None:
+    """文档例 2「有推荐时覆盖字号和位置」(+颜色):48px→2.0 夹取、top→0.8、红。"""
+    from nodes.node_08_add_subtitles import (
+        _JIANYING_DEFAULT_STYLE,
+        _overlay_storyline_style,
+    )
+
+    plan = {"default": {"size": 48, "color": "#FF0000", "position": "top"}}
+    style, notes = _overlay_storyline_style(
+        dict(_JIANYING_DEFAULT_STYLE), plan, lang="zh"
+    )
+
+    assert style["size"] == 10.0  # 48/24 = 2.0 → 触顶夹取
+    assert style["transform_y"] == 0.8
+    assert style["color"] == [1.0, 0.0, 0.0]
+    # 其他字段不被触碰
+    assert style["border"] == _JIANYING_DEFAULT_STYLE["border"]
+    assert style["bold"] == _JIANYING_DEFAULT_STYLE["bold"]
+    assert any("字号" in n for n in notes)
+    assert any("字幕颜色" in n for n in notes)
+    assert any("字幕位置" in n for n in notes)
+
+
+def test_overlay_storyline_font_unavailable_notes_fallback() -> None:
+    """文档例 3「字体不可用时回落」:资源库查不到 → 只记 note,样式不变。"""
+    from nodes.node_08_add_subtitles import (
+        _JIANYING_DEFAULT_STYLE,
+        _overlay_storyline_style,
+    )
+
+    plan = {"default": {"font_zh": "NoSuchFont-Bold.otf", "size": 24}}
+    style, notes = _overlay_storyline_style(
+        dict(_JIANYING_DEFAULT_STYLE), plan, lang="zh"
+    )
+
+    assert style == _JIANYING_DEFAULT_STYLE  # 无 font 键、其他字段不变
+    assert any("NoSuchFont-Bold.otf" in n and "不存在" in n for n in notes)
+    assert any("回落" in n for n in notes)
+
+
+def test_overlay_storyline_stub_defaults_identity() -> None:
+    """推荐 stub 默认(24/bottom/#FFFFFF/SourceHanSansCN-Bold.otf)→ 恒等变换。
+
+    「无推荐时行为不变」的构造性证明:size 24/24=1.0、bottom=-0.8、#FFFFFF=白,
+    逐项等于剪映默认;字体不存在只记 note,不改样式。
+    """
+    from nodes.node_08_add_subtitles import (
+        _JIANYING_DEFAULT_STYLE,
+        _overlay_storyline_style,
+    )
+
+    plan = {
+        "default": {
+            "font_zh": "SourceHanSansCN-Bold.otf",
+            "font_en": "Roboto-Bold.ttf",
+            "size": 24,
+            "color": "#FFFFFF",
+            "position": "bottom",
+        }
+    }
+    style, notes = _overlay_storyline_style(
+        dict(_JIANYING_DEFAULT_STYLE), plan, lang="zh"
+    )
+    assert style == _JIANYING_DEFAULT_STYLE
+    assert any("SourceHanSansCN-Bold.otf" in n for n in notes)  # 字体检查有记录
+
+
+def test_node_08_logs_storyline_overlay_notes(tmp_draft: Path) -> None:
+    """节点级接线:state 带 plan → status_log 出现 storyline 推荐样式说明;无 plan → 不出现。"""
+    plan = {"default": {"size": 30, "position": "center"}}
+
+    state_with = _state(tmp_draft)
+    state_with["storyline_text_style_plan"] = plan
+    out_with = add_subtitles(state_with)
+    assert any(
+        "[node_08] storyline 推荐样式:" in entry for entry in out_with["status_log"]
+    )
+
+    out_without = add_subtitles(_state(tmp_draft))
+    assert not any(
+        "[node_08] storyline 推荐样式:" in entry for entry in out_without["status_log"]
+    )

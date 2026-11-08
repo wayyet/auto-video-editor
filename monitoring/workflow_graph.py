@@ -291,7 +291,7 @@ _NODE_META: dict[str, dict[str, Any]] = {
     "storyline_recommend_text": {
         "name": "推荐文本",
         "group": "storyline_script",
-        "description": "推荐屏幕文本样式",
+        "description": "推荐字幕样式(P4 起经 node_08/08b 落到草稿)",
     },
     "storyline_plan_timeline_pro": {
         "name": "时间线规划",

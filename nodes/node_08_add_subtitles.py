@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import copy
 from pathlib import Path
+from typing import Any
 
 import config
 from assembly_capabilities.run_context import RunContext
@@ -89,6 +90,23 @@ _STYLE_SCALE_LIMITS: dict[str, tuple[float, float]] = {
 #                   这是**不等价的降级**,所以 status_log 会明说,不装作两者一回事。
 _BOX_BORDER_RATIO = 2.5
 
+# ---------------------------------------------------------------------------
+# P4(2026-11-08,相似功能节点计划 决定 2 选 A):storyline 推荐 → 剪映样式的换算
+# ---------------------------------------------------------------------------
+# storyline_recommend_text 的 size 是**设计基准像素**(缺省 24),与剪映 size 无
+# 公开换算公式 —— 与 scout 同用"比值锚定法":建议值 / 基准 24 的无量纲比值缩放
+# 剪映默认 5.0(复用 _scaled 夹取),基准不变时草稿一个数都不动。
+_STORYLINE_SIZE_BASELINE_PX = 24.0
+
+# storyline 的 position 是枚举字符串;剪映侧是 transform_y(当前默认 bottom=-0.8)。
+# center/middle 归并为 0.0,top 取对称 +0.8。未知值一律保留原值。
+_STORYLINE_POSITION_TO_Y: dict[str, float] = {
+    "bottom": -0.8,
+    "center": 0.0,
+    "middle": 0.0,
+    "top": 0.8,
+}
+
 
 def _scout_style_overrides(scout_report: dict) -> dict:
     """从 scout 报告里抽出可直接喂给 ``sty.resolve_style`` 的 override 字典。
@@ -113,6 +131,125 @@ def _scaled(default_value: float, ratio: float, key: str) -> float:
 def _safe_ratio(rec_px: float, base_px: float) -> float:
     """建议值 / baseline 值。baseline 缺失或为 0 时返回 1.0(即"不用改")。"""
     return float(rec_px) / float(base_px) if base_px else 1.0
+
+
+def _hex_to_rgb_floats(value: Any) -> list[float] | None:
+    """'#RRGGBB' / '#RRGGBBAA' → [r, g, b] 0-1 浮点(round 4);非法返回 None。
+
+    剪映 style 的 color 是 0-1 浮点三元组(``_JIANYING_DEFAULT_STYLE["color"]``),
+    storyline 推荐的是 ``#RRGGBB`` 字符串,这里是两者唯一的换算点。
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text.startswith("#"):
+        return None
+    hex_part = text[1:]
+    if len(hex_part) not in (6, 8):
+        return None
+    try:
+        r = int(hex_part[0:2], 16)
+        g = int(hex_part[2:4], 16)
+        b = int(hex_part[4:6], 16)
+    except ValueError:
+        return None
+    return [round(r / 255.0, 4), round(g / 255.0, 4), round(b / 255.0, 4)]
+
+
+def _font_file_available(name: Any) -> bool:
+    """推荐字体文件名(如 SourceHanSansCN-Bold.otf)在 ``config.ASSETS_FONTS_DIR`` 是否存在。
+
+    recommend_text 的字体候选约定来自本地资源库(``assets/fonts``);该目录当前
+    只有 README,所以"查不到"是本机的常态路径 —— 调用方据此回落并记日志。
+    """
+    if not isinstance(name, str) or not name.strip():
+        return False
+    try:
+        return (Path(config.ASSETS_FONTS_DIR) / name.strip()).is_file()
+    except (OSError, ValueError):
+        return False
+
+
+def _overlay_storyline_style(
+    style: dict, text_style_plan: Any, *, lang: str = "zh"
+) -> tuple[dict, list[str]]:
+    """P4(决定 2 选 A):storyline 推荐(``storyline_text_style_plan``)叠加到基础样式。
+
+    优先级(计划 §5.5):storyline 推荐 > 调用方已算好的基础样式(scout 换算结果 /
+    默认)。「用户明确要求」层当前无数据源(``style_request`` 死键:无写者、
+    recommend_text 也不读、console 无样式输入),不实现 —— 见执行记录偏差。
+
+    只叠加语义明确、且有剪映渲染路径的字段(plan 的 ``default``,node_08/08b
+    无 group 上下文,per-group items 无法映射):
+    - size:    推荐值 / 基准 24px 的比值缩放剪映 size(复用 ``_scaled`` 夹取 0.6~2.0);
+    - color:   ``#RRGGBB(AA)`` → [r,g,b] 浮点;非法/缺省保留原值;
+    - position: bottom/center/middle/top → ``transform_y``;未知值保留原值;
+    - font:    ``font_zh``(zh)/``font_en``(en)仅检查 ``config.ASSETS_FONTS_DIR``
+      存在性并记 note —— 原生 content JSON(``build_text_content_json``)暂无字体
+      渲染路径,不落草稿;查不到同样只记 note,样式回落不变。
+
+    plan 缺失/非 dict/无 default → 原样返回([],无 note)。推荐 stub 默认
+    (24 / bottom / #FFFFFF)与剪映默认逐项等值 → 恒等变换,「无推荐时行为不变」
+    由构造成立。永不抛异常:非法输入一律原样返回。
+    """
+    notes: list[str] = []
+    plan = text_style_plan if isinstance(text_style_plan, dict) else None
+    default_rec = plan.get("default") if plan else None
+    if not isinstance(default_rec, dict):
+        return style, notes
+
+    # --- size(比值锚定,复用 scout 的夹取)---
+    try:
+        rec_size = float(default_rec.get("size"))
+    except (TypeError, ValueError):
+        rec_size = 0.0
+    if rec_size > 0 and isinstance(style.get("size"), (int, float)):
+        ratio = rec_size / _STORYLINE_SIZE_BASELINE_PX
+        before = style["size"]
+        new_size = _scaled(float(before), ratio, "size")
+        if new_size != before:
+            style["size"] = new_size
+            notes.append(
+                f"字号 {before} → {new_size}(storyline 推荐 {rec_size:g}px / 基准 "
+                f"{_STORYLINE_SIZE_BASELINE_PX:g}px)"
+            )
+
+    # --- color(hex → 0-1 浮点三元组)---
+    rgb = _hex_to_rgb_floats(default_rec.get("color"))
+    if rgb is not None and isinstance(style.get("color"), (list, tuple)):
+        before_color = [round(float(c), 4) for c in style["color"]]
+        if before_color != rgb:
+            style["color"] = rgb
+            notes.append(
+                f"字幕颜色 {before_color} → {rgb}(storyline 推荐 {default_rec.get('color')})"
+            )
+
+    # --- position(枚举 → transform_y)---
+    position = str(default_rec.get("position") or "").strip().lower()
+    target_y = _STORYLINE_POSITION_TO_Y.get(position)
+    if target_y is not None and isinstance(style.get("transform_y"), (int, float)):
+        before_y = style["transform_y"]
+        if float(before_y) != target_y:
+            style["transform_y"] = target_y
+            notes.append(
+                f"字幕位置 {position}(transform_y {before_y} → {target_y})"
+            )
+
+    # --- font(仅存在性检查 + 日志;无渲染路径,不落草稿)---
+    font_key = "font_en" if lang == "en" else "font_zh"
+    font_name = default_rec.get(font_key)
+    if isinstance(font_name, str) and font_name.strip():
+        if _font_file_available(font_name):
+            notes.append(
+                f"推荐字体 {font_name} 本机资源库存在(仅记录:原生字幕暂无字体渲染路径,"
+                "样式不落草稿)"
+            )
+        else:
+            notes.append(
+                f"推荐字体 {font_name} 本机资源库不存在,回落当前默认(仅记录,"
+                "原生字幕暂无字体渲染路径)"
+            )
+    return style, notes
 
 
 def _style_from_scout(scout_report: dict | None) -> tuple[dict, list[str]]:
@@ -242,7 +379,14 @@ def add_subtitles(state: WorkflowState) -> dict:
     # 换算结果暂无草稿落点(ASR 字幕素材通道已移除),但 scout 报告与换算说明
     # 仍按原契约落到 state / status_log;``_style_from_scout`` 本身仍被 08b 复用。
     scout_report = _run_subtitle_scout(state.get("video_input_path", ""))
-    _style, style_notes = _style_from_scout(scout_report)
+    _style, scout_notes = _style_from_scout(scout_report)
+    # P4(决定 2 选 A):storyline 推荐(storyline_text_style_plan)叠加在 scout 换算
+    # 结果之上 —— 字幕基础样式的单一决策点。B1 后 zh 侧换算结果暂无草稿落点,
+    # 叠加说明按契约落 status_log;草稿仍不修改(回归锁 test_add_subtitles_
+    # preserves_existing_script_subtitles)。zh 侧样式真实落草稿的通道待后续阶段。
+    _style, plan_notes = _overlay_storyline_style(
+        _style, state.get("storyline_text_style_plan"), lang="zh"
+    )
 
     # Week 5:参数从 draft_path 提升为 draft_path.parent,safe_write_draft 双写
     log = list(state.get("status_log", []) or [])
@@ -259,10 +403,12 @@ def add_subtitles(state: WorkflowState) -> dict:
         log.append("[node_08] subtitle_scout 成功,推荐已落到 state.subtitle_scout_report")
     else:
         log.append("[node_08] subtitle_scout 失败,沿用默认样式")
-    for note in style_notes:
+    for note in scout_notes:
         log.append(f"[node_08] scout 样式已生效:{note}")
-    if scout_report is not None and not style_notes:
+    if scout_report is not None and not scout_notes:
         log.append("[node_08] scout 未提出需要改样式的建议(当前设置已合适)")
+    for note in plan_notes:
+        log.append(f"[node_08] storyline 推荐样式:{note}")
     out: dict = {
         **state,
         "status_log": log,

@@ -22,7 +22,7 @@ from pathlib import Path
 
 from nodes._draft_io import apply_and_write, load_draft
 from nodes._subtitle_texts import make_text_material, sync_text_track
-from nodes.node_08_add_subtitles import _style_from_scout
+from nodes.node_08_add_subtitles import _overlay_storyline_style, _style_from_scout
 from state import WorkflowState
 
 
@@ -43,10 +43,18 @@ def add_subtitles_en(state: WorkflowState) -> dict:
         return {"error_log": [f"[node_08b] 英文分支草稿不存在,跳过: {draft_file}"]}
 
     draft = load_draft(draft_file)
-    # 英文字幕用默认基础样式。注:node_08 把 scout 报告写到 state["subtitle_scout_report"],
-    # 但该键没有在 state.py 里声明,图运行时会被丢弃,这里拿不到。
+    # 基础样式 = 默认。注:node_08 把 scout 报告写到 state["subtitle_scout_report"],
+    # 但该键没有在 state.py 里声明,图运行时会被丢弃,这里拿不到(已知限制)。
     # 如需与中文字幕同一份 scout 样式:先在 state.py 声明该键,再把 None 换成 state.get(...)。
-    style, _notes = _style_from_scout(None)
+    # P4(决定 2 选 A):storyline 推荐(storyline_text_style_plan.default)叠加在此
+    # 基础样式之上 —— 这是推荐样式唯一真实落草稿的通道:字号/颜色/位置有剪映
+    # 渲染路径会生效;字体仅检查 ASSETS_FONTS_DIR 存在性并记日志(原生 content
+    # JSON 暂无字体渲染路径)。推荐 stub 默认(24/bottom/#FFFFFF)为恒等变换,
+    # 无推荐/推荐等于默认时行为不变。
+    style, base_notes = _style_from_scout(None)
+    style, style_notes = _overlay_storyline_style(
+        style, state.get("storyline_text_style_plan"), lang="en"
+    )
 
     texts = []
     for i, seg in enumerate(segments):
@@ -76,4 +84,7 @@ def add_subtitles_en(state: WorkflowState) -> dict:
         "node_08b",
         done_tag="node_08b_add_subtitles_en_done",
     )
+    # P4:样式决策说明(scout 基础 + storyline 叠加)落 status_log,跑批日志可查
+    for note in (*base_notes, *style_notes):
+        log.append(f"[node_08b] 字幕样式:{note}")
     return {"status_log": log}
