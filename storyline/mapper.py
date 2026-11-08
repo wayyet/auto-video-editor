@@ -12,6 +12,7 @@
 - ``materials.audios`` ← ``audio.bgm_ref`` / ``audio.voiceover``
 - ``tracks`` ← 每段 clip 转 ``Segment``(target_start_us / target_end_us)
 - 每个 video material 额外携带 ``source_in_ms / source_out_ms`` 字段(便于 node_07 变速)
+- **无 text 轨**(2026-11-09 阶段 1):中文字幕由 node_08 关卡①后原生落草稿
 """
 
 from __future__ import annotations
@@ -187,24 +188,10 @@ def canonical_to_draft(
             }
         )
 
-    text_track: dict[str, Any] = {
-        "type": "text",
-        "id": "track-text-1",
-        "segments": [],
-    }
-    if plan.subtitles.zh:
-        text_track["segments"].append(
-            {
-                "id": "subtitle-zh-1",
-                "text": plan.subtitles.zh,
-                "target_start_us": 0,
-                "target_end_us": _ms_to_us(
-                    plan.clips[-1].timeline_out_ms if plan.clips else 0
-                ),
-                "lang": "zh",
-            }
-        )
-
+    # 阶段 1(2026-11-09 效果缺失修复):不再产出内部 text 轨 —— 此前的私有形状
+    # (text/target_start_us 等)会被 storyline_to_native 整轨丢弃进 sidecar,从不
+    # 能成为剪映字幕。中文字幕的唯一写入口是 node_08(关卡①后按当前草稿时间落
+    # 原生 text material/track);字幕文本仍随 storyline_meta.subtitles 留档。
     return {
         "canvas_config": {"width": canvas_w, "height": canvas_h},
         "materials": {
@@ -212,7 +199,7 @@ def canonical_to_draft(
             "audios": audios,
             "texts": [],
         },
-        "tracks": [video_track, audio_track, text_track],
+        "tracks": [video_track, audio_track],
         "storyline_meta": {
             "schema_version": plan.schema_version,
             "job_id": plan.job_id,

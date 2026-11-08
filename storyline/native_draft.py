@@ -461,7 +461,10 @@ def storyline_to_native(draft: dict[str, Any]) -> tuple[dict[str, Any], dict[str
     for track in src_tracks:
         ttype = str(track.get("type") or "")
         if ttype == "text":
-            # mapper 文本轨恒空/私有形状;字幕由 node_08/08b 以原生形状写
+            # 阶段 1(2026-11-09 效果缺失修复):mapper 已不再产出内部 text 轨,
+            # 中文字幕由 node_08 以原生形状写(关卡①后,时间取自当前草稿)。
+            # 此分支仅防御旧 checkpoint 残留的 mapper 私有形状文本轨:进 sidecar
+            # 留档(不静默消失),node_05 对 dropped 非空会打告警日志。
             dropped["dropped_text_track"] = track
             continue
         old_track_id = str(track.get("id") or ttype)

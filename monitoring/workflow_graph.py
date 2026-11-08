@@ -147,7 +147,7 @@ _NODE_META: dict[str, dict[str, Any]] = {
     "node_08_add_subtitles": {
         "name": "添加中文字幕",
         "group": "subtitles_covers",
-        "description": "字幕主干兼容节点(B1 ASR 移除后不再转写语音);英文线 16a 依赖它",
+        "description": "中文字幕原生落草稿唯一写入口(旁白逐句、时间取自当前草稿,2026-11-09 阶段1);scout+storyline 样式叠加;英文线 16a 依赖它",
     },
     "node_08b_add_subtitles_en": {
         "name": "添加英文字幕",

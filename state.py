@@ -171,6 +171,15 @@ class WorkflowState(TypedDict, total=False):
     subtitle_segments_en: NotRequired[list[SubtitleSegment]]
     subtitle_srt_path: NotRequired[Optional[str]]
 
+    # ===== 2026-11-09 阶段 1(效果缺失修复):中文字幕原生落草稿 =====
+    # 节点 8 写:中文旁白逐句字幕段(形状复用 SubtitleSegment;时间取自当前草稿
+    # 视频段反推的组区间)。node_16a 英文翻译以此为准源(替代已废弃的
+    # asr_segments_zh,见阶段 2);无旁白时不写(空输入跳过是常态)。
+    subtitle_segments_zh: NotRequired[list[SubtitleSegment]]
+    # 节点 8 的 subtitle_scout 成功时写(此前键未声明,会被 graph 运行时静默丢弃;
+    # 显式声明后 scout 报告才真正可在 state 存活,08b 及 QA 可消费)。
+    subtitle_scout_report: NotRequired[Optional[dict]]
+
     # 关卡③ 触发标记(节点 16 写)
     checkpoint3_triggered: NotRequired[bool]
 

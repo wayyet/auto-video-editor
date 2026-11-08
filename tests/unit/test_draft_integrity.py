@@ -136,3 +136,67 @@ def test_mirror_en_voiceover_only_with_zh_empty_passes() -> None:
     result = check_audio_mirror(zh, en)
     assert result["issues"] == []
     assert result["summary"]["matched"] is True
+
+
+# ---------------------------------------------------------------------------
+# 阶段 1(2026-11-09 效果缺失修复):text 轨 ↔ materials.texts 一致性
+# ---------------------------------------------------------------------------
+from draft_ops.draft_integrity import check_texts_track_alignment
+
+
+def test_texts_alignment_no_texts_no_track_passes() -> None:
+    """无字幕是合法态(空输入跳过):不报。"""
+    draft = {"materials": {"texts": []}, "tracks": [{"type": "video", "segments": []}]}
+    assert check_texts_track_alignment(draft, "zh") == []
+
+
+def test_texts_alignment_dangling_segment_reference_errors() -> None:
+    """text 轨段引用不存在的字幕素材 → error(时间轴可见但数据断裂)。"""
+    draft = {
+        "materials": {"texts": []},
+        "tracks": [
+            {"type": "text", "id": "track-text-1", "segments": [
+                {"id": "s1", "material_id": "text-zh-1",
+                 "target_timerange": {"start": 0, "duration": 1_000_000}}]},
+        ],
+    }
+    issues = check_texts_track_alignment(draft, "zh")
+    assert any(i["severity"] == "error" and "text-zh-1" in i["detail"] for i in issues)
+
+
+def test_texts_alignment_unreferenced_material_warns() -> None:
+    """texts 桶里有素材但无任何 text 轨段引用 → warning(时间轴不可见)。"""
+    draft = {
+        "materials": {
+            "texts": [{"id": "text-zh-1", "type": "text", "content": "孤儿字幕"}],
+        },
+        "tracks": [{"type": "video", "segments": []}],
+    }
+    issues = check_texts_track_alignment(draft, "zh")
+    assert any(i["severity"] == "warning" and "未被任何 text 轨道段引用" in i["detail"] for i in issues)
+
+
+def test_texts_alignment_native_content_ok(tmp_path: Path) -> None:
+    """原生 content JSON + 轨段引用齐全 → 无 issue;check_draft_dir 纳入新检查。"""
+    content = json.dumps(
+        {"styles": [{"fill": {"content": {"render_type": "solid"}}}], "text": "你好"},
+        ensure_ascii=False,
+    )
+    draft = {
+        "materials": {
+            "videos": [{"id": "video-1", "path": ""}],
+            "texts": [{"id": "text-zh-1", "type": "text", "content": content,
+                       "target_timerange": {"start": 0, "duration": 1_000_000}}],
+        },
+        "tracks": [
+            {"type": "video", "segments": [
+                {"id": "v1", "material_id": "video-1",
+                 "target_timerange": {"start": 0, "duration": 1_000_000}}]},
+            {"type": "text", "id": "track-text-1", "segments": [
+                {"id": "s1", "material_id": "text-zh-1",
+                 "target_timerange": {"start": 0, "duration": 1_000_000}}]},
+        ],
+    }
+    assert check_texts_track_alignment(draft, "zh") == []
+    result = check_draft_dir(_write_draft(tmp_path, draft), tag="zh", registered_expected=False)
+    assert "texts_track_alignment" in result["checks"]

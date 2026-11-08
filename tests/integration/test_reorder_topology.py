@@ -28,22 +28,31 @@ def _seed(
     monkeypatch: pytest.MonkeyPatch,
     *,
     asr_segments_zh: list[dict] | None = None,
+    storyline_plan: dict | None = None,
+    script_narration: dict[str, str] | None = None,
 ) -> dict:
     """预置 35s 草稿;默认**不**预置 asr_segments_zh(B1 ASR 移除后的常态输入)。
 
     ``asr_segments_zh`` 仅用于显式验证"有源字幕"的老路径(关卡③ 布局人工校对),
     模拟旧线程恢复时 state 里已有段落的场景;新流程 node_08 恒产出空列表。
+
+    ``storyline_plan`` + ``script_narration``(2026-11-09 阶段 1):给 node_08 的
+    中文旁白字幕落草稿提供 storyline_plan 与 script 产物;同时给种子草稿的单一
+    视频段补 source_timerange(0-35s,与 plan 的 clip 源范围一致)与素材路径,
+    供源范围匹配。
     """
     draft_dir = tmp_path / "drafts" / "demo"
     draft_dir.mkdir(parents=True)
     dur = 35_000_000
     draft_file = draft_dir / "draft_content.json"
+    segment: dict = {"id": "s1", "target_timerange": {"start": 0, "duration": dur}}
+    if storyline_plan is not None:
+        segment["source_timerange"] = {"start": 0, "duration": dur}
     draft_file.write_text(json.dumps({
         "canvas_config": {"width": 1080, "height": 1920},
         "duration": dur,
-        "materials": {"videos": [{"id": "v1"}]},
-        "tracks": [{"type": "video", "fps": 30,
-                    "segments": [{"id": "s1", "target_timerange": {"start": 0, "duration": dur}}]}],
+        "materials": {"videos": [{"id": "v1", "path": "C:/tmp/fake.mp4"}]},
+        "tracks": [{"type": "video", "fps": 30, "segments": [segment]}],
     }, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setenv("AUTO_VIDEO_EDITOR_DRAFT_DIR", str(draft_dir))
     state = {
@@ -58,6 +67,23 @@ def _seed(
     }
     if asr_segments_zh is not None:
         state["asr_segments_zh"] = asr_segments_zh
+    if storyline_plan is not None:
+        state["storyline_plan"] = storyline_plan
+    if script_narration is not None:
+        script_file = draft_dir / "script.json"
+        script_file.write_text(
+            json.dumps(
+                {
+                    "group_scripts": [
+                        {"group_id": gid, "narration": text}
+                        for gid, text in script_narration.items()
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        state["storyline_script_artifact"] = str(script_file)
     return state
 
 
@@ -238,3 +264,70 @@ def test_tail_chain_applies_to_both_drafts(tmp_path, monkeypatch):
     log = final["status_log"]
     assert "node_09_inject_fx_done" in log and "node_09_inject_fx_en_done" in log
     assert "node_11_inject_sticker_done" in log and "node_11_inject_sticker_en_done" in log
+
+
+def test_zh_draft_gets_native_subtitles(tmp_path, monkeypatch):
+    """阶段 1(2026-11-09 效果缺失修复):有旁白 → node_08 把中文旁白逐句写成
+    原生 text 素材 + text 轨道(计划 §8 阶段 1 集成验收:materials.texts > 0、
+    text track 存在、每段 material_id 都存在)。
+
+    storyline 链在集成桩下(fake 媒体)产出空 clips 并经 join 覆盖 storyline_plan、
+    经 generate_script 覆盖 storyline_script_artifact(写到共享 outputs 目录)。
+    这里把 join 的时间线读取替换为种子 plan、把 generate_script 替换为"保留种子
+    script 产物"(join 的 Pydantic 校验等其余逻辑照常),使 generate_draft →
+    node_08 走真实全链;被测对象是 05→07→08 的落草稿行为,不是 stub 链本身。
+    """
+    import nodes.storyline.join_storyline as join_mod
+
+
+    plan = {
+        "schema_version": "1.0", "job_id": "reorder", "created_at_ms": 0,
+        "source_media": [{
+            "media_id": "media_0001", "file_uri": "file:///C:/tmp/fake.mp4",
+            "duration_ms": 35000, "media_type": "video",
+        }],
+        "clips": [{
+            "clip_id": "clip_0001", "source_media_id": "media_0001",
+            "source_in_ms": 0, "source_out_ms": 35000,
+            "timeline_in_ms": 0, "timeline_out_ms": 35000,
+            "voiceover_id": "voiceover_0001",
+        }],
+        "audio": {"bgm_ref": None,
+                  "voiceover": json.dumps({"group_0001": "voiceover_0001"})},
+        "subtitles": {"zh": None, "en": None},
+        "options": {"enable_ai_transition": False, "enable_voiceover": True,
+                    "max_duration_ms": 35000},
+    }
+    script_file = tmp_path / "script.json"
+    script_file.write_text(
+        json.dumps(
+            {"group_scripts": [{"group_id": "group_0001", "narration": "你好。世界"}]},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(join_mod, "_read_timeline_dict", lambda state: plan)
+    # graph.py 是 `from ... import storyline_generate_script_node` 符号直连,
+    # patch 必须打在 graph 模块的绑定上(join 走模块属性查找所以不受此影响)。
+    monkeypatch.setattr(
+        "graph.storyline_generate_script_node",
+        lambda state: {
+            "storyline_script_artifact": str(script_file),
+            "status_log": ["storyline_generate_script_done"],
+        },
+    )
+    _, _, final = _drive(_seed(
+        tmp_path, monkeypatch, storyline_plan=plan,
+        script_narration={"group_0001": "你好。世界"},
+    ))
+
+    zh = json.loads(Path(final["draft_path"]).read_text(encoding="utf-8"))
+    texts = zh.get("materials", {}).get("texts") or []
+    assert [t["id"] for t in texts] == ["text-zh-1", "text-zh-2"]  # 逐句:你好。/世界
+    text_tracks = [t for t in zh.get("tracks", []) if t.get("type") == "text"]
+    assert len(text_tracks) == 1
+    ids = {t["id"] for t in texts}
+    assert all(seg["material_id"] in ids for seg in text_tracks[0]["segments"])
+    # state 侧段落(供阶段 2 的 node_16a 英文翻译消费)
+    segs = final.get("subtitle_segments_zh") or []
+    assert [s["text_zh"] for s in segs] == ["你好。", "世界"]

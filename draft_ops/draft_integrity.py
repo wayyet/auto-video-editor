@@ -250,6 +250,53 @@ def check_texts(draft: dict, tag: str) -> list[dict[str, str]]:
     return issues
 
 
+def check_texts_track_alignment(draft: dict, tag: str) -> list[dict[str, str]]:
+    """text 轨道段 ↔ ``materials.texts`` 双向一致性(阶段 1,2026-11-09)。
+
+    背景(效果缺失根因分析 §5.1):mapper 私有形状 text 轨曾被原生转换整轨
+    丢弃而 QA 不报 —— "有字幕数据"与"时间轴可见"是两回事。本检查对每条
+    text 轨段验证 material_id 可解析且显示文本非空;反向对未被任何段引用的
+    texts 素材给 warning(躺在桶里、剪映时间轴不可见)。无 text 轨 + 无 texts
+    是合法态(空输入),不报。
+    """
+    from jy_common.native_text import text_display_text
+
+    issues: list[dict[str, str]] = []
+    texts = {
+        str(t.get("id") or ""): t
+        for t in (draft.get("materials") or {}).get("texts") or []
+        if isinstance(t, dict) and t.get("id")
+    }
+    referenced: set[str] = set()
+    for tr in draft.get("tracks") or []:
+        if not isinstance(tr, dict) or tr.get("type") != "text":
+            continue
+        for i, s in enumerate(tr.get("segments") or []):
+            if not isinstance(s, dict):
+                continue
+            mid = str(s.get("material_id") or "")
+            mat = texts.get(mid)
+            if mat is None:
+                issues.append(_issue(
+                    "字幕一致", SEV_ERROR, tag,
+                    f"text 轨段#{i}({s.get('id', '?')}) 引用的字幕素材 {mid!r} 不存在",
+                ))
+                continue
+            referenced.add(mid)
+            if not text_display_text(mat).strip():
+                issues.append(_issue(
+                    "字幕一致", SEV_ERROR, tag,
+                    f"text 轨段#{i} 引用的字幕素材 {mid} 显示文本为空",
+                ))
+    for tid, mat in texts.items():
+        if tid not in referenced:
+            issues.append(_issue(
+                "字幕一致", SEV_WARNING, tag,
+                f"字幕素材 {tid}({text_display_text(mat)[:20]}) 未被任何 text 轨道段引用(时间轴不可见)",
+            ))
+    return issues
+
+
 def check_draft_dir(
     draft_dir: Path,
     *,
@@ -303,6 +350,8 @@ def check_draft_dir(
         result["checks"].append("material_paths")
         issues.extend(check_texts(content, tag))
         result["checks"].append("texts")
+        issues.extend(check_texts_track_alignment(content, tag))
+        result["checks"].append("texts_track_alignment")
     return result
 
 

@@ -535,3 +535,208 @@ def test_node_08_logs_storyline_overlay_notes(tmp_draft: Path) -> None:
     assert not any(
         "[node_08] storyline 推荐样式:" in entry for entry in out_without["status_log"]
     )
+
+
+# ---------------------------------------------------------------------------
+# 阶段 1(2026-11-09 效果缺失修复):中文旁白字幕原生落草稿
+# ---------------------------------------------------------------------------
+import copy as _copy
+
+
+def _zh_plan() -> dict:
+    """两段两组的 storyline_plan:clip_0001→group_0001(0-3s),clip_0002→group_0002(3-7s)。"""
+    return {
+        "schema_version": "1.0",
+        "job_id": "job",
+        "created_at_ms": 0,
+        "source_media": [
+            {"media_id": "media_0001", "file_uri": "file:///C:/v.mp4", "duration_ms": 6000, "media_type": "video"}
+        ],
+        "clips": [
+            {
+                "clip_id": "clip_0001", "source_media_id": "media_0001",
+                "source_in_ms": 0, "source_out_ms": 3000,
+                "timeline_in_ms": 0, "timeline_out_ms": 3000,
+                "voiceover_id": "voiceover_0001",
+            },
+            {
+                "clip_id": "clip_0002", "source_media_id": "media_0001",
+                "source_in_ms": 3000, "source_out_ms": 6000,
+                "timeline_in_ms": 3000, "timeline_out_ms": 7000,
+                "voiceover_id": "voiceover_0002",
+            },
+        ],
+        "audio": {
+            "bgm_ref": None,
+            "voiceover": json.dumps(
+                {"group_0001": "voiceover_0001", "group_0002": "voiceover_0002"}
+            ),
+        },
+        "subtitles": {"zh": None, "en": None},
+        "options": {"enable_ai_transition": False, "enable_voiceover": True, "max_duration_ms": 7000},
+    }
+
+
+def _zh_draft() -> dict:
+    """与 _zh_plan 源范围一致的两段原生草稿(路径用 / 形态,模拟剪映保存后改写)。"""
+    return {
+        "canvas_config": {"width": 1080, "height": 1920},
+        "duration": 7_000_000,
+        "materials": {
+            "videos": [{"id": "v1", "path": "C:/v.mp4"}],
+            "texts": [],
+        },
+        "tracks": [
+            {
+                "type": "video",
+                "segments": [
+                    {
+                        "id": "s1", "material_id": "v1",
+                        "source_timerange": {"start": 0, "duration": 3_000_000},
+                        "target_timerange": {"start": 0, "duration": 3_000_000},
+                    },
+                    {
+                        "id": "s2", "material_id": "v1",
+                        "source_timerange": {"start": 3_000_000, "duration": 3_000_000},
+                        "target_timerange": {"start": 3_000_000, "duration": 4_000_000},
+                    },
+                ],
+            },
+        ],
+    }
+
+
+def _zh_state(draft_path: Path, tmp_path: Path, narration_g1: str, narration_g2: str) -> dict:
+    script_file = tmp_path / "script.json"
+    script_file.write_text(
+        json.dumps(
+            {
+                "group_scripts": [
+                    {"group_id": "group_0001", "narration": narration_g1},
+                    {"group_id": "group_0002", "narration": narration_g2},
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    state = _state(draft_path)
+    state["storyline_plan"] = _zh_plan()
+    state["storyline_script_artifact"] = str(script_file)
+    return state
+
+
+def _write_draft(tmp_path: Path, draft: dict) -> Path:
+    draft_file = tmp_path / "draft" / "draft_content.json"
+    draft_file.parent.mkdir(parents=True, exist_ok=True)
+    draft_file.write_text(json.dumps(draft, ensure_ascii=False, indent=2), encoding="utf-8")
+    return draft_file
+
+
+def test_zh_subtitles_written_from_narration(tmp_path: Path) -> None:
+    """有旁白 → materials.texts 原生条目 + text 轨段(material_id 可解析)+ state 段落。"""
+    draft_file = _write_draft(tmp_path, _zh_draft())
+    state = _zh_state(draft_file, tmp_path, "第一句。第二句!", "第三句")
+
+    out = add_subtitles(state)
+
+    assert "node_08_add_subtitles_done" in out["status_log"]
+    segs = out["subtitle_segments_zh"]
+    assert len(segs) == 3
+    # 组1(0-3s)两句按字符比例(4:4)各 1.5s;组2(3-7s)一句 4s
+    assert (segs[0]["start_ms"], segs[0]["end_ms"]) == (0, 1500)
+    assert (segs[1]["start_ms"], segs[1]["end_ms"]) == (1500, 3000)
+    assert (segs[2]["start_ms"], segs[2]["end_ms"]) == (3000, 7000)
+
+    draft = json.loads(draft_file.read_text(encoding="utf-8"))
+    texts = draft["materials"]["texts"]
+    assert [t["id"] for t in texts] == ["text-zh-1", "text-zh-2", "text-zh-3"]
+    # 原生 content JSON(text 字段回显句子)
+    for t, expect in zip(texts, ["第一句。", "第二句!", "第三句"]):
+        assert json.loads(t["content"])["text"] == expect
+    # text 轨段引用完整
+    text_tracks = [t for t in draft["tracks"] if t["type"] == "text"]
+    assert len(text_tracks) == 1
+    assert [s["material_id"] for s in text_tracks[0]["segments"]] == [
+        "text-zh-1", "text-zh-2", "text-zh-3",
+    ]
+
+
+def test_zh_subtitles_replay_is_idempotent(tmp_path: Path) -> None:
+    """重放(幂等):同一 state 跑两遍,草稿逐字节一致。"""
+    draft_file = _write_draft(tmp_path, _zh_draft())
+    state = _zh_state(draft_file, tmp_path, "第一句。第二句!", "第三句")
+
+    add_subtitles(state)
+    first = draft_file.read_text(encoding="utf-8")
+    add_subtitles(state)
+    assert draft_file.read_text(encoding="utf-8") == first
+
+
+def test_zh_subtitles_empty_narration_leaves_draft_untouched(tmp_path: Path) -> None:
+    """空旁白(上游断裂的常态输入)→ 不写草稿、不产 subtitle_segments_zh、只记 note。"""
+    draft = _zh_draft()
+    draft_file = _write_draft(tmp_path, draft)
+    state = _zh_state(draft_file, tmp_path, "", "  ")
+
+    out = add_subtitles(state)
+
+    after = json.loads(draft_file.read_text(encoding="utf-8"))
+    assert after == draft
+    assert "subtitle_segments_zh" not in out
+    assert any("中文字幕跳过" in x for x in out["status_log"])
+
+
+def test_zh_subtitles_without_plan_leaves_draft_untouched(tmp_path: Path) -> None:
+    """无 storyline_plan → 无法映射组区间,跳过(草稿字节不变;既有回归锁语义)。"""
+    draft = _zh_draft()
+    draft_file = _write_draft(tmp_path, draft)
+    state = _zh_state(draft_file, tmp_path, "有旁白", "也有")
+    del state["storyline_plan"]
+
+    out = add_subtitles(state)
+
+    after = json.loads(draft_file.read_text(encoding="utf-8"))
+    assert after == draft
+    assert "subtitle_segments_zh" not in out
+    assert any("无法把当前草稿视频段映射到分组" in x for x in out["status_log"])
+
+
+def test_zh_subtitles_survive_human_reorder(tmp_path: Path) -> None:
+    """关卡①人工调序后:target 位置互换、源范围不变 → 组区间跟随新位置。"""
+    draft = _zh_draft()
+    segs = draft["tracks"][0]["segments"]
+    segs[0], segs[1] = segs[1], segs[0]
+    segs[0]["target_timerange"] = {"start": 0, "duration": 4_000_000}
+    segs[1]["target_timerange"] = {"start": 4_000_000, "duration": 3_000_000}
+    draft_file = _write_draft(tmp_path, draft)
+    state = _zh_state(draft_file, tmp_path, "第一组旁白", "第二组旁白")
+
+    out = add_subtitles(state)
+
+    segs_zh = out["subtitle_segments_zh"]
+    # 源范围匹配:clip_0002(源 3000-6000)现落在 0-4s,其组字幕应在 0-4s
+    assert (segs_zh[0]["start_ms"], segs_zh[0]["end_ms"]) == (0, 4000)
+    # clip_0001(源 0-3000)现落在 4-7s
+    assert (segs_zh[1]["start_ms"], segs_zh[1]["end_ms"]) == (4000, 7000)
+
+
+def test_zh_subtitles_preserves_foreign_texts_and_replaces_own(tmp_path: Path) -> None:
+    """人工文本素材/轨道保留;本节点旧产物(text-zh-*/track-text-1)被定向替换。"""
+    draft = _zh_draft()
+    draft["materials"]["texts"] = [
+        {"id": "manual-1", "type": "text", "content": "人工标题",
+         "target_timerange": {"start": 0, "duration": 1_000_000}},
+        {"id": "text-zh-9", "type": "text", "content": "上一轮旧字幕",
+         "target_timerange": {"start": 0, "duration": 1_000_000}},
+    ]
+    draft["tracks"].append(
+        {"type": "text", "id": "track-manual", "segments": [
+            {"id": "m1", "material_id": "manual-1",
+             "target_timerange": {"start": 0, "duration": 1_000_000}}]},
+    )
+    draft["tracks"].append(
+        {"type": "text", "id": "track-text-1", "segments": [
+            {"id": "old1", "material_id": "text-zh-9",
+             "target_timerange": {"start": 0, "duration": 1_000_000}}]},
+    )

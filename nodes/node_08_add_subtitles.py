@@ -1,15 +1,29 @@
-"""节点 8:add_subtitles — 字幕主干兼容节点(B1 ASR 移除后,2026-11-08)。
+"""节点 8:add_subtitles — 中文字幕原生落草稿的唯一写入口(2026-11-09 效果缺失修复)。
 
 历史上本节点调用 ASR 客户端把语音转成逐句字幕写进草稿;B1 ASR 移除
-(``docs/第三期开发/B1_ASR_移除设计与分阶段执行计划.md`` 阶段 3)后**不再
-识别语音、不再注入 ASR 字幕、绝不调用 ``sync_text_track``**(空列表整轨
-替换会清空 mapper 已写入的脚本字幕)。
+(``docs/第三期开发/B1_ASR_移除设计与分阶段执行计划.md`` 阶段 3)后不再
+识别语音。2026-11-09《剪映草稿效果缺失根因分析与修复设计执行计划》阶段 1
+起,本节点承担**中文字幕原生落草稿**(此前的断点:mapper 私有形状 text 轨被
+``storyline_to_native`` 整轨丢弃、node_08 只算样式不落草稿):
+
+- 字幕文本 = ``storyline_script_artifact`` 的逐组旁白(``group_scripts[].narration``);
+- 组 → 时间区间 = 当前草稿视频段反推(**源范围匹配**,抗关卡①人工调序;
+  ``node_07`` 压缩后的时间变化天然被吸收 —— 这是写在 node_05 的初始草稿做不到的);
+- 组内逐句:旁白按标点切句,按字符比例分摊组区间;
+- 原生形状(materials.texts 条目 + text 轨道段)复用 ``nodes/_subtitle_texts.py``
+  (与 node_08b 英文侧同一套已验证构造器);样式 = scout 换算 + storyline 推荐
+  叠加(P4 代码自此真正上岗);
+- 同步语义是**定向替换**:只替换/清理本节点自己的 id 前缀(``text-zh-``)与轨
+  (``track-text-1``),人工在剪映加的其他文本素材/轨道原样保留(原则:自动节点
+  不覆盖人工编辑);
+- 无旁白 / 无 storyline_plan / 组映射失败 → 不写草稿,仅记 status_log(空输入
+  跳过是常态路径,不是错误)。
 
 保留的职责:
 - 保持原图节点位置与中英两条分支的共同入口(拓扑不变);
 - ``subtitle_scout`` 样式侦察与 ``_style_from_scout`` 换算(非 ASR 样式能力,
   ``_style_from_scout`` 仍被 ``node_08b_add_subtitles_en`` 复用);
-- **不再写** ``asr_segments_zh`` / ``asr_segments_zh_written``(计划 §3.3"置空或缺省"
+- **不写** ``asr_segments_zh`` / ``asr_segments_zh_written``(计划 §3.3"置空或缺省"
   取缺省):新任务 state 天然无此键,节点 16a 走"无源字幕"正常跳过;旧线程
   checkpoint 里已有的段落经 ``{**state}`` 原样透传,按兼容语义继续可被 16a 消费。
 
@@ -29,12 +43,15 @@ scout 失败 / 异常 / 判定"当前设置已合适" → 一律回落到 ``_JIA
 from __future__ import annotations
 
 import copy
+import json
+import re
 from pathlib import Path
 from typing import Any
 
 import config
 from assembly_capabilities.run_context import RunContext
 from nodes._draft_io import apply_and_write, load_draft
+from nodes._subtitle_texts import build_text_track, make_text_material
 from state import WorkflowState
 from video_edit_capabilities import subtitle_style as sty
 from video_edit_capabilities.subtitle_scout import subtitle_scout
@@ -106,6 +123,281 @@ _STORYLINE_POSITION_TO_Y: dict[str, float] = {
     "middle": 0.0,
     "top": 0.8,
 }
+
+
+# ---------------------------------------------------------------------------
+# 阶段 1(2026-11-09,效果缺失修复计划):中文旁白字幕原生落草稿
+# ---------------------------------------------------------------------------
+#: 本节点拥有的 text material id 前缀(_sync_zh_text_materials 只清理它)
+_ZH_ID_PREFIX = "text-zh"
+#: 本节点拥有的 text 轨 id(_subtitle_texts.build_text_track 的固定 id)
+_ZH_TRACK_ID = "track-text-1"
+#: 本节点写入的私有轨名(仅日志/人读用;剪映原生轨 name 恒为 "")
+_ZH_TRACK_NAME = "Subtitles_zh"
+
+#: 句子边界:在 。!?;!?;\n 之后切(lookbehind,标点留在前句)
+_SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[。！？；!?;\n])")
+
+
+def _split_sentences(narration: str) -> list[str]:
+    """组旁白 → 逐句(标点切分;切不出任何边界时整段一条)。"""
+    text = str(narration or "").strip()
+    if not text:
+        return []
+    parts = [p.strip() for p in _SENTENCE_BOUNDARY_RE.split(text) if p and p.strip()]
+    return parts or [text]
+
+
+def _proportional_ranges(
+    start_us: int, end_us: int, sentences: list[str]
+) -> list[tuple[int, int]]:
+    """把 [start_us, end_us] 按句子字符数比例切分;末句吃整数余量避免累计漂移。"""
+    span = max(0, int(end_us) - int(start_us))
+    weights = [max(1, len(s)) for s in sentences]
+    total = sum(weights)
+    out: list[tuple[int, int]] = []
+    acc = int(start_us)
+    for i, w in enumerate(weights):
+        if i == len(weights) - 1:
+            dur = int(end_us) - acc
+        else:
+            dur = int(span * w / total)
+        out.append((acc, max(0, dur)))
+        acc += dur
+    return out
+
+
+def _narration_by_group(state: WorkflowState) -> dict[str, str]:
+    """``storyline_script_artifact``(script.json) → {group_id: narration}。"""
+    raw_path = state.get("storyline_script_artifact")
+    if not raw_path:
+        return {}
+    try:
+        doc = json.loads(Path(str(raw_path)).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    out: dict[str, str] = {}
+    for g in (doc or {}).get("group_scripts") or []:
+        if isinstance(g, dict) and g.get("group_id"):
+            out[str(g["group_id"])] = str(g.get("narration") or "")
+    return out
+
+
+def _voiceover_to_group(state: WorkflowState, plan: dict) -> dict[str, str]:
+    """voiceover_id → group_id 桥。
+
+    优先解析 plan ``audio.voiceover`` 的 JSON 映射串({group_id: voiceover_id},
+    plan_timeline_pro 写入的联调字段);缺失时回落 voiceover.json 产物的逐段
+    ``voiceover_id``/``group_id``。
+    """
+    bridge: dict[str, str] = {}
+    audio = plan.get("audio") if isinstance(plan.get("audio"), dict) else {}
+    raw = (audio or {}).get("voiceover")
+    if isinstance(raw, str) and raw.strip():
+        try:
+            for gid, vid in json.loads(raw).items():
+                bridge[str(vid)] = str(gid)
+        except (ValueError, AttributeError):
+            pass
+    if bridge:
+        return bridge
+    raw_artifact = state.get("storyline_voiceover_artifact")
+    if not raw_artifact:
+        return {}
+    try:
+        doc = json.loads(Path(str(raw_artifact)).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    for entry in (doc or {}).get("voiceover") or []:
+        if isinstance(entry, dict) and entry.get("voiceover_id") and entry.get("group_id"):
+            bridge[str(entry["voiceover_id"])] = str(entry["group_id"])
+    return bridge
+
+
+def _norm_path_key(path: str) -> str:
+    """路径归一化键:统一分隔符 + 小写(剪映保存可能改写 \\ 为 /)。"""
+    return str(path or "").replace("\\", "/").strip().lower()
+
+
+def _group_spans_from_draft(
+    draft: dict, state: WorkflowState
+) -> dict[str, tuple[int, int]] | None:
+    """当前草稿视频段 → {voiceover_id: (start_us, end_us)} 组时间区间。
+
+    匹配键 = (素材路径归一化, source 起点 µs, source 跨度 µs):关卡① 人工调序
+    只改 target 位置不改源范围,所以按源范围匹配是抗调序的;plan 缺失/键对不上
+    时退化为**顺序配对**(mapper 保序产出,段数一致即可靠);再失败返回 None
+    (调用方跳过写字幕,不猜)。
+    """
+    from storyline.mapper import file_uri_to_path
+
+    plan = state.get("storyline_plan")
+    if not isinstance(plan, dict):
+        return None
+    clips = [c for c in (plan.get("clips") or []) if isinstance(c, dict)]
+    if not clips:
+        return None
+
+    media = {
+        str(m.get("media_id")): m
+        for m in (plan.get("source_media") or [])
+        if isinstance(m, dict) and m.get("media_id")
+    }
+    key_to_clip: dict[tuple[str, int, int], dict] = {}
+    for c in clips:
+        m = media.get(str(c.get("source_media_id") or ""))
+        if not m:
+            continue
+        try:
+            path = file_uri_to_path(str(m.get("file_uri") or ""))
+        except ValueError:
+            continue
+        in_us = int(c.get("source_in_ms", 0) or 0) * 1000
+        dur_us = (int(c.get("source_out_ms", 0) or 0) - int(c.get("source_in_ms", 0) or 0)) * 1000
+        key_to_clip.setdefault((_norm_path_key(path), in_us, dur_us), c)
+
+    mat_path_by_id: dict[str, str] = {}
+    for v in (draft.get("materials") or {}).get("videos") or []:
+        if isinstance(v, dict) and v.get("id") and isinstance(v.get("path"), str):
+            mat_path_by_id[str(v["id"])] = v["path"]
+
+    draft_segs: list[dict] = []
+    for t in draft.get("tracks") or []:
+        if not isinstance(t, dict) or t.get("type") != "video":
+            continue
+        for s in t.get("segments") or []:
+            if not isinstance(s, dict):
+                continue
+            src = s.get("source_timerange") or {}
+            tgt = s.get("target_timerange") or {}
+            if not src or not tgt:
+                continue
+            draft_segs.append(
+                {
+                    "path": mat_path_by_id.get(str(s.get("material_id") or ""), ""),
+                    "src_start": int(src.get("start") or 0),
+                    "src_dur": int(src.get("duration") or 0),
+                    "tgt_start": int(tgt.get("start") or 0),
+                    "tgt_dur": int(tgt.get("duration") or 0),
+                }
+            )
+    if not draft_segs:
+        return None
+
+    # 段 → clip:先源范围精确匹配,miss 的段再顺序配对(仅当段数与 clips 一致)
+    matched: list[dict | None] = []
+    misses: list[int] = []
+    for i, seg in enumerate(draft_segs):
+        clip = key_to_clip.get(
+            (_norm_path_key(seg["path"]), seg["src_start"], seg["src_dur"])
+        )
+        matched.append(clip)
+        if clip is None:
+            misses.append(i)
+    if misses and len(draft_segs) == len(clips):
+        ordered = sorted(clips, key=lambda c: int(c.get("timeline_in_ms", 0) or 0))
+        for i in misses:
+            matched[i] = ordered[i]
+
+    vo_group = _voiceover_to_group(state, plan)
+    spans: dict[str, tuple[int, int]] = {}
+    for seg, clip in zip(draft_segs, matched):
+        if not clip:
+            continue
+        vid = str(clip.get("voiceover_id") or "")
+        if not vid:
+            continue
+        gid = vo_group.get(vid, vid)
+        start = seg["tgt_start"]
+        end = start + seg["tgt_dur"]
+        lo, hi = spans.get(gid, (start, end))
+        spans[gid] = (min(lo, start), max(hi, end))
+    return spans or None
+
+
+def _build_zh_subtitles(
+    draft: dict, state: WorkflowState, style: dict
+) -> tuple[list[dict], list[dict], list[str]]:
+    """构造中文字幕 materials + state 段落元数据;返回 (materials, segments, notes)。
+
+    空输入(无旁白/无 plan/组映射失败)→ ([], [], notes),调用方不写草稿。
+    """
+    notes: list[str] = []
+    spans = _group_spans_from_draft(draft, state)
+    if spans is None:
+        notes.append(
+            "中文字幕跳过:无法把当前草稿视频段映射到分组(缺 storyline_plan 或段数不符)"
+        )
+        return [], [], notes
+    narration = _narration_by_group(state)
+    if not narration:
+        notes.append("中文字幕跳过:script 无旁白(空 narration 是上游断裂的信号,见根因分析)")
+        return [], [], notes
+
+    materials: list[dict] = []
+    segments: list[dict] = []
+    index = 0
+    for gid, (start_us, end_us) in sorted(spans.items(), key=lambda kv: kv[1][0]):
+        text = (narration.get(gid) or "").strip()
+        if not text:
+            continue
+        sentences = _split_sentences(text)
+        for (s_us, d_us), sentence in zip(_proportional_ranges(start_us, end_us, sentences), sentences):
+            if d_us <= 0 or not sentence:
+                continue
+            materials.append(
+                make_text_material(
+                    index=index,
+                    content=sentence,
+                    start_us=s_us,
+                    duration_us=d_us,
+                    style=style,
+                    track_name=_ZH_TRACK_NAME,
+                    id_prefix=_ZH_ID_PREFIX,
+                    extra={"text_zh": sentence},
+                )
+            )
+            segments.append(
+                {
+                    "index": index,
+                    "start_ms": s_us // 1000,
+                    "end_ms": (s_us + d_us) // 1000,
+                    "text_zh": sentence,
+                }
+            )
+            index += 1
+    if not materials:
+        notes.append("中文字幕跳过:全部分组旁白为空")
+    return materials, segments, notes
+
+
+def _sync_zh_text_materials(draft: dict, materials: list[dict]) -> None:
+    """定向替换 materials.texts:只清理/替换本节点的 ``text-zh-`` 前缀条目,
+    人工在剪映加的其他文本素材原样保留(自动节点不覆盖人工编辑)。"""
+    mats = draft.setdefault("materials", {})
+    existing = mats.get("texts") or []
+    foreign = [
+        t
+        for t in existing
+        if isinstance(t, dict) and not str(t.get("id") or "").startswith(_ZH_ID_PREFIX)
+    ]
+    mats["texts"] = foreign + list(materials)
+
+
+def _sync_zh_text_track(draft: dict, materials: list[dict]) -> None:
+    """定向替换本节点的 text 轨(id=track-text-1);其余 text 轨(人工)保留。"""
+    tracks = draft.setdefault("tracks", []) or []
+    kept = [
+        t
+        for t in tracks
+        if not (
+            isinstance(t, dict)
+            and t.get("type") == "text"
+            and str(t.get("id") or "") == _ZH_TRACK_ID
+        )
+    ]
+    kept.append(build_text_track(materials))
+    draft["tracks"] = kept
 
 
 def _scout_style_overrides(scout_report: dict) -> dict:
@@ -388,6 +680,15 @@ def add_subtitles(state: WorkflowState) -> dict:
         _style, state.get("storyline_text_style_plan"), lang="zh"
     )
 
+    # 阶段 1(2026-11-09 效果缺失修复):中文旁白字幕原生落草稿 —— 本节点是
+    # 中文字幕唯一写入口。时机在 node_07 时长适配之后(读 snapshot2):组→时间
+    # 区间从当前草稿视频段按源范围反推,关卡①人工调序与压缩后的时间变化天然被
+    # 吸收。空输入(无旁白/无 plan)→ 不写草稿,仅记 notes(常态跳过路径)。
+    zh_materials, zh_segments, zh_notes = _build_zh_subtitles(draft, state, _style)
+    if zh_materials:
+        _sync_zh_text_materials(draft, zh_materials)
+        _sync_zh_text_track(draft, zh_materials)
+
     # Week 5:参数从 draft_path 提升为 draft_path.parent,safe_write_draft 双写
     log = list(state.get("status_log", []) or [])
     log.extend(
@@ -398,6 +699,11 @@ def add_subtitles(state: WorkflowState) -> dict:
             done_tag="node_08_add_subtitles_done",
         )
     )
+    if zh_materials:
+        log.append(
+            f"[node_08] 中文字幕已落草稿:{len(zh_materials)} 条(text 轨 track-text-1,"
+            f"样式=scout+storyline 叠加)"
+        )
     # 9 工具迁移 §6.4 step 1:成功调 scout → 把侦察报告落到 state;失败 → 不写
     if scout_report is not None:
         log.append("[node_08] subtitle_scout 成功,推荐已落到 state.subtitle_scout_report")
@@ -409,10 +715,16 @@ def add_subtitles(state: WorkflowState) -> dict:
         log.append("[node_08] scout 未提出需要改样式的建议(当前设置已合适)")
     for note in plan_notes:
         log.append(f"[node_08] storyline 推荐样式:{note}")
+    for note in zh_notes:
+        log.append(f"[node_08] {note}")
     out: dict = {
         **state,
         "status_log": log,
     }
     if scout_report is not None:
         out["subtitle_scout_report"] = scout_report
+    if zh_segments:
+        # 阶段 1:中文字幕段落(state 形状复用 SubtitleSegment),node_16a 英文
+        # 翻译以此为源(替代已废弃的 asr_segments_zh,见阶段 2)。
+        out["subtitle_segments_zh"] = zh_segments
     return out

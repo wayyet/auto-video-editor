@@ -177,6 +177,19 @@ def generate_initial_jianying_draft(
         # 发布 copytree 自动携带(剪映忽略未知文件)
         try:
             write_sidecar(draft_dir, native_sidecar)
+            # 阶段 1(2026-11-09 效果缺失修复):丢弃必须有痕 —— 原生转换把无法
+            # 落地的数据(text 轨/unresolved 音频引用)写进 sidecar,这里同步把
+            # 计数透出到 status_log,避免"产物看着成功、数据其实被丢"。
+            dropped = native_sidecar.get("dropped") or {}
+            if dropped:
+                dropped_count = sum(
+                    len(v) if isinstance(v, (list, dict)) else 1 for v in dropped.values()
+                )
+                names = ", ".join(sorted(str(k) for k in dropped))
+                log_tags.append(
+                    f"[node_05] 原生转换丢弃 {dropped_count} 项({names}),"
+                    "详见 drafts/autovideo_storyline_source.json"
+                )
         except Exception as exc:  # noqa: BLE001 — sidecar 失败不阻断草稿
             errors.append(f"[node_05] sidecar 写入失败(不阻断): {exc!r}")
     _emit_monitor_event(

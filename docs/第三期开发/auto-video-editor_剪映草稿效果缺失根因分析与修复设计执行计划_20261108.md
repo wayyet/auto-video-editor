@@ -869,3 +869,36 @@ flowchart TD
 因此，不建议通过单纯“重新跑一遍整个工作流”来解决。应先冻结当前任务的草稿和 checkpoint，再按本文件阶段0→阶段1→阶段2/3/4/5→阶段6→阶段7的顺序修复。优先打通字幕的原生写入与真实音频映射，再处理特效资源和 QA 阻断，最后通过剪映实机端到端验收确认效果。
 
 **判定标准必须从“节点执行完成”升级为“节点确实修改了草稿 + 草稿原生结构有效 + 剪映客户端能打开并看到/播放效果 + 交付 QA 通过”。**
+
+
+---
+
+## 13. 执行记录(2026-11-09)
+
+### 13.1 阶段 0:运行基线与证据冻结 —— ✅ 已交付(f5dd584)
+
+- 新增只读取证脚本 `scripts/freeze_run_baseline.py`(任务目录盘点 + staging/官方双草稿 SHA-256/轨道素材计数/`draft_integrity.check_draft_dir` 引用完整性 + `aget_state` 挂起导出,SelectorEventLoop 同 resume_workflow 口径);对 `console-d103e894da2b` 实跑通过。
+- 冻结记录见《auto-video-editor_剪映草稿效果缺失_阶段0_基线冻结记录_20261109.md》。关键事实修正:该 run 已于 2026-11-08 22:50 前后恢复并跑完全程(`interrupts: []`、`final_export_status=skipped`),交付 QA `passed=false` —— "跑完仍缺效果"被本 run 自证。
+- 测试基线:unit 1488 例 0 失败;integration 128 例 **8 存量失败**(注:剪映客户端在跑会被 `JY_WRITE_FAIL_ON_JIANYING_RUNNING` fail-closed 拒写,需带 `=0` 或关剪映,首次 32 失败即此因)。基线产物在 `outputs/baseline-console-d103e894da2b/`(gitignore,本地留存)。
+- 阶段 0 对后续的输入:官方草稿已含人工 VIP 音乐(Island Sway 3)→ node_08 配音轨重写必须带删除守卫;`check_dual_files` 对剪映人工保存的双文件不一致报 error(记录待放宽口径);EN 音频镜像悬空 companion 引用 ×4(阶段 5 输入)。
+
+### 13.2 阶段 1:字幕原生落地 —— ✅ 已交付
+
+**设计决策(计划任务 2 的二选一):由 `node_08` 唯一负责中文原生字幕写入**,理由:
+1. `timeline_planner.distribute` 在 TTS 驱动下明确不裁剪到目标时长(`timeline_planner.py:111-116`)+ 关卡①人工调序 → node_05 时点写入的时间必然错位;node_08 读 snapshot2(node_07 之后),时机正确;
+2. 计划 §7.2 目标数据链亦把字幕放在关卡①之后;
+3. 复用 node_08b 英文侧已验证的原生构造器(`nodes/_subtitle_texts.py`),P4 的样式叠加代码自此真正落草稿。
+
+**改动清单:**
+- `nodes/node_08_add_subtitles.py`(主):`_split_sentences`(标点切句)/`_proportional_ranges`(字符比例分摊,末句吃余量)/`_narration_by_group`(script.json 旁白)/`_voiceover_to_group`(plan.audio.voiceover JSON 串解析,回落 voiceover.json)/`_group_spans_from_draft`(**源范围匹配**抗关卡①调序:素材路径归一化+source 起点/跨度 µs;miss 段顺序配对兜底;再失败跳过)/`_build_zh_subtitles`/`_sync_zh_text_materials`+`_sync_zh_text_track`(**定向替换**:只清理 `text-zh-` 前缀与 `track-text-1` 轨,人工文本素材/轨道保留);产出 `subtitle_segments_zh`(复用 SubtitleSegment 形状,供阶段 2 的 16a 消费)。
+- `storyline/mapper.py`:删除内部 text 轨构造(私有形状曾被原生转换整轨丢弃,从不曾是剪映字幕);`storyline_meta.subtitles` 留档不变。
+- `storyline/native_draft.py`:dropped_text_track 分支降级为防御性(旧 checkpoint 残留),注释明确。
+- `nodes/node_05_generate_draft.py`:sidecar dropped 非空时向 status_log 告警(丢弃必须有痕)。
+- `state.py`:声明 `subtitle_segments_zh`、`subtitle_scout_report`(后者此前被 graph 运行时静默丢弃)。
+- `draft_ops/draft_integrity.py`:新增 `check_texts_track_alignment`(text 轨段 material_id 可解析+显示文本非空;反向孤儿素材 warning),接入 `check_draft_dir`。
+- `monitoring/workflow_graph.py`:node_08 注册表文案同步。
+
+**测试与验收:**
+- 新增 10 例:node_08 ×6(写入/幂等重放/空旁白跳过/无 plan 跳过/**人工调序后跟随新位置**/人工文本保留+旧产物定向替换)+ integrity ×4(空态合法/悬空引用 error/孤儿素材 warning/原生形态+check_draft_dir 接线);集成新增 1 例 `test_zh_draft_gets_native_subtitles`(整图驱动 05→07→08:materials.texts>0、text 轨存在、material_id 全解析、state 段落产出;storyline 桩链用 join/_read_timeline_dict + graph 符号补丁隔离)。
+- 验收:unit **1498 例 0 失败**(基线 1488+10);integration **129 例,新增失败 0/消失 0**(`compare_junit` 对照阶段 0 基线,8 存量不变);`check_imports` 0 未解析。
+- 实机验收(待用户,须新 thread):剪映打开草稿应见字幕轨,保存关闭重开仍在;本 thread(narration 空)仅验证空输入跳过路径。
