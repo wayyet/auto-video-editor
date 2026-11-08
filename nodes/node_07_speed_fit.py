@@ -155,7 +155,8 @@ def speed_fit(state: WorkflowState) -> dict:
     # Week 5:safe_write_draft 双写(content + info)+ duration 索引同步;签名从
     # (draft_file, content) 改为 (draft_dir, content),参数提升为目录。
     write_result = write_draft(
-        draft_path, draft, duration_us=int(draft.get("duration", 0))
+        draft_path, draft, duration_us=int(draft.get("duration", 0)),
+        audit_node="node_07",
     )
     log = list(state.get("status_log", []) or [])
     log.extend(jianying_running_tags("node_07", (write_result,)))

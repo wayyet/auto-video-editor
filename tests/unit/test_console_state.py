@@ -157,3 +157,31 @@ class TestWriteInitialStateJson:
         assert not raw.startswith(b"\xef\xbb\xbf")  # 无 BOM
         loaded = json.loads(raw.decode("utf-8"))
         assert loaded == state
+
+
+# ---------------------------------------------------------------------------
+# 阶段 6(2026-11-09 效果缺失修复):required_features 白名单键
+# ---------------------------------------------------------------------------
+def test_required_features_whitelisted(tmp_path):
+    """显式声明只保留 9 类布尔键;未知键/非布尔值过滤。"""
+    videos = [str(tmp_path / "a.mp4")]
+    (tmp_path / "a.mp4").write_bytes(b"x")
+    state = build_initial_state(
+        thread_id="console-aaaaaaaaaaaa", video_paths=videos, prompt="p",
+        target_duration_ms=35000, ratio="9:16", lang="zh",
+        outputs_root=tmp_path,
+        required_features={"bgm": True, "unknown_key": True, "transitions": "yes"},
+    )
+    assert state["required_features"] == {"bgm": True}
+
+
+def test_required_features_omitted_when_none(tmp_path):
+    """不声明时不写该键(冻结键集不膨胀,由 QA 侧运行时推导)。"""
+    videos = [str(tmp_path / "a.mp4")]
+    (tmp_path / "a.mp4").write_bytes(b"x")
+    state = build_initial_state(
+        thread_id="console-bbbbbbbbbbbb", video_paths=videos, prompt="p",
+        target_duration_ms=35000, ratio="9:16", lang="zh",
+        outputs_root=tmp_path,
+    )
+    assert "required_features" not in state

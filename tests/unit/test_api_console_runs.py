@@ -476,3 +476,37 @@ class TestReadOnlyBoundary:
         assert ("/api/console/runs", ("POST",)) in console_routes
         assert ("/api/console/config", ("GET",)) in console_routes
         assert ("/api/console/csrf", ("GET",)) in console_routes
+
+
+# ---------------------------------------------------------------------------
+# 阶段 6(2026-11-09 效果缺失修复):必需功能表单字段
+# ---------------------------------------------------------------------------
+def test_create_run_required_features_form(console_env):
+    """require_* 表单字段 → initial_state.json 的 required_features(白名单键)。"""
+    resp = client.post(
+        "/api/console/runs",
+        data={
+            "prompt": "剪一条 30 秒短片",
+            "require_bgm": "true",
+            "require_transitions": "false",
+            "require_stickers": "1",
+        },
+        files=_files(("trip.mp4", b"video-bytes")),
+    )
+    assert resp.status_code == 202, resp.text
+    tid = resp.json()["thread_id"]
+    state = json.loads((console_env / tid / "initial_state.json").read_text("utf-8"))
+    assert state["required_features"] == {"bgm": True, "transitions": False, "stickers": True}
+
+
+def test_create_run_required_features_absent_means_none(console_env):
+    """不传 require_* → initial_state 不含 required_features(运行时推导)。"""
+    resp = client.post(
+        "/api/console/runs",
+        data={"prompt": "剪一条 30 秒短片"},
+        files=_files(("trip.mp4", b"video-bytes")),
+    )
+    assert resp.status_code == 202, resp.text
+    tid = resp.json()["thread_id"]
+    state = json.loads((console_env / tid / "initial_state.json").read_text("utf-8"))
+    assert "required_features" not in state

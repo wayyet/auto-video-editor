@@ -168,6 +168,26 @@ def generate_initial_jianying_draft(
     write_result = writer(draft_dir, draft_content)
     # writer 返回值可能是 dict(safe_write_draft)或 None(legacy atomic_write_draft),
     # 兼容两种形态。
+    # 阶段 6b:初建草稿也进 draft_mutations 审计(记录 created 形态,
+    # sha_before=None;测试注入 writer 时同样生效,审计失败降级不阻断)。
+    try:
+        from draft_ops.draft_lock import hash_draft_files
+        from nodes._draft_io import append_draft_mutation, build_draft_mutation_record
+
+        append_draft_mutation(
+            draft_dir,
+            build_draft_mutation_record(
+                "node_05",
+                draft_dir / "draft_content.json",
+                None,
+                draft_content,
+                sha_before=None,
+                sha_after=hash_draft_files(draft_dir / "draft_content.json"),
+                status="created",
+            ),
+        )
+    except Exception:  # noqa: BLE001 — 审计绝不阻断草稿生成
+        pass
     log_tags = list(state.get("status_log", []) or [])
     if isinstance(write_result, dict) and write_result.get("jianying_running"):
         log_tags.append("[node_05] 剪映进程在跑,写入仍继续(告警不阻断)")

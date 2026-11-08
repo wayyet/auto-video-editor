@@ -25,6 +25,7 @@ from langgraph.types import Command
 
 from graph import build_graph
 from state import WorkflowState
+from draft_ops.draft_integrity import REQUIRED_FEATURE_KEYS
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +74,8 @@ def _legacy_week4_state(draft_path: str) -> dict:
         "draft_path": draft_path,
         "draft_encryption_status": "plaintext",
         "draft_version_strategy": "strategy_a_version_lock",
+        # 阶段 6:老 schema 恢复回归不声明必需效果,gate 永不阻断
+        "required_features": {key: False for key in REQUIRED_FEATURE_KEYS},
         "shot_plan": {"video_path": "", "shots": [{"id": "sh1", "start_s": 0.0, "end_s": 5.0}]},
         "asr_segments_zh": [
             {"index": 0, "start_ms": 0, "end_ms": 2_000, "text_zh": "你好"},

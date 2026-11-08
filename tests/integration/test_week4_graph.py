@@ -21,6 +21,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from config import make_checkpointer
 from graph import build_graph
 from state import WorkflowState
+from draft_ops.draft_integrity import REQUIRED_FEATURE_KEYS
 
 
 
@@ -43,6 +44,9 @@ def _seed_draft(draft_dir: Path, duration_us: int = 35_000_000) -> Path:
     return draft_file
 
 
+_TEST_REQUIRED_FEATURES = {key: False for key in REQUIRED_FEATURE_KEYS}
+
+
 def _seed_state(draft_path: str, *, asr_segments_zh: list[dict] | None = None) -> WorkflowState:
     return {
         "session_id": "w4-int",
@@ -58,6 +62,7 @@ def _seed_state(draft_path: str, *, asr_segments_zh: list[dict] | None = None) -
         "asr_segments_zh_written": True,
         "error_log": [],
         "status_log": ["node_05_generate_draft_done"],
+        "required_features": _TEST_REQUIRED_FEATURES,
     }
 
 

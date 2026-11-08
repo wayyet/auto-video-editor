@@ -26,6 +26,7 @@ from langgraph.types import Command
 from graph import build_graph
 from jy_common.translate_client import MockTranslateClient, set_default_client
 from state import WorkflowState
+from draft_ops.draft_integrity import REQUIRED_FEATURE_KEYS
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +51,9 @@ def _seed_draft(draft_dir: Path, duration_us: int = 35_000_000) -> Path:
     return draft_file
 
 
+REQUIRED_FEATURES_NONE = {key: False for key in REQUIRED_FEATURE_KEYS}
+
+
 def _seed_state(draft_path: str, *, asr_segments_zh: list[dict] | None = None) -> WorkflowState:
     return {
         "session_id": "w5-int",
@@ -65,6 +69,7 @@ def _seed_state(draft_path: str, *, asr_segments_zh: list[dict] | None = None) -
         "asr_segments_zh_written": True,
         "error_log": [],
         "status_log": ["node_05_generate_draft_done"],
+        "required_features": REQUIRED_FEATURES_NONE,
     }
 
 

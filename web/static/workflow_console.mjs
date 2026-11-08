@@ -246,6 +246,19 @@ export function failSubmission(state, err) {
 // FormData 构建(字段名与 POST /api/console/runs 冻结契约一致)
 // ---------------------------------------------------------------------------
 
+// 必需功能复选框(阶段 6):Form 字段名与 POST /runs 契约一致,顺序即展示顺序
+export const REQUIRED_FEATURE_FIELDS = Object.freeze([
+  ["require_subtitles_zh", "subtitles_zh"],
+  ["require_subtitles_en", "subtitles_en"],
+  ["require_voiceover_zh", "voiceover_zh"],
+  ["require_voiceover_en", "voiceover_en"],
+  ["require_bgm", "bgm"],
+  ["require_transitions", "transitions"],
+  ["require_text_animation", "text_animation"],
+  ["require_stickers", "stickers"],
+  ["require_volume_fades", "volume_fades"],
+]);
+
 export function buildCreateFormData(state, params) {
   const fd = new FormData();
   fd.append("prompt", String((params && params.prompt) || "").trim());
@@ -258,6 +271,11 @@ export function buildCreateFormData(state, params) {
   // Agent 智能体选择(2026-11-07):非空才下发,保持旧契约向后兼容(缺省 = 服务端默认)
   const backend = String((params && params.llm_backend) || "").trim();
   if (backend) fd.append("llm_backend", backend);
+  // 必需功能(阶段 6):全量下发勾选态,服务端写进 required_features
+  const required = (params && params.required_features) || {};
+  for (const [formKey, featureKey] of REQUIRED_FEATURE_FIELDS) {
+    fd.append(formKey, required[featureKey] ? "true" : "false");
+  }
   return fd;
 }
 

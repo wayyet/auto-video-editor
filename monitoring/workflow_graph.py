@@ -227,6 +227,16 @@ _NODE_META: dict[str, dict[str, Any]] = {
         "group": "fx_delivery",
         "description": "可选:FFmpeg 渲染中文主草稿为 MP4(阶段 6;默认关闭记 skipped)",
     },
+    "delivery_qa_repair": {
+        "name": "交付 QA 定向修复",
+        "group": "fx_delivery",
+        "description": "阶段 6:required 类别 failed/degraded 时重跑幂等修复节点(转场/动画/贴纸/淡入淡出),回 QA 复检",
+    },
+    "delivery_qa_failed": {
+        "name": "交付 QA 终止",
+        "group": "fx_delivery",
+        "description": "阶段 6:复检仍失败 → raise 终止为 run.failed(不允许静默 END)",
+    },
     # ---- storyline(auto 链) ----
     "storyline_load_media": {
         "name": "载入媒体",
@@ -373,6 +383,10 @@ _EDGE_LABELS: dict[tuple[str, str], str] = {
     ("storyline_qa_gate", "storyline_render_video"): "QA 通过",
     ("storyline_join", "generate_draft"): "有规划产物",
     ("storyline_join", "END"): "无规划产物",
+    ("join_before_delivery", "export_final_video"): "QA gate 通过",
+    ("join_before_delivery", "delivery_qa_repair"): "required 缺失,定向修复",
+    ("join_before_delivery", "delivery_qa_failed"): "复检仍失败,终止",
+    ("delivery_qa_repair", "join_before_delivery"): "修复后回 QA 复检",
 }
 
 # ---------------------------------------------------------------------------

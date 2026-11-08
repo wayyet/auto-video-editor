@@ -29,6 +29,10 @@ from langgraph.types import Command
 
 from graph import build_graph
 from state import WorkflowState
+from draft_ops.draft_integrity import REQUIRED_FEATURE_KEYS
+
+
+REQUIRED_FEATURES_NONE = {key: False for key in REQUIRED_FEATURE_KEYS}
 
 
 def _seed_state(draft_path: str) -> WorkflowState:
@@ -41,6 +45,7 @@ def _seed_state(draft_path: str) -> WorkflowState:
         "shot_plan": {"video_path": "", "shots": [{"id": "sh1", "start_s": 0.0, "end_s": 5.0}]},
         "error_log": [],
         "status_log": ["node_05_generate_draft_done"],
+        "required_features": REQUIRED_FEATURES_NONE,
     }
 
 

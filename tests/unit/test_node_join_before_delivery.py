@@ -448,3 +448,99 @@ def test_join_warning_not_in_join_qa_issues(tmp_path: Path) -> None:
     out = join_before_delivery(state)
     assert out["join_qa_issues"] == [], out["join_qa_issues"]
     assert any(i["severity"] == "warning" for i in out["join_qa_report"]["issues"])
+
+
+# ---------------------------------------------------------------------------
+# 阶段 6(2026-11-09 效果缺失修复):required-feature gate
+# ---------------------------------------------------------------------------
+def test_join_report_categories_and_gate_ok(tmp_path: Path) -> None:
+    """健康双草稿 → categories 全量存在,gate 不失败,required_features 回显。"""
+    state = _state_with_drafts(tmp_path)
+    out = join_before_delivery(state)
+    report = out["join_qa_report"]
+    cats = report["categories"]
+    assert set(cats.keys()) >= {"subtitles_zh", "subtitles_en", "voiceover_zh", "bgm", "transitions", "volume_fades"}
+    assert report["gate_failed"] is False
+    assert report["required_features"]["subtitles_zh"] is True
+    assert report["required_features"]["bgm"] is False
+    # 夹具:1 个视频段 → 转场不适用;无 text-zh 前缀字幕且无旁白 → 字幕不适用
+    assert cats["transitions"]["status"] == "not_applicable"
+    assert cats["subtitles_zh"]["status"] == "not_applicable"
+    assert "delivery_qa_gate_failed" not in out["status_log"]
+
+
+def test_join_gate_failed_when_required_subtitles_missing(tmp_path: Path) -> None:
+    """有旁白产物但草稿无我方字幕 → subtitles_zh failed → gate_failed。"""
+    state = _state_with_drafts(
+        tmp_path,
+        voiceover_summary={"provider": "firered", "written": 3, "stub_count": 0, "failed": 0},
+    )
+    out = join_before_delivery(state)
+    report = out["join_qa_report"]
+    assert report["gate_failed"] is True
+    assert report["categories"]["subtitles_zh"]["status"] == "failed"
+    assert "delivery_qa_gate_failed" in out["status_log"]
+    # 新 issue 进入字符串契约
+    assert any("无我方字幕" in i for i in out["join_qa_issues"])
+
+
+def test_join_gate_ignores_optional_bgm_missing(tmp_path: Path) -> None:
+    """bgm 未 required 且无 BGM 轨 → not_applicable,gate 不失败。"""
+    zh_dir = tmp_path / "zh2"
+    en_dir = tmp_path / "en_branch2"
+    draft = _healthy_draft(zh_dir, audio_volume=None)
+    # 拆掉音轨:草稿无 audio 轨 → bgm n/a
+    draft["tracks"] = [t for t in draft["tracks"] if t["type"] != "audio"]
+    draft["materials"]["audios"] = []
+    draft["materials"].pop("audio_fades", None)
+    serialized = json.dumps(draft, ensure_ascii=False)
+    zh_dir.mkdir(parents=True, exist_ok=True)
+    (zh_dir / "draft_content.json").write_text(serialized, encoding="utf-8")
+    (zh_dir / "draft_info.json").write_text(serialized, encoding="utf-8")
+    _healthy_draft(en_dir)
+    state = {
+        "covers": _ok_covers(),
+        "subtitle_srt_path": "/p/subtitle_en.srt",
+        "draft_path": str(zh_dir / "draft_content.json"),
+        "draft_dir_en_branch": str(en_dir),
+        "status_log": [],
+        "error_log": [],
+    }
+    out = join_before_delivery(state)
+    report = out["join_qa_report"]
+    assert report["categories"]["bgm"]["status"] == "not_applicable"
+    assert report["categories"]["volume_fades"]["status"] == "not_applicable"
+    assert report["gate_failed"] is False
+
+
+def test_join_gate_stub_voiceover_degraded_blocks(monkeypatch, tmp_path: Path) -> None:
+    """TTS_BACKEND=firered(生产语义)+ stub 配音摘要 → voiceover_zh degraded 阻断。"""
+    monkeypatch.setenv("TTS_BACKEND", "firered")
+    state = _state_with_drafts(
+        tmp_path,
+        voiceover_summary={"provider": "stub", "written": 2, "stub_count": 2, "failed": 0},
+    )
+    out = join_before_delivery(state)
+    report = out["join_qa_report"]
+    assert report["categories"]["voiceover_zh"]["status"] == "degraded"
+    assert report["gate_failed"] is True
+
+
+def test_join_explicit_required_features_state(tmp_path: Path) -> None:
+    """state.required_features 显式声明 → 报告回显与 categories.required 反映。"""
+    state = _state_with_drafts(tmp_path, required_features={"bgm": True})
+    out = join_before_delivery(state)
+    report = out["join_qa_report"]
+    assert report["required_features"]["bgm"] is True
+    assert report["categories"]["bgm"]["required"] is True
+    # bgm required 但夹具草稿有 BGM 轨(非配音轨)→ 仍 passed,不阻断
+    assert report["categories"]["bgm"]["status"] == "passed"
+    assert report["gate_failed"] is False
+
+
+def test_join_report_sha256_present(tmp_path: Path) -> None:
+    state = _state_with_drafts(tmp_path)
+    out = join_before_delivery(state)
+    sha = out["join_qa_report"]["sha256"]
+    assert "zh" in sha and "en" in sha
+    assert len(sha["zh"]["draft_content.json"]) == 64

@@ -36,8 +36,11 @@
     → node_11_inject_sticker         (尾链 09/11/12/13 同时作用于中英两份草稿)
     → node_12_human_add_bgm          ⏸ interrupt("②")
     → node_13_adjust_volume
-    → join_before_delivery           (交付前 QA 闸门,单前驱,不再承担 fan-in)
-    → export_final_video             (可选 MP4 导出,阶段 6;默认关闭记 skipped)
+    → join_before_delivery           (交付 QA 闸门 + required-feature gate,单前驱)
+    → 🔁 条件边(route_after_join_qa,阶段 6):
+      ├─→ export_final_video         (gate 通过;可选 MP4 导出,默认关闭记 skipped)
+      ├─→ delivery_qa_repair         (gate 失败未修复:重跑幂等修复节点 → 回 join 复检)
+      └─→ delivery_qa_failed         (复检仍失败:raise → run.failed,不静默 END)
     → END
 
 2026-11-04 单流水线架构收敛(阶段3,见《单流水线架构设计与分阶段执行计划
@@ -126,6 +129,7 @@ from nodes.node_16a_translate_and_check import node_16a_translate_and_check
 from nodes.node_checkpoint3_layout_review import node_checkpoint3_layout_review
 from nodes.node_17_inject_english_tts import node_17_inject_english_tts
 from nodes.node_18_export_video import export_final_video
+from nodes.node_delivery_qa_repair import delivery_qa_failed, delivery_qa_repair
 from nodes.node_fork_english_branch import fork_draft_for_english_branch
 from nodes.node_join_before_delivery import join_before_delivery
 from state import WorkflowState
@@ -247,6 +251,30 @@ def route_after_translate(state: WorkflowState) -> str:
     if state.get("layout_issues_detected"):
         return "node_checkpoint3_layout_review"
     return "node_17_inject_english_tts"
+
+
+# ---------------------------------------------------------------------------
+# 阶段 6 条件边(效果缺失修复):交付 QA required-feature gate 阻断路由
+# ---------------------------------------------------------------------------
+def route_after_join_qa(state: WorkflowState) -> str:
+    """join_before_delivery 之后的条件路由(计划 §8 阶段 6 任务 4)。
+
+    - gate 未失败(required 类别全 passed/not_applicable)→ 可选导出;
+    - gate 失败且尚未修复过 → ``delivery_qa_repair``(重跑幂等修复节点,
+      回边到 join 复检);
+    - gate 失败且修复过仍失败 → ``delivery_qa_failed``(raise → run.failed,
+      不允许静默 END)。
+
+    判据读 ``join_qa_report.gate_failed``(join 节点写,见
+    :func:`draft_ops.draft_integrity.build_qa_categories`),与
+    ``delivery_qa_retry_count``(repair 唯一写入者)。
+    """
+    report = state.get("join_qa_report") or {}
+    if not report.get("gate_failed"):
+        return "export_final_video"
+    if not state.get("delivery_qa_retry_count"):
+        return "delivery_qa_repair"
+    return "delivery_qa_failed"
 
 
 # ---------------------------------------------------------------------------
@@ -516,6 +544,9 @@ def _build_state_graph():
     # 2026-11-07 阶段 6:可选最终 MP4 导出(交付 QA 与导出分离;开关关闭时
     # 节点显式记 skipped,不静默)。
     g.add_node("export_final_video", export_final_video)
+    # 2026-11-09 阶段 6(效果缺失修复):required-feature gate 阻断路由两节点
+    g.add_node("delivery_qa_repair", delivery_qa_repair)
+    g.add_node("delivery_qa_failed", delivery_qa_failed)
 
     # ---- auto 链 19 节点 + qa_gate + join_storyline(plan_v4 §2.2 / §2.3)----
     g.add_node("storyline_load_media", storyline_load_media_node)
@@ -641,10 +672,22 @@ def _build_state_graph():
     # 交付前 QA 闸门:单前驱,不再承担 fan-in
     g.add_edge("node_13_adjust_volume", "join_before_delivery")
 
-    # join → 可选 MP4 导出(阶段 6)→ END
-    # 导出与发布/关卡/QA 分离(计划 §8 阶段 6);FINAL_EXPORT_ENABLED=False 时
-    # 节点显式记 final_export_status="skipped" 并上报 export.skipped,不渲染。
-    g.add_edge("join_before_delivery", "export_final_video")
+    # join → 条件路由(阶段 6:required-feature gate)→ 可选导出 / 定向修复 / 失败终止
+    # gate 未失败 → export;失败未修复 → repair(回边 join 复检);复检仍失败 →
+    # delivery_qa_failed(raise → run.failed)。导出与发布/关卡/QA 分离(计划 §8 阶段 6);
+    # FINAL_EXPORT_ENABLED=False 时节点显式记 final_export_status="skipped" 并上报
+    # export.skipped,不渲染。
+    g.add_conditional_edges(
+        "join_before_delivery",
+        route_after_join_qa,
+        {
+            "export_final_video": "export_final_video",
+            "delivery_qa_repair": "delivery_qa_repair",
+            "delivery_qa_failed": "delivery_qa_failed",
+        },
+    )
+    g.add_edge("delivery_qa_repair", "join_before_delivery")
+    g.add_edge("delivery_qa_failed", END)
     g.add_edge("export_final_video", END)
 
     # ---- auto 链 19 节点图边(plan_v4 §2.2 / §5 阶段 0)----

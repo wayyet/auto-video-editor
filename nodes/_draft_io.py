@@ -27,10 +27,21 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 from draft_ops.atomic_writer import safe_write_draft
+from draft_ops.draft_lock import hash_draft_files
+
+#: 节点级草稿修改审计文件(阶段 6b;点前缀,剪映不读;每次写入 append 一行)
+AUDIT_FILE_NAME = ".autovideo_draft_mutations.jsonl"
+
+#: 审计分桶的 materials 桶名(其余桶不 diff,防止计数噪声)
+_AUDIT_BUCKETS: tuple[str, ...] = (
+    "videos", "audios", "texts", "transitions", "video_effects",
+    "stickers", "material_animations", "audio_fades", "speeds",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +62,101 @@ def load_draft(draft_file: Path | str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# 阶段 6b:节点级草稿修改审计(draft_mutations)
+# ---------------------------------------------------------------------------
+def draft_role_of(draft_path: Path | str) -> str:
+    """按路径推断草稿角色:英文分支目录(``en_branch_*``)→ ``en``,其余 ``zh``。"""
+    return "en" if "en_branch" in Path(draft_path).as_posix() else "zh"
+
+
+def _bucket_counts(draft: dict[str, Any] | None) -> dict[str, int]:
+    """materials 各桶条目数 + tracks 段总数(轻量计数,免深比较)。"""
+    if not isinstance(draft, dict):
+        return {}
+    materials = draft.get("materials") or {}
+    counts = {
+        f"materials.{bucket}": len(materials.get(bucket) or [])
+        for bucket in _AUDIT_BUCKETS
+        if isinstance(materials.get(bucket), list)
+    }
+    counts["track_segments"] = sum(
+        len(t.get("segments") or [])
+        for t in (draft.get("tracks") or [])
+        if isinstance(t, dict)
+    )
+    return counts
+
+
+def build_draft_mutation_record(
+    node_id: str,
+    draft_path: Path | str,
+    before: dict[str, Any] | None,
+    after: dict[str, Any] | None,
+    *,
+    sha_before: dict[str, str] | None,
+    sha_after: dict[str, str] | None,
+    status: str = "succeeded",
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """构造一条审计记录(纯函数;落盘由 :func:`append_draft_mutation` 负责)。"""
+    counts_before = _bucket_counts(before)
+    counts_after = _bucket_counts(after)
+    changed_counts = {
+        key: {"before": counts_before.get(key, 0), "after": counts_after.get(key, 0)}
+        for key in sorted(set(counts_before) | set(counts_after))
+        if counts_before.get(key, 0) != counts_after.get(key, 0)
+    }
+    return {
+        "node_id": node_id,
+        "draft_role": draft_role_of(draft_path),
+        "draft_path": str(draft_path),
+        "sha256_before": (sha_before or {}).get("draft_content.json"),
+        "sha256_after": (sha_after or {}).get("draft_content.json"),
+        "changed": bool(changed_counts) or (
+            (sha_before or {}).get("draft_content.json")
+            != (sha_after or {}).get("draft_content.json")
+        ),
+        "changed_counts": changed_counts,
+        "status": status,
+        "reason": reason,
+        "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+
+def append_draft_mutation(draft_dir: Path | str, record: dict[str, Any]) -> bool:
+    """审计记录追加进 ``<draft_dir>/.autovideo_draft_mutations.jsonl``。
+
+    审计是观测通道,**绝不阻断主流程**:任何 IO 异常吞掉返回 False。
+    """
+    try:
+        path = Path(draft_dir) / AUDIT_FILE_NAME
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        return True
+    except OSError:
+        return False
+
+
+def read_draft_mutations(draft_dir: Path | str) -> list[dict[str, Any]]:
+    """读回审计记录(文件缺失/损坏返回空列表;join QA 聚合用)。"""
+    path = Path(draft_dir) / AUDIT_FILE_NAME
+    if not path.is_file():
+        return []
+    records: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+            if isinstance(obj, dict):
+                records.append(obj)
+        except ValueError:
+            continue
+    return records
+
+
+# ---------------------------------------------------------------------------
 # R2:写回
 # ---------------------------------------------------------------------------
 def write_draft(
@@ -58,6 +164,7 @@ def write_draft(
     draft: dict[str, Any],
     *,
     duration_us: int | None = None,
+    audit_node: str | None = None,
 ) -> dict[str, Any]:
     """目录级双写草稿并返回 ``safe_write_draft`` 的结果字典。
 
@@ -69,8 +176,37 @@ def write_draft(
         draft: 草稿内容 dict。
         duration_us: 给出时同步更新 ``draft_meta_info.json`` / ``root_meta_info.json``
             的 ``tm_duration``;``None`` 表示不更新(默认)。
+        audit_node: 阶段 6b 审计节点名(如 ``"node_08"``)。给出时写前/写后各取
+            一枚 SHA-256 并把修改记录追加进草稿目录的
+            ``.autovideo_draft_mutations.jsonl``(失败降级,不阻断)。
     """
-    return safe_write_draft(Path(draft_path).parent, draft, duration_us=duration_us)
+    target = Path(draft_path)
+    before_content: dict[str, Any] | None = None
+    sha_before: dict[str, str] | None = None
+    if audit_node:
+        try:
+            before_content = load_draft(target)
+        except (OSError, ValueError):
+            before_content = None
+        try:
+            sha_before = hash_draft_files(target)
+        except OSError:
+            sha_before = None
+    result = safe_write_draft(target.parent, draft, duration_us=duration_us)
+    if audit_node:
+        try:
+            sha_after = hash_draft_files(target)
+        except OSError:
+            sha_after = None
+        status = "succeeded" if result.get("ok") else "failed"
+        record = build_draft_mutation_record(
+            audit_node, target, before_content, draft,
+            sha_before=sha_before, sha_after=sha_after, status=status,
+            reason=result.get("reason") if status == "failed" else None,
+        )
+        append_draft_mutation(target.parent, record)
+        result["mutation"] = record
+    return result
 
 
 def jianying_running_tags(node_tag: str, write_results: Iterable[Any]) -> list[str]:
@@ -112,7 +248,8 @@ def apply_and_write(
     Args:
         draft_path: 草稿文件路径(实际写入其父目录)。
         draft: 草稿内容 dict。
-        node_tag: 节点标签(``"node_08"``),告警前缀。
+        node_tag: 节点标签(``"node_08"``),告警前缀;同时作为阶段 6b 审计的
+            ``audit_node``(每次写入自动追加 draft_mutation 记录)。
         done_tag: 完成标记(如 ``"node_08_add_subtitles_done"``)。
         duration_us: 可选,透传 :func:`write_draft` 同步时长索引。
 
@@ -124,7 +261,7 @@ def apply_and_write(
             log.extend(apply_and_write(draft_path, draft, "node_10",
                                        done_tag="node_10_inject_text_fx_done"))
     """
-    write_result = write_draft(draft_path, draft, duration_us=duration_us)
+    write_result = write_draft(draft_path, draft, duration_us=duration_us, audit_node=node_tag)
     return [done_tag, *jianying_running_tags(node_tag, (write_result,))]
 
 
@@ -175,11 +312,16 @@ def upsert_by_id(items: list[dict], item: dict) -> bool:
 
 
 __all__ = [
-    "load_draft",
-    "write_draft",
-    "jianying_running_tags",
+    "AUDIT_FILE_NAME",
     "apply_and_write",
-    "find_video_track",
+    "append_draft_mutation",
+    "build_draft_mutation_record",
+    "draft_role_of",
     "find_text_segment_by_material_id",
+    "find_video_track",
+    "jianying_running_tags",
+    "load_draft",
+    "read_draft_mutations",
     "upsert_by_id",
+    "write_draft",
 ]

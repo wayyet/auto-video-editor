@@ -220,6 +220,15 @@ class WorkflowState(TypedDict, total=False):
     # 的产物 + 节点级汇总);字符串版 join_qa_issues 保持兼容,结构化明细在此。
     join_qa_report: NotRequired[Optional[dict]]
 
+    # ===== 2026-11-09 阶段 6(效果缺失修复):required-feature gate =====
+    # 创建台表单显式声明的必需功能(9 类布尔;缺省时由
+    # draft_ops.draft_integrity.resolve_required_features 按运行时能力推导)。
+    # required 类别在 QA 中处于 failed/degraded → 阻断路由,不允许静默 END。
+    required_features: NotRequired[Optional[dict]]
+    # delivery QA 修复循环计数(delivery_qa_repair 唯一写入者,无需 reducer):
+    # repair 重跑幂等修复节点后回 join 复检;仍失败则终止为 run.failed。
+    delivery_qa_retry_count: NotRequired[int]
+
     # ===== Week 5 新增字段(对齐第 5 周计划 §1.1 / §4.1)=====
     # 节点 17 写,验收脚本读。Week 5 仍是 stub,产出 en_dub.wav 占位空 wav。
     en_audio_path: NotRequired[Optional[str]]

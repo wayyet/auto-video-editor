@@ -232,7 +232,7 @@ def _adjust_volume_with_write(
         if not segments and removed == 0:
             return None, None
 
-    write_result = write_draft(draft_file, draft)
+    write_result = write_draft(draft_file, draft, audit_node="node_13")
     return written_entry, write_result
 
 

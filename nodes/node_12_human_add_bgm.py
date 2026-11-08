@@ -200,7 +200,7 @@ def mirror_bgm_to_en_draft(state: WorkflowState) -> list[str]:
         )
 
     try:
-        write_draft(en_file, en_draft)
+        write_draft(en_file, en_draft, audit_node="node_12_mirror")
     except (OSError, ValueError, RuntimeError) as exc:
         # RuntimeError = 剪映在跑且严格模式拒写(JY_WRITE_FAIL_ON_JIANYING_RUNNING)
         # —— 关卡② resume 后剪映很可能还开着,降级不崩(阶段 5 加固)。

@@ -66,6 +66,21 @@ router = APIRouter(prefix="/api/console")
 ALLOWED_RATIOS: tuple[str, ...] = ("9:16", "16:9", "4:3")
 ALLOWED_LANGS: tuple[str, ...] = ("zh", "en")
 
+#: 阶段 6(效果缺失修复):创建台"必需功能"复选框的 Form 字段名 →
+#: required_features 键(顺序即前端展示顺序;与
+#: draft_ops.draft_integrity.REQUIRED_FEATURE_KEYS 一一对应)。
+REQUIRED_FEATURE_FORM_FIELDS: tuple[tuple[str, str], ...] = (
+    ("require_subtitles_zh", "subtitles_zh"),
+    ("require_subtitles_en", "subtitles_en"),
+    ("require_voiceover_zh", "voiceover_zh"),
+    ("require_voiceover_en", "voiceover_en"),
+    ("require_bgm", "bgm"),
+    ("require_transitions", "transitions"),
+    ("require_text_animation", "text_animation"),
+    ("require_stickers", "stickers"),
+    ("require_volume_fades", "volume_fades"),
+)
+
 
 class ResumeBody(BaseModel):
     """POST /runs/{tid}/resume 请求体(阶段 5)。"""
@@ -144,6 +159,8 @@ def _bad_request(detail: str) -> HTTPException:
 def console_config(request: Request) -> dict:
     """前端表单限制与默认值(只读;不含 LLM 后端、路径等敏感项)。"""
     _verify_same_origin(request)
+    from draft_ops.draft_integrity import default_required_features
+
     return {
         "ok": True,
         "max_videos": config.CONSOLE_MAX_VIDEOS,
@@ -154,6 +171,8 @@ def console_config(request: Request) -> dict:
         "allowed_video_exts": sorted(ALLOWED_VIDEO_EXTS),
         "ratios": list(ALLOWED_RATIOS),
         "langs": list(ALLOWED_LANGS),
+        # 阶段 6:必需功能复选框默认勾选态(按 TTS 后端等运行时能力推导)
+        "required_features_defaults": default_required_features(),
     }
 
 
@@ -177,6 +196,15 @@ def create_run(
     ratio: str = Form("9:16"),
     lang: str = Form("zh"),
     llm_backend: str = Form(""),
+    require_subtitles_zh: Optional[bool] = Form(None),
+    require_subtitles_en: Optional[bool] = Form(None),
+    require_voiceover_zh: Optional[bool] = Form(None),
+    require_voiceover_en: Optional[bool] = Form(None),
+    require_bgm: Optional[bool] = Form(None),
+    require_transitions: Optional[bool] = Form(None),
+    require_text_animation: Optional[bool] = Form(None),
+    require_stickers: Optional[bool] = Form(None),
+    require_volume_fades: Optional[bool] = Form(None),
 ) -> JSONResponse:
     """创建并启动一次工作流任务(第二期阶段 2 语义)。
 
@@ -184,6 +212,8 @@ def create_run(
     同步 def 由 FastAPI 放线程池跑,落盘/Popen/PG 预检不阻塞事件循环。
     llm_backend 可选(仅 claude-cli/mcode-cli,浏览器显式选择即生效);缺省
     跟随服务端 CONSOLE_LLM_BACKEND 门禁;stub 不可由浏览器指定。
+    阶段 6(效果缺失修复):``require_*`` 必需功能显式声明(浏览器全量下发);
+    全缺省(None)时由 ``resolve_required_features`` 按运行时能力推导。
     """
     # 第二道防线:跨源浏览器请求直接拒绝(curl/同源不带 Origin 时放行)
     _verify_same_origin(request)
@@ -222,6 +252,29 @@ def create_run(
             "stub 不可由浏览器指定)"
         )
 
+    # --- 阶段 6:必需功能显式声明(全 None 时留空,由 QA 侧按运行时能力推导) ---
+    form_values = {
+        form_key: value
+        for form_key, value in (
+            ("require_subtitles_zh", require_subtitles_zh),
+            ("require_subtitles_en", require_subtitles_en),
+            ("require_voiceover_zh", require_voiceover_zh),
+            ("require_voiceover_en", require_voiceover_en),
+            ("require_bgm", require_bgm),
+            ("require_transitions", require_transitions),
+            ("require_text_animation", require_text_animation),
+            ("require_stickers", require_stickers),
+            ("require_volume_fades", require_volume_fades),
+        )
+    }
+    required_features: Optional[dict[str, bool]] = None
+    if any(v is not None for v in form_values.values()):
+        required_features = {
+            feature_key: bool(form_values[form_key])
+            for form_key, feature_key in REQUIRED_FEATURE_FORM_FIELDS
+            if form_values[form_key] is not None
+        }
+
     # --- 落盘 + 构建 State(阶段 1;失败整体回滚任务目录) ---
     try:
         result = prepare_run(
@@ -230,6 +283,7 @@ def create_run(
             target_duration_ms=duration,
             ratio=ratio,
             lang=lang,
+            required_features=required_features,
         )
     except ConsoleUploadError as e:
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e

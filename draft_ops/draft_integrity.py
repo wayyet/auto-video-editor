@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -369,6 +370,8 @@ def check_draft_dir(
         result["checks"].append("texts")
         issues.extend(check_texts_track_alignment(content, tag))
         result["checks"].append("texts_track_alignment")
+        issues.extend(check_resource_ids(content, tag))
+        result["checks"].append("resource_ids")
     return result
 
 
@@ -468,6 +471,367 @@ def check_audio_mirror(zh_draft: dict, en_draft: dict) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# 阶段 6(2026-11-09 效果缺失修复):required-feature gate
+# ---------------------------------------------------------------------------
+#: 必需功能 9 类(计划 §7.3.G)。创建台表单显式声明,缺省由
+#: :func:`default_required_features` 按运行时能力推导。
+REQUIRED_FEATURE_KEYS: tuple[str, ...] = (
+    "subtitles_zh",
+    "subtitles_en",
+    "voiceover_zh",
+    "voiceover_en",
+    "bgm",
+    "transitions",
+    "text_animation",
+    "stickers",
+    "volume_fades",
+)
+
+#: QA 分类全集 = 9 类必需功能 + 恒检查但不 gate 的交付类别
+#: (video_effects 不进 required:特效属"加分效果",缺资源时降级不阻断交付)。
+CATEGORY_KEYS: tuple[str, ...] = REQUIRED_FEATURE_KEYS + (
+    "video_effects",
+    "covers",
+    "srt",
+    "draft_integrity",
+)
+
+#: 类别 → 创建台展示名(与 DELIVERY QA 明细的 check 字段中文一致)
+CATEGORY_LABELS: dict[str, str] = {
+    "subtitles_zh": "中文字幕",
+    "subtitles_en": "英文字幕",
+    "voiceover_zh": "中文配音",
+    "voiceover_en": "英文配音",
+    "bgm": "BGM",
+    "transitions": "转场",
+    "text_animation": "字幕动画",
+    "stickers": "贴纸",
+    "volume_fades": "音量淡入淡出",
+    "video_effects": "视频特效",
+    "covers": "封面",
+    "srt": "英文字幕文件",
+    "draft_integrity": "草稿结构",
+}
+
+#: 深度 QA issue 的 check 文本 → category(尾链/交付物 issue 在节点侧自带 category)
+DEEP_CHECK_CATEGORY: dict[str, str] = {
+    "字幕文本": "subtitles",  # 按issue draft 标签再细分 zh/en
+    "字幕一致": "subtitles",
+    "BGM镜像": "bgm",
+    "双文件": "draft_integrity",
+    "草稿元数据": "draft_integrity",
+    "根索引": "draft_integrity",
+    "目录": "draft_integrity",
+    "视频轨": "draft_integrity",
+    "素材引用": "draft_integrity",
+    "素材路径": "draft_integrity",
+}
+
+#: 类别状态(passed=通过;failed=阻断级;degraded=降级,required 时阻断;
+#: not_applicable=该类别本次运行不适用,永不阻断)
+CAT_PASSED = "passed"
+CAT_FAILED = "failed"
+CAT_DEGRADED = "degraded"
+CAT_NOT_APPLICABLE = "not_applicable"
+
+
+def default_required_features() -> dict[str, bool]:
+    """按运行时能力推导的必需功能默认集(无显式 ``required_features`` 时用)。
+
+    推导原则(计划 §7.1 原则 6"按用户配置区分必需能力"):
+    - 字幕/转场/动画/淡入淡出 = 阶段 1-5 已承诺能力,默认必选
+      (单镜头转场、无旁白字幕等由 QA 判 not_applicable,不会误伤);
+    - 配音 = 仅 ``TTS_BACKEND=firered``(与 ``nodes/storyline/_tts_adapter.py``
+      同口径)时默认必选 —— stub 环境不默认阻断联调,但表单显式勾选后
+      stub 即 degraded 阻断(「stub 不冒充成功」);
+    - BGM = 关卡② 人工可选,默认不阻断;贴纸 = 资源 ID 未实机回填
+      (fail-closed 降级),默认不阻断。
+    """
+    tts_backend = str(os.environ.get("TTS_BACKEND", "") or "").strip().lower()
+    return {
+        "subtitles_zh": True,
+        "subtitles_en": True,
+        "voiceover_zh": tts_backend == "firered",
+        "voiceover_en": tts_backend == "firered",
+        "bgm": False,
+        "transitions": True,
+        "text_animation": True,
+        "stickers": False,
+        "volume_fades": True,
+    }
+
+
+def resolve_required_features(state: dict[str, Any]) -> dict[str, bool]:
+    """解析本次运行的必需功能集:显式声明覆盖推导默认,键之外忽略。"""
+    resolved = default_required_features()
+    raw = state.get("required_features")
+    if isinstance(raw, dict):
+        for key in REQUIRED_FEATURE_KEYS:
+            value = raw.get(key)
+            if isinstance(value, bool):
+                resolved[key] = value
+    return resolved
+
+
+def _is_our_fx_material(material_id: str) -> bool:
+    """是否我方确定性 id 的效果素材(人工/剪映原生条目是 uuid,不受影响)。"""
+    return material_id.startswith(("transition-", "vfx-", "sticker-", "text-anim-"))
+
+
+def check_resource_ids(draft: dict, tag: str) -> list[dict[str, str]]:
+    """我方 FX 素材的 ``resource_id`` 必须是真实 19 位剪映资源 ID。
+
+    背景(计划 §7.3.D):占位 resource_id 写进草稿,剪映加载不到该资源 ——
+    node_11 已对贴纸 fail-closed,本检查对转场/特效/动画兜底(资源库回填
+    错误、模板被改坏时 QA 必须暴露,而不是静默写入废资源)。
+    ``audio_fades`` 是原生结构不是资源条目(无 resource_id),不查。
+    """
+    from jy_common.native_fx import is_19_digit_resource_id
+
+    issues: list[dict[str, str]] = []
+    materials = draft.get("materials") or {}
+    for bucket in ("transitions", "video_effects", "stickers", "material_animations"):
+        for m in materials.get(bucket) or []:
+            if not isinstance(m, dict):
+                continue
+            material_id = str(m.get("id") or "")
+            if not _is_our_fx_material(material_id):
+                continue
+            resource_id = m.get("resource_id")
+            if resource_id is None:
+                # 键缺失:测试夹具/旧形态素材;真实构造器(native_fx)总是写该键,
+                # 不在此列 —— QA 抓"存在但非法"(空串/PLACEHOLDER/非 19 位)。
+                continue
+            if not is_19_digit_resource_id(resource_id):
+                issues.append(_issue(
+                    "资源ID", SEV_ERROR, tag,
+                    f"{bucket}#{material_id} resource_id 非法(占位或非 19 位): {resource_id!r}",
+                ))
+    return issues
+
+
+def _our_text_ids(draft: dict | None, prefix: str) -> list[str]:
+    if not draft:
+        return []
+    return [
+        str(m.get("id"))
+        for m in ((draft.get("materials") or {}).get("texts") or [])
+        if isinstance(m, dict) and str(m.get("id")).startswith(prefix)
+    ]
+
+
+def _bgm_segment_count(draft: dict | None) -> int:
+    """非配音音轨的段数(0 = 关卡② 未加 BGM / 镜像缺失)。"""
+    if not draft:
+        return 0
+    from nodes.node_13_adjust_volume import is_voiceover_track
+
+    return sum(
+        len(track.get("segments") or [])
+        for track in (draft.get("tracks") or [])
+        if isinstance(track, dict) and track.get("type") == "audio" and not is_voiceover_track(track)
+    )
+
+
+def _video_segment_count(draft: dict | None) -> int:
+    if not draft:
+        return 0
+    return sum(
+        len(track.get("segments") or [])
+        for track in (draft.get("tracks") or [])
+        if isinstance(track, dict) and track.get("type") == "video"
+    )
+
+
+def _category(
+    status: str,
+    issues: list[dict[str, str]],
+    counts: dict[str, Any] | None = None,
+    note: str | None = None,
+) -> dict[str, Any]:
+    out: dict[str, Any] = {"status": status, "issues": issues}
+    if counts:
+        out["counts"] = counts
+    if note:
+        out["note"] = note
+    return out
+
+
+def build_qa_categories(
+    state: dict[str, Any],
+    zh_draft: dict | None,
+    en_draft: dict | None,
+    deep_issues: list[dict[str, str]],
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, str]], bool]:
+    """按类别聚合 QA 结果并生成类别专属判定(阶段 6 required-feature gate)。
+
+    Args:
+        state: 工作流 state(读 voiceover_summary/fx_summary 等摘要)。
+        zh_draft / en_draft: 两份草稿 dict(不可得时 None)。
+        deep_issues: 深度 QA(draft_integrity)+ 尾链的结构化 issue,
+            每条已带 ``category`` 键(节点侧写入)。
+
+    Returns:
+        ``(categories, new_issues, gate_failed)``;``new_issues`` 是类别判定
+        **新产生**的 issue(如"有旁白但字幕未写入",已挂进对应类别的
+        ``issues``),调用方并入事件明细与 ``join_qa_issues``;``gate_failed``
+        = 任一 required 类别处于 failed/degraded。每类
+        ``{"status", "issues", "counts"?, "note"?, "required"}``。
+    """
+    categories: dict[str, dict[str, Any]] = {key: {"status": CAT_PASSED, "issues": []} for key in CATEGORY_KEYS}
+    new_issues: list[dict[str, str]] = []
+
+    # 1) 深度/尾链 issue 按 category 归桶(severity=error 即 failed)
+    for issue in deep_issues:
+        cat = issue.get("category")
+        if cat in categories:
+            categories[cat]["issues"].append(issue)
+            if issue.get("severity") == SEV_ERROR:
+                categories[cat]["status"] = CAT_FAILED
+
+    def _status_of(cat: str) -> str:
+        return categories[cat]["status"]
+
+    def _append_issue(cat: str, check: str, detail: str, *, severity: str = SEV_ERROR, draft: str = "-") -> dict[str, str]:
+        issue = {"check": check, "severity": severity, "draft": draft, "detail": detail, "category": cat}
+        categories[cat]["issues"].append(issue)
+        new_issues.append(issue)
+        if severity == SEV_ERROR or _status_of(cat) == CAT_PASSED:
+            categories[cat]["status"] = CAT_FAILED if severity == SEV_ERROR else CAT_DEGRADED
+        return issue
+
+    required = resolve_required_features(state)
+    en_checked = bool(state.get("draft_dir_en_branch"))
+
+    # 2) subtitles_zh:有旁白产物却无我方中文字幕 = node_08 该写没写
+    zh_texts = _our_text_ids(zh_draft, "text-zh-")
+    has_narration = bool(state.get("voiceover_summary")) or bool(state.get("subtitle_segments_zh"))
+    if zh_texts:
+        if _status_of("subtitles_zh") == CAT_PASSED:
+            categories["subtitles_zh"]["status"] = CAT_PASSED
+        categories["subtitles_zh"]["counts"] = {"texts": len(zh_texts)}
+    elif has_narration:
+        _append_issue("subtitles_zh", "中文字幕", "有旁白产物但中文草稿无我方字幕(node_08 未写入?)")
+    else:
+        categories["subtitles_zh"]["status"] = CAT_NOT_APPLICABLE
+        categories["subtitles_zh"]["note"] = "无旁白产物"
+
+    # 3) subtitles_en:英文分支存在且中文侧有字幕时,英文侧必须有字幕
+    en_texts = _our_text_ids(en_draft, "text-en-")
+    if not en_checked:
+        categories["subtitles_en"]["status"] = CAT_NOT_APPLICABLE
+        categories["subtitles_en"]["note"] = "英文分支未生成"
+    elif en_texts:
+        categories["subtitles_en"]["counts"] = {"texts": len(en_texts)}
+    elif zh_texts:
+        _append_issue("subtitles_en", "英文字幕", "中文侧有字幕但英文分支无我方英文字幕(node_16a/08b 链降级?)")
+    else:
+        categories["subtitles_en"]["status"] = CAT_NOT_APPLICABLE
+        categories["subtitles_en"]["note"] = "无中文字幕来源"
+
+    # 4) voiceover_zh:stub 一律 degraded(不冒充成功);有摘要但轨写入 0 = failed
+    vo_summary = state.get("voiceover_summary") or {}
+    if not vo_summary:
+        categories["voiceover_zh"]["status"] = CAT_NOT_APPLICABLE
+        categories["voiceover_zh"]["note"] = "无配音产物"
+    else:
+        provider = str(vo_summary.get("provider") or "")
+        stub_count = int(vo_summary.get("stub_count") or 0)
+        written = int(vo_summary.get("written") or 0)
+        failed_count = int(vo_summary.get("failed") or 0)
+        categories["voiceover_zh"]["counts"] = {"provider": provider, "written": written, "stub": stub_count, "failed": failed_count}
+        if stub_count > 0 or provider == "stub":
+            _append_issue(
+                "voiceover_zh", "中文配音",
+                f"配音含静音 Stub({stub_count} 段,provider={provider or 'stub'}):不是真实语音",
+                severity=SEV_WARNING,
+            )
+        if written == 0:
+            if failed_count > 0:
+                _append_issue("voiceover_zh", "中文配音", f"配音合成失败 {failed_count} 段,草稿未写入任何配音")
+            # 写入 0 且无失败计数:上游无旁白,not_applicable 由 note 说明
+            elif not has_narration:
+                categories["voiceover_zh"]["status"] = CAT_NOT_APPLICABLE
+                categories["voiceover_zh"]["note"] = "无旁白产物"
+
+    # 5) voiceover_en:empty_text=无英文文本(n/a);其它 tts_issue=failed
+    tts_issue = str(state.get("tts_issue") or "")
+    if not en_checked:
+        categories["voiceover_en"]["status"] = CAT_NOT_APPLICABLE
+        categories["voiceover_en"]["note"] = "英文分支未生成"
+    elif tts_issue == "empty_text":
+        categories["voiceover_en"]["status"] = CAT_NOT_APPLICABLE
+        categories["voiceover_en"]["note"] = "无英文字幕文本"
+    elif tts_issue:
+        _append_issue("voiceover_en", "英文配音", f"英文 TTS 失败: {tts_issue}")
+
+    # 6) bgm:required 而无 BGM 轨 = failed(操作员未加);有轨时引用/fade 走 issue
+    bgm_segments = _bgm_segment_count(zh_draft)
+    categories["bgm"]["counts"] = {"bgm_segments": bgm_segments}
+    if bgm_segments == 0 and _status_of("bgm") == CAT_PASSED:
+        if required.get("bgm"):
+            _append_issue("bgm", "BGM", "必需 BGM 但草稿无 BGM 音轨(关卡② 未添加?)")
+        else:
+            categories["bgm"]["status"] = CAT_NOT_APPLICABLE
+            categories["bgm"]["note"] = "关卡② 未添加 BGM"
+
+    # 7) transitions:单镜头(≤1 视频段)= not_applicable
+    video_segments = _video_segment_count(zh_draft)
+    categories["transitions"]["counts"] = {"video_segments": video_segments}
+    if video_segments <= 1 and _status_of("transitions") == CAT_PASSED:
+        categories["transitions"]["status"] = CAT_NOT_APPLICABLE
+        categories["transitions"]["note"] = "单镜头无剪辑边界"
+
+    # 8) text_animation:无我方字幕(zh+en)时 n/a;缺绑定已由尾链 issue 报
+    if not zh_texts and not en_texts and _status_of("text_animation") == CAT_PASSED:
+        categories["text_animation"]["status"] = CAT_NOT_APPLICABLE
+        categories["text_animation"]["note"] = "无我方字幕"
+
+    # 9) stickers:required 且占位降级 = degraded(fail-closed 未落草稿);
+    #    required 且无任何贴纸 = failed;非 required 无贴纸 = n/a
+    sticker_summary = state.get("sticker_summary") or {}
+    degraded = int(sticker_summary.get("degraded") or 0) if isinstance(sticker_summary, dict) else 0
+    sticker_count = sum(
+        1 for m in ((zh_draft or {}).get("materials") or {}).get("stickers") or [] if isinstance(m, dict)
+    ) + sum(
+        1 for m in ((en_draft or {}).get("materials") or {}).get("stickers") or [] if isinstance(m, dict)
+    )
+    categories["stickers"]["counts"] = {"stickers": sticker_count, "degraded": degraded}
+    if sticker_count == 0 and _status_of("stickers") == CAT_PASSED:
+        if required.get("stickers"):
+            if degraded > 0:
+                _append_issue(
+                    "stickers", "贴纸",
+                    f"必需贴纸但有 {degraded} 条因 resource_id 未回填被 fail-closed 拦截"
+                    "(按 sticker_template.json _reverse_engineering_steps 实机回填)",
+                    severity=SEV_WARNING,
+                )
+            else:
+                _append_issue("stickers", "贴纸", "必需贴纸但草稿无任何贴纸(无关键词匹配或 node_11 降级)")
+        else:
+            categories["stickers"]["status"] = CAT_NOT_APPLICABLE
+            categories["stickers"]["note"] = "未要求贴纸"
+
+    # 10) volume_fades:无 BGM 段时 n/a(fade 只由 node_13 写;配音轨豁免)
+    if bgm_segments == 0 and _status_of("volume_fades") == CAT_PASSED:
+        categories["volume_fades"]["status"] = CAT_NOT_APPLICABLE
+        categories["volume_fades"]["note"] = "无 BGM 段"
+
+    # 11) required 但 required 类别 still passed 的,不额外处理;
+    #     未 required 的类别即使 failed 也保持 failed(展示用),gate 只看 required。
+    gate_failed = any(
+        required.get(key) and categories[key]["status"] in (CAT_FAILED, CAT_DEGRADED)
+        for key in REQUIRED_FEATURE_KEYS
+    )
+
+    # required_features 回显进报告(创建台展示判定依据)
+    for key in CATEGORY_KEYS:
+        categories[key]["required"] = bool(required.get(key)) if key in REQUIRED_FEATURE_KEYS else False
+
+    return categories, new_issues, gate_failed
+
+
+# ---------------------------------------------------------------------------
 # join 节点用的总报告
 # ---------------------------------------------------------------------------
 def build_join_qa_report(state: dict[str, Any]) -> dict[str, Any]:
@@ -522,6 +886,37 @@ def build_join_qa_report(state: dict[str, Any]) -> dict[str, Any]:
         *en_report["issues"],
         *mirror["issues"],
     ]
+
+    # 阶段 6:回读 SHA-256(创建台可指出"哪份草稿、哪个版本"的缺失;
+    # hash_draft_files 对双文件各算一枚,缺文件少一键)。
+    sha256: dict[str, Any] = {}
+    from draft_ops.draft_lock import hash_draft_files
+
+    if zh_report["present"] and zh_dir is not None:
+        sha256["zh"] = hash_draft_files(zh_dir / "draft_content.json")
+    if en_report["present"]:
+        sha256["en"] = hash_draft_files(en_dir / "draft_content.json")
+
+    # 阶段 6b:节点级草稿修改审计摘要(每节点最近一条;明细在草稿目录
+    # .autovideo_draft_mutations.jsonl —— 权威落盘,零 state 侵入)。
+    mutations: dict[str, Any] = {}
+    from nodes._draft_io import read_draft_mutations
+
+    for role, d in (("zh", zh_dir), ("en", en_dir)):
+        if d is None:
+            continue
+        records = read_draft_mutations(d)
+        if records:
+            latest: dict[str, Any] = {}
+            for rec in records:
+                latest[str(rec.get("node_id"))] = {
+                    "sha256_after": rec.get("sha256_after"),
+                    "changed": rec.get("changed"),
+                    "changed_counts": rec.get("changed_counts") or {},
+                    "status": rec.get("status"),
+                }
+            mutations[role] = latest
+
     return {
         "skipped": False,
         "passed": not any(i["severity"] == SEV_ERROR for i in issues),
@@ -529,26 +924,39 @@ def build_join_qa_report(state: dict[str, Any]) -> dict[str, Any]:
         "zh": {k: v for k, v in zh_report.items() if k != "draft"},
         "en": {k: v for k, v in en_report.items() if k != "draft"},
         "mirror": mirror["summary"],
+        "sha256": sha256,
+        "mutations": mutations,
         "issues": issues,
     }
 
 
 __all__ = [
+    "CAT_DEGRADED",
+    "CAT_FAILED",
+    "CAT_NOT_APPLICABLE",
+    "CAT_PASSED",
+    "CATEGORY_KEYS",
+    "CATEGORY_LABELS",
     "DUAL_FILES",
     "META_INFO_NAME",
+    "REQUIRED_FEATURE_KEYS",
     "ROOT_META_NAME",
     "SEV_ERROR",
     "SEV_WARNING",
     "build_join_qa_report",
+    "build_qa_categories",
     "check_audio_mirror",
     "check_draft_dir",
     "check_dual_files",
     "check_material_paths",
     "check_meta_info",
+    "check_resource_ids",
     "check_root_index",
     "check_texts",
     "check_track_references",
     "check_video_track",
+    "default_required_features",
     "issue_text",
     "registered_expected_for",
+    "resolve_required_features",
 ]

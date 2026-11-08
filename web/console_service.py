@@ -65,6 +65,7 @@ def prepare_run(
     target_duration_ms: int,
     ratio: str,
     lang: str,
+    required_features: dict[str, bool] | None = None,
     outputs_root: Path | None = None,
     probe: Callable[[Path], dict[str, Any]] | None = None,
 ) -> dict:
@@ -74,6 +75,8 @@ def prepare_run(
         prompt: 用户提示词(API 层已做非空/长度校验;此处不再重复截断)。
         uploads: 上传文件对象列表(透传给 :func:`save_uploaded_videos`)。
         target_duration_ms / ratio / lang: 结构化参数(API 层已校验)。
+        required_features: 阶段 6 必需功能显式声明(9 类布尔;None = 由 QA 侧
+            按运行时能力推导);透传 build_initial_state 落进 initial state。
         outputs_root: 任务根目录;缺省读 ``config.CONSOLE_OUTPUTS_ROOT``(运行时读)。
         probe: 视频探测函数(缺省 ffprobe;单测注入)。
 
@@ -108,6 +111,7 @@ def prepare_run(
             target_duration_ms=target_duration_ms,
             ratio=ratio,
             lang=lang,
+            required_features=required_features,
             outputs_root=root,
         )
         state_path = write_initial_state_json(task_dir, state)

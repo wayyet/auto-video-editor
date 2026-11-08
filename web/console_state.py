@@ -3,7 +3,8 @@
 契约(冻结):docs/第二期开发/auto-video-editor_工作流创建台_阶段0_基线与契约冻结_20261105.md §3。
 
 关键纪律:
-- 键集合**固定**为下方 ``build_initial_state`` 写死的键 ——
+- 键集合**固定**为下方 ``build_initial_state`` 写死的键(2026-11-09 阶段 6 起
+  含 ``required_features``,值全为布尔、键名走 ``REQUIRED_FEATURE_KEYS`` 白名单)——
   ``scripts/run_workflow.py --initial-state-json`` 对 JSON 无字段白名单
   (整体透传进 WorkflowState),所以白名单责任在本创建台,不透传任何额外键;
 - 提示词只映射 ``storyline_targets.user_request / script_request``,
@@ -41,6 +42,7 @@ def build_initial_state(
     ratio: str,
     lang: str,
     outputs_root: Path,
+    required_features: dict[str, bool] | None = None,
 ) -> dict:
     """构建冻结契约的初始 WorkflowState。
 
@@ -52,6 +54,9 @@ def build_initial_state(
         target_duration_ms / ratio / lang: 结构化参数(API 层已校验)。
         outputs_root: 任务根目录;``storyline_outputs_root`` 指向任务目录本身,
             工作流产物按 thread_id 隔离。
+        required_features: 阶段 6(效果缺失修复)必需功能显式声明(9 类布尔,
+            API 层白名单过滤);``None`` = 不写该键,由 QA 侧
+            ``resolve_required_features`` 按运行时能力推导。
 
     Returns:
         只含冻结键集合的 dict(可直接 json.dumps 落盘)。
@@ -65,7 +70,7 @@ def build_initial_state(
 
     paths = [str(Path(p).resolve()) for p in video_paths]
     task_dir = str((Path(outputs_root) / thread_id).resolve())
-    return {
+    state: dict = {
         "session_id": thread_id,
         "video_input_path": paths[0],
         "video_input_paths": paths,
@@ -79,6 +84,19 @@ def build_initial_state(
         },
         "error_log": [],
     }
+    # 阶段 6:必需功能走白名单键(只保留 9 类布尔;非布尔值过滤,与
+    # draft_integrity.resolve_required_features 同口径)。
+    if required_features:
+        from draft_ops.draft_integrity import REQUIRED_FEATURE_KEYS
+
+        state["required_features"] = {
+            key: required_features[key]
+            for key in REQUIRED_FEATURE_KEYS
+            if isinstance(required_features.get(key), bool)
+        }
+        if not state["required_features"]:
+            del state["required_features"]
+    return state
 
 
 def write_initial_state_json(task_dir: Path, state: dict) -> Path:

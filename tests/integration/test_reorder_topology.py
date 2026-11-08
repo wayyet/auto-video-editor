@@ -21,6 +21,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
 from graph import build_graph
+from draft_ops.draft_integrity import REQUIRED_FEATURE_KEYS
+
+
+REQUIRED_FEATURES_NONE = {key: False for key in REQUIRED_FEATURE_KEYS}
 
 
 def _seed(
@@ -64,6 +68,8 @@ def _seed(
         "shot_plan": {"video_path": "", "shots": [{"id": "sh1", "start_s": 0.0, "end_s": 5.0}]},
         "error_log": [],
         "status_log": ["node_05_generate_draft_done"],
+        # 阶段 6:拓扑/恢复/效果落点测试不声明必需效果,gate 永不阻断
+        "required_features": REQUIRED_FEATURES_NONE,
     }
     if asr_segments_zh is not None:
         state["asr_segments_zh"] = asr_segments_zh

@@ -200,3 +200,192 @@ def test_texts_alignment_native_content_ok(tmp_path: Path) -> None:
     assert check_texts_track_alignment(draft, "zh") == []
     result = check_draft_dir(_write_draft(tmp_path, draft), tag="zh", registered_expected=False)
     assert "texts_track_alignment" in result["checks"]
+
+
+# ---------------------------------------------------------------------------
+# 阶段 6(2026-11-09 效果缺失修复):required-feature gate
+# ---------------------------------------------------------------------------
+from draft_ops.draft_integrity import (  # noqa: E402
+    CAT_DEGRADED,
+    CAT_FAILED,
+    CAT_NOT_APPLICABLE,
+    CAT_PASSED,
+    REQUIRED_FEATURE_KEYS,
+    build_join_qa_report,
+    build_qa_categories,
+    check_resource_ids,
+    default_required_features,
+    resolve_required_features,
+)
+
+
+def test_check_resource_ids_placeholder_reported() -> None:
+    draft = {
+        "materials": {
+            "transitions": [{"id": "transition-1", "resource_id": ""}],
+            "video_effects": [{"id": "vfx-1", "resource_id": "PLACEHOLDER_X"}],
+            "stickers": [{"id": "sticker-t1", "resource_id": "123"}],
+            "material_animations": [{"id": "text-anim-m1", "resource_id": "1234567890123456789"}],
+        },
+    }
+    issues = check_resource_ids(draft, "zh")
+    details = [i["detail"] for i in issues]
+    assert any("transition-1" in d for d in details)
+    assert any("vfx-1" in d for d in details)
+    assert any("sticker-t1" in d for d in details)
+    # 19 位合法 + 人工 uuid 不报
+    assert not any("text-anim-m1" in d for d in details)
+
+
+def test_check_resource_ids_missing_key_skipped() -> None:
+    """resource_id 键缺失(测试夹具/旧形态)不报;真实构造器总写该键。"""
+    draft = {"materials": {"transitions": [{"id": "transition-1"}]}}
+    assert check_resource_ids(draft, "zh") == []
+
+
+def test_check_resource_ids_ignores_human_uuid_entries() -> None:
+    draft = {
+        "materials": {
+            "transitions": [{"id": "d1a2b3c4-0000-0000-0000-000000000000", "resource_id": ""}],
+        },
+    }
+    assert check_resource_ids(draft, "zh") == []
+
+
+def test_default_required_features_follow_tts_backend(monkeypatch) -> None:
+    monkeypatch.setenv("TTS_BACKEND", "firered")
+    assert default_required_features()["voiceover_zh"] is True
+    assert default_required_features()["voiceover_en"] is True
+    monkeypatch.setenv("TTS_BACKEND", "stub")
+    assert default_required_features()["voiceover_zh"] is False
+    # 恒定项:BGM/贴纸默认可选;字幕/转场/动画/淡入淡出默认必选
+    defaults = default_required_features()
+    assert defaults["bgm"] is False and defaults["stickers"] is False
+    assert defaults["subtitles_zh"] and defaults["transitions"]
+    assert defaults["text_animation"] and defaults["volume_fades"]
+
+
+def test_resolve_required_features_explicit_overrides_default(monkeypatch) -> None:
+    monkeypatch.setenv("TTS_BACKEND", "firered")
+    resolved = resolve_required_features({"required_features": {"voiceover_zh": False, "bgm": True}})
+    assert resolved["voiceover_zh"] is False  # 显式覆盖推导
+    assert resolved["bgm"] is True
+    assert resolved["subtitles_zh"] is True  # 未声明的保持推导
+    # 非布尔/未知键忽略
+    resolved2 = resolve_required_features({"required_features": {"bgm": "yes", "unknown": True}})
+    assert resolved2["bgm"] is False  # "yes" 非布尔,忽略
+    # 无显式声明 → 纯推导
+    assert resolve_required_features({}) == default_required_features()
+
+
+def _cat_state(**overrides) -> dict:
+    state = {
+        "draft_path": "/tmp/zh/draft_content.json",
+        "draft_dir_en_branch": "/tmp/en_branch",
+    }
+    state.update(overrides)
+    return state
+
+
+def test_build_qa_categories_narration_without_subtitles_failed() -> None:
+    """有旁白产物但草稿无我方中文字幕 → subtitles_zh failed。"""
+    categories, new_issues, gate_failed = build_qa_categories(
+        _cat_state(voiceover_summary={"provider": "firered", "written": 3}),
+        zh_draft={"materials": {"texts": []}, "tracks": []},
+        en_draft=None,
+        deep_issues=[],
+    )
+    assert categories["subtitles_zh"]["status"] == CAT_FAILED
+    assert any("字幕" in i["detail"] for i in new_issues)
+    assert gate_failed is True  # subtitles_zh 默认 required
+
+
+def test_build_qa_categories_no_narration_na() -> None:
+    """无旁白产物 → subtitles_zh not_applicable(不阻断)。"""
+    categories, _, gate_failed = build_qa_categories(
+        _cat_state(),
+        zh_draft={"materials": {"texts": []}, "tracks": []},
+        en_draft=None,
+        deep_issues=[],
+    )
+    assert categories["subtitles_zh"]["status"] == CAT_NOT_APPLICABLE
+    assert gate_failed is False
+
+
+def test_build_qa_categories_single_shot_transitions_na() -> None:
+    """单镜头(≤1 视频段)→ transitions not_applicable。"""
+    draft = {"tracks": [{"type": "video", "segments": [{"id": "s1"}]}]}
+    categories, _, _ = build_qa_categories(_cat_state(), zh_draft=draft, en_draft=None, deep_issues=[])
+    assert categories["transitions"]["status"] == CAT_NOT_APPLICABLE
+
+
+def test_build_qa_categories_stub_voiceover_degraded_blocks_when_required(monkeypatch) -> None:
+    monkeypatch.setenv("TTS_BACKEND", "firered")
+    categories, new_issues, gate_failed = build_qa_categories(
+        _cat_state(voiceover_summary={"provider": "stub", "written": 2, "stub_count": 2}),
+        zh_draft={"tracks": []},
+        en_draft=None,
+        deep_issues=[],
+    )
+    assert categories["voiceover_zh"]["status"] == CAT_DEGRADED
+    assert any("Stub" in i["detail"] for i in new_issues)
+    assert gate_failed is True
+
+
+def test_build_qa_categories_required_bgm_missing_blocks(monkeypatch) -> None:
+    monkeypatch.setenv("TTS_BACKEND", "stub")
+    categories, _, gate_failed = build_qa_categories(
+        _cat_state(required_features={"bgm": True}),
+        zh_draft={"tracks": []},
+        en_draft=None,
+        deep_issues=[],
+    )
+    assert categories["bgm"]["status"] == CAT_FAILED
+    assert gate_failed is True
+
+
+def test_build_qa_categories_optional_bgm_missing_na() -> None:
+    categories, _, gate_failed = build_qa_categories(
+        _cat_state(),
+        zh_draft={"tracks": []},
+        en_draft=None,
+        deep_issues=[],
+    )
+    assert categories["bgm"]["status"] == CAT_NOT_APPLICABLE
+    assert gate_failed is False
+
+
+def test_build_qa_categories_deep_issue_routed_to_category() -> None:
+    """深度/尾链 issue 带 category → failed 按桶归位。"""
+    deep = [
+        {"check": "转场", "severity": "error", "draft": "zh", "detail": "中文主草稿转场缺失", "category": "transitions"},
+    ]
+    draft = {"tracks": [{"type": "video", "segments": [{"id": "s1"}, {"id": "s2"}]}]}
+    categories, _, gate_failed = build_qa_categories(_cat_state(), zh_draft=draft, en_draft=None, deep_issues=deep)
+    assert categories["transitions"]["status"] == CAT_FAILED
+    assert gate_failed is True
+
+
+def test_build_qa_categories_all_category_keys_present() -> None:
+    categories, _, _ = build_qa_categories(_cat_state(), zh_draft=None, en_draft=None, deep_issues=[])
+    assert set(categories.keys()) == set(
+        list(REQUIRED_FEATURE_KEYS) + ["video_effects", "covers", "srt", "draft_integrity"]
+    )
+
+
+def test_join_qa_report_carries_sha256(tmp_path: Path) -> None:
+    """报告顶层带双草稿回读 SHA-256(创建台可指出"哪份草稿哪个版本")。"""
+    from draft_ops.draft_lock import hash_draft_files
+
+    zh_dir = tmp_path / "zh"
+    en_dir = tmp_path / "en_branch"
+    _write_draft(zh_dir, _minimal_draft())
+    _write_draft(en_dir, _minimal_draft())
+    report = build_join_qa_report({
+        "draft_path": str(zh_dir / "draft_content.json"),
+        "draft_dir_en_branch": str(en_dir),
+    })
+    assert report["sha256"]["zh"]["draft_content.json"] == hash_draft_files(
+        zh_dir / "draft_content.json"
+    )["draft_content.json"]
+    assert len(report["sha256"]["zh"]["draft_content.json"]) == 64

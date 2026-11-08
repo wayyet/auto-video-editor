@@ -183,6 +183,10 @@
           </select>
         </label>
       </div>
+      <div class="params" style="margin-top:8px">
+        <label style="display:block; width:100%">必需功能<span class="hint" style="margin-left:6px">交付 QA 将逐项把关,勾选项缺失/降级时阻断交付(阶段 6)</span></label>
+        <div id="requiredFeatures" style="display:flex; flex-wrap:wrap; gap:4px 12px; width:100%"></div>
+      </div>
       <button class="btn primary" id="btnCreate">创建并运行工作流</button>
       <div id="formMeta">创建后自动在本页订阅执行事件;提示词不会进入监控事件日志。</div>
       <div id="progressWrap">
@@ -226,7 +230,7 @@
           <tbody id="deliveryBody"></tbody>
         </table>
         <div id="deliveryIssues" style="margin-top:6px"></div>
-        <div class="hint">四状态来自工作流事件:草稿生成(generate_draft)→ 草稿发布(剪映草稿库注册)→ 交付 QA(join_before_delivery)→ MP4 导出(可选,默认关闭)。"草稿生成成功"不等于"发布成功";发布失败自动降级继续用任务目录草稿;导出失败会明确标红,不会把草稿当成成片。</div>
+        <div class="hint">六状态来自工作流事件:分析产物(storyline 链)→ 草稿生成(generate_draft)→ 草稿发布(剪映草稿库注册)→ 效果落盘(QA 逐类判定聚合)→ 交付 QA(required-feature gate,缺失阻断)→ MP4 导出(可选,默认关闭)。"草稿生成成功"不等于"发布成功";必需功能缺失时 QA 阻断并终止运行(run.failed),不会静默完成。</div>
       </div>
 
       <div id="resumeBox">
@@ -323,6 +327,7 @@
     // 查看模式回填表单前需 await 本 promise,避免 applyLimitsToForm
     // 的默认值覆盖任务原始参数。
     // ------------------------------------------------------------------
+    renderRequiredFeatures();
     const configReady = (async () => {
       try {
         const r = await fetch(CONSOLE_API_PATHS.config, { headers: { Accept: "application/json" } });
@@ -339,6 +344,7 @@
             ratios: Array.isArray(cfg.ratios) && cfg.ratios.length ? cfg.ratios : DEFAULT_LIMITS.ratios,
             langs: Array.isArray(cfg.langs) && cfg.langs.length ? cfg.langs : DEFAULT_LIMITS.langs,
           };
+          if (cfg.required_features_defaults) applyRequiredFeatures(cfg.required_features_defaults);
         }
       } catch (e) {
         renderFormMeta("无法读取服务端限制(/api/console/config),已使用内置默认值。", true);
@@ -462,6 +468,10 @@
       }
       ensureSelectOption(ratioSelect, targets.ratio);
       ensureSelectOption(langSelect, targets.lang, { zh: "中文", en: "英文" });
+      // 阶段 6:必需功能按任务 initial_state 回填(config 默认之后覆盖)
+      applyRequiredFeatures(
+        (detail && detail.initial_state && detail.initial_state.required_features) || null
+      );
       // 04·Agent(记录无此字段时保留下拉当前值)
       const backend = record.llm_backend;
       if (backend && BACKEND_CHOICES.includes(backend)) backendSelect.value = backend;
@@ -632,6 +642,51 @@
     // ------------------------------------------------------------------
     // 创建提交(XHR 以支持上传进度;CSRF token 同源获取)
     // ------------------------------------------------------------------
+    // ------------------------------------------------------------------
+    // 阶段 6:必需功能复选框(勾选项缺失/降级时交付 QA 阻断)
+    // 默认勾选态 = 服务端 config 端点按运行时能力推导(required_features_defaults);
+    // config 不可达时用内置保守默认。查看模式按任务 initial_state 回填。
+    // ------------------------------------------------------------------
+    const REQUIRED_FEATURE_FIELDS = [
+      ["require_subtitles_zh", "subtitles_zh", "中文字幕"],
+      ["require_subtitles_en", "subtitles_en", "英文字幕"],
+      ["require_voiceover_zh", "voiceover_zh", "中文配音"],
+      ["require_voiceover_en", "voiceover_en", "英文配音"],
+      ["require_bgm", "bgm", "BGM"],
+      ["require_transitions", "transitions", "转场"],
+      ["require_text_animation", "text_animation", "字幕动画"],
+      ["require_stickers", "stickers", "贴纸"],
+      ["require_volume_fades", "volume_fades", "淡入淡出"],
+    ];
+    const REQUIRED_FEATURE_FALLBACK_DEFAULTS = {
+      subtitles_zh: true, subtitles_en: true, voiceover_zh: false, voiceover_en: false,
+      bgm: false, transitions: true, text_animation: true, stickers: false, volume_fades: true,
+    };
+    function renderRequiredFeatures() {
+      const box = document.getElementById("requiredFeatures");
+      if (!box || box.childElementCount) return;
+      for (const [, key, label] of REQUIRED_FEATURE_FIELDS) {
+        const wrap = document.createElement("label");
+        wrap.style.cssText = "display:flex; align-items:center; gap:4px; font-size:12px;";
+        wrap.innerHTML = `<input type="checkbox" data-rf="${key}"` +
+          (REQUIRED_FEATURE_FALLBACK_DEFAULTS[key] ? " checked" : "") +
+          ` /> <span>${label}</span>`;
+        box.appendChild(wrap);
+      }
+    }
+    function readRequiredFeatures() {
+      const out = {};
+      for (const el of document.querySelectorAll("#requiredFeatures input[data-rf]")) {
+        out[el.dataset.rf] = !!el.checked;
+      }
+      return out;
+    }
+    function applyRequiredFeatures(values) {
+      if (!values || typeof values !== "object") return;
+      for (const el of document.querySelectorAll("#requiredFeatures input[data-rf]")) {
+        if (typeof values[el.dataset.rf] === "boolean") el.checked = values[el.dataset.rf];
+      }
+    }
     function readParams() {
       return {
         prompt: promptInput.value,
@@ -639,6 +694,7 @@
         ratio: ratioSelect.value,
         lang: langSelect.value,
         llm_backend: backendSelect.value,
+        required_features: readRequiredFeatures(),
       };
     }
     async function ensureCsrf() {
@@ -790,10 +846,12 @@
     // 计划 §8 阶段 4:区分"草稿生成成功 / 草稿发布成功 / 交付 QA 成功 /
     // MP4 导出成功"四种状态 —— 不把草稿文件存在误判为成片交付。
     // ------------------------------------------------------------------
-    const DELIVERY_ROWS = ["draft_generated", "draft_published", "delivery_qa", "final_export"];
+    const DELIVERY_ROWS = ["artifacts", "draft_generated", "draft_published", "effects", "delivery_qa", "final_export"];
     const DELIVERY_LABELS = {
+      artifacts: "分析产物",
       draft_generated: "草稿生成",
       draft_published: "草稿发布",
+      effects: "效果落盘",
       delivery_qa: "交付 QA",
       final_export: "MP4 导出",
     };
@@ -837,6 +895,32 @@
           }).join("")
         : "";
     }
+    function shaNote(sha) {
+      if (!sha || typeof sha !== "object") return "";
+      const parts = [];
+      for (const role of ["zh", "en"]) {
+        const h = sha[role] && sha[role]["draft_content.json"];
+        if (h) parts.push(`${role}:${String(h).slice(0, 12)}…`);
+      }
+      return parts.length ? ` [SHA ${parts.join(" / ")}]` : "";
+    }
+    function deliveryEffectsRow(categories) {
+      // 效果落盘行 = QA 类别结果聚合(计划 §8 阶段 6 任务 5:节点效果落盘单列)
+      let ok = 0, degraded = 0, failed = 0, na = 0;
+      for (const k of Object.keys(categories || {})) {
+        const st = categories[k] && categories[k].status;
+        if (st === "passed") ok += 1;
+        else if (st === "degraded") degraded += 1;
+        else if (st === "failed") failed += 1;
+        else na += 1;
+      }
+      const total = ok + degraded + failed + na;
+      return {
+        state: failed ? "fail" : degraded ? "warn" : (ok ? "ok" : "skip"),
+        note: total ? `通过 ${ok} / 降级 ${degraded} / 失败 ${failed} / 不适用 ${na}` : "",
+        issues: [],
+      };
+    }
     function handleDeliverySummary(summary) {
       const ev = String(summary.event || "");
       if (ev === "draft.generated") {
@@ -852,14 +936,32 @@
       } else if (ev === "delivery.qa_passed") {
         delivery.delivery_qa = {
           state: summary.skipped ? "skip" : "ok",
-          note: summary.skipped ? "未执行(英文分支未生成,上游降级)" : "QA 通过",
+          note: (summary.skipped ? "未执行(英文分支未生成,上游降级)" : "QA 通过") + shaNote(summary.sha256),
           issues: [],
         };
+        if (summary.categories) delivery.effects = deliveryEffectsRow(summary.categories);
       } else if (ev === "delivery.qa_issues") {
+        const gateFailed = !!summary.gate_failed;
+        delivery.delivery_qa = {
+          state: gateFailed ? "fail" : "warn",
+          note: (gateFailed
+            ? `必需功能缺失,阻断交付(发现 ${summary.issue_count ?? "?"} 个问题)`
+            : `发现 ${summary.issue_count ?? "?"} 个问题(非必需,不阻断;全量见监控事件)`) +
+            shaNote(summary.sha256),
+          issues: Array.isArray(summary.issues) ? summary.issues : [],
+        };
+        if (summary.categories) delivery.effects = deliveryEffectsRow(summary.categories);
+      } else if (ev === "delivery.qa_repair") {
+        delivery.delivery_qa = {
+          state: "warn",
+          note: `定向修复中:${(summary.retried || []).join(", ") || "无可修复类别"}(修复后复检)`,
+          issues: [],
+        };
+      } else if (ev === "delivery.qa_failed") {
         delivery.delivery_qa = {
           state: "fail",
-          note: `发现 ${summary.issue_count ?? "?"} 个问题(全量见监控事件 / state.join_qa_report)`,
-          issues: Array.isArray(summary.issues) ? summary.issues : [],
+          note: `必需功能复检仍失败,运行已终止(run.failed):${(summary.blocked || []).join(", ")}`,
+          issues: [],
         };
       } else if (ev === "export.succeeded") {
         delivery.final_export = { state: "ok", note: summary.output_path || "", issues: [] };
@@ -901,6 +1003,12 @@
         ? event.payload.summary : null;
       if (event.event_type === "node.progress" && progressSummary && progressSummary.event) {
         handleDeliverySummary(progressSummary);
+      }
+      // 阶段 6:分析产物行(storyline 链汇合完成 = 上游分析/规划产物就绪)
+      if (event.event_type === "node.succeeded" && event.node_id === "storyline_join"
+          && delivery.artifacts && delivery.artifacts.state === "pending") {
+        delivery.artifacts = { state: "ok", note: "脚本/时间线/配音/转场计划产物已生成", issues: [] };
+        renderDeliveryCard();
       }
       const { applied } = applyEvent(monitor, event);
       if (!applied) return;

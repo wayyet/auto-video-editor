@@ -144,7 +144,7 @@ def _write_en_voiceover_track(
     )
 
     try:
-        write_draft(en_file, en_draft)
+        write_draft(en_file, en_draft, audit_node="node_17")
     except (OSError, ValueError, RuntimeError) as exc:
         # RuntimeError = 剪映在跑且严格模式拒写(JY_WRITE_FAIL_ON_JIANYING_RUNNING),
         # 与 node_12 同口径降级不崩(阶段 5 加固)。

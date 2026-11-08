@@ -31,7 +31,6 @@ from typing import Optional
 from PIL import Image, ImageDraw, ImageFont
 from langgraph.types import interrupt  # 模块级别 import:让 ``patch("nodes.node_16_translate_subtitles.interrupt")`` 仍能工作
 
-from draft_ops.atomic_writer import safe_write_draft
 from draft_ops.atomic_writer_file import atomic_write_file
 from jy_common.native_text import text_display_text
 from state import SubtitleSegment, WorkflowState
@@ -210,8 +209,11 @@ def _write_marker(draft_dir: Path, segments: list[SubtitleSegment]) -> None:
         idx = int(seg.get("index", -1))
         if 0 <= idx < len(texts):
             texts[idx]["text_en"] = seg.get("text_en", "")
-    # safe_write_draft 内部已做 verify,失败时整目录回退 + raise
-    safe_write_draft(draft_dir, draft)
+    # write_draft 内部已做 verify,失败时整目录回退 + raise;
+    # 阶段 6b:经 _draft_io 汇合点写回,自动追加 draft_mutations 审计。
+    from nodes._draft_io import write_draft
+
+    write_draft(draft_dir / "draft_content.json", draft, audit_node="node_16")
 
 
 def _marker_exists(draft_dir: Path, expected_count: int) -> bool:
