@@ -327,7 +327,6 @@
     // 查看模式回填表单前需 await 本 promise,避免 applyLimitsToForm
     // 的默认值覆盖任务原始参数。
     // ------------------------------------------------------------------
-    renderRequiredFeatures();
     const configReady = (async () => {
       try {
         const r = await fetch(CONSOLE_API_PATHS.config, { headers: { Accept: "application/json" } });
@@ -662,6 +661,9 @@
       subtitles_zh: true, subtitles_en: true, voiceover_zh: false, voiceover_en: false,
       bgm: false, transitions: true, text_animation: true, stickers: false, volume_fades: true,
     };
+    // 先用内置默认渲染复选框,config 端点返回后由 applyRequiredFeatures 覆盖。
+    // 必须保持在上方 const 声明之后:本调用位于模块顶层同步执行,const 不提升。
+    renderRequiredFeatures();
     function renderRequiredFeatures() {
       const box = document.getElementById("requiredFeatures");
       if (!box || box.childElementCount) return;

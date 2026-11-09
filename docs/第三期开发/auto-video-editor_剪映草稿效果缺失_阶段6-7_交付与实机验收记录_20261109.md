@@ -277,3 +277,43 @@ test_week5_resilience / test_interrupt_resume)、`_legacy_week4_state`
   (fail-closed 语义,1 次重试即终止),定向修复定位是"重放竞争类"瞬时故障;
 - 英文分支 QA 的 `voiceover_en` 判定读 `tts_issue` 文本(无结构化 summary),
   后续如需更细粒度(段级失败数)需 node_17 补 summary 字段。
+
+## 7. 实机验收发现的回归:创建台点击无响应(2026-11-10 修复)
+
+### 7.1 现象与根因
+
+操作员实机验收时,创建台「02 · 导入视频」上传区点击/拖放均无任何响应。
+根因是本阶段提交 `d0f1aac` 引入的脚本初始化回归:
+
+- `web/console.html` 模块脚本顶层第 330 行同步调用 `renderRequiredFeatures()`;
+- 函数声明会提升,调用本身不报错;但函数体读取的 `const REQUIRED_FEATURE_FIELDS`
+  在同文件第 650 行才声明,`const` 不提升初始化,调用时处于暂时性死区(TDZ),
+  抛 `ReferenceError: Cannot access 'REQUIRED_FEATURE_FIELDS' before initialization`;
+- 该调用无 try/catch,位于 `<script type="module">` 顶层,异常导致整个模块中断:
+  第 598 行上传区 `click` 绑定、创建按钮、SSE 订阅等全部未注册。
+
+**佐证**:`logs/monitor_20261108_201654.log`(d0f1aac 之前)有
+`GET /api/console/config` ×7 + `POST /api/console/runs 202`;
+`logs/monitor_20261109_142848.log`(d0f1aac 之后)`/console` 加载 ×4 但
+config 请求 0 次、创建请求 0 次——脚本在首个 fetch 之前已崩。
+时间窗内唯一触及 console.html 的提交即 d0f1aac。
+
+### 7.2 集成测试未拦住的原因
+
+前端内联脚本无任何测试覆盖:unit/integration 均不触碰 console.html 的 JS,
+`check_imports` 只覆盖 Python。该回归只能在浏览器加载时暴露。
+
+### 7.3 修复(1 行移动)
+
+`renderRequiredFeatures()` 调用从第 330 行移至 `REQUIRED_FEATURE_FALLBACK_DEFAULTS`
+声明之后(函数定义旁),执行顺序语义不变:先同步渲染复选框(内置默认)
+→ config 端点返回后 `applyRequiredFeatures` 覆盖。不采用调用点包 try/catch(掩盖问题)。
+
+### 7.4 修复后验证(2026-11-10,浏览器实测,无需重启服务)
+
+1. 页面加载后 9 个必需功能复选框全部渲染,勾选态由服务端
+   `required_features_defaults` 下发覆盖;
+2. `GET /api/console/config` 正常发出(与上传区绑定位于同一同步块,其发出即证明绑定存活);
+3. 合成点击 dropZone(临时拦截 `fileInput.click` 防
+   真弹系统对话框)确认 click 监听已注册;
+4. DOM 快照确认页面全要素渲染正常。系统文件对话框弹窗行为由操作员手点复核。
