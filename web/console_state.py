@@ -8,8 +8,8 @@
   ``scripts/run_workflow.py --initial-state-json`` 对 JSON 无字段白名单
   (整体透传进 WorkflowState),所以白名单责任在本创建台,不透传任何额外键;
 - 提示词只映射 ``storyline_targets.user_request / script_request``,
-  **绝不写 ``query``**(graph.py ``_web_topic_branch_enabled`` 读它,误写会
-  触发网页话题搜索分支);
+  **绝不写 ``query``**(它是手动检索词覆盖位:``build_web_topic_query`` 会把
+  它拼进检索词,误写会污染网页话题检索的自动构造);
 - 提示词不进监控事件 payload(``monitoring/workflow_runner.py`` 的
   ``STATE_SUMMARY_KEYS`` 白名单本就不含它)。
 """

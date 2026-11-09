@@ -15,9 +15,10 @@
 关于 ``get_graph()`` 的画图伪边(langgraph 1.2.9 实测,``pregel/_draw.py``):
 它按静态模拟推边,会把所有"只入不出"的 termini 节点**合成**普通 ``→__end__``
 边,并漏掉"有出边节点"的普通直连 ``→__end__`` 边。因此 schema 以 builder 为
-真源;护栏测试断言:drawn − schema 恰为 termini 合成集(当前拓扑 2 个 storyline
-死胡同节点),schema − drawn 为空集(→END 真边所在节点的出边只有 →END 时,
-画图合成边与真边重合)—— langgraph 升级改变该行为时,这里会先红。
+真源;护栏测试断言:drawn − schema 恰为 termini 合成集(当前拓扑 1 个 storyline
+死胡同节点:script_template_recommendation;web_topic 已随 2026-11-10 前置化
+阶段3 获得业务出边,不再死胡同),schema − drawn 为空集(→END 真边所在节点的
+出边只有 →END 时,画图合成边与真边重合)—— langgraph 升级改变该行为时,这里会先红。
 
 本测试只构图、不执行图(不 invoke),符合设计 §11.5"避免为可视化重复执行图"。
 """
@@ -149,15 +150,16 @@ def test_schema_matches_drawn_graph_with_documented_artifacts(monkeypatch):
     }
     schema_triples = _edge_triples(schema)
 
-    # drawn − schema = 只入不出节点的合成 →END 边(当前拓扑 2 个 storyline 死胡同:
-    # web_topic / script_template_recommendation;speech_rough_cut 已随 B1 ASR 移除删除)
+    # drawn − schema = 只入不出节点的合成 →END 边(当前拓扑 1 个 storyline 死胡同:
+    # script_template_recommendation;web_topic 已随 2026-11-10 前置化阶段3 接上
+    # generate_script 业务出边不再死胡同,speech_rough_cut 已随 B1 ASR 移除删除)
     # langgraph 规则显式排除 END 自身(if d != END)
     schema_targets = {t for _, t, _ in schema_triples}
     schema_sources = {s for s, _, _ in schema_triples}
     termini = (schema_targets - schema_sources) - {"END"}
     expected_synthetic = {(t, "END", "normal") for t in termini}
     assert drawn - schema_triples == expected_synthetic
-    assert len(expected_synthetic) == 2
+    assert len(expected_synthetic) == 1
 
     # schema − drawn = 有出边节点的普通直连 END(画图漏掉的**真**边)
     # 当前拓扑中 →END 真边所在节点(join_before_delivery / escalate_guardrail_failure)
@@ -271,7 +273,8 @@ def test_storyline_search_media_removed(monkeypatch):
     assert "storyline_search_media" not in by_id
 
     pairs = _edge_pairs(schema)
-    # 主干边保留(load_media → split_shots,现为无条件主边;条件机制仅为 web_topic 保留)
+    # 主干边保留(load_media → split_shots,现为无条件主边;2026-11-10 前置化阶段3
+    # 起条件机制移到 group_clips 之后为 web_topic 服务,load_media 后不再有旁支)
     assert ("storyline_load_media", "storyline_split_shots") in pairs
     # 旁支节点相关的任何边都不存在
     leftovers = [p for p in pairs if "storyline_search_media" in p]

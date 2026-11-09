@@ -10,6 +10,11 @@
 删除;human 模式前置节点 launch_openstoryline / open_preview 亦已删除,
 START 直连 ``storyline_load_media``。)
 
+(2026-11-10 前置化阶段3:``storyline_search_web_topic`` 移到 ``group_clips`` 与
+``generate_script`` 之间的条件路由上 —— 入边/出边邻居、执行时序、qa 重试内
+计数语义(每轮执行 + query_hash 缓存防重复网络,设计方案 §4.6)断言已同步改写;
+检索词自动构造见 ``build_web_topic_query``(设计方案 §4.1)。)
+
 策略:**真实编译 LangGraph**,只把"重 IO / LLM / 外部进程"的节点换成确定性假节点
 (load_media / split_shots / understand / filter / group),
 其余(plan_timeline_pro / qa_gate / join / render_video / generate_script /
@@ -28,6 +33,7 @@ START 直连 ``storyline_load_media``。)
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import deque
 from itertools import combinations
@@ -101,9 +107,9 @@ _RT = "storyline_recommend_text"
 
 # 各节点 → (入边邻居, 出边邻居)。这张表就是《关联分析表》的"放在哪":每个新节点贴着自己的相关节点。
 NEIGHBORS: dict[str, tuple[set[str], set[str]]] = {
-    # load_media 旁的并行死胡同分支(与 split_shots 并列;search_media 已随
-    # 2026-11-10 检索素材移除删除);结果经 state 给 generate_script
-    "storyline_search_web_topic": ({"storyline_load_media"}, set()),
+    # 前置化阶段3:group_clips 后的条件前置节点(检索 → 文案;条件路由来自
+    # _storyline_route_after_group_clips)。search_media 已随 2026-11-10 检索素材移除删除
+    "storyline_search_web_topic": ({_GC}, {_GS}),
     # 与 plan_timeline_pro 并排:同一道 4 源屏障
     _GAT: ({_GC, _GS, _GV, _SB}, {_PTAT}),
     # plan_timeline_pro + generate_ai_transition 之后、qa_gate 之前
@@ -177,24 +183,22 @@ def test_each_new_node_sits_beside_its_own_related_nodes(
 
 
 def test_wired_nodes_are_spread_out_not_clustered(monkeypatch: pytest.MonkeyPatch) -> None:
-    """不聚堆:各节点两两**不共用挂接点**(挂接点 = 邻居里除新节点之外的现有节点)。"""
+    """不聚堆:AI 转场两节点两两**不共用挂接点**(挂接点 = 邻居里除新节点之外的现有节点)。
+
+    (前置化阶段3:``storyline_search_web_topic`` 不再参与两两断言 —— 它已从
+    "旁支挂点"变成 ``group_clips → generate_script`` 主链上的条件前置节点,
+    与屏障节点共用 GC/GS 挂接点是设计方案 §4.3 规定的位置,不是聚堆。)
+    """
     _, compiled = _compiled(monkeypatch)
     ins, outs = _neighbors(_edge_set(compiled))
+    cluster_guard = WIRED_NODES - {"storyline_search_web_topic"}
     attach = {n: (ins.get(n, set()) | outs.get(n, set())) - WIRED_NODES for n in WIRED_NODES}
-    for a, b in combinations(sorted(WIRED_NODES), 2):
+    for a, b in combinations(sorted(cluster_guard), 2):
         shared = attach[a] & attach[b]
         assert not shared, f"{a} 和 {b} 挂在同一个现有节点上:{sorted(shared)}"
-    # 每个节点都至少贴着一个现有节点
+    # 每个节点都至少贴着一个现有节点(search 仍检查:主链前置位)
     for n in WIRED_NODES:
         assert attach[n], f"{n} 没有挂在任何现有节点旁"
-
-
-@pytest.mark.parametrize("node", ["storyline_search_web_topic"])
-def test_side_branches_are_dead_ends(monkeypatch: pytest.MonkeyPatch, node: str) -> None:
-    """web_topic 是死胡同旁支:唯一的出边是 END,结果只经 state 交给下游读取。"""
-    _, compiled = _compiled(monkeypatch)
-    out_targets = {t for s, t in _edge_set(compiled) if s == node}
-    assert out_targets == {"__end__"}
 
 
 def test_ai_pair_is_beside_plan_timeline_pro(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -305,6 +309,7 @@ def run_auto(
     saver: Any | None = None,
     stop_after: str | None = None,
     group_counts: list[int] | None = None,
+    no_analysis: bool = False,
 ) -> Run:
     """在真实图上跑一遍 auto 模式,直到关卡①(node_06_human_reorder)挂起。"""
     # ---- 开关 ----
@@ -351,9 +356,11 @@ def run_auto(
         }
 
     def fake_understand(state):
+        # no_analysis:overall 置空,配合「检索输入全空 → 条件路由跳过检索」用例
         return {
             "storyline_understanding_artifact": write(
-                "understanding.json", {"overall": "整体概述", "clips": []}
+                "understanding.json",
+                {"overall": "" if no_analysis else "整体概述", "clips": []},
             ),
             "status_log": ["storyline_understand_clips_done"],
         }
@@ -377,7 +384,8 @@ def run_auto(
             groups.append(
                 {
                     "group_id": f"group_{gi + 1:04d}",
-                    "theme": f"主题{gi + 1}",
+                    # no_analysis:主题置空(同 fake_understand,检索输入全空用例)
+                    "theme": "" if no_analysis else f"主题{gi + 1}",
                     "clips": [
                         {
                             "clip_id": f"clip_{gi + 1:04d}",
@@ -414,6 +422,26 @@ def run_auto(
 
     monkeypatch.setattr(ngs, "generate_script", spy_generate_script)
 
+    if web and web_titles is None:
+        # 前置化阶段3 网络隔离:检索前置化后,凡走到 group_clips 之后且检索开关
+        # 开着的用例都会触发检索节点。未显式给 web_titles 的用例不真打 DuckDuckGo
+        # (可达性/耗时不可控),统一按「网络异常软失败」走 —— failed 产物 + 固定
+        # 标签,主流程照常(与本机 DDG 不可达时的真实行为一致)。
+        def offline_topic(*, query, max_results=10, provider="duckduckgo_html", **_kw):
+            return {
+                "status": "failed",
+                "search_web_topic": [],
+                "preview_urls": [],
+                "error_code": "NETWORK_ERROR",
+                "message": "offline stub (web_titles not provided)",
+                "query_hash": hashlib.sha256(str(query).encode("utf-8")).hexdigest(),
+                "searched_at": "2026-11-10T00:00:00+00:00",
+            }
+
+        monkeypatch.setattr(
+            "nodes.storyline.node_search_web_topic.cap_topic", offline_topic
+        )
+
     if web_titles is not None:
 
         def fake_topic(*, query, max_results=10, provider="duckduckgo_html", **_kw):
@@ -422,7 +450,16 @@ def run_auto(
                 {"url": f"https://example.com/{i}", "title": t, "source": "fake"}
                 for i, t in enumerate(web_titles)
             ]
-            return {"search_web_topic": items, "preview_urls": [], "error_code": None, "message": ""}
+            # 阶段2 产物契约:节点 cache_hit 幂等依赖 query_hash(测试桩同步升级)
+            return {
+                "search_web_topic": items,
+                "preview_urls": [],
+                "error_code": None,
+                "message": "",
+                "status": "ok",
+                "query_hash": hashlib.sha256(str(query).encode("utf-8")).hexdigest(),
+                "searched_at": "2026-11-10T00:00:00+00:00",
+            }
 
         monkeypatch.setattr("nodes.storyline.node_search_web_topic.cap_topic", fake_topic)
 
@@ -531,8 +568,13 @@ def test_defaults_run_all_wired_nodes_with_expected_shape(
     # 阶段3 auto-only:第一个任务就是 storyline_load_media(START 直连)
     assert run.order[0][1] == "storyline_load_media"
 
-    # 并行 fan-out:同一超步
-    assert run.steps_of("storyline_search_web_topic") == run.steps_of("storyline_split_shots")
+    # 前置化阶段3:检索是 group_clips 与 generate_script 之间的条件前置节点,
+    # 不再与 split_shots 同超步(load_media 旁支已拆)
+    gc_steps = run.steps_of(_GC)
+    search_steps = run.steps_of("storyline_search_web_topic")
+    script_steps = run.steps_of(_GS)
+    assert search_steps == [s + 1 for s in gc_steps], "检索应紧跟每轮 group_clips"
+    assert script_steps == [s + 1 for s in search_steps], "文案应紧跟每轮检索"
     # B1 ASR 移除:split_shots 后静态直连 understand_clips(同一条主边,无旁支)
 
     # AI 转场两节点与 plan_timeline_pro 并排:GAT 与 PTP 同一超步;PTAT 紧随其后;再下一步才是 qa_gate
@@ -570,8 +612,10 @@ def test_qa_retry_loop_still_retriggers_plan_timeline_pro(
     assert run.count("storyline_qa_gate") == 4
     assert run.count("storyline_generate_ai_transition") == 4
     assert run.count("storyline_plan_timeline_ai_transition") == 4
-    # 网页分支在回路上游,只跑 1 次
-    assert run.count("storyline_search_web_topic") == 1
+    # 前置化阶段3:检索节点进入 qa 重试回路,每轮执行;分组未变 → query_hash
+    # 缓存命中,互联网请求只发 1 次(设计方案 §4.6)
+    assert run.count("storyline_search_web_topic") == 4
+    assert len(run.web_queries) == 1
     assert run.next_nodes == ("node_06_human_reorder",), "图提前 END 了(D10 症状)"
 
 
@@ -599,7 +643,9 @@ def test_web_topic_reference_reaches_script_prompt_and_is_sanitized(
         query="夏季防晒",
         web_titles=[evil, "A" * 200, evil],
     )
-    assert run.web_queries == ["夏季防晒"]
+    # 前置化阶段3:检索词 = 手动 query + overall 首句 + 分组主题(§4.1 去重拼接,
+    # 手动 query 排最前);qa 重试期间分组未变 → query_hash 缓存命中只搜 1 次
+    assert run.web_queries == ["夏季防晒、整体概述、主题1、主题2"]
     assert run.seen_overall, "generate_script 应被调用"
     for overall in run.seen_overall:  # qa 重试回路里每一轮都一样
         assert overall.startswith("整体概述")
@@ -611,11 +657,25 @@ def test_web_topic_reference_reaches_script_prompt_and_is_sanitized(
         assert all(len(ln) <= 2 + 80 for ln in ref_lines)
 
 
-def test_web_topic_not_run_without_query(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    run = run_auto(monkeypatch, tmp_path, query="", web_titles=["不应被调用"])
+def test_web_topic_runs_on_auto_query_without_manual_query(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """前置化阶段3:手动 query 为空时,由 overall + 分组主题自动构造检索词仍运行(§4.1)。"""
+    run = run_auto(monkeypatch, tmp_path, query="", web_titles=["自动检索"])
+    assert "storyline_search_web_topic" in run.names()
+    assert run.web_queries == ["整体概述、主题1、主题2"]
+
+
+def test_web_topic_skipped_when_no_retrievable_input(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """手动 query、画面概述、分组主题全空 → 条件路由直达文案,不跑检索(§4.1 判空跳过)。"""
+    run = run_auto(
+        monkeypatch, tmp_path, query="", web_titles=["不应被调用"], no_analysis=True
+    )
     assert "storyline_search_web_topic" not in run.names()
     assert run.web_queries == []
-    assert all("网页话题参考" not in o for o in run.seen_overall)
+    assert run.next_nodes == ("node_06_human_reorder",)
 
 
 def test_web_topic_not_run_when_flag_off(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

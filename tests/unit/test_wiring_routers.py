@@ -1,13 +1,16 @@
-"""单测:2026-10 接入"不可达节点"新增 / 改动的路由函数(纯函数,不编译图)。
+"""单测:路由函数(纯函数,不编译图)。
 
-- ``_web_topic_branch_enabled``         网页话题分支:开关 AND query 非空
-- ``_storyline_route_after_load_media`` 返回 str 或 list[str](并行 fan-out)
+- ``_storyline_route_after_group_clips`` ``group_clips`` 之后的检索条件路由
+  (2026-11-10 前置化阶段3):检索开关 AND ``build_web_topic_query`` 非空 →
+  先检索再文案;否则直达文案。路由与检索节点共用同一 builder(设计方案 §4.1)。
 - qa_gate 之后的路由不再被包装(AI 转场两节点在 qa_gate 之前,由建图时的屏障接线决定)
 
 (原 ``_asr_branch_enabled`` / ``_storyline_route_after_split_shots`` 已随
-2026-11-08 B1 ASR 移除删除:``split_shots`` 改为静态直连 ``understand_clips``。
-原 ``_storyline_route_after_load_media`` 内的 ``search_media`` Pexels 旁路已随
-2026-11-10 检索素材移除删除:主干恒 ``split_shots``,不再读任何 env。)
+2026-11-08 B1 ASR 移除删除。原 ``_web_topic_branch_enabled`` /
+``_storyline_route_after_load_media`` 已随 2026-11-10 前置化阶段3 删除:
+``load_media`` 改静态直连 ``split_shots``,检索条件路由移到 ``group_clips`` 之后,
+检索词改由 ``build_web_topic_query`` 自动构造 —— 其矩阵用例见
+``tests/unit/test_web_topic_reference.py`` 的 builder 用例与 wiring 集成用例。)
 """
 from __future__ import annotations
 
@@ -15,56 +18,45 @@ import pytest
 
 import config
 import graph as g
+import nodes.storyline.node_search_web_topic as node_search_mod
 from nodes.storyline import qa_gate as qa_gate_mod
+from nodes.storyline import _common as common_mod
 
 
 # ---------------------------------------------------------------------------
-# _web_topic_branch_enabled
+# _storyline_route_after_group_clips(前置化阶段3,设计方案 §4.3)
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize(
-    "flag,targets,expected",
-    [
-        (True, {"query": "夏季防晒"}, True),
-        (True, {"query": "  夏季防晒  "}, True),
-        (True, {"query": "   "}, False),
-        (True, {"query": ""}, False),
-        (True, {"query": None}, False),
-        (True, {"query": 123}, False),
-        (True, {}, False),
-        (True, None, False),
-        (False, {"query": "夏季防晒"}, False),
-    ],
-)
-def test_web_topic_branch_needs_flag_and_non_empty_query(
-    monkeypatch: pytest.MonkeyPatch, flag: bool, targets, expected: bool
+def test_route_after_group_clips_flag_off_goes_straight_to_script(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(config, "STORYLINE_ENABLE_WEB_TOPIC", flag)
-    state = {} if targets is None else {"storyline_targets": targets}
-    assert g._web_topic_branch_enabled(state) is expected
-
-
-# ---------------------------------------------------------------------------
-# _storyline_route_after_load_media
-# ---------------------------------------------------------------------------
-def test_after_load_media_default_is_plain_string(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(config, "STORYLINE_ENABLE_WEB_TOPIC", True)
-    # 没有 query → 没有网页分支,返回值仍是单个 str(与接入前完全一致)
-    assert g._storyline_route_after_load_media({}) == "storyline_split_shots"
-
-
-def test_after_load_media_adds_web_topic_as_parallel_branch(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(config, "STORYLINE_ENABLE_WEB_TOPIC", True)
-    state = {"storyline_targets": {"query": "夏季防晒"}}
-    assert g._storyline_route_after_load_media(state) == [
-        "storyline_split_shots",
-        "storyline_search_web_topic",
-    ]
-
-
-def test_after_load_media_flag_off_equals_pre_wiring(monkeypatch: pytest.MonkeyPatch) -> None:
+    """开关关闭 → 条件路由直达文案,即使检索词可构造。"""
     monkeypatch.setattr(config, "STORYLINE_ENABLE_WEB_TOPIC", False)
-    state = {"storyline_targets": {"query": "夏季防晒"}}
-    assert g._storyline_route_after_load_media(state) == "storyline_split_shots"
+    monkeypatch.setattr(g, "build_web_topic_query", lambda _state: "夏季防晒")
+    assert g._storyline_route_after_group_clips({}) == "storyline_generate_script"
+
+
+def test_route_after_group_clips_empty_builder_skips_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """开关开启但 builder 构造为空(query/overall/themes 全空)→ 直达文案。"""
+    monkeypatch.setattr(config, "STORYLINE_ENABLE_WEB_TOPIC", True)
+    monkeypatch.setattr(g, "build_web_topic_query", lambda _state: "")
+    assert g._storyline_route_after_group_clips({}) == "storyline_generate_script"
+
+
+def test_route_after_group_clips_routes_to_search_when_builder_non_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """开关开启且能构造出检索词 → 先检索再文案。"""
+    monkeypatch.setattr(config, "STORYLINE_ENABLE_WEB_TOPIC", True)
+    monkeypatch.setattr(g, "build_web_topic_query", lambda _state: "夏季防晒、整体概述")
+    assert g._storyline_route_after_group_clips({}) == "storyline_search_web_topic"
+
+
+def test_route_and_node_share_the_same_query_builder() -> None:
+    """§4.1 一致性约束:路由判定与检索节点必须共用同一个 build_web_topic_query。"""
+    assert g.build_web_topic_query is common_mod.build_web_topic_query
+    assert node_search_mod.build_web_topic_query is common_mod.build_web_topic_query
 
 
 # ---------------------------------------------------------------------------

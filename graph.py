@@ -65,8 +65,10 @@
 - ②与③ 永不同时挂起(②在尾链,③在英文线)。
 
 2026-10 接入原"不可达节点"(保留,见《不可达节点接入LangGraph设计与执行计划》):
-- ``storyline_search_web_topic``:``storyline_load_media`` 后并行旁支
-  (``STORYLINE_ENABLE_WEB_TOPIC`` 且 query 非空);死胡同分支。
+- ``storyline_search_web_topic``:2026-11-10 前置化阶段3 起改为
+  ``storyline_group_clips`` →(条件路由)→ ``storyline_search_web_topic`` →
+  ``storyline_generate_script``(检索开关开启且 ``build_web_topic_query`` 能构造出
+  非空检索词时;否则条件路由直达文案)。不再是 load_media 后的死胡同旁支。
 - ``storyline_generate_ai_transition`` 与 ``plan_timeline_pro`` 并排共用 4 源屏障;
   ``plan_timeline_ai_transition`` 屏障 [PTP, GAT] 后接管 qa_gate 的屏障位
   (``STORYLINE_ENABLE_AI_TRANSITION``,默认开,**建图时读取**,改开关要重启进程)。
@@ -184,7 +186,7 @@ from nodes.storyline.node_plan_timeline_ai_transition import (
     storyline_plan_timeline_ai_transition_node,
 )
 from nodes.storyline.node_render_video import storyline_render_video_node
-from nodes.storyline._common import target_duration_ms, web_topic_query
+from nodes.storyline._common import build_web_topic_query, target_duration_ms
 from storyline_capabilities.ai_transition_client import is_ai_transition_enabled
 
 
@@ -204,31 +206,24 @@ def _route_after_storyline_join(state: WorkflowState) -> str:
     return "__end__"
 
 
-def _web_topic_branch_enabled(state: WorkflowState) -> bool:
-    """网页话题分支是否触发:开关为真 **且** ``storyline_targets.query`` 非空。
+def _storyline_route_after_group_clips(state: WorkflowState) -> str:
+    """``storyline_group_clips`` 之后的条件路由(2026-11-10 前置化阶段3,设计方案 §4.3)。
 
-    没有 query 就没有可搜的话题,不如不跑(也避免多一个空产物)。
+    检索开关开启 **且** ``build_web_topic_query(state)`` 能构造出非空检索词
+    (手动 query / 画面概述 / 分组主题任一非空)时,先走 ``storyline_search_web_topic``
+    再进文案;开关关闭或无有效检索输入时直达 ``storyline_generate_script``。
+
+    一致性约束(设计方案 §4.1):路由判定与检索节点必须共用同一个
+    ``build_web_topic_query`` —— ``node_search_web_topic`` 节点内构造最终检索词
+    用的就是它,保证「路由放行 ⇒ 节点必能构造出检索词」。
     """
     import config as _config
 
-    return bool(_config.STORYLINE_ENABLE_WEB_TOPIC and web_topic_query(state))
-
-
-def _storyline_route_after_load_media(state: WorkflowState):
-    """storyline_load_media 之后的条件路由。
-
-    主干恒为 ``split_shots``(2026-11-10:原 ``search_media`` Pexels 旁路已整体
-    移除,见《检索素材节点移除设计与执行记录》;``storyline_media_artifact``
-    回到 load_media 单一来源)。
-
-    2026-10:``_web_topic_branch_enabled`` 为真时**同时**触发 ``storyline_search_web_topic``
-    (返回 list = 并行 fan-out)。该分支是死胡同(无出边),不进任何 fan-in 屏障。
-    返回值:单个分支时是 ``str``,两个分支时是 ``list[str]``。
-    """
-    main = "storyline_split_shots"
-    if _web_topic_branch_enabled(state):
-        return [main, "storyline_search_web_topic"]
-    return main
+    if not _config.STORYLINE_ENABLE_WEB_TOPIC:
+        return "storyline_generate_script"
+    if not build_web_topic_query(state):
+        return "storyline_generate_script"
+    return "storyline_search_web_topic"
 
 
 # ---------------------------------------------------------------------------
@@ -546,7 +541,8 @@ def _build_state_graph():
     # ---- auto 链 18 节点 + qa_gate + join_storyline(plan_v4 §2.2 / §2.3)----
     # (2026-11-10:storyline_search_media「检索素材」节点已整体移除)
     g.add_node("storyline_load_media", storyline_load_media_node)
-    # 2026-10 已接入:storyline_load_media 之后的并行旁支(见 _storyline_route_after_load_media)
+    # 2026-11-10 前置化阶段3:检索节点改为 group_clips 后的条件前置节点
+    # (条件路由见 _storyline_route_after_group_clips;不再挂 load_media 旁支)
     g.add_node("storyline_search_web_topic", storyline_search_web_topic_node)
     g.add_node("storyline_split_shots", storyline_split_shots_node)
     # 2026-10 已接入:与 plan_timeline_pro 并排(同一道 4 源屏障;建图时按开关接边)
@@ -688,17 +684,10 @@ def _build_state_graph():
     # ---- auto 链 18 节点图边(plan_v4 §2.2 / §5 阶段 0)----
     # 起点:START 已直连 storyline_load_media(2026-11-04 阶段3)。
 
-    # LM 后主干 → split_shots(2026-11-10:原 Pexels 旁路 search_media 已整体移除;
-    # 条件边机制保留,仅为 web_topic 并行 fan-out 服务)。
-    # 2026-10:路由函数可返回 list(并行 fan-out)。search_web_topic 是死胡同分支。
-    g.add_conditional_edges(
-        "storyline_load_media",
-        _storyline_route_after_load_media,
-        {
-            "storyline_split_shots": "storyline_split_shots",
-            "storyline_search_web_topic": "storyline_search_web_topic",
-        },
-    )
+    # LM 后主干 → split_shots(2026-11-10 前置化阶段3:web_topic 并行 fan-out 条件边
+    # 整体拆除,与 B1 移除后 split_shots 主边同一先例 —— load_media 后不再有任何旁支;
+    # 检索条件路由移到 group_clips 之后,见下面 group_clips 三路注释)。
+    g.add_edge("storyline_load_media", "storyline_split_shots")
 
     # 2026-11-08 B1 ASR 移除:原条件路由(_storyline_route_after_split_shots,含
     # local_asr 旁支)删除,改为确定性主边 —— 无论素材有无音轨都进入视觉理解主链。
@@ -708,12 +697,25 @@ def _build_state_graph():
     g.add_edge("storyline_understand_clips", "storyline_filter_clips")
     g.add_edge("storyline_filter_clips", "storyline_group_clips")
 
-    # group_clips → 两路:
-    #   A) generate_script(文案)
+    # group_clips → 三路(2026-11-10 前置化阶段3:A 路改条件路由,设计方案 §4.3):
+    #   A) 检索开关开且能构造出非空检索词 → storyline_search_web_topic →(下方新增边)
+    #      → generate_script;开关关闭或无有效检索输入 → 条件路由直达 generate_script。
+    #      检索词由 ``build_web_topic_query`` 自动构造(手动 query / 画面概述 / 分组主题)。
     #   B) recommend_transition(转场) — 等 select_bgm 完成后才走
     #   C) plan_timeline_pro:在下面 fan-in 列表形式统一加入
-    g.add_edge("storyline_group_clips", "storyline_generate_script")
+    # ⚠️ search_web_topic 是条件触发节点,不进任何 fan-in 屏障(D10,设计方案 §4.3):
+    #    qa 重试部分轮次跳过它时,屏障若含它将永远凑不齐。
+    g.add_conditional_edges(
+        "storyline_group_clips",
+        _storyline_route_after_group_clips,
+        {
+            "storyline_search_web_topic": "storyline_search_web_topic",
+            "storyline_generate_script": "storyline_generate_script",
+        },
+    )
     g.add_edge("storyline_group_clips", "storyline_recommend_transition")
+    # 前置化阶段3:检索完成 → 文案(检索节点唯一的业务出边;不再是死胡同)
+    g.add_edge("storyline_search_web_topic", "storyline_generate_script")
 
     # generate_script 之后并行 fan-out(plan §2.2 §3):
     #   A) script_template_recommendation
