@@ -69,7 +69,8 @@ def test_node_builds_query_from_artifacts_when_manual_query_missing(
     assert captured["query"] == "夏季户外徒步，强日照。、户外防晒"
     assert captured["max_results"] == 10
     assert captured["provider"] == "duckduckgo_html"
-    assert out["status_log"] == ["storyline_search_web_topic_done"]
+    # 桩返回空结果(error_code=NO_RESULTS)→ 阶段2 起映射为 no_results 标签
+    assert out["status_log"] == ["storyline_search_web_topic_no_results"]
     assert Path(out["storyline_web_topic_artifact"]).exists()
 
 
@@ -85,4 +86,73 @@ def test_node_manual_query_wins_and_stays_verbatim(
     )
 
     assert captured["query"] == "夏季防晒"
+    # 桩返回空结果(error_code=NO_RESULTS)→ 阶段2 起映射为 no_results 标签
+    assert out["status_log"] == ["storyline_search_web_topic_no_results"]
+
+
+# ---------------------------------------------------------------------------
+# 阶段2:能力层 error_code → 固定状态标签(设计方案 §4.5)
+# ---------------------------------------------------------------------------
+def test_node_tags_no_results_without_error_log(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """无结果是软态:固定标签 no_results,不进 error_log。"""
+    captured: dict = {}
+    monkeypatch.setattr(node_mod, "cap_topic", _fake_cap_topic(captured))  # NO_RESULTS
+
+    out = storyline_search_web_topic_node(
+        _state(tmp_path, storyline_targets={"query": "夏季防晒"})
+    )
+
+    assert out["status_log"] == ["storyline_search_web_topic_no_results"]
+    assert "error_log" not in out
+    assert Path(out["storyline_web_topic_artifact"]).exists()
+
+
+def test_node_tags_capability_failure_and_logs_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """能力层失败(NETWORK_ERROR 等):固定标签 failed + append_error 留痕。"""
+
+    def fake_network_error(**kwargs: Any) -> dict:
+        return {
+            "search_web_topic": [],
+            "preview_urls": [],
+            "error_code": "NETWORK_ERROR",
+            "message": "DuckDuckGo request failed.",
+        }
+
+    monkeypatch.setattr(node_mod, "cap_topic", fake_network_error)
+
+    out = storyline_search_web_topic_node(
+        _state(tmp_path, storyline_targets={"query": "夏季防晒"})
+    )
+
+    assert out["status_log"] == ["storyline_search_web_topic_failed"]
+    assert any(
+        "[storyline:search_web_topic] NETWORK_ERROR" in e for e in out["error_log"]
+    )
+
+
+def test_node_fake_without_new_fields_defaults_to_done(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """旧桩(返回缺 status/query_hash/searched_at)走 .get 默认 → done,兼容。"""
+
+    def fake_legacy_shape(**kwargs: Any) -> dict:
+        return {
+            "search_web_topic": [
+                {"url": "https://e.com/1", "title": "t", "source": "fake"}
+            ],
+            "preview_urls": [],
+            "error_code": None,
+            "message": "",
+        }
+
+    monkeypatch.setattr(node_mod, "cap_topic", fake_legacy_shape)
+
+    out = storyline_search_web_topic_node(
+        _state(tmp_path, storyline_targets={"query": "夏季防晒"})
+    )
+
     assert out["status_log"] == ["storyline_search_web_topic_done"]

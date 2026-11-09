@@ -174,9 +174,10 @@ def test_search_web_topic_stub_provider() -> None:
 
 
 def test_search_web_topic_ddg_no_requests(monkeypatch: pytest.MonkeyPatch) -> None:
-    """requests 缺失时退化到空。"""
+    """requests 缺失时归类为 NETWORK_ERROR(2026-11-10 阶段2,与 NO_RESULTS 分离)。"""
     import storyline_capabilities.search_web_topic as mod
 
     monkeypatch.setattr(mod, "_HAS_REQUESTS", False)
     res = cap_search_web(query="hi", provider="duckduckgo_html")
-    assert res["error_code"] == "NO_RESULTS"
+    assert res["error_code"] == "NETWORK_ERROR"
+    assert res["status"] == "failed"
