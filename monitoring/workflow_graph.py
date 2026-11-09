@@ -243,11 +243,6 @@ _NODE_META: dict[str, dict[str, Any]] = {
         "group": "storyline_media",
         "description": "auto 链起点(START 直连);解析/导入源视频素材",
     },
-    "storyline_search_media": {
-        "name": "检索素材",
-        "group": "storyline_media",
-        "description": "Pexels 等检索源按 query 拉素材;已配检索源才触发",
-    },
     "storyline_search_web_topic": {
         "name": "网页话题检索",
         "group": "storyline_media",
@@ -361,8 +356,8 @@ _EDGE_LABELS: dict[tuple[str, str], str] = {
     ("node_15_localize_covers_en", "node_09_inject_fx"): "列表 fan-in(与 17 汇合)",
     ("node_17_inject_english_tts", "node_09_inject_fx"): "列表 fan-in(与 15 汇合)",
     # ---- auto 链条件边 ----
-    ("storyline_load_media", "storyline_search_media"): "已配检索源",
-    ("storyline_load_media", "storyline_split_shots"): "未配检索源",
+    # (2026-11-10:load_media → search_media「已配检索源」旁路已随检索素材节点移除删除)
+    ("storyline_load_media", "storyline_split_shots"): "主干",
     ("storyline_load_media", "storyline_search_web_topic"): "WEB_TOPIC 开启且有 query",
     ("storyline_split_shots", "storyline_understand_clips"): "主干",
     ("storyline_group_clips", "storyline_plan_timeline_pro"): "列表 fan-in(4 源屏障)",

@@ -17,7 +17,7 @@ START 直连 ``storyline_load_media``。)
 
 锁定的不变量:
 1. 结构:所有注册节点都能从 START 到达;
-   **条件触发**的节点(web_topic / search_media)不在任何 fan-in 屏障里(D10)。
+   **条件触发**的节点(web_topic)不在任何 fan-in 屏障里(D10)。
 2. 位置:各节点**挂在自己最相关的现有节点旁**(邻居表 NEIGHBORS),且两两不共用挂接点
    ——不允许把它们聚到同一个地方。
 3. 开关全关 ⇒ 执行轨迹与接入前逐步一致(黄金轨迹);AI 开关关 ⇒ 屏障与接入前一致。
@@ -51,7 +51,7 @@ WIRED_NODES = {
 # AI 转场两个节点不在此列:建图时按开关决定接不接,接了就**每轮必跑**,所以可以进屏障。
 CONDITIONAL_NODES = {
     "storyline_search_web_topic",
-    "storyline_search_media",
+    # (storyline_search_media 已随 2026-11-10 检索素材移除删除)
 }
 
 # ---------------------------------------------------------------------------
@@ -101,7 +101,8 @@ _RT = "storyline_recommend_text"
 
 # 各节点 → (入边邻居, 出边邻居)。这张表就是《关联分析表》的"放在哪":每个新节点贴着自己的相关节点。
 NEIGHBORS: dict[str, tuple[set[str], set[str]]] = {
-    # load_media 旁的并行死胡同分支(与 search_media / split_shots 并列);结果经 state 给 generate_script
+    # load_media 旁的并行死胡同分支(与 split_shots 并列;search_media 已随
+    # 2026-11-10 检索素材移除删除);结果经 state 给 generate_script
     "storyline_search_web_topic": ({"storyline_load_media"}, set()),
     # 与 plan_timeline_pro 并排:同一道 4 源屏障
     _GAT: ({_GC, _GS, _GV, _SB}, {_PTAT}),
@@ -311,7 +312,6 @@ def run_auto(
     monkeypatch.setattr(config, "STORYLINE_ENABLE_AI_TRANSITION", ai)
     monkeypatch.setattr("storyline_capabilities.ai_transition_client.ENABLE_AI_TRANSITION", ai)
     monkeypatch.setattr(config, "ASSEMBLY_QC_GATE_ENABLED", False)  # 直连 node_06,不跑 assembly 6 节点
-    monkeypatch.delenv("STORYLINE_PEXELS_API_KEY", raising=False)
 
     out_root = tmp_path / "outputs"
     (out_root / "storyline").mkdir(parents=True, exist_ok=True)

@@ -1,4 +1,7 @@
-"""A 类(阶段 1)单元测试:load_media / split_shots / search_media / search_web_topic。"""
+"""A 类(阶段 1)单元测试:load_media / split_shots / search_web_topic。
+
+(原 search_media 部分已随 2026-11-10 检索素材移除删除:能力模块与节点均已不存在。)
+"""
 from __future__ import annotations
 
 import json
@@ -15,7 +18,6 @@ from storyline_capabilities.load_media import (
     load_media,
     path_to_file_uri,
 )
-from storyline_capabilities.search_media import search_media as cap_search_media
 from storyline_capabilities.search_web_topic import search_web_topic as cap_search_web
 from storyline_capabilities.split_shots import (
     DEFAULT_DIFF_THRESHOLD,
@@ -150,47 +152,6 @@ def test_frame_difference_split_shots_constants() -> None:
     assert DEFAULT_MAX_SHOT_MS == 30000
     assert DEFAULT_DIFF_THRESHOLD > 0
     assert DEFAULT_FRAMES_PER_SECOND >= 1
-
-
-# ---------------------------------------------------------------------------
-# search_media — mock 网络层
-# ---------------------------------------------------------------------------
-def test_search_media_missing_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("PEXELS_API_KEY", raising=False)
-    res = cap_search_media(query="travel", media_dir=tmp_path)
-    assert res["error_code"] == "MISSING_KEY"
-    assert res["search_media"] == []
-
-
-def test_search_media_requests_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """若主 venv 没装 requests 也应优雅退化(no error_code,NO_RESULTS)。"""
-    monkeypatch.setenv("PEXELS_API_KEY", "fake_key_xxxxxxxxxxxxxxxxxxxxx")
-    # force _HAS_REQUESTS False
-    import storyline_capabilities.search_media as sm_mod
-
-    monkeypatch.setattr(sm_mod, "_HAS_REQUESTS", False)
-    res = cap_search_media(query="travel", media_dir=tmp_path)
-    assert res["search_media"] == []
-
-
-def test_search_media_video_request_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """requests 抛异常时,容错返回空(不向用户报错,仅 error_code=NO_RESULTS)。"""
-    monkeypatch.setenv("PEXELS_API_KEY", "fake_key_xxxxxxxxxxxxxxxxxxxxx")
-    import storyline_capabilities.search_media as sm_mod
-
-    class _FakeR:
-        def __init__(self):
-            self.ok = False
-
-        def raise_for_status(self):
-            raise RuntimeError("forced")
-
-        def json(self):
-            return {}
-
-    monkeypatch.setattr(sm_mod.requests, "get", lambda *a, **kw: _FakeR())
-    res = cap_search_media(query="travel", media_dir=tmp_path)
-    assert res["error_code"] == "NO_RESULTS"
 
 
 # ---------------------------------------------------------------------------

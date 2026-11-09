@@ -5,7 +5,9 @@
 - qa_gate 之后的路由不再被包装(AI 转场两节点在 qa_gate 之前,由建图时的屏障接线决定)
 
 (原 ``_asr_branch_enabled`` / ``_storyline_route_after_split_shots`` 已随
-2026-11-08 B1 ASR 移除删除:``split_shots`` 改为静态直连 ``understand_clips``。)
+2026-11-08 B1 ASR 移除删除:``split_shots`` 改为静态直连 ``understand_clips``。
+原 ``_storyline_route_after_load_media`` 内的 ``search_media`` Pexels 旁路已随
+2026-11-10 检索素材移除删除:主干恒 ``split_shots``,不再读任何 env。)
 """
 from __future__ import annotations
 
@@ -14,11 +16,6 @@ import pytest
 import config
 import graph as g
 from nodes.storyline import qa_gate as qa_gate_mod
-
-
-@pytest.fixture(autouse=True)
-def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("STORYLINE_PEXELS_API_KEY", raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -62,19 +59,6 @@ def test_after_load_media_adds_web_topic_as_parallel_branch(monkeypatch: pytest.
         "storyline_split_shots",
         "storyline_search_web_topic",
     ]
-
-
-def test_after_load_media_keeps_pexels_bypass_and_web_topic_together(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(config, "STORYLINE_ENABLE_WEB_TOPIC", True)
-    monkeypatch.setenv("STORYLINE_PEXELS_API_KEY", "k")
-    state = {"storyline_targets": {"query": "夏季防晒"}}
-    assert g._storyline_route_after_load_media(state) == [
-        "storyline_search_media",
-        "storyline_search_web_topic",
-    ]
-    assert g._storyline_route_after_load_media({}) == "storyline_search_media"
 
 
 def test_after_load_media_flag_off_equals_pre_wiring(monkeypatch: pytest.MonkeyPatch) -> None:

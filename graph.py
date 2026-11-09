@@ -99,7 +99,6 @@ PostgreSQL 统一改造后(checkpointer 统一为 PostgreSQL,方案 §4.1 / §4.
 from __future__ import annotations
 
 import contextlib
-import os
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -158,7 +157,6 @@ from nodes.storyline import (
     join_storyline as _join_storyline_mod,
 )
 from nodes.storyline.node_load_media import storyline_load_media_node
-from nodes.storyline.node_search_media import storyline_search_media_node
 from nodes.storyline.node_search_web_topic import storyline_search_web_topic_node
 from nodes.storyline.node_split_shots import storyline_split_shots_node
 from nodes.storyline.node_generate_ai_transition import (
@@ -217,20 +215,17 @@ def _web_topic_branch_enabled(state: WorkflowState) -> bool:
 
 
 def _storyline_route_after_load_media(state: WorkflowState):
-    """storyline_load_media 之后的条件路由(plan §2.2 第 96/97 行)。
+    """storyline_load_media 之后的条件路由。
 
-    主干:默认 ``split_shots``;``search_media`` 旁路仅当 ``Pexels Key`` 已配
-    (读 ``STORYLINE_PEXELS_API_KEY``)。
+    主干恒为 ``split_shots``(2026-11-10:原 ``search_media`` Pexels 旁路已整体
+    移除,见《检索素材节点移除设计与执行记录》;``storyline_media_artifact``
+    回到 load_media 单一来源)。
 
     2026-10:``_web_topic_branch_enabled`` 为真时**同时**触发 ``storyline_search_web_topic``
     (返回 list = 并行 fan-out)。该分支是死胡同(无出边),不进任何 fan-in 屏障。
     返回值:单个分支时是 ``str``,两个分支时是 ``list[str]``。
     """
-    main = (
-        "storyline_search_media"
-        if os.environ.get("STORYLINE_PEXELS_API_KEY", "").strip()
-        else "storyline_split_shots"
-    )
+    main = "storyline_split_shots"
     if _web_topic_branch_enabled(state):
         return [main, "storyline_search_web_topic"]
     return main
@@ -548,9 +543,9 @@ def _build_state_graph():
     g.add_node("delivery_qa_repair", delivery_qa_repair)
     g.add_node("delivery_qa_failed", delivery_qa_failed)
 
-    # ---- auto 链 19 节点 + qa_gate + join_storyline(plan_v4 §2.2 / §2.3)----
+    # ---- auto 链 18 节点 + qa_gate + join_storyline(plan_v4 §2.2 / §2.3)----
+    # (2026-11-10:storyline_search_media「检索素材」节点已整体移除)
     g.add_node("storyline_load_media", storyline_load_media_node)
-    g.add_node("storyline_search_media", storyline_search_media_node)
     # 2026-10 已接入:storyline_load_media 之后的并行旁支(见 _storyline_route_after_load_media)
     g.add_node("storyline_search_web_topic", storyline_search_web_topic_node)
     g.add_node("storyline_split_shots", storyline_split_shots_node)
@@ -690,25 +685,20 @@ def _build_state_graph():
     g.add_edge("delivery_qa_failed", END)
     g.add_edge("export_final_video", END)
 
-    # ---- auto 链 19 节点图边(plan_v4 §2.2 / §5 阶段 0)----
+    # ---- auto 链 18 节点图边(plan_v4 §2.2 / §5 阶段 0)----
     # 起点:START 已直连 storyline_load_media(2026-11-04 阶段3)。
 
-    # LM 后两条路:
-    #   A) Pexels Key 已配 → search_media → LM(条件边,可选循环)
-    #   B) 主干 → split_shots
-    # 阶段 0 默认走 B(stub 模式无条件),search_media 暂作旁路,**不** 串回 LM
-    # (避免单测复杂度;阶段 1+ 完善)。
+    # LM 后主干 → split_shots(2026-11-10:原 Pexels 旁路 search_media 已整体移除;
+    # 条件边机制保留,仅为 web_topic 并行 fan-out 服务)。
     # 2026-10:路由函数可返回 list(并行 fan-out)。search_web_topic 是死胡同分支。
     g.add_conditional_edges(
         "storyline_load_media",
         _storyline_route_after_load_media,
         {
-            "storyline_search_media": "storyline_search_media",
             "storyline_split_shots": "storyline_split_shots",
             "storyline_search_web_topic": "storyline_search_web_topic",
         },
     )
-    g.add_edge("storyline_search_media", "storyline_split_shots")
 
     # 2026-11-08 B1 ASR 移除:原条件路由(_storyline_route_after_split_shots,含
     # local_asr 旁支)删除,改为确定性主边 —— 无论素材有无音轨都进入视觉理解主链。

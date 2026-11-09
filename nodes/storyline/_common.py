@@ -244,7 +244,8 @@ def target_duration_ms(
 def web_topic_query(state: WorkflowState) -> str:
     """``storyline_targets.query``(去空白);取不到返回空串。
 
-    与 ``node_search_web_topic`` / ``node_search_media`` 读取同一个键。
+    与 ``node_search_web_topic`` 读取同一个键(``node_search_media`` 已随
+    2026-11-10 检索素材移除删除)。
     """
     targets = state.get("storyline_targets")
     if not isinstance(targets, dict):

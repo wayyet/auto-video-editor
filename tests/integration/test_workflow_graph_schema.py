@@ -46,7 +46,8 @@ ASSEMBLY_NODES = {
 }
 
 #: 阶段3 删除的 human 模式 5 节点 + 运维节点 + B1 移除的 storyline ASR 旁支 2 节点
-#: 与 assembly ASR 复合节点(改名 assembly_visual_observe)(不得再出现在编译图与 schema 中)
+#: 与 assembly ASR 复合节点(改名 assembly_visual_observe)+ 2026-11-10 移除的
+#: 检索素材节点 storyline_search_media(不得再出现在编译图与 schema 中)
 REMOVED_NODES = {
     "clean_cache",
     "launch_openstoryline",
@@ -57,6 +58,7 @@ REMOVED_NODES = {
     "storyline_local_asr",
     "storyline_speech_rough_cut",
     "assembly_asr_and_visual_observe",
+    "storyline_search_media",
 }
 
 #: interrupt 关卡节点 → 关卡编号(阶段3 后仅 ①②③)
@@ -257,6 +259,22 @@ def test_storyline_asr_side_branch_removed(monkeypatch):
         p for p in pairs
         if "storyline_local_asr" in p or "storyline_speech_rough_cut" in p
     ]
+    assert leftovers == []
+
+
+def test_storyline_search_media_removed(monkeypatch):
+    """2026-11-10 检索素材移除:load_media 主干恒直连 split_shots,
+    Pexels 旁路节点/边不复存在(移除记录《检索素材节点移除设计与执行记录》)。"""
+    schema = _make_schema(monkeypatch, qc=True)
+    by_id = {n["id"]: n for n in schema["nodes"]}
+
+    assert "storyline_search_media" not in by_id
+
+    pairs = _edge_pairs(schema)
+    # 主干边保留(load_media → split_shots,现为无条件主边;条件机制仅为 web_topic 保留)
+    assert ("storyline_load_media", "storyline_split_shots") in pairs
+    # 旁支节点相关的任何边都不存在
+    leftovers = [p for p in pairs if "storyline_search_media" in p]
     assert leftovers == []
 
 

@@ -298,7 +298,7 @@ class WorkflowState(TypedDict, total=False):
     storyline_web_topic_artifact: Annotated[Optional[str], _last_wins]        # search_web_topic(条件)
     storyline_render_smoke_test_path: Annotated[Optional[str], _last_wins]    # render_video(旁支)
     # 2026-10 调序新增的独立键(避免与既有键并发写冲突):
-    storyline_search_media_artifact: Annotated[Optional[str], _last_wins]     # search_media(不覆盖 storyline_media_artifact)
+    storyline_search_media_artifact: Annotated[Optional[str], _last_wins]     # DEPRECATED(2026-11-10):search_media 节点已删;该键历史上从无读写者(节点实际写 storyline_media_artifact),仅旧 checkpoint 兼容
     storyline_timeline_plan_ai: Annotated[Optional[str], _last_wins]          # plan_timeline_ai_transition(不覆盖 storyline_timeline_plan)
     storyline_auto_plan: Annotated[Optional[dict], _last_wins]                # storyline_join(不覆盖 storyline_plan)
     storyline_qa_retry_count: NotRequired[int]            # qa_gate 唯一写入者(无需 reducer)

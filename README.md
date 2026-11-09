@@ -661,7 +661,8 @@ PostgreSQL 统一改造方案(阶段 A / B)新增的应用层数据访问层。*
 | 新节点 | 挂在哪(相关的现有节点) | 触发条件 | 开关(默认 `1`) |
 |---|---|---|---|
 | ~~`clean_cache`~~ | **已删除**(2026-11-04 阶段3,R-10:唯一触发入口 clean-cache 端点随旧聊天运行时删除) | — | — |
-| `storyline_search_web_topic` | `storyline_load_media` 之后,与 `storyline_search_media` / `storyline_split_shots` 并行的旁支(走到 END) | `STORYLINE_MODE=auto` + `storyline_targets.query` 非空 | `STORYLINE_ENABLE_WEB_TOPIC` |
+| ~~`storyline_search_media`~~ | **已删除**(2026-11-10 检索素材移除:`storyline_load_media` 主干恒直连 `storyline_split_shots`,Pexels 旁路与 `STORYLINE_PEXELS_API_KEY` 开关整体删除) | — | — |
+| `storyline_search_web_topic` | `storyline_load_media` 之后,与 `storyline_split_shots` 并行的旁支(走到 END) | `STORYLINE_MODE=auto` + `storyline_targets.query` 非空 | `STORYLINE_ENABLE_WEB_TOPIC` |
 | ~~`storyline_local_asr`~~ / ~~`storyline_speech_rough_cut`~~ | **已删除**(2026-11-08 B1 ASR 移除:切镜后静态直连 `storyline_understand_clips`,开关删除) | — | — |
 | `storyline_generate_ai_transition` | 与 `storyline_plan_timeline_pro` 并排(同一道 4 源屏障) | `STORYLINE_MODE=auto` | `STORYLINE_ENABLE_AI_TRANSITION` |
 | `storyline_plan_timeline_ai_transition` | 在 `plan_timeline_pro` + `generate_ai_transition` 之后、`qa_gate` 之前(`qa_gate` 的屏障里用它替换 `plan_timeline_pro`) | 同上 | 同上 |

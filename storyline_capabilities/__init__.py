@@ -18,7 +18,8 @@ OpenStoryline copy 字节对齐。**每个模块提供无 FireRed 依赖的纯�
 - ``load_media``:扫描 video/image 取 metadata(av + Pillow,**无 torch**)
 - ``split_shots``:镜头切分,TransNetV2 走 vendored venv;**本地**提供简化版
   ``frame_difference_split_shots`` 用于本地 CI 烟测
-- ``search_media`` / ``search_web_topic``:Pexels HTTP API + 简化的网络主题检索
+- ``search_web_topic``:简化的网络主题检索(DuckDuckGo html,无 key;
+  ``search_media`` 已随 2026-11-10 检索素材移除删除)
 - ``prompts/``:从 vendored prompts/tasks 复制而来的双语 Prompt
 - ``vlm_client`` / ``llm_script_gen``:可注入的 LLM 接口
 """
