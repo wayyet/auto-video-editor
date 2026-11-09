@@ -332,6 +332,38 @@ def test_build_qa_categories_stub_voiceover_degraded_blocks_when_required(monkey
     assert gate_failed is True
 
 
+def test_build_qa_categories_voiceover_en_empty_text_prefixed_na(monkeypatch) -> None:
+    """node_17 的 ``empty_text: ...`` 带后缀串 → voiceover_en not_applicable。
+
+    2026-11-10 修复:全等比较曾把该 n/a 情形误判成 failed 虚增阻断
+    (console-5aa2606e546b 交付 QA 复盘)。
+    """
+    monkeypatch.setenv("TTS_BACKEND", "firered")
+    categories, new_issues, gate_failed = build_qa_categories(
+        _cat_state(tts_issue="empty_text: no text_en segments to synthesize"),
+        zh_draft={"tracks": []},
+        en_draft={"tracks": []},
+        deep_issues=[],
+    )
+    assert categories["voiceover_en"]["status"] == CAT_NOT_APPLICABLE
+    assert not any(i.get("category") == "voiceover_en" for i in new_issues)
+    assert gate_failed is False
+
+
+def test_build_qa_categories_voiceover_en_real_failure_blocks(monkeypatch) -> None:
+    """真实 TTS 失败串仍 failed 且计入 gate(与 empty_text 前缀区分)。"""
+    monkeypatch.setenv("TTS_BACKEND", "firered")
+    categories, new_issues, gate_failed = build_qa_categories(
+        _cat_state(tts_issue="all TTS attempts failed"),
+        zh_draft={"tracks": []},
+        en_draft={"tracks": []},
+        deep_issues=[],
+    )
+    assert categories["voiceover_en"]["status"] == CAT_FAILED
+    assert any("TTS" in i["detail"] for i in new_issues)
+    assert gate_failed is True
+
+
 def test_build_qa_categories_required_bgm_missing_blocks(monkeypatch) -> None:
     monkeypatch.setenv("TTS_BACKEND", "stub")
     categories, _, gate_failed = build_qa_categories(

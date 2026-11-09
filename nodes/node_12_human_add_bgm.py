@@ -25,7 +25,11 @@ from typing import Any
 
 from langgraph.types import interrupt
 
-from draft_ops.draft_integrity import check_track_references
+from draft_ops.draft_integrity import (
+    _bgm_segment_count,
+    check_track_references,
+    resolve_required_features,
+)
 from draft_ops.draft_lock import hash_draft_files
 from nodes._checkpoint import build_interrupt_payload, post_resume
 from nodes._draft_io import load_draft, write_draft
@@ -38,20 +42,51 @@ def _send_notification(state: WorkflowState, checkpoint: str) -> None:
     print(f"[notify] {checkpoint} thread={state.get('session_id')} draft={state.get('draft_path')}")
 
 
-def _build_interrupt_payload(state: WorkflowState) -> dict:
+def _build_interrupt_payload(state: WorkflowState, *, bgm_missing: bool = False) -> dict:
     """构造 interrupt payload — 纯函数,便于单测。
 
     Week 5:``checkpoint`` 字段统一为 ``"②"``;保留 ``legacy_id`` 兼容旧版。
     样板部分见 ``nodes._checkpoint.build_interrupt_payload``;本函数只声明
     关卡② 特有的 4 个参数。
+
+    ``bgm_missing=True``(2026-11-10):resume 后校验未检出 BGM 轨,带告警
+    重新挂起时的 payload —— 指令文案点名问题,``extra_payload`` 带
+    ``bgm_missing`` 标记供监控页/创建台展示。
     """
     return build_interrupt_payload(
         checkpoint="②",
         legacy_id="checkpoint2_add_bgm",
         step=12,
-        extra_payload={"draft_path": state.get("draft_path")},
-        instructions="请从剪映 VIP 音乐库选取 BGM 并拖入音轨,完成后确认继续",
+        extra_payload={
+            "draft_path": state.get("draft_path"),
+            **({"bgm_missing": True} if bgm_missing else {}),
+        },
+        instructions=(
+            "未检测到 BGM 音轨:请从剪映 VIP 音乐库选取 BGM 并拖入音轨,完成后确认继续"
+            if bgm_missing
+            else "请从剪映 VIP 音乐库选取 BGM 并拖入音轨,完成后确认继续"
+        ),
     )
+
+
+def _zh_bgm_missing(draft: dict | None) -> bool:
+    """关卡② 校验(纯函数):中文草稿是否没有可用的 BGM 音轨。
+
+    ``_bgm_segment_count`` 只数**非配音** audio 轨段数(配音轨按轨名豁免),
+    0 段 = BGM 缺失。与交付 QA ``build_qa_categories`` 的 bgm 判据同口径。
+    """
+    return _bgm_segment_count(draft) == 0
+
+
+def _load_zh_draft_for_gate(state: WorkflowState) -> dict | None:
+    """读中文主草稿;读取失败返回 None(校验降级放行,不无限卡关卡)。"""
+    zh_path = state.get("draft_path")
+    if not zh_path:
+        return None
+    try:
+        return load_draft(zh_path)
+    except (FileNotFoundError, ValueError, OSError):
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +311,20 @@ def _post_resume(state: WorkflowState, notifier=_send_notification) -> dict:
 
 
 def human_add_bgm(state: WorkflowState) -> dict:
-    """关卡②:挂起等待用户确认,resume 后发通知、把 BGM 镜像到英文草稿并通过。"""
+    """关卡②:挂起等待用户确认;BGM 必选时校验草稿确有 BGM 轨后才放行。
+
+    2026-11-10(console-5aa2606e546b 复盘):此前 resume 即通过,操作员未真正
+    拖入 BGM 也会放行,缺口要拖到交付 QA 才兜住。现 required_features.bgm 为真
+    时,resume 后重读磁盘上的中文草稿做校验,BGM 缺失 → 带告警再次 interrupt
+    (LangGraph 顺序多次 interrupt:重跑时首个 interrupt 回放已答复的 resume 值,
+    新 interrupt 重新挂起;草稿每次从磁盘现读,人工编辑即时可见)。未勾选 BGM
+    的任务保持原行为(确认即过);草稿读取失败也放行(降级,不无限卡关)。
+    """
+    bgm_required = bool(resolve_required_features(state).get("bgm"))
     interrupt(_build_interrupt_payload(state))
+    while bgm_required:
+        draft = _load_zh_draft_for_gate(state)
+        if not _zh_bgm_missing(draft):
+            break
+        interrupt(_build_interrupt_payload(state, bgm_missing=True))
     return _post_resume(state)

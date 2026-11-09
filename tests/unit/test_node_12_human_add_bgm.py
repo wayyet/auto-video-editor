@@ -9,6 +9,7 @@ from typing import Any
 from nodes.node_12_human_add_bgm import (
     _build_interrupt_payload,
     _post_resume,
+    _zh_bgm_missing,
     mirror_bgm_to_en_draft,
 )
 
@@ -32,6 +33,45 @@ def test_interrupt_payload_structure() -> None:
     assert payload["step"] == 12
     assert payload["draft_path"] == "C:/tmp/draft.json"
     assert "BGM" in payload["instructions"]
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-10:关卡② BGM 落轨校验 —— required_features.bgm 必选时,resume 后
+# 校验中文草稿确有非配音音轨,缺失 → 带告警再次挂起(console-5aa2606e546b
+# 复盘:此前确认即放行,缺口拖到交付 QA 才兜住)
+# ---------------------------------------------------------------------------
+def test_zh_bgm_missing_with_bgm_track_false() -> None:
+    """有人工 BGM 音轨 → 不缺。"""
+    assert _zh_bgm_missing(_zh_draft_with_bgm()) is False
+
+
+def test_zh_bgm_missing_voiceover_only_true() -> None:
+    """只有配音轨(按轨名豁免,与交付 QA 同口径)→ 视为 BGM 缺失。"""
+    draft = _en_draft_without_audio()
+    draft["tracks"].append({
+        "type": "audio",
+        "id": "vo-zh",
+        "name": "Voiceover_zh",
+        "segments": [{"id": "vo-seg", "material_id": "m1"}],
+    })
+    assert _zh_bgm_missing(draft) is True
+
+
+def test_zh_bgm_missing_no_tracks_or_none_true() -> None:
+    """无音轨 / 草稿不可得(None)→ 缺失。"""
+    assert _zh_bgm_missing(_en_draft_without_audio()) is True
+    assert _zh_bgm_missing(None) is True
+
+
+def test_interrupt_payload_bgm_missing_variant() -> None:
+    """bgm_missing 变体:extra_payload 带标记,指令文案点名问题。"""
+    payload = _build_interrupt_payload(_state(), bgm_missing=True)
+    assert payload["checkpoint"] == "②"  # resume 匹配键不变
+    assert payload["bgm_missing"] is True
+    assert "未检测到 BGM 音轨" in payload["instructions"]
+    # 常规变体不带标记
+    plain = _build_interrupt_payload(_state())
+    assert "bgm_missing" not in plain
 
 
 def test_post_resume_sends_notification_and_logs() -> None:

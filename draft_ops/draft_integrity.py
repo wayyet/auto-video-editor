@@ -755,11 +755,13 @@ def build_qa_categories(
                 categories["voiceover_zh"]["note"] = "无旁白产物"
 
     # 5) voiceover_en:empty_text=无英文文本(n/a);其它 tts_issue=failed
+    #    (2026-11-10 修复:node_17 实际写 ``"empty_text: ..."`` 带后缀串,
+    #    全等比较曾把该 n/a 情形误判成 failed —— 改前缀匹配。)
     tts_issue = str(state.get("tts_issue") or "")
     if not en_checked:
         categories["voiceover_en"]["status"] = CAT_NOT_APPLICABLE
         categories["voiceover_en"]["note"] = "英文分支未生成"
-    elif tts_issue == "empty_text":
+    elif tts_issue.startswith("empty_text"):
         categories["voiceover_en"]["status"] = CAT_NOT_APPLICABLE
         categories["voiceover_en"]["note"] = "无英文字幕文本"
     elif tts_issue:
