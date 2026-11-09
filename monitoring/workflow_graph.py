@@ -60,7 +60,9 @@ __all__ = [
 
 WORKFLOW_ID = "auto_video_editor_main"
 #: schema 结构版本;布局缓存 key 纳入它(设计 §6.2-F 第 7 条)。改字段结构时 +1。
-SCHEMA_VERSION = 1
+#: 2026-11-10 前置化阶段3/4:web_topic 拓扑移位(group_clips 条件前置)→ bump 2,
+#: 否则浏览器布局缓存仍按 v1 旧图渲染(设计方案 §5.8)。
+SCHEMA_VERSION = 2
 
 #: 关卡编号全集(阶段3 删除关卡⓪后剩 ①②③)
 CHECKPOINT_MARKS = ("①", "②", "③")
@@ -246,7 +248,7 @@ _NODE_META: dict[str, dict[str, Any]] = {
     "storyline_search_web_topic": {
         "name": "网页话题检索",
         "group": "storyline_media",
-        "description": "WEB_TOPIC 开启且有 query 时并行旁支;死胡同,产物由 generate_script 软读取",
+        "description": "group_clips 后条件前置节点:WEB_TOPIC 开启且能构造出检索词时先检索再文案;产物经 web_research 独立上下文进入 generate_script",
     },
     "storyline_split_shots": {
         "name": "分镜切分",
@@ -356,9 +358,11 @@ _EDGE_LABELS: dict[tuple[str, str], str] = {
     ("node_15_localize_covers_en", "node_09_inject_fx"): "列表 fan-in(与 17 汇合)",
     ("node_17_inject_english_tts", "node_09_inject_fx"): "列表 fan-in(与 15 汇合)",
     # ---- auto 链条件边 ----
-    # (2026-11-10:load_media → search_media「已配检索源」旁路已随检索素材节点移除删除)
+    # (2026-11-10:load_media → search_media「已配检索源」旁路已随检索素材节点移除删除;
+    #  load_media → search_web_topic 并行旁支已随前置化阶段3 拆除,条件路由移到 group_clips 之后)
     ("storyline_load_media", "storyline_split_shots"): "主干",
-    ("storyline_load_media", "storyline_search_web_topic"): "WEB_TOPIC 开启且有 query",
+    ("storyline_group_clips", "storyline_search_web_topic"): "WEB_TOPIC 开且有可检索输入",
+    ("storyline_search_web_topic", "storyline_generate_script"): "检索→文案",
     ("storyline_split_shots", "storyline_understand_clips"): "主干",
     ("storyline_group_clips", "storyline_plan_timeline_pro"): "列表 fan-in(4 源屏障)",
     ("storyline_generate_script", "storyline_plan_timeline_pro"): "列表 fan-in(4 源屏障)",
