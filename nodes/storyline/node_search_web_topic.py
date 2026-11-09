@@ -9,7 +9,11 @@ from pathlib import Path
 
 from state import WorkflowState
 from storyline_capabilities.search_web_topic import search_web_topic as cap_topic
-from nodes.storyline._common import append_status_tag, _resolve_outputs_root
+from nodes.storyline._common import (
+    _resolve_outputs_root,
+    append_status_tag,
+    build_web_topic_query,
+)
 
 
 def storyline_search_web_topic_node(state: WorkflowState) -> dict:
@@ -17,10 +21,9 @@ def storyline_search_web_topic_node(state: WorkflowState) -> dict:
     out_dir = outputs_root / "storyline"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    targets = state.get("storyline_targets") or {}
-    query = (
-        (targets.get("query") if isinstance(targets, dict) else None) or ""
-    ).strip()
+    # 2026-11-10 阶段1:检索词改由统一 builder 构造(手动 query 优先,缺失时
+    # 由 understanding.overall + groups[].theme 自动构造;前置化设计方案 §4.1)。
+    query = build_web_topic_query(state)
 
     try:
         result = cap_topic(

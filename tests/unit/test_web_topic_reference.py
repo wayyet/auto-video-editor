@@ -7,11 +7,18 @@
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from nodes.storyline._common import (
     WEB_TOPIC_MAX_ITEMS,
     WEB_TOPIC_MAX_TITLE_LEN,
+    WEB_TOPIC_QUERY_PART_MAX_CHARS,
+    WEB_TOPIC_QUERY_THEME_LIMIT,
+    WEB_TOPIC_QUERY_TOTAL_MAX_CHARS,
+    build_web_topic_query,
     format_web_topic_reference,
     web_topic_query,
 )
@@ -120,3 +127,104 @@ def test_titles_that_become_equal_after_cleaning_are_deduplicated() -> None:
 )
 def test_web_topic_query(state, expected) -> None:
     assert web_topic_query(state) == expected
+
+
+# ---------------------------------------------------------------------------
+# build_web_topic_query(2026-11-10 阶段1:检索词自动构造,设计方案 §4.1)
+# ---------------------------------------------------------------------------
+def _understanding_state(overall: str, tmp_path: Path) -> dict:
+    p = tmp_path / "understanding.json"
+    p.write_text(json.dumps({"overall": overall}, ensure_ascii=False), encoding="utf-8")
+    return {"storyline_understanding_artifact": str(p)}
+
+
+def _groups_state(*themes: object, tmp_path: Path) -> dict:
+    p = tmp_path / "groups.json"
+    p.write_text(
+        json.dumps({"groups": [{"theme": t} for t in themes]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return {"storyline_groups_artifact": str(p)}
+
+
+def test_build_query_empty_state_returns_empty_string() -> None:
+    assert build_web_topic_query({}) == ""
+
+
+def test_build_query_manual_only_returns_it_verbatim() -> None:
+    """手动 query 是唯一来源时必须原样返回(wiring :602 精确相等断言依赖此语义)。"""
+    state = {"storyline_targets": {"query": "夏季防晒"}}
+    assert build_web_topic_query(state) == "夏季防晒"
+
+
+def test_build_query_uses_overall_first_sentence(tmp_path: Path) -> None:
+    state = _understanding_state("夏季户外徒步，强日照。人物长时间运动。", tmp_path)
+    assert build_web_topic_query(state) == "夏季户外徒步，强日照。"
+
+
+def test_build_query_falls_back_to_head_without_sentence_end(tmp_path: Path) -> None:
+    state = _understanding_state("夏季户外徒步强日照环境", tmp_path)
+    assert build_web_topic_query(state) == "夏季户外徒步强日照环境"
+
+
+def test_build_query_uses_group_themes(tmp_path: Path) -> None:
+    state = _groups_state("户外防晒", "补水", tmp_path=tmp_path)
+    assert build_web_topic_query(state) == "户外防晒、补水"
+
+
+def test_build_query_combines_manual_overall_themes_in_order(tmp_path: Path) -> None:
+    """手动 query 排最前,与视频分析结果兼顾(设计方案 §5.4 DoD)。"""
+    state = {
+        "storyline_targets": {"query": "夏季防晒"},
+        **_understanding_state("夏季户外徒步，强日照。", tmp_path),
+        **_groups_state("补水", tmp_path=tmp_path),
+    }
+    assert build_web_topic_query(state) == "夏季防晒、夏季户外徒步，强日照。、补水"
+
+
+def test_build_query_deduplicates_identical_parts(tmp_path: Path) -> None:
+    state = {
+        "storyline_targets": {"query": "户外防晒"},
+        **_groups_state("户外防晒", "补水", tmp_path=tmp_path),
+    }
+    assert build_web_topic_query(state) == "户外防晒、补水"
+
+
+def test_build_query_survives_garbage_inputs(tmp_path: Path) -> None:
+    """targets 非字典 / 产物路径不存在:一律按空值跳过,不抛异常。"""
+    state = {
+        "storyline_targets": "不是 dict",
+        "storyline_understanding_artifact": str(tmp_path / "缺失.json"),
+        "storyline_groups_artifact": str(tmp_path / "缺失.json"),
+    }
+    assert build_web_topic_query(state) == ""
+
+
+def test_build_query_skips_non_dict_group_entries(tmp_path: Path) -> None:
+    p = tmp_path / "groups.json"
+    p.write_text(
+        json.dumps(
+            {"groups": [None, 5, {"theme": "有效主题"}, {"no_theme": 1}]},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    assert build_web_topic_query({"storyline_groups_artifact": str(p)}) == "有效主题"
+
+
+def test_build_query_truncates_long_parts_and_total(tmp_path: Path) -> None:
+    state = {
+        "storyline_targets": {"query": "长" * 500},
+        **_understanding_state("概" * 500, tmp_path),
+        **_groups_state("主" * 500, "乙" * 200, "丙" * 200, tmp_path=tmp_path),
+    }
+    query = build_web_topic_query(state)
+    assert len(query) == WEB_TOPIC_QUERY_TOTAL_MAX_CHARS
+    assert query.startswith("长" * WEB_TOPIC_QUERY_PART_MAX_CHARS)
+
+
+def test_build_query_theme_limit_is_capped(tmp_path: Path) -> None:
+    state = _groups_state(*[f"主题{i}" for i in range(10)], tmp_path=tmp_path)
+    assert build_web_topic_query(state) == "、".join(
+        f"主题{i}" for i in range(WEB_TOPIC_QUERY_THEME_LIMIT)
+    )
