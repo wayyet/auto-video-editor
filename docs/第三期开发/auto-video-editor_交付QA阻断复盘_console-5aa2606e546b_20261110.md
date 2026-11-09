@@ -96,3 +96,45 @@ node_12 此前不校验,确认即过。
   draft.published 事件存在)—— 展示缺陷,`handleDeliverySummary` 只挂在实时 SSE 路径,另案处理;
 - "已导入视频"查看模式回填同类;
 - mcode 偶发 exit=0 失败的底层原因(轻量会话不稳定?)未深究,现已有留痕可查。
+
+## 6. 二轮实机验证(console-4bf596407c19,2026-11-10 凌晨)
+
+首轮修复落地后的第一个真实任务(本地 02:47 启动,跑的是新代码)失败 #2589,QA blocked 只剩
+`subtitles_zh; voiceover_zh`。
+
+### 6.1 首轮修复的验证结论(全部生效)
+
+- `script_llm_trace.json` 落盘,`obj_keys` 含 `group_scripts`,narration 完整提取 → **键名归一生效**;
+- blocked 列表无 voiceover_en(英文字幕段空 → empty_text 前缀命中 → n/a)→ **误判修复生效**;
+- 未勾选的 BGM/贴纸正确 not_applicable → **gate 语义正常**。
+
+### 6.2 新根因一:字幕与配音设计耦合(已修复)
+
+- FireRed TTS 全失败(HTTP 502)→ `timeline_planner.py:94` `has_tts=False` → `voiceover_id_map`
+  保持空 dict → plan clips **无 `voiceover_id` 字段**(实机 plan 核对:4 clips 全带
+  `subtitle_style.group_id`、全无 voiceover_id)→ `node_08_add_subtitles.py` 组映射全部
+  continue → spans=None → **字幕静默跳过**(该 run 四份 .snapshots 快照 `text-zh` 均为 0,
+  而 narration 完整);
+- 修复:`_group_spans_from_draft` 组定位双通道 —— clip.voiceover_id(配音驱动,行为不变)
+  优先,缺失时 fallback 读 `clip.subtitle_style.group_id`(plan clips 恒带,与 narration
+  分组键同源);两者都无才跳过(不猜);
+- 英文链自动受益(node_16a 翻译 zh 段 → node_08b 写英文字幕)。
+
+### 6.3 新根因二:FireRed TTS :8010 未部署(基础设施,后议)
+
+`TTS_BACKEND=firered`(start_production.ps1:378 生产门禁缺省)依赖的本地 FireRedTTS2 服务
+**在本机从未部署** —— 检索实锤:文件系统(开发代码全树/剪艾/AI_dev_codes_setting/Tools/
+Documents/Downloads,按名 `*fire*` `*tts*`)无命中、无相关 docker 镜像、开发代码树内无
+`/synthesize` 服务端代码(仅客户端 `jy_common/tts_client.py:110`,注释明示"占位待核实")、
+无 `.env`(无 `FIRERED_TTS_ENDPOINT` 覆盖)、历史 run 日志无任何成功连接(仅 FireRedASR
+vendor 记录,B1 已移除)。生产门禁(node_generate_voiceover.py:40-58)要求 production 显式
+firered,换 provider 需放宽门禁(设计决策,另议)。**决策(用户 2026-11-10):本轮不动配音侧,
+部署后议;验收时表单不勾中文/英文配音**(required=False 时 QA failed 只展示不计 gate,
+`draft_integrity.py` gate 语义)。
+
+### 6.4 二轮验证
+
+- unit:fd7ab77 纯净树实测收集 1589(与 11-09 记忆基线 1582 存在 -4 环境性漂移,与本轮改动
+  无关 —— stash 对照:本轮 delta 精确 +2 = 1591);**1591 全绿 exit 0**(node_08 新增 2 例);
+- integration:对照 8 例存量基线(见 §4);
+- 实机待办:新建任务不勾配音 → 预期字幕落稿(texts>0)、QA 无 blocked、交付完成。

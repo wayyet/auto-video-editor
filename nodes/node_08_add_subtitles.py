@@ -304,10 +304,18 @@ def _group_spans_from_draft(
     for seg, clip in zip(draft_segs, matched):
         if not clip:
             continue
+        # 组定位双通道:配音驱动路径用 clip.voiceover_id 经 vo_group 桥;
+        # TTS 失败(has_tts=False)时 voiceover_id_map 为空、clips 无
+        # voiceover_id —— 2026-11-10 console-4bf596407c19 复盘:此时字幕
+        # 不应连带消失,fallback 读 plan clips 恒带的
+        # subtitle_style.group_id(与 narration 分组键同源)。
         vid = str(clip.get("voiceover_id") or "")
-        if not vid:
+        if vid:
+            gid = vo_group.get(vid, vid)
+        else:
+            gid = str(((clip.get("subtitle_style") or {}).get("group_id")) or "")
+        if not gid:
             continue
-        gid = vo_group.get(vid, vid)
         start = seg["tgt_start"]
         end = start + seg["tgt_dur"]
         lo, hi = spans.get(gid, (start, end))

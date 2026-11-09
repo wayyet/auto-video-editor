@@ -673,6 +673,57 @@ def test_zh_subtitles_replay_is_idempotent(tmp_path: Path) -> None:
     assert draft_file.read_text(encoding="utf-8") == first
 
 
+def test_zh_subtitles_written_without_voiceover_id_via_subtitle_style(tmp_path: Path) -> None:
+    """TTS 失败(has_tts=False)→ clips 无 voiceover_id:subtitle_style.group_id 兜底。
+
+    2026-11-10 console-4bf596407c19 复盘:voiceover_id_map 空 → 组映射全空 →
+    字幕静默跳过,配音挂了字幕陪葬。修复后组定位双通道(voiceover_id 桥优先,
+    subtitle_style.group_id 兜底)。
+    """
+    plan = _zh_plan()
+    for c in plan["clips"]:
+        c.pop("voiceover_id")
+        c["subtitle_style"] = {
+            "group_id": "group_0001" if c["clip_id"] == "clip_0001" else "group_0002",
+        }
+    plan["audio"]["voiceover"] = None  # has_tts=False 的实机形态:映射为空
+    draft_file = _write_draft(tmp_path, _zh_draft())
+    state = _zh_state(draft_file, tmp_path, "第一句。第二句!", "第三句")
+    state["storyline_plan"] = plan
+
+    out = add_subtitles(state)
+
+    assert "node_08_add_subtitles_done" in out["status_log"]
+    segs = out["subtitle_segments_zh"]
+    assert len(segs) == 3
+    assert (segs[0]["start_ms"], segs[0]["end_ms"]) == (0, 1500)
+    assert (segs[2]["start_ms"], segs[2]["end_ms"]) == (3000, 7000)
+    draft = json.loads(draft_file.read_text(encoding="utf-8"))
+    assert [t["id"] for t in draft["materials"]["texts"]] == [
+        "text-zh-1", "text-zh-2", "text-zh-3",
+    ]
+
+
+def test_zh_subtitles_skipped_when_no_group_key_at_all(tmp_path: Path) -> None:
+    """voiceover_id 与 subtitle_style.group_id 都缺 → 不猜,跳过并留 note。"""
+    plan = _zh_plan()
+    for c in plan["clips"]:
+        c.pop("voiceover_id")
+    plan["audio"]["voiceover"] = None
+    draft_file = _write_draft(tmp_path, _zh_draft())
+    state = _zh_state(draft_file, tmp_path, "第一句。", "第三句")
+    state["storyline_plan"] = plan
+
+    out = add_subtitles(state)
+
+    assert any(
+        "无法把当前草稿视频段映射到分组" in str(s) for s in out["status_log"]
+    )
+    assert "subtitle_segments_zh" not in out
+    draft = json.loads(draft_file.read_text(encoding="utf-8"))
+    assert draft["materials"]["texts"] == []
+
+
 def test_zh_subtitles_empty_narration_leaves_draft_untouched(tmp_path: Path) -> None:
     """空旁白(上游断裂的常态输入)→ 不写草稿、不产 subtitle_segments_zh、只记 note。"""
     draft = _zh_draft()
