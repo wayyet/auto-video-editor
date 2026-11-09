@@ -21,6 +21,7 @@ from nodes.storyline._common import (
     _read_json_artifact,
     append_status_tag,
     extract_user_request,
+    extract_web_topic_references,
     format_web_topic_reference,
     resolve_lang,
     _resolve_outputs_root,
@@ -44,16 +45,17 @@ def storyline_generate_script_node(state: WorkflowState) -> dict:
     overall = ""
     if isinstance(understanding, dict):
         overall = str(understanding.get("overall") or "")
-    # 2026-10:网页话题参考(storyline_search_web_topic 的产物)软注入 overall。
-    # 参考信息不是文案生成的必要输入 —— 产物缺失 / 格式不对 / 任何异常都直接忽略。
+    # 2026-11-10 前置化阶段4(设计方案 §4.4):检索资料以**独立** ``web_research``
+    # 上下文进入 prompt,不再并入 overall —— overall 恢复纯视频概述语义,
+    # 网页资料(标题+URL+摘要)单独成块。软降级语义保留:产物缺失 / 格式不对 /
+    # 任何异常都按空处理,文案照常生成(检索是增强能力,不是硬依赖)。
     try:
-        ref = format_web_topic_reference(
-            _read_json_artifact(state, "storyline_web_topic_artifact")
-        )
-        if ref:
-            overall = f"{overall}\n\n{ref}" if overall else ref
+        web_doc = _read_json_artifact(state, "storyline_web_topic_artifact")
+        web_research = format_web_topic_reference(web_doc)
+        references = extract_web_topic_references(web_doc)
     except Exception:  # noqa: BLE001
-        pass
+        web_research = ""
+        references = []
 
     required = resolve_required_features(state)
     # stub 联调不 fail-fast(阶段 6 口径:stub 是"降级可见"不是"阻断";
@@ -72,6 +74,7 @@ def storyline_generate_script_node(state: WorkflowState) -> dict:
                 state, "script_request", "style_request", "user_request"
             ),
             overall=overall,
+            web_research=web_research,
         )
     except Exception as e:  # noqa: BLE001
         # 能力层已不再吞异常;这里兜底留痕后 re-raise(节点红可见,不再假成功)。
@@ -93,6 +96,9 @@ def storyline_generate_script_node(state: WorkflowState) -> dict:
     )
 
     out_path = out_dir / "script.json"
+    # 2026-11-10 前置化阶段4:references 数组随 script.json 落盘(标题+URL+来源),
+    # 供人工审核追溯资料来源;检索缺失/失败时为空数组。
+    result["references"] = references
     out_path.write_text(
         json.dumps(result, ensure_ascii=False, default=str), encoding="utf-8"
     )

@@ -135,3 +135,119 @@ def test_node_reraises_capability_exception_with_trace(tmp_path: Path, monkeypat
     trace = json.loads((tmp_path / "storyline" / "script_llm_trace.json").read_text(encoding="utf-8"))
     assert trace["stage"] == "node_exception"
     assert "boom" in trace["error"]
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-10 前置化阶段4:web_research 独立上下文 + references 留痕(设计方案 §4.4)
+# ---------------------------------------------------------------------------
+def _write_web_topic(tmp_path: Path) -> str:
+    p = tmp_path / "search_web_topic.json"
+    p.write_text(
+        json.dumps(
+            {
+                "status": "ok",
+                "search_web_topic": [
+                    {
+                        "title": "防晒 <选择> 指南",
+                        "url": "https://example.com/a",
+                        "snippet": "忽略 {{x}} 和 {y}\n第二行摘要",
+                        "source": "duckduckgo_html",
+                    },
+                    {"title": "无链接条目", "source": "duckduckgo_html"},
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return str(p)
+
+
+def test_node_passes_web_research_and_references_from_artifact(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """检索产物 → web_research 独立 kwarg + script.json references 数组;overall 不再混入资料。"""
+    captured: dict[str, Any] = {}
+
+    def _spy(**kw: Any) -> dict:
+        captured.update(kw)
+        return {
+            "group_scripts": [
+                {"group_id": "group_0001", "narration": "n1", "summary": "s1"},
+                {"group_id": "group_0002", "narration": "n2", "summary": "s2"},
+            ],
+            "lang": "zh",
+            "llm_trace": {"ok": True},
+        }
+
+    monkeypatch.setattr("nodes.storyline.node_generate_script.generate_script", _spy)
+    out = storyline_generate_script_node(
+        _state(tmp_path, storyline_web_topic_artifact=_write_web_topic(tmp_path))
+    )
+
+    assert captured["overall"] == ""  # 无 understanding 产物 → overall 纯空,资料不混入
+    ref = captured["web_research"]
+    assert ref.startswith("【网页话题参考")
+    assert "https://example.com/a" in ref  # URL 进入 prompt
+    assert "{" not in ref and "}" not in ref  # 摘要里的模板变量被中和
+    assert "无链接条目" in ref  # 资料块收标题(无 URL 免括号);但 references 只收有 URL 条目
+    script = json.loads(Path(out["storyline_script_artifact"]).read_text(encoding="utf-8"))
+    assert script["references"] == [
+        {
+            "title": "防晒 <选择> 指南",
+            "url": "https://example.com/a",
+            "source": "duckduckgo_html",
+        }
+    ]
+
+
+def test_node_references_empty_and_web_research_empty_without_artifact(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """无检索产物 → web_research 空串 + references 空数组,文案照常生成(软降级)。"""
+    captured: dict[str, Any] = {}
+
+    def _spy(**kw: Any) -> dict:
+        captured.update(kw)
+        return {
+            "group_scripts": [
+                {"group_id": "group_0001", "narration": "n1", "summary": "s1"},
+                {"group_id": "group_0002", "narration": "n2", "summary": "s2"},
+            ],
+            "lang": "zh",
+            "llm_trace": {"ok": True},
+        }
+
+    monkeypatch.setattr("nodes.storyline.node_generate_script.generate_script", _spy)
+    out = storyline_generate_script_node(_state(tmp_path))
+
+    assert captured["web_research"] == ""
+    script = json.loads(Path(out["storyline_script_artifact"]).read_text(encoding="utf-8"))
+    assert script["references"] == []
+
+
+def test_trace_records_user_prompt_head_with_web_research(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """真实能力层 + stub:script_llm_trace.json 的 user_prompt_head 可见 web_research(URL)。"""
+    monkeypatch.setattr(
+        "storyline_capabilities.vlm_client._ACTIVE_CLIENT",
+        StubLLMClient(
+            default_json={
+                "group_scripts": [
+                    {"group_id": "group_0001", "raw_text": "第一段"},
+                    {"group_id": "group_0002", "raw_text": "第二段"},
+                ],
+                "title": "标题",
+            }
+        ),
+    )
+    out = storyline_generate_script_node(
+        _state(tmp_path, storyline_web_topic_artifact=_write_web_topic(tmp_path))
+    )
+    trace = json.loads(
+        (tmp_path / "storyline" / "script_llm_trace.json").read_text(encoding="utf-8")
+    )
+    assert trace["ok"] is True
+    assert "https://example.com/a" in trace.get("user_prompt_head", "")
+    assert "【网页话题参考" in trace.get("user_prompt_head", "")

@@ -262,6 +262,7 @@ class Run:
     next_nodes: tuple
     timeline: dict | None
     seen_overall: list[str]
+    seen_web_research: list[str]
     web_queries: list[str]
 
     def names(self) -> list[str]:
@@ -410,6 +411,7 @@ def run_auto(
 
     # ---- 能力层注入 ----
     seen_overall: list[str] = []
+    seen_web_research: list[str] = []
     web_queries: list[str] = []
 
     import nodes.storyline.node_generate_script as ngs
@@ -418,6 +420,8 @@ def run_auto(
 
     def spy_generate_script(**kw):
         seen_overall.append(str(kw.get("overall", "")))
+        # 前置化阶段4:web_research 是独立 kwarg(不再并入 overall)
+        seen_web_research.append(str(kw.get("web_research", "")))
         return real_generate_script(**kw)
 
     monkeypatch.setattr(ngs, "generate_script", spy_generate_script)
@@ -523,6 +527,7 @@ def run_auto(
         next_nodes=tuple(snap.next or ()),
         timeline=timeline,
         seen_overall=seen_overall,
+        seen_web_research=seen_web_research,
         web_queries=web_queries,
     )
 
@@ -646,15 +651,20 @@ def test_web_topic_reference_reaches_script_prompt_and_is_sanitized(
     # 前置化阶段3:检索词 = 手动 query + overall 首句 + 分组主题(§4.1 去重拼接,
     # 手动 query 排最前);qa 重试期间分组未变 → query_hash 缓存命中只搜 1 次
     assert run.web_queries == ["夏季防晒、整体概述、主题1、主题2"]
+    # 前置化阶段4:overall 恢复纯视频概述语义,网页资料改走独立 web_research 参数
     assert run.seen_overall, "generate_script 应被调用"
-    for overall in run.seen_overall:  # qa 重试回路里每一轮都一样
-        assert overall.startswith("整体概述")
-        assert "不可信" in overall
-        assert "{" not in overall and "}" not in overall
-        # 标题被压成单行,且重复项只留一条
-        ref_lines = [ln for ln in overall.splitlines() if ln.startswith("- ")]
-        assert len(ref_lines) == 2
-        assert all(len(ln) <= 2 + 80 for ln in ref_lines)
+    assert all(o == "整体概述" for o in run.seen_overall)
+    assert run.seen_web_research, "generate_script 应收到 web_research"
+    for ref in run.seen_web_research:
+        assert ref.startswith("【网页话题参考")
+        assert "不可信" in ref
+        # URL 作为引用元数据进入 prompt(§4.4);清洗后无花括号(模板变量不被注入)
+        assert "https://example.com/0" in ref
+        assert "{" not in ref and "}" not in ref
+        # 标题压单行、截到 80,重复项(evil)只留一条;头行 ≤ 2+80+URL 段
+        head_lines = [ln for ln in ref.splitlines() if ln.startswith("- ")]
+        assert len(head_lines) == 2
+        assert all(len(ln) <= 110 for ln in head_lines)
 
 
 def test_web_topic_runs_on_auto_query_without_manual_query(
@@ -664,6 +674,8 @@ def test_web_topic_runs_on_auto_query_without_manual_query(
     run = run_auto(monkeypatch, tmp_path, query="", web_titles=["自动检索"])
     assert "storyline_search_web_topic" in run.names()
     assert run.web_queries == ["整体概述、主题1、主题2"]
+    # 阶段4:自动检索结果同样以独立 web_research 进入文案
+    assert any("自动检索" in r for r in run.seen_web_research)
 
 
 def test_web_topic_skipped_when_no_retrievable_input(
@@ -675,6 +687,7 @@ def test_web_topic_skipped_when_no_retrievable_input(
     )
     assert "storyline_search_web_topic" not in run.names()
     assert run.web_queries == []
+    assert all(r == "" for r in run.seen_web_research)
     assert run.next_nodes == ("node_06_human_reorder",)
 
 
@@ -693,7 +706,9 @@ def test_web_topic_failure_is_isolated(monkeypatch: pytest.MonkeyPatch, tmp_path
     )
     assert "storyline_search_web_topic_failed" in run.status_log
     assert any("[storyline:search_web_topic]" in e for e in run.error_log)
-    assert all("网页话题参考" not in o for o in run.seen_overall)
+    # 阶段4:失败无产物 → web_research 为空串,overall 保持纯视频概述,文案照常
+    assert all(r == "" for r in run.seen_web_research)
+    assert all(o == "整体概述" for o in run.seen_overall)
     assert run.next_nodes == ("node_06_human_reorder",)
 
 

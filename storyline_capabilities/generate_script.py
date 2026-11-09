@@ -41,6 +41,7 @@ def generate_script(
     lang: str = "zh",
     user_request: str = "",
     overall: str = "",
+    web_research: str = "",
     client: Optional[LLMClient] = None,
 ) -> dict[str, Any]:
     """为每个 group 生成一段文案 + 配音脚本。
@@ -50,7 +51,11 @@ def generate_script(
         voiceover_style: 配音风格。
         lang: prompt 语言。
         user_request: 用户对文案的额外要求;空时用中性默认文案。
-        overall: 素材整体概述(来自 ``understand_clips`` 的 ``overall``)。
+        overall: 素材整体概述(来自 ``understand_clips`` 的 ``overall``,
+            纯视频画面语义;2026-11-10 前置化阶段4 起不再混入网页资料)。
+        web_research: 外部网页检索摘要与来源 URL(来自 ``search_web_topic``
+            产物,经节点层清洗;前置化设计方案 §4.4)。检索缺失/失败时为空串,
+            文案照常生成。外部资料是不可信参考,模板已写明使用纪律。
 
     输出 ``{"group_scripts": [{group_id, narration, summary, ...}, ...],
     "lang": ..., "llm_trace": {...}}``;``llm_trace`` 记录 LLM 调用与解析
@@ -59,8 +64,8 @@ def generate_script(
     if not groups:
         return {"group_scripts": [], "lang": lang, "llm_trace": {"note": "no groups"}}
 
-    # 模板需要 user_request / overall / groups 三个变量(D6:此前 user_request 与
-    # overall 没传,占位符原样残留,模型拿不到素材概述和风格要求)。
+    # 模板需要 user_request / overall / groups / web_research 四个变量(D6:此前
+    # user_request 与 overall 没传,占位符原样残留;阶段4 新增 web_research)。
     sys_p = render_prompt("generate_script", "system", lang=lang)
     user_p = render_prompt(
         "generate_script",
@@ -68,6 +73,7 @@ def generate_script(
         lang=lang,
         user_request=str(user_request or "").strip() or "No requirements",
         overall=str(overall or ""),
+        web_research=str(web_research or "").strip() or "（无外部检索资料）",
         groups="\n".join(
             f"- {g.get('group_id', '?')} theme={g.get('theme', '')} "
             f"clips={len(g.get('clips') or [])}"
@@ -95,6 +101,10 @@ def generate_script(
             client=client,
         )
         trace["obj_keys"] = sorted(obj.keys())
+        # 请求侧留痕(2026-11-10 前置化阶段4):raw_head 只留响应,请求 prompt
+        # 也留头部证据 —— script_llm_trace.json 可核对 web_research 是否真的
+        # 进入 LLM 请求(前置化设计方案 §5.7 DoD)。
+        trace["user_prompt_head"] = user_p[:4000]
         if trace.get("ok") and _extract_scripts(obj):
             break
 
