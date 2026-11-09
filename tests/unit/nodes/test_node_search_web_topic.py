@@ -156,3 +156,166 @@ def test_node_fake_without_new_fields_defaults_to_done(
     )
 
     assert out["status_log"] == ["storyline_search_web_topic_done"]
+
+
+# ---------------------------------------------------------------------------
+# 前置化阶段3:QA 重试幂等 cache_hit(设计方案 §4.6 —— 检索节点移入 qa 重试
+# 回路后,同一 query_hash 的产物必须复用,不重复请求互联网)
+# ---------------------------------------------------------------------------
+import hashlib
+
+
+def _ok_result(query: str) -> dict:
+    return {
+        "status": "ok",
+        "search_web_topic": [
+            {"url": "https://e.com/1", "title": "t1", "snippet": "s1", "source": "fake"},
+        ],
+        "preview_urls": [],
+        "error_code": None,
+        "message": "",
+        "query_hash": hashlib.sha256(query.encode("utf-8")).hexdigest(),
+        "searched_at": "2026-11-10T00:00:00+00:00",
+    }
+
+
+def test_cache_hit_same_query_hash_skips_network(tmp_path: Path, monkeypatch) -> None:
+    """同 query_hash 且结构有效 → cache_hit 复用,cap_topic 不被再次调用。"""
+    calls = {"n": 0}
+
+    def _counting(**kwargs: Any) -> dict:
+        calls["n"] += 1
+        return _ok_result(kwargs["query"])
+
+    monkeypatch.setattr(node_mod, "cap_topic", _counting)
+    state = _state(tmp_path, storyline_targets={"query": "夏季防晒"})
+
+    out1 = storyline_search_web_topic_node(state)
+    assert calls["n"] == 1
+
+    # QA 重试语义:state 带上第一轮的产物路径 → cache_hit,不再请求互联网
+    state2 = {
+        **state,
+        "storyline_web_topic_artifact": out1["storyline_web_topic_artifact"],
+    }
+    out2 = storyline_search_web_topic_node(state2)
+    assert calls["n"] == 1
+    doc = json.loads(
+        Path(out2["storyline_web_topic_artifact"]).read_text(encoding="utf-8")
+    )
+    assert doc["status"] == "cache_hit"
+    assert doc["query_hash"] == hashlib.sha256("夏季防晒".encode("utf-8")).hexdigest()
+    assert doc["search_web_topic"]  # 检索结果原样保留
+    assert out2["status_log"] == ["storyline_search_web_topic_done"]
+
+
+def test_cache_miss_when_query_changes_researches_and_overwrites(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """QA 修复改了分组/概述 → query_hash 变化 → 重新检索并覆盖本线程产物。"""
+    calls = {"n": 0}
+
+    def _counting(**kwargs: Any) -> dict:
+        calls["n"] += 1
+        return _ok_result(kwargs["query"])
+
+    monkeypatch.setattr(node_mod, "cap_topic", _counting)
+    state = _state(tmp_path, storyline_targets={"query": "夏季防晒"})
+    out1 = storyline_search_web_topic_node(state)
+    assert calls["n"] == 1
+
+    state2 = {
+        **state,
+        "storyline_targets": {"query": "冬季滑雪"},  # 检索词变了
+        "storyline_web_topic_artifact": out1["storyline_web_topic_artifact"],
+    }
+    out2 = storyline_search_web_topic_node(state2)
+    assert calls["n"] == 2
+    doc = json.loads(
+        Path(out2["storyline_web_topic_artifact"]).read_text(encoding="utf-8")
+    )
+    assert doc["status"] == "ok"  # 新检索结果,不是 cache_hit
+    assert doc["query_hash"] == hashlib.sha256("冬季滑雪".encode("utf-8")).hexdigest()
+
+
+def test_cache_hit_of_failed_artifact_reuses_without_network(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """failed 产物同样复用(标签如实落 failed;重试网络请开新任务,见节点 docstring)。"""
+
+    def _no_network(**_kw: Any) -> dict:  # pragma: no cover - 不应被调用
+        raise AssertionError("cache_hit 路径不应请求互联网")
+
+    monkeypatch.setattr(node_mod, "cap_topic", _no_network)
+    cached = _ok_result("夏季防晒")
+    cached.update({"status": "failed", "error_code": "NETWORK_ERROR", "message": "down"})
+    p = tmp_path / "out" / "storyline" / "search_web_topic.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(cached, ensure_ascii=False), encoding="utf-8")
+
+    out = storyline_search_web_topic_node(
+        _state(
+            tmp_path,
+            storyline_targets={"query": "夏季防晒"},
+            storyline_web_topic_artifact=str(p),
+        )
+    )
+    doc = json.loads(p.read_text(encoding="utf-8"))
+    assert doc["status"] == "cache_hit"
+    assert doc["error_code"] == "NETWORK_ERROR"  # 失败原因原样保留,不假成功
+    assert out["status_log"] == ["storyline_search_web_topic_failed"]
+
+
+def test_cache_hit_of_no_results_keeps_soft_tag(tmp_path: Path, monkeypatch) -> None:
+    """cache 命中无结果产物:标签仍归 no_results(软态可对账),不打网络。"""
+
+    def _no_network(**_kw: Any) -> dict:  # pragma: no cover - 不应被调用
+        raise AssertionError("cache_hit 路径不应请求互联网")
+
+    monkeypatch.setattr(node_mod, "cap_topic", _no_network)
+    cached = _ok_result("夏季防晒")
+    cached.update({"status": "no_results", "error_code": "NO_RESULTS"})
+    p = tmp_path / "out" / "storyline" / "search_web_topic.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(cached, ensure_ascii=False), encoding="utf-8")
+
+    out = storyline_search_web_topic_node(
+        _state(
+            tmp_path,
+            storyline_targets={"query": "夏季防晒"},
+            storyline_web_topic_artifact=str(p),
+        )
+    )
+    assert out["status_log"] == ["storyline_search_web_topic_no_results"]
+    assert "error_log" not in out
+
+
+def test_cache_ignores_legacy_artifact_without_query_hash(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """旧格式产物(无 query_hash 字段)不参与缓存 → 照常重新检索。"""
+    calls = {"n": 0}
+
+    def _counting(**kwargs: Any) -> dict:
+        calls["n"] += 1
+        return _ok_result(kwargs["query"])
+
+    monkeypatch.setattr(node_mod, "cap_topic", _counting)
+    p = tmp_path / "out" / "storyline" / "search_web_topic.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(
+        json.dumps(
+            {"search_web_topic": [], "preview_urls": [], "error_code": None, "message": ""},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    storyline_search_web_topic_node(
+        _state(
+            tmp_path,
+            storyline_targets={"query": "夏季防晒"},
+            storyline_web_topic_artifact=str(p),
+        )
+    )
+    assert calls["n"] == 1
