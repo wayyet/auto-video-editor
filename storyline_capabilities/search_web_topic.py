@@ -199,6 +199,7 @@ def search_web_topic(
         dict::
 
             {"status": "ok"|"no_results"|"failed",
+             "query": str(实际提交的检索词),
              "search_web_topic": [items],
              "preview_urls": [...],
              "error_code": None|"NO_RESULTS"|"NETWORK_ERROR"|"PARSE_ERROR"|"UNKNOWN_PROVIDER",
@@ -229,6 +230,9 @@ def search_web_topic(
             status = "ok" if items else "no_results"
         return {
             "status": status,
+            # 2026-11-10 真机验收补漏:§4.2 产物契约要求记录实际提交的检索词
+            # (审计/排障入口;此前只有 query_hash,人工无法直接读回检索内容)
+            "query": str(query),
             "search_web_topic": items,
             "preview_urls": preview_urls if preview_urls is not None else [],
             "error_code": error_code,

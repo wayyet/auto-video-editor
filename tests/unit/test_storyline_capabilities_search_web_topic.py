@@ -93,6 +93,8 @@ def test_status_query_hash_and_searched_at_are_stamped(monkeypatch) -> None:
     assert res["query_hash"] == hashlib.sha256("夏季防晒".encode("utf-8")).hexdigest()
     assert res["searched_at"]  # UTC isoformat,由实现保证格式
     assert res["status"] == "ok"
+    # 2026-11-10 真机验收补漏:§4.2 契约要求产物记录实际提交的检索词
+    assert res["query"] == "夏季防晒"
 
 
 def test_control_chars_and_newlines_in_snippet_are_cleaned(monkeypatch) -> None:
