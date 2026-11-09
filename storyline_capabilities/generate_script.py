@@ -1,6 +1,12 @@
 """本地化 generate_script(plan_v4 §5 阶段 3 / B 类第二批)。
 
 按 groups 数组逐组生成文案,产出 group_scripts / captions。
+
+2026-11-10(交付 QA 阻断分析):chat 异常 / 解析失败此前都被静默折成空
+narration(配音/字幕源头断裂且零痕迹)。现改走 :func:`chat_json_with_trace`
+留痕,坏返回(异常或拿不到 ``scripts``)自动重试一次,并在输出携带
+``llm_trace``;空 narration 是否算失败由**节点层**按 required_features 裁决
+(本能力保持纯函数,不做策略)。
 """
 from __future__ import annotations
 
@@ -9,10 +15,23 @@ from typing import Any, Iterable, Optional
 from storyline_capabilities.vlm_client import (
     LLMClient,
     StubLLMClient,
-    chat_json,
+    chat_json_with_trace,
     parse_json_loose,
 )
 from storyline_capabilities.prompts import render_prompt
+
+
+def _extract_scripts(obj: dict[str, Any]) -> list[Any]:
+    """从 LLM 返回的 dict 提取脚本数组,双键兼容。
+
+    prompts 模板(prompt/tasks/generate_script)要求 ``group_scripts``;
+    代码历史键名是 ``scripts``。两键语义等价,取先命中者。
+    """
+    for key in ("group_scripts", "scripts"):
+        value = obj.get(key)
+        if isinstance(value, list):
+            return value
+    return []
 
 
 def generate_script(
@@ -33,10 +52,12 @@ def generate_script(
         user_request: 用户对文案的额外要求;空时用中性默认文案。
         overall: 素材整体概述(来自 ``understand_clips`` 的 ``overall``)。
 
-    输出 ``{"group_scripts": [{group_id, narration, summary, ...}, ...], "lang": ...}``。
+    输出 ``{"group_scripts": [{group_id, narration, summary, ...}, ...],
+    "lang": ..., "llm_trace": {...}}``;``llm_trace`` 记录 LLM 调用与解析
+    留痕(节点层落盘 + 依此裁决空 narration 是否 fail-fast)。
     """
     if not groups:
-        return {"group_scripts": [], "lang": lang}
+        return {"group_scripts": [], "lang": lang, "llm_trace": {"note": "no groups"}}
 
     # 模板需要 user_request / overall / groups 三个变量(D6:此前 user_request 与
     # overall 没传,占位符原样残留,模型拿不到素材概述和风格要求)。
@@ -54,24 +75,30 @@ def generate_script(
         ),
     )
 
-    try:
-        obj = chat_json(
+    schema = {
+        "type": "object",
+        "properties": {
+            "group_scripts": {
+                "type": "array",
+            },
+        },
+    }
+
+    # 坏返回(调用异常 / 解析不出 / 拿不到脚本数组)重试一次;每次尝试都留痕。
+    obj: dict[str, Any] = {}
+    trace: dict[str, Any] = {}
+    for _attempt in range(2):
+        obj, trace = chat_json_with_trace(
             system_prompt=sys_p,
             user_prompt=user_p,
-            schema={
-                "type": "object",
-                "properties": {
-                    "scripts": {
-                        "type": "array",
-                    },
-                },
-            },
+            schema=schema,
             client=client,
         )
-    except Exception:  # noqa: BLE001
-        obj = {}
+        trace["obj_keys"] = sorted(obj.keys())
+        if trace.get("ok") and _extract_scripts(obj):
+            break
 
-    raw_scripts = list(obj.get("scripts") or [])
+    raw_scripts = _extract_scripts(obj)
 
     out: list[dict[str, Any]] = []
     for g_idx, g in enumerate(groups):
@@ -79,7 +106,9 @@ def generate_script(
         narration = ""
         summary = ""
         if isinstance(raw, dict):
-            narration = str(raw.get("narration", "") or "")
+            # prompts/tasks/generate_script 模板要求模型输出 ``raw_text``;
+            # ``narration`` 是历史键名,双键兼容防未来模板/模型漂移。
+            narration = str(raw.get("narration") or raw.get("raw_text") or "")
             summary = str(raw.get("summary", "") or "")
         elif isinstance(raw, str):
             narration = raw
@@ -99,6 +128,7 @@ def generate_script(
         "group_scripts": out,
         "lang": lang,
         "voiceover_style": voiceover_style,
+        "llm_trace": trace,
     }
 
 

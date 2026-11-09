@@ -171,6 +171,54 @@ def register_default_clients() -> None:
 # ---------------------------------------------------------------------------
 # 调用便捷函数 — 让 capability 实现更短
 # ---------------------------------------------------------------------------
+def chat_json_with_trace(
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    media: Optional[list[dict[str, Any]]] = None,
+    schema: Optional[dict[str, Any]] = None,
+    temperature: float = 0.3,
+    max_tokens: int = 4096,
+    client: Optional[LLMClient] = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """``chat_json`` 的带留痕版本:返回 ``(parsed_obj, trace)``。
+
+    背景(2026-11-10 交付 QA 阻断分析):``parse_json_loose`` 解析失败与
+    ``client.chat`` 异常都会静默折成 ``{}``,调用方拿到的空 narration 无法区分
+    「模型坏返回 / 调用异常 / 真无内容」。本函数把三类信号显式带回:
+
+    trace 结构::
+
+        {"ok": bool,      # chat 调用未抛异常
+         "error": str,    # 异常 repr(ok=False 时非空)
+         "raw_head": str, # 原始返回前 4000 字符(证据)
+         "parsed": bool}  # parse_json_loose 是否解析出非空 dict
+    """
+    trace: dict[str, Any] = {
+        "ok": False,
+        "error": "",
+        "raw_head": "",
+        "parsed": False,
+    }
+    try:
+        raw = (client or get_default_client()).chat(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            media=media,
+            json_schema=schema,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+    except Exception as exc:  # noqa: BLE001
+        trace["error"] = repr(exc)
+        return {}, trace
+    trace["ok"] = True
+    trace["raw_head"] = str(raw or "")[:4000]
+    obj = parse_json_loose(raw)
+    trace["parsed"] = bool(obj)
+    return obj, trace
+
+
 def chat_json(
     *,
     system_prompt: str,
@@ -185,16 +233,18 @@ def chat_json(
 
     与 vendored ``open_storyline.utils.parse_json.parse_json_dict`` 对齐的容错:
     容错提取首段 ``{...}`` JSON,容忍 ``<think>...</think>`` 包裹。
+    需要区分「解析失败 / 调用异常 / 真空返回」时改用 :func:`chat_json_with_trace`。
     """
-    raw = (client or get_default_client()).chat(
+    obj, _trace = chat_json_with_trace(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         media=media,
-        json_schema=schema,
+        schema=schema,
         temperature=temperature,
         max_tokens=max_tokens,
+        client=client,
     )
-    return parse_json_loose(raw)
+    return obj
 
 
 def chat_text(
@@ -251,6 +301,7 @@ __all__ = [
     "set_default_client",
     "register_default_clients",
     "chat_json",
+    "chat_json_with_trace",
     "chat_text",
     "parse_json_loose",
 ]
