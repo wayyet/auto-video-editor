@@ -27,6 +27,7 @@ storyline dict 转成与原生新建草稿字段级一致的结构。
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import uuid
@@ -34,6 +35,9 @@ from pathlib import Path
 from typing import Any
 
 import config
+
+#: 探测回退等告警统一走模块 logger(2026-11-11 模糊修复阶段1,不得静默)
+logger = logging.getLogger(__name__)
 
 #: 原生稿识别键:含 ``new_version`` 即视为已转换/原生,幂等直通
 _NATIVE_MARKER_KEY = "new_version"
@@ -114,10 +118,13 @@ _CLIP_TEMPLATE: dict[str, Any] = {
     "transform": {"x": 0.0, "y": 0.0},
 }
 
-#: 视频素材 crop 默认值(样本原值)
+#: 视频素材 crop 默认值 = 全幅单位正方形,四角 (0,0),(1,0),(1,1),(0,1),
+#: 与剪映 5.9 原生工程实测一致。2026-11-11 修复:原 lower_right_y=0.0 为
+#: 转写错误——右下角与右上角重合成退化三角形,剪映把三角形拉伸铺满画布,
+#: 成片右侧出现横向拉伸条纹(证据 outputs/*/baseline/ab_test_result.md)。
 _CROP_TEMPLATE: dict[str, Any] = {
     "lower_left_x": 0.0, "lower_left_y": 1.0, "lower_right_x": 1.0,
-    "lower_right_y": 0.0, "upper_left_x": 0.0, "upper_left_y": 0.0,
+    "lower_right_y": 1.0, "upper_left_x": 0.0, "upper_left_y": 0.0,
     "upper_right_x": 1.0, "upper_right_y": 0.0,
 }
 
@@ -158,18 +165,32 @@ def _new_id(old: Any, domain: str) -> str:
 
 
 def _probe_size(path: str) -> tuple[int, int]:
-    """素材宽高 best-effort:复用仓库 probe_video_size;失败回退画布尺寸。"""
+    """素材宽高 best-effort:取**显示口径**(coded+旋转元数据→display)。
+
+    2026-11-11 模糊修复阶段1(设计文档 §4.2):剪映按 material 声明尺寸参与
+    布局,声明必须与解码后显示方向一致——原 coded 口径会把 iPhone 竖拍
+    (coded 1920×1080 + rotation -90)误声明成横屏。失败不再静默伪装,
+    统一 logger.warning 留痕后回退画布尺寸。
+    """
     canvas = (int(config.CANVAS_WIDTH), int(config.CANVAS_HEIGHT))
     if not path or not Path(path).is_file():
         return canvas
     try:
-        from video_edit_capabilities.render import probe_video_size
+        from video_edit_capabilities.render import probe_display_size
 
-        w, h = probe_video_size(Path(path))
+        w, h = probe_display_size(Path(path))
         if not w or not h or w <= 0 or h <= 0:
+            logger.warning(
+                "native_draft display probe invalid for %r (w=%r h=%r), fallback to canvas %r",
+                path, w, h, canvas,
+            )
             return canvas
         return int(w), int(h)
-    except Exception:  # noqa: BLE001 — 探测失败回退画布,不阻断转换
+    except Exception as exc:  # noqa: BLE001 — 探测失败回退画布,不阻断转换
+        logger.warning(
+            "native_draft display probe failed for %r: %r — fallback to canvas %r",
+            path, exc, canvas,
+        )
         return canvas
 
 

@@ -185,6 +185,13 @@ class TestVideoConversion:
         assert m["duration"] == 2000000, "素材时长(µs)保留"
         assert m["material_name"] == "clip_0001"
         assert m["crop"]["upper_left_x"] == 0.0
+        # 2026-11-11 修复:crop 必须是全幅单位正方形——退化裁切(如
+        # lower_right_y=0.0)会被剪映拉伸铺满画布,成片右侧出现定向拉丝
+        assert m["crop"] == {
+            "lower_left_x": 0.0, "lower_left_y": 1.0, "lower_right_x": 1.0,
+            "lower_right_y": 1.0, "upper_left_x": 0.0, "upper_left_y": 0.0,
+            "upper_right_x": 1.0, "upper_right_y": 0.0,
+        }
         assert m["video_algorithm"]["algorithms"] == []
         assert m["local_material_id"] == m["id"].lower()
 
@@ -377,3 +384,65 @@ def test_voiceover_structured_chain_converts(tmp_path) -> None:
     # 引用完整性:音频段 speed 伴随无悬空
     from draft_ops.draft_integrity import check_track_references
     assert check_track_references(native, "zh") == []
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-11 模糊修复阶段1:_probe_size 切显示口径(设计文档 §4.2)
+# ---------------------------------------------------------------------------
+class TestProbeSizeDisplayOrientation:
+    """material 宽高声明必须与解码后显示方向一致;失败留痕不静默。"""
+
+    @staticmethod
+    def _draft_with_real_file(tmp_path: Path) -> dict:
+        draft = _storyline_draft()
+        fake_media = tmp_path / "source.mov"
+        fake_media.write_bytes(b"fake")
+        draft["materials"]["videos"][0]["path"] = str(fake_media)
+        return draft
+
+    def test_display_size_written_to_material(self, tmp_path, monkeypatch) -> None:
+        """display 口径直写 material:fake 返回横屏 (1920,1080),与画布回退
+        (1080,1920) 可区分,证明走的是探测结果而非兜底。"""
+        import video_edit_capabilities.render as render_mod
+
+        draft = self._draft_with_real_file(tmp_path)
+        monkeypatch.setattr(render_mod, "probe_display_size", lambda source: (1920, 1080))
+        native, _ = storyline_to_native(draft)
+        m = native["materials"]["videos"][0]
+        assert (m["width"], m["height"]) == (1920, 1080)
+
+    def test_probe_failure_falls_back_to_canvas_with_warning(
+        self, tmp_path, monkeypatch, caplog
+    ) -> None:
+        import logging
+
+        import video_edit_capabilities.render as render_mod
+
+        draft = self._draft_with_real_file(tmp_path)
+
+        def boom(source):
+            raise RuntimeError("ffprobe exploded")
+
+        monkeypatch.setattr(render_mod, "probe_display_size", boom)
+        with caplog.at_level(logging.WARNING, logger="storyline.native_draft"):
+            native, _ = storyline_to_native(draft)
+        m = native["materials"]["videos"][0]
+        assert (m["width"], m["height"]) == (1080, 1920), "回退画布尺寸,不阻断转换"
+        assert any(
+            "display probe failed" in record.message for record in caplog.records
+        ), "探测失败必须 logger.warning 留痕,不得静默伪装"
+
+    def test_missing_file_short_circuits_to_canvas(self, tmp_path, monkeypatch) -> None:
+        """path 指向不存在的文件 → 不触发探测直接回退画布(既有行为不变)。"""
+        import video_edit_capabilities.render as render_mod
+
+        calls: list[object] = []
+        monkeypatch.setattr(
+            render_mod, "probe_display_size", lambda source: calls.append(source)
+        )
+        draft = _storyline_draft()
+        draft["materials"]["videos"][0]["path"] = str(tmp_path / "not_exist.mov")
+        native, _ = storyline_to_native(draft)
+        m = native["materials"]["videos"][0]
+        assert (m["width"], m["height"]) == (1080, 1920)
+        assert calls == [], "文件不存在时不得发起探测"

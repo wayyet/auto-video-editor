@@ -37,16 +37,6 @@
       "style_tag": "default"
     }
   ],
-  "video_effects": [
-    {
-      "name": "抖动模糊",
-      "category": "video_effect",
-      "intensity": 0.3
-    },
-    {
-      "name": "胶片暖棕",
-      "category": "video_effect",
-      "intensity": 0.3
-    }
-  ]
+  "_video_effects_disabled": "2026-11-11 清空:原候选'抖动模糊'(0.3)/'胶片暖棕'均为全片挂载型特效,'抖动模糊'实测把成片染成全画面模糊(见 outputs/console-64da836e2f3f/baseline/ab_test_result.md)。清空后 node_09 走降级路径不注入特效;恢复前必须先在剪映实机验证候选特效(且禁止全片模糊类),再逐个加回。注意 pick_video_effect 对无 style_tag 行有 hash 兜底,数组非空时必须给出唯一安全候选。",
+  "video_effects": []
 }

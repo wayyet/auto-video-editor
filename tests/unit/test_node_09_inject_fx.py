@@ -90,7 +90,12 @@ def test_inject_fx_binds_transitions_to_boundaries(tmp_draft: Path) -> None:
     zh_summary = out["fx_summary"]["zh"]
     assert zh_summary["boundaries"] == 2
     assert zh_summary["transitions_written"] == 2
-    assert zh_summary["video_effects_written"] == 3  # 每段一个特效
+    # 2026-11-11:fx_template video_effects 已清空("抖动模糊"全片挂载致成片模糊)
+    # → 降级不写入,每段一条 degraded 记录,error_log 留痕
+    assert zh_summary["video_effects_written"] == 0
+    assert zh_summary["video_effects_degraded"] >= 3
+    assert not draft["materials"].get("video_effects")
+    assert any("视频特效资源未解析" in e for e in out["error_log"])
     assert not zh_summary["not_applicable"]
     assert "node_09_inject_fx_done" in out["status_log"]
 
@@ -250,7 +255,7 @@ def test_inject_fx_replay_is_byte_identical(tmp_draft: Path) -> None:
     assert first == second
     draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
     assert len(draft["materials"]["transitions"]) == 2
-    assert len(draft["materials"]["video_effects"]) == 3
+    assert len(draft["materials"]["video_effects"]) == 0
 
 
 def test_inject_fx_cleans_stale_after_boundary_shrink(tmp_draft: Path) -> None:
@@ -265,7 +270,7 @@ def test_inject_fx_cleans_stale_after_boundary_shrink(tmp_draft: Path) -> None:
     inject_fx(state)
     draft2 = json.loads(tmp_draft.read_text(encoding="utf-8"))
     assert len(draft2["materials"]["transitions"]) == 1
-    assert len(draft2["materials"]["video_effects"]) == 2
+    assert len(draft2["materials"]["video_effects"]) == 0
     assert check_track_references(draft2, "zh") == []
     assert "transition-2" not in str(draft2["tracks"][0]["segments"][1].get("extra_material_refs"))
 
@@ -309,7 +314,7 @@ def test_inject_fx_applies_to_en_draft_when_present(tmp_draft: Path, tmp_path: P
 
     assert len(zh_draft["materials"]["transitions"]) > 0
     assert len(en_draft["materials"]["transitions"]) == len(zh_draft["materials"]["transitions"])
-    assert len(en_draft["materials"]["video_effects"]) > 0
+    assert len(en_draft["materials"]["video_effects"]) == 0
     assert "node_09_inject_fx_done" in out["status_log"]
     assert "node_09_inject_fx_en_done" in out["status_log"]
     assert out["fx_summary"]["zh"]["transitions_written"] == out["fx_summary"]["en"]["transitions_written"]

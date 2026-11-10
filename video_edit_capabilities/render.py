@@ -8,6 +8,9 @@
 - ``cut_clip``            —— 把单个 clip 切到输出 canvas 并补静音
 - ``ffconcat_escape``     —— 把 path 编码成 ffmpeg concat demuxer 期望的转义格式
 - ``probe_video_size``    —— ffprobe 取 (宽, 高)
+- ``probe_video_dimensions`` —— ffprobe 取 coded/display 双口径 + 旋转
+  (2026-11-11 模糊修复阶段1新增;90/270 时 display=coded 交换)
+- ``probe_display_size``  —— 显示口径 (宽, 高) 封装(剪映 material 声明用)
 - ``source_has_audio``    —— ffprobe 0:a? 探查
 - ``source_has_video``    —— ffprobe 0:v? 探查
 
@@ -29,6 +32,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import ffproc as _ffproc
@@ -37,6 +41,10 @@ from .timeline import media_duration_seconds
 # Import reject helper from upstream assembly_capabilities to avoid duplicate
 # maintain — same name + same contract; cross-package import is one line.
 from assembly_capabilities.run_context import reject_input_output_collision
+
+# 旋转感知探测(2026-11-11 模糊修复阶段1):旋转提取/数值解析复用 media_probe,
+# 单一事实源,避免两套 tags/side_data 解析口径漂移。
+from assembly_capabilities.media_probe import safe_float, stream_fps, stream_rotation
 
 
 def ffconcat_escape(path: Path) -> str:
@@ -118,6 +126,104 @@ def probe_video_size(source: Path) -> tuple[int, int]:
     if width <= 0 or height <= 0:
         raise RuntimeError(f"invalid dimensions from ffprobe for {source}: {width}x{height}")
     return width, height
+
+
+# ---------------------------------------------------------------------------
+# 旋转感知的显示尺寸探测(2026-11-11 模糊修复阶段1,设计文档 §4.1/§4.2)
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class VideoDimensions:
+    """媒体探测结果:coded(存储)与 display(显示)双口径 + 旋转元数据。
+
+    ``coded_*`` 是文件里像素实际存储的宽高(iPhone 竖拍约定"横着存 + 旋转
+    标记");``rotation_degrees`` 归一化到 [0,360);90/270 时 display 宽高 =
+    coded 交换。其余字段 best-effort,缺失为 None,不影响尺寸结论。
+    """
+
+    coded_width: int
+    coded_height: int
+    rotation_degrees: int
+    display_width: int
+    display_height: int
+    duration_ms: int | None = None
+    fps: float | None = None
+    codec_name: str | None = None
+    pix_fmt: str | None = None
+
+
+def normalize_rotation_degrees(raw: str | int | float | None) -> int:
+    """把 ffprobe 的旋转原值(如 ``-90``/``90``/``270.0``)归一化到 [0,360)。
+
+    缺失/非法一律按 0(无旋转)处理;负角 +360、超界取模、四舍五入到整数度。
+    """
+    if raw is None:
+        return 0
+    try:
+        value = round(float(str(raw).strip()))
+    except (TypeError, ValueError):
+        return 0
+    return int(value) % 360
+
+
+def probe_video_dimensions(source: Path) -> VideoDimensions:
+    """单次 ffprobe 返回 coded/display 双口径尺寸与基础信息。
+
+    与 ``probe_video_size``(coded 口径,语义冻结)并存:剪映 material 宽高
+    声明、crop/画布适配等"面向显示效果"的调用点应使用本函数的 display
+    口径。旋转提取复用 ``media_probe.stream_rotation``(tags.rotate 优先,
+    side_data_list[].rotation 兜底,0 值跳过),本函数只做归一化与换算。
+    """
+    if not shutil.which("ffprobe"):
+        raise RuntimeError("ffprobe not found on PATH")
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries",
+        "stream=width,height,codec_name,pix_fmt,avg_frame_rate,duration"
+        ":stream_side_data:stream_tags=rotate",
+        "-of", "json",
+        str(source),
+    ]
+    proc = _ffproc.run_proc(cmd, capture_output=True, text=True, timeout=60)
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffprobe failed: {(proc.stderr or '').strip()}")
+    try:
+        data = json.loads(proc.stdout or "")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"could not parse ffprobe JSON for {source}: {exc}") from exc
+    streams = data.get("streams") if isinstance(data, dict) else None
+    stream = streams[0] if isinstance(streams, list) and streams and isinstance(streams[0], dict) else {}
+    width = int(stream.get("width") or 0)
+    height = int(stream.get("height") or 0)
+    if width <= 0 or height <= 0:
+        raise RuntimeError(f"invalid dimensions from ffprobe for {source}: {width}x{height}")
+    rotation = normalize_rotation_degrees(stream_rotation(stream))
+    if rotation in (90, 270):
+        display_width, display_height = height, width
+    else:
+        display_width, display_height = width, height
+    duration_s = safe_float(stream.get("duration"))
+    return VideoDimensions(
+        coded_width=width,
+        coded_height=height,
+        rotation_degrees=rotation,
+        display_width=display_width,
+        display_height=display_height,
+        duration_ms=int(duration_s * 1000) if duration_s else None,
+        fps=stream_fps(stream),
+        codec_name=str(stream["codec_name"]) if stream.get("codec_name") else None,
+        pix_fmt=str(stream["pix_fmt"]) if stream.get("pix_fmt") else None,
+    )
+
+
+def probe_display_size(source: Path) -> tuple[int, int]:
+    """返回显示口径 ``(宽, 高)``:应用旋转元数据后的方向。
+
+    供剪映 material 宽高声明等"显示效果"调用点使用;探测失败向上抛,
+    由调用方决定回退策略(不得静默伪装成画布尺寸)。
+    """
+    dims = probe_video_dimensions(source)
+    return dims.display_width, dims.display_height
 
 
 def source_has_audio(source: Path) -> bool:

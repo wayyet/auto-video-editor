@@ -153,10 +153,11 @@ def test_sequential_produces_complete_draft(seeded_state, tmp_path: Path) -> Non
     draft = json.loads(draft_file.read_text(encoding="utf-8"))
     materials = draft["materials"]
 
-    # 字幕/转场/视频特效/贴纸 — 应非空
+    # 字幕/转场/贴纸 — 应非空;视频特效 2026-11-11 起模板清空(全片模糊类
+    # 特效致成片模糊)→ node_09 降级不注入,保持为空
     assert materials.get("texts"), "字幕应被注入"
     assert materials.get("transitions"), "转场应被注入"
-    assert materials.get("video_effects"), "视频特效应被注入"
+    assert not materials.get("video_effects"), "视频特效已停用(全片模糊类特效),应为空"
     assert materials.get("stickers"), "贴纸应被注入"
 
     # 步骤 7 应已将总时长压到 ≤ 35s

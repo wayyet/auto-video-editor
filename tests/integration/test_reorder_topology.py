@@ -250,7 +250,8 @@ def test_checkpoint3_path_no_parallel_conflict_and_human_edit_survives(tmp_path,
 def test_tail_chain_applies_to_both_drafts(tmp_path, monkeypatch):
     """K2=B:尾链 09/11 的产物在中英两份草稿上都存在,且条数一致。
 
-    - transitions / video_effects:node_09 对两份草稿各注入一次(>0)
+    - transitions:node_09 对两份草稿各注入一次(>0)
+    - video_effects:2026-11-11 起模板清空(全片模糊类特效致成片模糊)→ 两侧都为 0
     - stickers:node_11 对两份草稿各注入一次(占位资源 fail-closed,当前 0;一致即对称)
     - 中文草稿不含 ``Subtitles_en`` 轨,英文草稿不含 ``Subtitles`` 轨(字幕不串台)
     """
@@ -261,11 +262,13 @@ def test_tail_chain_applies_to_both_drafts(tmp_path, monkeypatch):
     zh_m = zh["materials"]
     en_m = en["materials"]
 
-    for key in ("transitions", "video_effects"):
-        assert len(en_m[key]) > 0, f"英文草稿 {key} 为空:尾链未对英文草稿生效"
-        assert len(en_m[key]) == len(zh_m[key]), (
-            f"{key} 条数不一致:zh={len(zh_m[key])} en={len(en_m[key])}"
-        )
+    assert len(en_m["transitions"]) > 0, "英文草稿 transitions 为空:尾链未对英文草稿生效"
+    assert len(en_m["transitions"]) == len(zh_m["transitions"]), (
+        f"transitions 条数不一致:zh={len(zh_m['transitions'])} en={len(en_m['transitions'])}"
+    )
+    assert len(en_m["video_effects"]) == 0 and len(zh_m["video_effects"]) == 0, (
+        "video_effects 已停用(全片模糊类特效),中英两侧都应为空"
+    )
 
     # 贴纸(阶段 4):模板占位资源 fail-closed → 两侧一致(当前为 0);
     # 真实 ID 实机回填后自然转正。条数一致仍验证 node_11 双草稿对称性。
