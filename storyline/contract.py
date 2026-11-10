@@ -17,6 +17,8 @@
 4. ``source_out_ms <= source_media[media_id].duration_ms``(源不溢出)
 5. 所有 ``source_media_id`` 命中 ``source_media[*].media_id``(引用闭合)
 6. 所有毫秒字段 >= 0(整数,非负)
+7. 逐片段速度 ``源跨度/目标跨度 >= STORYLINE_MIN_CLIP_SPEED``(2026-11-11
+   模糊修复阶段3;speed 由区间推导不落存储,短素材拉长冒充画面判契约违例)
 """
 
 from __future__ import annotations
@@ -219,6 +221,13 @@ class CanonicalTimeline(BaseModel):
                 raise ValueError("CanonicalTimeline: both source_media and clips empty")
             return self
 
+        # 2026-11-11 模糊修复阶段3:逐片段速度不变量(不新增存储字段,speed 由
+        # source/target 推导,唯一推导规则见 §4.4)。短素材被拉长冒充有效画面
+        # (speed 低于 STORYLINE_MIN_CLIP_SPEED,实机事故:0.883s → 11.593s)
+        # 直接判契约违例 → node_05/qa_gate/resume 校验统一 fail-closed。
+        from config import STORYLINE_MIN_CLIP_SPEED
+
+        min_speed = float(STORYLINE_MIN_CLIP_SPEED)
         prev_timeline_in: int | None = None
         for clip in self.clips:
             # 1. media_id 命中
@@ -240,6 +249,18 @@ class CanonicalTimeline(BaseModel):
                     f"clip {clip.clip_id}: timeline_in_ms ({clip.timeline_in_ms}) "
                     f"breaks monotonic (prev was {prev_timeline_in})"
                 )
+            # 4. 逐片段速度下限(CLIP_SPEED_INVALID)
+            if min_speed > 0:
+                target_ms = clip.timeline_out_ms - clip.timeline_in_ms
+                source_ms = clip.source_out_ms - clip.source_in_ms
+                derived_speed = source_ms / target_ms if target_ms > 0 else 0.0
+                if derived_speed < min_speed - 1e-6:
+                    raise ValueError(
+                        f"clip {clip.clip_id}: 源跨度 {source_ms}ms 拉长到 {target_ms}ms"
+                        f"(speed={derived_speed:.4f})低于最低速度阈值 {min_speed}"
+                        "(CLIP_SPEED_INVALID:禁止停帧/注水冒充有效画面;"
+                        "请由 planner 重分配、更换素材或缩短目标时长)"
+                    )
             prev_timeline_in = clip.timeline_in_ms
         return self
 

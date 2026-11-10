@@ -142,6 +142,17 @@ class TimeLine:
                 min_clip=min_clip,
             )
 
+        # 2.5 逐片段源跨度护栏(2026-11-11 模糊修复阶段3):任何分配模式产出
+        # 的目标时长都不得超过 源跨度/MIN_CLIP_SPEED(允许慢动作的下限)。
+        # 短素材被均分/节拍对齐拉长到 13 倍(实机:0.883s → 11.593s)会停帧/
+        # 重复帧,禁止;超出部分重分配给仍有余量的段,余量也不足时接受总长
+        # 短于计划并告警 —— 不注水、不虚标 speed。
+        durations, material_budget_ms = self._apply_source_span_caps(
+            durations=durations,
+            flat_clips=flat_clips,
+            warnings=warnings,
+        )
+
         # 3. 实际累计时间戳
         clips_out: list[dict[str, Any]] = []
         t = 0
@@ -165,6 +176,14 @@ class TimeLine:
             warnings.append(
                 f"timeline {total_ms}ms exceeds target {target_ms}ms by > 5%; "
                 f"qa_gate may retry group_clips."
+            )
+        if target_ms and material_budget_ms is not None and material_budget_ms < target_ms:
+            # 阶段3:总素材在允许慢动作下都填不满目标时长 —— 必须显式告警,
+            # 由上游缩短目标时长/更换素材,禁止延长片段冒充有效画面。
+            warnings.append(
+                f"素材总跨度不足以填满目标时长(允许慢动作下最多 "
+                f"{material_budget_ms}ms < 目标 {target_ms}ms),已按逐段上限"
+                "分配不注水;请缩短目标时长或更换素材"
             )
 
         return {
@@ -257,6 +276,107 @@ class TimeLine:
             # min_clip 截断后总长 < 目标;接受并写 warning(由调用方 add)
             pass
         return durations, "scaled_to_target"
+
+    # ------------------------------------------------------------------
+    # 逐片段源跨度护栏(2026-11-11 模糊修复阶段3,设计文档 §4.4)
+    # ------------------------------------------------------------------
+    def _apply_source_span_caps(
+        self,
+        *,
+        durations: list[int],
+        flat_clips: list[dict[str, Any]],
+        warnings: list[str],
+    ) -> tuple[list[int], int | None]:
+        """把每段目标时长钳到 ``源跨度 / MIN_CLIP_SPEED`` 并重分配溢出。
+
+        速度语义(全链路唯一):``speed = 源跨度 / 目标跨度``。目标时长超过
+        ``源跨度 / MIN_CLIP_SPEED`` 即低于允许最低速度(短素材被拉长冒充有效
+        画面),先钳制;被钳掉的毫秒按**余量比例**重分配给其他段(每段同样不
+        超其上限);总余量仍不够时接受总长短于计划 —— 禁止注水、禁止虚标
+        speed,缺口写 warning 交给上游(替换素材/缩短成片)决策。
+
+        返回 ``(钳制+重分配后的时长, 素材预算毫秒)``;``MIN_CLIP_SPEED <= 0``
+        视为关闭护栏(仅联调),行为与旧版一致,素材预算返回 ``None``。
+        """
+        from config import STORYLINE_MIN_CLIP_SPEED
+
+        min_speed = float(STORYLINE_MIN_CLIP_SPEED)
+        if min_speed <= 0 or not durations:
+            return durations, None
+
+        caps: list[int | None] = []
+        for c in flat_clips:
+            span = max(
+                0,
+                int(c.get("source_out_ms", 0) or 0)
+                - int(c.get("source_in_ms", 0) or 0),
+            )
+            # int() 向下取整:派生 speed = span/d 永远 >= 阈值,不踩契约边界
+            caps.append(int(span / min_speed) if span > 0 else None)
+
+        clamped = [
+            min(d, cap) if cap is not None else d
+            for d, cap in zip(durations, caps)
+        ]
+        # 素材预算 = 全部段顶格(慢放到最低速度)可达的总时长,供"素材不足"
+        # 告警判断(与节拍/BGM 决策无关,只看素材现实)
+        material_budget_ms = sum(cap for cap in caps if cap is not None)
+        deficit = sum(durations) - sum(clamped)
+        if deficit <= 0:
+            return clamped, material_budget_ms
+
+        for idx, (planned, capped) in enumerate(zip(durations, clamped)):
+            if capped < planned:
+                clip_id = str(flat_clips[idx].get("clip_id") or f"clip_{idx + 1:04d}")
+                span = max(
+                    0,
+                    int(flat_clips[idx].get("source_out_ms", 0) or 0)
+                    - int(flat_clips[idx].get("source_in_ms", 0) or 0),
+                )
+                warnings.append(
+                    f"clip {clip_id} 源跨度 {span}ms 不足以承载分配的 {planned}ms"
+                    f"(最低速度 {min_speed},上限 {capped}ms);"
+                    "超分配部分将重分配给有余量的片段,禁止停帧/注水"
+                )
+
+        headroom = [
+            (cap - d) if cap is not None else 0
+            for d, cap in zip(clamped, caps)
+        ]
+        available = sum(h for h in headroom if h > 0)
+        if available <= 0:
+            warnings.append(
+                f"全部片段源跨度均不足以承载时间轴计划,总时长将短于计划 "
+                f"{deficit}ms(素材不足,禁止延长冒充);请缩短目标时长或更换素材"
+            )
+            return clamped, material_budget_ms
+
+        give_total = min(deficit, available)
+        given: list[int] = [0] * len(clamped)
+        allocated = 0
+        for idx, h in enumerate(headroom):
+            if h <= 0:
+                continue
+            given[idx] = give_total * h // available
+            allocated += given[idx]
+        # 余数按余量从大到小逐段 +1
+        remainder = give_total - allocated
+        if remainder > 0:
+            order = sorted(
+                (i for i, h in enumerate(headroom) if h > 0),
+                key=lambda i: headroom[i],
+                reverse=True,
+            )
+            for i in order[:remainder]:
+                given[i] += 1
+
+        result = [d + g for d, g in zip(clamped, given)]
+        if give_total < deficit:
+            warnings.append(
+                f"片段余量不足以承接全部重分配,总时长将短于计划 "
+                f"{deficit - give_total}ms(素材不足,禁止注水)"
+            )
+        return result, material_budget_ms
 
 
 __all__ = ["TimeLine"]

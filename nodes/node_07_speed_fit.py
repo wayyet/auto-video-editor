@@ -24,6 +24,7 @@ from uuid import uuid4
 from config import (
     NODE_07_DEFAULT_FPS,
     NODE_07_MAX_RETRY,
+    STORYLINE_MIN_CLIP_SPEED,
 )
 from nodes._draft_io import find_video_track, jianying_running_tags, load_draft, write_draft
 from nodes.storyline._common import target_duration_ms
@@ -35,6 +36,52 @@ from state import WorkflowState
 # ---------------------------------------------------------------------------
 def _compute_total_duration_us(video_track: dict) -> int:
     return sum(int(seg.get("target_timerange", {}).get("duration", 0)) for seg in video_track.get("segments", []))
+
+
+def _segment_source_duration_us(seg: dict) -> int | None:
+    """段的真实源跨度(微秒);``source_timerange`` 缺失/非法时返回 None。
+
+    2026-11-11 阶段3:速度语义 = 源跨度/目标跨度,判断与计算都以源跨度为基准;
+    旧草稿(无 source_timerange)按 None 处理,调用方以 target 兜底(与旧版等价)。
+    """
+    tr = seg.get("source_timerange")
+    if not isinstance(tr, dict):
+        return None
+    try:
+        d = int(tr.get("duration") or 0)
+    except (TypeError, ValueError):
+        return None
+    return d if d > 0 else None
+
+
+def _set_segment_speed(draft: dict, seg: dict, speed: float) -> None:
+    """写段速度并同步 speed material(node_07 唯一写入口)。
+
+    同时落两处(剪映按 material 里的速度播放,段上 speed 仅作声明):
+    ``seg["speed"]`` + ``materials.speeds[]``(已有引用则原位更新,否则新建)。
+    """
+    seg["speed"] = float(speed)
+    materials = draft.setdefault("materials", {})
+    speeds_material = materials.setdefault("speeds", [])
+    refs = seg.setdefault("extra_material_refs", [])
+    speed_ref = next(
+        (ref for ref in refs if any(sm.get("id") == ref for sm in speeds_material)),
+        None,
+    )
+    if speed_ref is None:
+        mat_id = f"speed-{uuid4().hex[:8]}"
+        speeds_material.append({
+            "id": mat_id,
+            "speed": float(speed),
+            "mode": 0,           # 0 = 常规变速(曲线变速 mode != 0)
+            "curve_speed": None,
+            "type": "speed",     # 原生 speed material 必带(2026-11-07 样本核对)
+        })
+        refs.append(mat_id)
+    else:
+        for sm in speeds_material:
+            if sm.get("id") == speed_ref:
+                sm["speed"] = float(speed)
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +126,17 @@ def _frame_aligned_durations(
 # 节点函数
 # ---------------------------------------------------------------------------
 def speed_fit(state: WorkflowState) -> dict:
-    """读取 draft → 校验时长 → 若超时则变速 → 原子写回。"""
+    """读取 draft → 逐段速度护栏 → 若超时则变速压缩 → 原子写回。
+
+    2026-11-11 阶段3重写(设计文档 §4.4):速度语义唯一为
+    ``speed = 源跨度 / 目标跨度``,处理不再只看目标总时长:
+
+    1. **拉长护栏**(新):``target > 源跨度/STORYLINE_MIN_CLIP_SPEED`` 的段
+       钳回上限(实机事故:0.883s 源被铺成 11.593s,停帧冒充画面);
+       允许范围内的慢动作段,把与区间矛盾的段速度纠偏成真实速度;
+    2. **总时长压缩**(原护栏):超目标时帧对齐压缩,速度同样按源跨度计算
+       (旧版误用 target 作分子,对已带真实速度的段会算错变速值)。
+    """
     raw_draft_path = state.get("draft_path")
     if not raw_draft_path:
         # node_05 因契约不合法早退时 draft_path 是 None(D7,2026-10-20 修)。
@@ -99,56 +156,54 @@ def speed_fit(state: WorkflowState) -> dict:
 
     # P1(决定 1 选 B):目标时长读 state(创建台输入框),毫秒 → 微秒;缺省 35s
     target_us = target_duration_ms(state) * 1000
+    min_speed = float(STORYLINE_MIN_CLIP_SPEED)
+    changed = False
 
+    # ---- Pass 1:逐段拉长护栏(不允许把短素材拉长冒充有效画面)----
+    for seg in src_segments:
+        src_dur = _segment_source_duration_us(seg)
+        if not src_dur:
+            continue
+        tgt_dur = int((seg.get("target_timerange") or {}).get("duration") or 0)
+        if tgt_dur <= 0:
+            continue
+        # int 向下取整:派生 speed = src/new 恒 >= 阈值,不踩下限边界
+        cap = int(src_dur / min_speed) if min_speed > 0 else None
+        new_dur = min(tgt_dur, cap) if cap is not None else tgt_dur
+        expected_speed = src_dur / new_dur if new_dur > 0 else 1.0
+        current = float(seg.get("speed") or 1.0)
+        if new_dur != tgt_dur or abs(current - expected_speed) > 1e-6:
+            (seg.setdefault("target_timerange", {}))["duration"] = new_dur
+            _set_segment_speed(draft, seg, expected_speed)
+            changed = True
+
+    # ---- Pass 2:总时长压缩(原护栏,速度改按源跨度计算)----
     src_total_us = _compute_total_duration_us(video_track)
-    # 已达标:直接返回(由条件边判断后产出 snapshot2 → node_08)
-    if src_total_us <= target_us:
-        # 仍递增重试计数便于联调断言(Week 3 兼容 Week 2 测试期望)
+    if src_total_us > target_us:
+        src_durations = [int(seg["target_timerange"]["duration"]) for seg in src_segments]
+        new_durations = _frame_aligned_durations(src_durations, target_us, fps)
+        for seg, new_dur in zip(src_segments, new_durations):
+            # 速度分子必须是真实源跨度;无 source_timerange 的旧草稿按 target
+            # 兜底(与旧版行为等价)。
+            src_dur = _segment_source_duration_us(seg) or int(
+                seg["target_timerange"]["duration"]
+            )
+            (seg.setdefault("target_timerange", {}))["duration"] = int(new_dur)
+            _set_segment_speed(draft, seg, src_dur / new_dur if new_dur > 0 else 1.0)
+            changed = True
+
+    if not changed:
+        # 已达标且无逐段违例:直接返回(由条件边判断后产出 snapshot2 → node_08)。
+        # 仍递增重试计数便于联调断言(Week 3 兼容 Week 2 测试期望)。
         retry = dict(state.get("retry_counts") or {})
         retry["node_07"] = retry.get("node_07", 0) + 1
         return {**state, "retry_counts": retry}
 
-    src_durations = [int(seg["target_timerange"]["duration"]) for seg in src_segments]
-    new_durations = _frame_aligned_durations(src_durations, target_us, fps)
-
-    # 应用速度:写 segment.speed + materials.speeds[].speed + extra_material_refs
-    materials = draft.setdefault("materials", {})
-    speeds_material = materials.setdefault("speeds", [])
-
-    for seg, new_dur in zip(src_segments, new_durations):
-        src_dur = int(seg["target_timerange"]["duration"])
-        speed = src_dur / new_dur if new_dur > 0 else 1.0
-        seg["speed"] = speed
-
-        refs = seg.setdefault("extra_material_refs", [])
-        # 找该段已引用的 speed material(原生伴随结构里每段一个;旧链路可能没有)
-        speed_ref = next(
-            (ref for ref in refs if any(sm.get("id") == ref for sm in speeds_material)),
-            None,
-        )
-        if speed_ref is None:
-            mat_id = f"speed-{uuid4().hex[:8]}"
-            speeds_material.append({
-                "id": mat_id,
-                "speed": speed,
-                "mode": 0,           # 0 = 常规变速(曲线变速 mode != 0)
-                "curve_speed": None,
-                "type": "speed",     # 原生 speed material 必带(2026-11-07 样本核对)
-            })
-            refs.append(mat_id)
-        else:
-            # 原生伴随结构(转换器引入):剪映按 material 里的速度播放,
-            # 段引用已存在时必须同步写新速度,否则变速不生效
-            for sm in speeds_material:
-                if sm.get("id") == speed_ref:
-                    sm["speed"] = speed
-
-    # 重算 target_timerange.start + 顶层 duration
+    # 重算 target_timerange.start + 顶层 duration(拉长钳制/压缩都改变了时长)
     cursor = 0
-    for seg, new_dur in zip(src_segments, new_durations):
+    for seg in src_segments:
         seg["target_timerange"]["start"] = cursor
-        seg["target_timerange"]["duration"] = new_dur
-        cursor += new_dur
+        cursor += int(seg["target_timerange"]["duration"])
     video_track["segments"] = src_segments
     draft["duration"] = cursor
 

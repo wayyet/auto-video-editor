@@ -62,6 +62,46 @@ def _target_ms(state: WorkflowState) -> int:
     return target_duration_ms(state)
 
 
+def _per_clip_issues(canonical: CanonicalTimeline) -> list[str]:
+    """逐片段 source/target/speed 一致性复查(2026-11-11 阶段3,§4.4 错误码)。
+
+    总时长达标 ≠ 每段时间映射合法(实机事故:0.883s 源被铺成 11.593s 而全片
+    时长完全达标)。正常情况下 contract 不变量已在加载时判死这类计划;本函数
+    是防御性复查(阈值 ``STORYLINE_MIN_CLIP_SPEED <= 0`` 关闭时与 contract
+    同步放行)并把结构化错误码留痕。违例**不走 retry** —— retry 只对总时长
+    超标有意义,逐段违例必须阻止交付。
+    """
+    from config import STORYLINE_MIN_CLIP_SPEED
+
+    min_speed = float(STORYLINE_MIN_CLIP_SPEED)
+    media_by_id = {s.media_id: s for s in canonical.source_media}
+    issues: list[str] = []
+    for clip in canonical.clips:
+        media = media_by_id.get(clip.source_media_id)
+        if media is None:
+            issues.append(
+                f"SOURCE_RANGE_INVALID clip {clip.clip_id}: source_media_id 未闭合"
+            )
+            continue
+        if clip.source_out_ms <= clip.source_in_ms or clip.source_out_ms > media.duration_ms:
+            issues.append(
+                f"SOURCE_RANGE_INVALID clip {clip.clip_id}: 源区间 "
+                f"[{clip.source_in_ms}, {clip.source_out_ms}] 非法或超出媒体时长 "
+                f"{media.duration_ms}ms"
+            )
+        if min_speed > 0:
+            target_ms = clip.timeline_out_ms - clip.timeline_in_ms
+            source_ms = clip.source_out_ms - clip.source_in_ms
+            speed = source_ms / target_ms if target_ms > 0 else 0.0
+            if speed < min_speed - 1e-6:
+                issues.append(
+                    f"CLIP_SPEED_INVALID clip {clip.clip_id}: speed={speed:.4f} < "
+                    f"{min_speed}(源 {source_ms}ms → 目标 {target_ms}ms,"
+                    "短素材拉长冒充有效画面)"
+                )
+    return issues
+
+
 def storyline_qa_gate_node(state: WorkflowState) -> dict:
     """QA 闸门主入口(纯函数副作用:仅写 status_log / error_log / 重试计数)。
 
@@ -88,6 +128,23 @@ def storyline_qa_gate_node(state: WorkflowState) -> dict:
             "status_log": append_status_tag(
                 state, "storyline_qa_done_empty"
             ),
+        }
+
+    # 逐片段一致性校验(阶段3):任一违例直接 fail,不进入总时长 retry 循环。
+    clip_issues = _per_clip_issues(canonical)
+    if clip_issues:
+        code = (
+            "CLIP_SPEED_INVALID"
+            if any(i.startswith("CLIP_SPEED_INVALID") for i in clip_issues)
+            else "SOURCE_RANGE_INVALID"
+        )
+        return {
+            "status_log": append_status_tag(state, "storyline_qa_failed"),
+            "error_log": [
+                *list(state.get("error_log", []) or []),
+                *[f"[storyline:qa_gate] {msg}" for msg in clip_issues],
+            ],
+            "storyline_error_code": code,
         }
 
     actual_ms = int(canonical.clips[-1].timeline_out_ms)

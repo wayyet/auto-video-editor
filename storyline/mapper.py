@@ -140,6 +140,14 @@ def canonical_to_draft(
     for idx, clip in enumerate(plan.clips, start=1):
         seg_duration_us = _ms_to_us(clip.timeline_out_ms - clip.timeline_in_ms)
         seg_source_duration_us = _ms_to_us(clip.source_out_ms - clip.source_in_ms)
+        # 2026-11-11 模糊修复阶段3:真实速度(全链路唯一推导规则
+        # speed = 源跨度/目标跨度),不再硬编码 1.0 掩盖源/目标区间矛盾;
+        # 与 planner(逐段上限)、contract(不变量)、node_07/qa_gate 共用同一口径。
+        speed = (
+            seg_source_duration_us / seg_duration_us if seg_duration_us > 0 else 1.0
+        )
+        if abs(speed - 1.0) < 1e-6:
+            speed = 1.0
         video_track["segments"].append(
             {
                 "id": f"segment-{idx}",
@@ -158,7 +166,7 @@ def canonical_to_draft(
                 "target_end_us": _ms_to_us(clip.timeline_out_ms),
                 "source_in_us": _ms_to_us(clip.source_in_ms),
                 "source_out_us": _ms_to_us(clip.source_out_ms),
-                "speed": 1.0,
+                "speed": speed,
                 "transcript": clip.transcript or "",
             }
         )

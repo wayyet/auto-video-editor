@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 import os
 import subprocess
 import sys
@@ -198,6 +199,32 @@ def _frame_avg_diff(a: Path, b: Path) -> float:
 # ---------------------------------------------------------------------------
 # 共享后处理:切点毫秒序列 → clips(两种检测器共用)
 # ---------------------------------------------------------------------------
+def _balanced_max_shot_spans(
+    span_ms: int, *, max_shot_ms: int, min_shot_ms: int
+) -> list[tuple[int, int]]:
+    """把超长片段**平衡切分**成不超过 max_shot 的若干段(相对偏移)。
+
+    2026-11-11 模糊修复阶段3(设计文档 §3.4):旧的"固定步长 max_shot 顺切"
+    会把尾料重新切出极短残尾(实机:30.883s 素材 → 30000ms + 883ms,883ms 段
+    再被拉长成 11.593s 停帧段)。平衡分段先按总时长算出需要的段数,再把切点
+    均匀摊开 —— 每段都接近 ``span/n``,既满足 max_shot 上限,又不产生可避免的
+    短尾;仅当总时长本身不足以容纳两段 min_shot 时才允许短段(标记由调用方
+    的 method 承载)。
+
+    Returns:
+        ``[(start, end), ...]`` 相对 span 起点的偏移,有序、无缝、覆盖全 span。
+    """
+    if span_ms <= 0:
+        return []
+    n = max(1, math.ceil(span_ms / max_shot_ms))
+    # 段数回退:确保均分后每段不低于 min_shot(能少一段就少一段)
+    while n > 1 and math.ceil(span_ms / n) < min_shot_ms:
+        n -= 1
+    base = math.ceil(span_ms / n)
+    cuts = [i * base for i in range(n)] + [span_ms]
+    return [(cuts[i], cuts[i + 1]) for i in range(n)]
+
+
 def _clips_from_cuts(
     cuts_ms: list[int],
     *,
@@ -214,7 +241,8 @@ def _clips_from_cuts(
     2. 超过 ``max_shot_ms`` 逐段强制切;
     3. 最小长度回填(首段过短并入下一段);
     4. max_shot **后置兜底强切**(2026-11-07 实机回归:连续运动素材帧帧超
-       阈值 → 全部相邻段被 min_shot 合并成 1 个巨镜头,违反 max_shot 契约);
+       阈值 → 全部相邻段被 min_shot 合并成 1 个巨镜头,违反 max_shot 契约;
+       2026-11-11 阶段3 起为**平衡分段**,不再顺切出 <min_shot 的极短残尾);
     5. clip_id 重排。
     """
     clips: list[dict[str, Any]] = []
@@ -227,26 +255,15 @@ def _clips_from_cuts(
             clips[-1]["source_out_ms"] = e
             continue
         if e - s > max_shot_ms:
-            # 强制切
-            cur = s
-            while cur + max_shot_ms < e:
-                nxt = cur + max_shot_ms
+            # 强制切(2026-11-11 阶段3:平衡分段,不再顺切出极短残尾)
+            for sub_s, sub_e in _balanced_max_shot_spans(
+                e - s, max_shot_ms=max_shot_ms, min_shot_ms=min_shot_ms
+            ):
                 clips.append(
                     _make_clip(
                         f"clip_{len(clips) + 1:04d}",
-                        cur,
-                        nxt,
-                        method=method_max_split,
-                        video_path=video_path,
-                    )
-                )
-                cur = nxt
-            if e - cur > 0:
-                clips.append(
-                    _make_clip(
-                        f"clip_{len(clips) + 1:04d}",
-                        cur,
-                        e,
+                        s + sub_s,
+                        s + sub_e,
                         method=method_max_split,
                         video_path=video_path,
                     )
@@ -285,30 +302,24 @@ def _clips_from_cuts(
     # 帧帧超阈值 → 全部相邻段被 min_shot 合并进同一个 clip,上面的逐对强制切
     # 分支永远轮不到,最终产出 1 个 69s 巨镜头(违反"超过 max_shot 强制切"
     # 的文档契约)。这里对合并后的最终 clip 再兜底切一遍。
+    # 2026-11-11 阶段3:切分方式改为平衡分段 —— 旧的固定步长顺切会把尾料
+    # 重新切成极短残尾(实机:30.883s → 30000+883ms)。
     enforced: list[dict[str, Any]] = []
     for c in final_clips:
-        span = c["timeline_out_ms"] - c["timeline_in_ms"]
+        start = c["timeline_in_ms"]
+        end = c["timeline_out_ms"]
+        span = end - start
         if span <= max_shot_ms:
             enforced.append(c)
             continue
-        cur = c["timeline_in_ms"]
-        while cur + max_shot_ms < c["timeline_out_ms"]:
+        for sub_s, sub_e in _balanced_max_shot_spans(
+            span, max_shot_ms=max_shot_ms, min_shot_ms=min_shot_ms
+        ):
             enforced.append(
                 _make_clip(
                     f"clip_{len(enforced) + 1:04d}",
-                    cur,
-                    cur + max_shot_ms,
-                    method=method_max_split,
-                    video_path=str(c.get("path") or video_path),
-                )
-            )
-            cur += max_shot_ms
-        if c["timeline_out_ms"] - cur > 0:
-            enforced.append(
-                _make_clip(
-                    f"clip_{len(enforced) + 1:04d}",
-                    cur,
-                    c["timeline_out_ms"],
+                    start + sub_s,
+                    start + sub_e,
                     method=method_max_split,
                     video_path=str(c.get("path") or video_path),
                 )

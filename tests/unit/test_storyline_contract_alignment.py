@@ -216,7 +216,10 @@ def test_contract_accepts_new_optional_fields() -> None:
     assert timeline["clips"][0]["transition_in"] == "fade_in"
     canonical = CanonicalTimeline.model_validate(timeline)
     assert canonical.method is not None
-    assert canonical.warnings == []
+    # 2026-11-11 阶段3:夹具素材 12s < 目标 35s,"素材不足"告警是预期新行为;
+    # 本用例关心的是"除它之外无其他意外告警"。
+    unexpected = [w for w in canonical.warnings if "素材总跨度不足" not in w]
+    assert unexpected == []
 
 
 def test_subtitles_zh_rejects_dict() -> None:
