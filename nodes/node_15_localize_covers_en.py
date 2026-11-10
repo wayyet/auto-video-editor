@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 
 from draft_ops.atomic_writer_file import atomic_write_file
+from jy_common.native_text import text_display_text
 from mcp_clients.firered_image_edit_client import call_firered_edit
 from state import WorkflowState
 
@@ -25,6 +26,10 @@ from state import WorkflowState
 def _get_titles(state: WorkflowState) -> tuple[str, str]:
     """从 state['draft_path'] 的 draft_content.json 读 title_zh;title_en 由 mock 提供。
 
+    2026-11-11 阶段4修复:原生 text material 的 ``content`` 是 JSON 字符串,
+    此前直接 ``str(content)`` 把整段 JSON 当标题发给图编辑;统一经
+    :func:`text_display_text` 双形态解析取真实文字。
+
     Returns:
         (title_zh, title_en) 元组。
     """
@@ -34,8 +39,10 @@ def _get_titles(state: WorkflowState) -> tuple[str, str]:
         try:
             draft = json.loads(Path(draft_path).read_text(encoding="utf-8"))
             texts = draft.get("materials", {}).get("texts", [])
-            if texts and texts[0].get("content"):
-                title_zh = str(texts[0]["content"])
+            if texts and isinstance(texts[0], dict):
+                text = text_display_text(texts[0]).strip()
+                if text:
+                    title_zh = text
         except (json.JSONDecodeError, OSError, KeyError, IndexError):
             pass
     # Week 4 用固定映射,Week 5 接翻译服务

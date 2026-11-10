@@ -315,6 +315,129 @@ def check_texts_track_alignment(draft: dict, tag: str) -> list[dict[str, str]]:
     return issues
 
 
+# ---------------------------------------------------------------------------
+# 2026-11-11 模糊修复防线:crop 全幅 + 模糊类特效全片挂载
+# ---------------------------------------------------------------------------
+#: 全幅单位正方形(与 storyline/native_draft._CROP_TEMPLATE、剪映原生工程一致)
+_FULL_FRAME_CROP: dict[str, float] = {
+    "lower_left_x": 0.0, "lower_left_y": 1.0, "lower_right_x": 1.0,
+    "lower_right_y": 1.0, "upper_left_x": 0.0, "upper_left_y": 0.0,
+    "upper_right_x": 1.0, "upper_right_y": 0.0,
+}
+
+
+def check_video_crops(draft: dict, tag: str) -> list[dict[str, str]]:
+    """video material 的 crop 必须是全幅单位正方形。
+
+    退化裁切(如 lower_right_y=0.0 使四角变成三角形)会被剪映拉伸铺满画布,
+    成片出现大面积定向拉丝——该 bug 曾随 ``_CROP_TEMPLATE`` 存活数日,字段级
+    验收测不出,必须像素语义级校验。缺失 crop 的素材跳过(非我方写入形态)。
+    """
+    issues: list[dict[str, str]] = []
+    for m in (draft.get("materials") or {}).get("videos") or []:
+        if not isinstance(m, dict):
+            continue
+        crop = m.get("crop")
+        if not isinstance(crop, dict) or not crop:
+            continue
+        mismatched = {
+            k: crop.get(k)
+            for k, v in _FULL_FRAME_CROP.items()
+            if not isinstance(crop.get(k), (int, float)) or abs(float(crop[k]) - v) > 1e-6
+        }
+        if mismatched:
+            issues.append(_issue(
+                "素材裁切", SEV_ERROR, tag,
+                f"video material {m.get('material_name') or m.get('id', '?')} crop 非全幅"
+                f"(退化裁切会被剪映拉伸铺满画面): {mismatched}",
+            ))
+    return issues
+
+
+def check_blur_video_effects(draft: dict, tag: str) -> list[dict[str, str]]:
+    """我方 vfx 特效名字含"模糊"且**每个视频段都挂了至少一个**→ 告警。
+
+    "抖动模糊"(0.3) 逐段全时长挂载(node_09 每段一个 vfx-N 条目)曾把成片
+    染成全画面模糊(2026-11-11 定案)——注意各段引用的是不同 id,判定必须
+    按"段覆盖率"而不是单 id 出现次数。只检查 id 前缀 ``vfx-`` 的我方特效,
+    人工在剪映里添加的 uuid 特效不误伤。
+    """
+    issues: list[dict[str, str]] = []
+    blur = {
+        str(m.get("id")): str(m.get("name") or "")
+        for m in (draft.get("materials") or {}).get("video_effects") or []
+        if isinstance(m, dict) and str(m.get("id", "")).startswith("vfx-")
+        and "模糊" in str(m.get("name") or "")
+    }
+    if not blur:
+        return issues
+    video_segments = [
+        s
+        for t in (draft.get("tracks") or [])
+        if isinstance(t, dict) and t.get("type") == "video"
+        for s in (t.get("segments") or []) if isinstance(s, dict)
+    ]
+    if not video_segments:
+        return issues
+    covered = sum(
+        1 for s in video_segments
+        if any(r in blur for r in (s.get("extra_material_refs") or []))
+    )
+    if covered == len(video_segments):
+        names = sorted(set(blur.values()))
+        issues.append(_issue(
+            "模糊特效", SEV_WARNING, tag,
+            f"模糊类特效 {names} 覆盖全部 {len(video_segments)} 个视频段(全片挂载):"
+            "模糊类特效全片使用会把成片染糊,请确认是否有意为之",
+        ))
+    return issues
+
+
+def check_video_material_aspect(draft: dict, tag: str) -> list[dict[str, str]]:
+    """video material 的显示方向/比例必须与画布一致(阶段2 R3 修复的 QA 防线)。
+
+    归一化(预裁切)失败被降级放行、或绕过归一化进入草稿的横屏素材,比例与
+    1080×1920 画布不一致时剪映会拉伸/裁切变形 —— 字段级验收测不出,必须按
+    **显示口径**(coded + 旋转元数据)实测。探测失败(合成路径 / 缺 ffprobe)
+    静默跳过;归一化产物应已把方向烘焙进像素,仍带旋转元数据的条目一并告警。
+    只报 warning:比例不一致是可交付但有观感缺陷的降级态,不是结构损坏。
+    """
+    import config
+    from video_edit_capabilities.render import probe_video_dimensions
+
+    issues: list[dict[str, str]] = []
+    canvas_ratio = config.CANVAS_WIDTH / config.CANVAS_HEIGHT
+    tolerance = config.DRAFT_SOURCE_ASPECT_TOLERANCE
+    for m in (draft.get("materials") or {}).get("videos") or []:
+        if not isinstance(m, dict):
+            continue
+        p = m.get("path")
+        if not _is_checkable_local_path(p) or not Path(p).is_file():
+            continue
+        try:
+            dims = probe_video_dimensions(Path(p))
+        except Exception:  # noqa: BLE001 — QA 探测绝不阻断交付检查
+            continue
+        label = str(m.get("material_name") or m.get("id") or "?")
+        if dims.rotation_degrees != 0:
+            issues.append(_issue(
+                "素材比例", SEV_WARNING, tag,
+                f"video material {label} 带旋转元数据 rot={dims.rotation_degrees}"
+                "(归一化产物应已烘焙方向,声明与显示方向可能不一致)",
+            ))
+        if dims.display_height <= 0 or dims.display_width <= 0:
+            continue
+        ratio = dims.display_width / dims.display_height
+        if abs(ratio / canvas_ratio - 1.0) > tolerance:
+            issues.append(_issue(
+                "素材比例", SEV_WARNING, tag,
+                f"video material {label} 显示尺寸 {dims.display_width}x{dims.display_height}"
+                f" 与画布比例 {canvas_ratio:.4f} 不一致(未归一化或归一化降级,"
+                "剪映将拉伸/裁切该素材)",
+            ))
+    return issues
+
+
 def check_draft_dir(
     draft_dir: Path,
     *,
@@ -372,6 +495,12 @@ def check_draft_dir(
         result["checks"].append("texts_track_alignment")
         issues.extend(check_resource_ids(content, tag))
         result["checks"].append("resource_ids")
+        issues.extend(check_video_crops(content, tag))
+        result["checks"].append("video_crops")
+        issues.extend(check_blur_video_effects(content, tag))
+        result["checks"].append("blur_video_effects")
+        issues.extend(check_video_material_aspect(content, tag))
+        result["checks"].append("video_material_aspect")
     return result
 
 
@@ -525,6 +654,9 @@ DEEP_CHECK_CATEGORY: dict[str, str] = {
     "视频轨": "draft_integrity",
     "素材引用": "draft_integrity",
     "素材路径": "draft_integrity",
+    "素材裁切": "draft_integrity",
+    "素材比例": "draft_integrity",
+    "模糊特效": "video_effects",
 }
 
 #: 类别状态(passed=通过;failed=阻断级;degraded=降级,required 时阻断;
@@ -919,6 +1051,19 @@ def build_join_qa_report(state: dict[str, Any]) -> dict[str, Any]:
                 }
             mutations[role] = latest
 
+    # 阶段5(2026-11-11 模糊修复):画质诊断报告(草稿侧三方对照:画布 ↔
+    # material 声明 ↔ 显示口径实测 + 逐段 speed)。剪映手动导出后可携
+    # ``exported_file`` 重跑 build_quality_report 补全成片侧;只读不阻断,
+    # 告警不参与 passed 判定(结构性问题由上方各 check 把关)。
+    quality: dict[str, Any] = {"skipped": True}
+    if zh_report["present"] and zh_dir is not None:
+        try:
+            from draft_ops.quality_report import build_quality_report
+
+            quality = build_quality_report(zh_dir, renderer="jianying_manual")
+        except Exception as exc:  # noqa: BLE001 — 报告是增强诊断,失败不阻断交付
+            quality = {"skipped": True, "error": repr(exc)}
+
     return {
         "skipped": False,
         "passed": not any(i["severity"] == SEV_ERROR for i in issues),
@@ -928,6 +1073,7 @@ def build_join_qa_report(state: dict[str, Any]) -> dict[str, Any]:
         "mirror": mirror["summary"],
         "sha256": sha256,
         "mutations": mutations,
+        "quality": quality,
         "issues": issues,
     }
 
@@ -948,6 +1094,7 @@ __all__ = [
     "build_join_qa_report",
     "build_qa_categories",
     "check_audio_mirror",
+    "check_blur_video_effects",
     "check_draft_dir",
     "check_dual_files",
     "check_material_paths",
@@ -955,7 +1102,9 @@ __all__ = [
     "check_resource_ids",
     "check_root_index",
     "check_texts",
-    "check_track_references",
+    "check_texts_track_alignment",
+    "check_video_crops",
+    "check_video_material_aspect",
     "check_video_track",
     "default_required_features",
     "issue_text",

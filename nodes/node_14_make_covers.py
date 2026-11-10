@@ -15,13 +15,16 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import subprocess
 from pathlib import Path
 
 from PIL import Image, ImageDraw
 
 from draft_ops.atomic_writer_file import atomic_write_file
+from jy_common.native_text import text_display_text
 from mcp_clients.jianying_cover_client import call_write_cover_9x16, default_font
 from state import WorkflowState
+from video_edit_capabilities.render import probe_video_dimensions
 
 
 # ---------------------------------------------------------------------------
@@ -143,17 +146,135 @@ def _render_cover_9x16_sync(draft_dir: Path) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 封面源帧生产(2026-11-11 模糊修复阶段4)
+# ---------------------------------------------------------------------------
+#: 候选抽帧时间点(占视频时长比例):先取中后段(避开片头黑场/转场),
+#: 首选非黑帧失败再逐候选回退。
+_COVER_FRAME_CANDIDATES: tuple[float, ...] = (0.4, 0.2, 0.6, 0.1, 0.8)
+#: 候选帧平均亮度下限(0-255):低于视为黑场/转场帧,换下一个候选
+_COVER_FRAME_MIN_BRIGHTNESS: float = 16.0
+
+
+def _first_video_material_path(draft_dir: Path) -> str | None:
+    """草稿第一个视频素材的本机路径(原生/storyline 形态都是 ``materials.videos``)。"""
+    draft_file = draft_dir / "draft_content.json"
+    if not draft_file.is_file():
+        return None
+    try:
+        draft = json.loads(draft_file.read_text(encoding="utf-8"))
+        for m in (draft.get("materials") or {}).get("videos") or []:
+            if not isinstance(m, dict):
+                continue
+            p = str(m.get("path") or "")
+            if p and Path(p).is_file():
+                return p
+    except (json.JSONDecodeError, OSError):
+        pass
+    return None
+
+
+def _extract_frame_at(source: str, t_s: float, out_path: Path) -> bool:
+    """ffmpeg 从 ``source`` 的 ``t_s`` 秒抽 1 帧到 ``out_path``。
+
+    ffmpeg 默认自动应用旋转元数据 —— 抽出的帧即正立显示方向(方案 A 口径)。
+    """
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        proc = subprocess.run(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-ss", f"{t_s:.3f}",
+                "-i", source,
+                "-map", "0:v:0",
+                "-frames:v", "1",
+                "-q:v", "2",
+                str(out_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return proc.returncode == 0 and out_path.is_file() and out_path.stat().st_size > 0
+
+
+def _frame_brightness_ok(path: Path) -> bool:
+    """粗亮度检测:均值低于阈值视为黑帧/转场帧,换下一个候选。"""
+    try:
+        with Image.open(path) as img:
+            grey = img.convert("L").resize((64, 64))
+            pixels = list(grey.getdata())
+    except Exception:  # noqa: BLE001 — 读不出像素按不可用处理
+        return False
+    if not pixels:
+        return False
+    return (sum(pixels) / len(pixels)) >= _COVER_FRAME_MIN_BRIGHTNESS
+
+
+def _produce_cover_source_frame(
+    draft_dir: Path, *, extractor=_extract_frame_at
+) -> tuple[str | None, list[str]]:
+    """``cover_source_frame.jpg`` 生产者(阶段4,2026-11-11)。
+
+    此前全仓库只有消费者(``_load_source_frame`` / ``jianying_cover_client``)
+    没有生产者 —— 封面永远落到 #14141C 纯色底 + 大段字幕 JSON 文字。本函数在
+    渲染前从草稿第一个视频素材抽帧(优先非黑帧/非转场帧),失败**显式**留痕
+    并返回 None,让"占位底图封面"可观测,不静默伪装成功。
+
+    Returns:
+        ``(源帧路径或 None, 留痕日志列表)``。
+    """
+    logs: list[str] = []
+    target = draft_dir / "cover_source_frame.jpg"
+    if target.is_file():
+        return str(target), logs
+    source = _first_video_material_path(draft_dir)
+    if not source:
+        logs.append("[node_14] 封面源帧未生产:草稿无可用视频素材路径,封面将使用占位底图")
+        return None, logs
+    try:
+        dims = probe_video_dimensions(Path(source))
+        duration_s = (dims.duration_ms or 0) / 1000.0
+    except Exception as exc:  # noqa: BLE001 — 抽帧是增强路径,探测失败降级
+        logs.append(f"[node_14] 封面源帧未生产:素材探测失败({exc}),封面将使用占位底图")
+        return None, logs
+    if duration_s <= 0:
+        duration_s = 1.0
+    for frac in _COVER_FRAME_CANDIDATES:
+        t = min(max(duration_s * frac, 0.0), max(duration_s - 0.05, 0.0))
+        if not extractor(source, t, target):
+            continue
+        if _frame_brightness_ok(target):
+            logs.append(f"[node_14] 封面源帧已生产:{target.name}@{t:.2f}s")
+            return str(target), logs
+    try:
+        target.unlink(missing_ok=True)
+    except OSError:
+        pass
+    logs.append("[node_14] 封面源帧抽取失败(全部候选帧不可用),封面将使用占位底图")
+    return None, logs
+
+
+# ---------------------------------------------------------------------------
 # 标题读取
 # ---------------------------------------------------------------------------
 def _get_title(draft_dir: Path) -> str:
-    """从 ``draft_content.json`` 的 ``materials.texts[0].content`` 读标题,缺失时占位。"""
+    """从 ``draft_content.json`` 的 ``materials.texts[0]`` 读标题,缺失时占位。
+
+    2026-11-11 阶段4修复:原生 text material 的 ``content`` 是 JSON 字符串
+    (``{"styles":[...],"text":"文本"}``),此前直接 ``str(content)`` 把整段
+    JSON 当标题绘制。统一经 :func:`text_display_text` 双形态解析。
+    """
     draft_file = draft_dir / "draft_content.json"
     if draft_file.exists():
         try:
             draft = json.loads(draft_file.read_text(encoding="utf-8"))
             texts = draft.get("materials", {}).get("texts", [])
-            if texts and texts[0].get("content"):
-                return str(texts[0]["content"])
+            if texts and isinstance(texts[0], dict):
+                text = text_display_text(texts[0]).strip()
+                if text:
+                    return text
         except (json.JSONDecodeError, OSError, KeyError, IndexError):
             pass
     return "默认标题"
@@ -197,8 +318,13 @@ async def _node_14_make_covers_async(state: WorkflowState) -> dict:
         }
 
     draft_dir = Path(draft_path).parent
+    # 阶段4:先确保封面源帧存在(生产失败时留痕,渲染端仍走占位底图但可观测)
+    _frame_path, frame_logs = _produce_cover_source_frame(draft_dir)
     covers = await _render_all_async(draft_dir)
-    return {"covers": covers, "status_log": ["node_14_make_covers_done"]}
+    return {
+        "covers": covers,
+        "status_log": ["node_14_make_covers_done", *frame_logs],
+    }
 
 
 # 同步别名 — 兼容某些 graph 配置
