@@ -155,6 +155,32 @@ def _bad_request(detail: str) -> HTTPException:
     return HTTPException(status_code=400, detail=detail)
 
 
+def _sticker_library_ready(template_path: str | os.PathLike[str] | None = None) -> bool:
+    """贴纸模板库是否已实机回填真实 resource_id(阶段 6 贴纸 fail-closed 的配套护栏)。
+
+    就绪 = ``_reverse_engineering_pending`` 为 false **且** ``sticker_by_keyword``
+    全部值都是真实 19 位剪映资源 ID(双条件:模板被改坏/残留占位都拦住)。
+    文件缺失或解析失败一律 False —— fail-closed,与 node_11 同口径。
+    ``template_path`` 仅供单测注入;缺省读仓库模板。
+    """
+    import json
+
+    from jy_common.native_fx import is_19_digit_resource_id
+
+    path = Path(template_path) if template_path else config.REPO_ROOT / "templates" / "sticker_template.json"
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return False
+    if data.get("_reverse_engineering_pending") is not False:
+        return False
+    keyword_map = data.get("sticker_by_keyword")
+    if not isinstance(keyword_map, dict) or not keyword_map:
+        return False
+    return all(is_19_digit_resource_id(v) for v in keyword_map.values())
+
+
 @router.get("/config")
 def console_config(request: Request) -> dict:
     """前端表单限制与默认值(只读;不含 LLM 后端、路径等敏感项)。"""
@@ -173,6 +199,9 @@ def console_config(request: Request) -> dict:
         "langs": list(ALLOWED_LANGS),
         # 阶段 6:必需功能复选框默认勾选态(按 TTS 后端等运行时能力推导)
         "required_features_defaults": default_required_features(),
+        # 贴纸模板库是否已实机回填真实 resource_id;false 时前端禁用贴纸复选框,
+        # 且创建接口对 require_stickers=true 直接 400(避免跑完整链才死在交付 QA)
+        "stickers_ready": _sticker_library_ready(),
     }
 
 
@@ -274,6 +303,16 @@ def create_run(
             for form_key, feature_key in REQUIRED_FEATURE_FORM_FIELDS
             if form_values[form_key] is not None
         }
+
+    # --- 阶段 6 护栏:贴纸模板未实机回填时,勾选"贴纸"创建即拒绝(fail-fast) ---
+    # 不拦就会跑完整条链才死在交付 QA(如 console-ef8504d3a62c);node_11 对占位
+    # resource_id fail-closed 不落草稿,stickers=true 恒过不了必需门禁。
+    if required_features and required_features.get("stickers") and not _sticker_library_ready():
+        raise _bad_request(
+            "贴纸模板未回填真实资源 ID(占位),勾选『贴纸』将无法通过交付 QA;"
+            "请先按 templates/sticker_template.json 的 _reverse_engineering_steps"
+            " 实机回填,或取消勾选『贴纸』后重试"
+        )
 
     # --- 落盘 + 构建 State(阶段 1;失败整体回滚任务目录) ---
     try:

@@ -235,6 +235,111 @@ class TestParamValidation400:
         assert state["storyline_targets"]["lang"] == "zh"
 
 
+def _write_template(tmp_path, pending: bool, keyword_map: dict) -> Path:
+    """写一份贴纸模板夹具;resource_id 是否 19 位由调用方给值决定。"""
+    tpl = tmp_path / "sticker_template.json"
+    tpl.write_text(
+        json.dumps(
+            {
+                "_reverse_engineering_pending": pending,
+                "sticker_by_keyword": keyword_map,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return tpl
+
+
+class TestStickerLibraryReady:
+    """_sticker_library_ready 双条件判定(pending 翻转 + 全值 19 位;缺失/坏 JSON fail-closed)。"""
+
+    def test_pending_true_not_ready(self, tmp_path):
+        assert api_console._sticker_library_ready(
+            _write_template(tmp_path, True, {"赞": "1234567890123456789"})
+        ) is False
+
+    def test_backfilled_placeholder_id_not_ready(self, tmp_path):
+        """pending 已翻转但残留占位 ID(模板被改坏)→ 仍拦截。"""
+        assert api_console._sticker_library_ready(
+            _write_template(tmp_path, False, {"赞": "PLACEHOLDER_STICKER_THUMBS_UP"})
+        ) is False
+
+    def test_backfilled_real_ids_ready(self, tmp_path):
+        assert api_console._sticker_library_ready(
+            _write_template(
+                tmp_path, False,
+                {"赞": "1234567890123456789", "默认": "9876543210987654321"},
+            )
+        ) is True
+
+    def test_missing_file_fail_closed(self, tmp_path):
+        assert api_console._sticker_library_ready(tmp_path / "nope.json") is False
+
+    def test_malformed_json_fail_closed(self, tmp_path):
+        tpl = tmp_path / "broken.json"
+        tpl.write_text("{not-json", encoding="utf-8")
+        assert api_console._sticker_library_ready(tpl) is False
+
+    def test_empty_keyword_map_not_ready(self, tmp_path):
+        assert api_console._sticker_library_ready(
+            _write_template(tmp_path, False, {})
+        ) is False
+
+
+class TestStickerRequiredGuard:
+    """阶段 6 护栏:贴纸模板未实机回填时,创建勾选 require_stickers=true 直接 400
+    (否则要跑完整条链才死在交付 QA,console-ef8504d3a62c 即此死法)。"""
+
+    @pytest.fixture()
+    def stickers_not_ready(self, monkeypatch):
+        monkeypatch.setattr(api_console, "_sticker_library_ready", lambda *a, **k: False)
+
+    @pytest.fixture()
+    def stickers_ready(self, monkeypatch):
+        monkeypatch.setattr(api_console, "_sticker_library_ready", lambda *a, **k: True)
+
+    def test_stickers_required_not_ready_400(self, console_env, stickers_not_ready):
+        resp = client.post(
+            "/api/console/runs",
+            data={"prompt": "p", "require_stickers": "true"},
+            files=_files(("a.mp4", b"x")),
+        )
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert "贴纸模板未回填" in detail
+        assert "『贴纸』" in detail
+        # fail-fast:任务目录不应已创建(prepare_run 之前就拒绝)
+        assert not any(console_env.iterdir())
+
+    def test_stickers_unchecked_not_ready_202(self, console_env, stickers_not_ready):
+        """不勾贴纸(显式 false 或全缺省)不受护栏影响。"""
+        resp = client.post(
+            "/api/console/runs",
+            data={"prompt": "p", "require_stickers": "false", "require_bgm": "true"},
+            files=_files(("a.mp4", b"x")),
+        )
+        assert resp.status_code == 202, resp.text
+
+    def test_stickers_required_ready_202(self, console_env, stickers_ready):
+        resp = client.post(
+            "/api/console/runs",
+            data={"prompt": "p", "require_stickers": "true"},
+            files=_files(("a.mp4", b"x")),
+        )
+        assert resp.status_code == 202, resp.text
+        tid = resp.json()["thread_id"]
+        state = json.loads(
+            (console_env / tid / "initial_state.json").read_text(encoding="utf-8")
+        )
+        assert state["required_features"]["stickers"] is True
+
+    def test_config_exposes_stickers_ready(self, stickers_not_ready):
+        resp = client.get("/api/console/config")
+        assert resp.status_code == 200
+        assert resp.json()["stickers_ready"] is False
+
+
 class TestFileValidation:
     def test_disallowed_extension_415(self, console_env):
         resp = client.post(
@@ -481,8 +586,13 @@ class TestReadOnlyBoundary:
 # ---------------------------------------------------------------------------
 # 阶段 6(2026-11-09 效果缺失修复):必需功能表单字段
 # ---------------------------------------------------------------------------
-def test_create_run_required_features_form(console_env):
-    """require_* 表单字段 → initial_state.json 的 required_features(白名单键)。"""
+def test_create_run_required_features_form(console_env, monkeypatch):
+    """require_* 表单字段 → initial_state.json 的 required_features(白名单键)。
+
+    桩掉贴纸库就绪检查:本用例只测表单映射,不依赖真实模板的回填状态
+    (真实模板 pending 翻转后此桩即冗余,但保留以隔离外部状态)。
+    """
+    monkeypatch.setattr(api_console, "_sticker_library_ready", lambda *a, **k: True)
     resp = client.post(
         "/api/console/runs",
         data={

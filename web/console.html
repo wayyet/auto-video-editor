@@ -344,6 +344,7 @@
             langs: Array.isArray(cfg.langs) && cfg.langs.length ? cfg.langs : DEFAULT_LIMITS.langs,
           };
           if (cfg.required_features_defaults) applyRequiredFeatures(cfg.required_features_defaults);
+          if (typeof cfg.stickers_ready === "boolean") applyStickersReady(cfg.stickers_ready);
         }
       } catch (e) {
         renderFormMeta("无法读取服务端限制(/api/console/config),已使用内置默认值。", true);
@@ -687,6 +688,21 @@
       if (!values || typeof values !== "object") return;
       for (const el of document.querySelectorAll("#requiredFeatures input[data-rf]")) {
         if (typeof values[el.dataset.rf] === "boolean") el.checked = values[el.dataset.rf];
+      }
+    }
+    // 贴纸模板库未实机回填时(config 下发 stickers_ready=false)禁用贴纸复选框:
+    // node_11 对占位 resource_id fail-closed 不落草稿,勾了也过不了交付 QA —— 与
+    // 创建接口的 400 护栏同源,前端只是提前拦住,最终以服务端校验为准。
+    function applyStickersReady(ready) {
+      if (ready) return;
+      const el = document.querySelector('#requiredFeatures input[data-rf="stickers"]');
+      if (!el) return;
+      el.checked = false;
+      el.disabled = true;
+      const label = el.parentElement && el.parentElement.querySelector("span");
+      if (label && !label.dataset.stickerNote) {
+        label.dataset.stickerNote = "1";
+        label.textContent = `${label.textContent}(未回填,暂不可用)`;
       }
     }
     function readParams() {

@@ -105,6 +105,49 @@ def test_inject_sticker_matches_keywords(
     assert "node_11_inject_sticker_done" in out["status_log"]
 
 
+def test_inject_sticker_end_to_end_after_real_backfill(
+    tmp_draft_with_texts: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回填完成后端到端:真实模板文件(pending=false + 19 位 ID)→ 真实解析 → 正常写入。
+
+    与 ``real_id_resolver`` 的桩不同,本用例不动 resolver —— 验证
+    ``resolve_sticker_resource_id`` 读回填模板 → node_11 落草稿的完整链路
+    (console-ef8504d3a62c 的反例:同一条链路,占位模板走到 fail-closed)。
+    """
+    tpl_dir = tmp_path / "templates"
+    tpl_dir.mkdir()
+    zh_id, en_id, fallback_id = (
+        "7325648367747338802",
+        "7325648367747338803",
+        "7325648367747338804",
+    )
+    (tpl_dir / "sticker_template.json").write_text(
+        json.dumps(
+            {
+                "_reverse_engineering_pending": False,
+                "sticker_by_keyword": {"赞": zh_id, "加油": en_id, "默认": fallback_id},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)  # node_11 的模板路径是 CWD 相对的既有契约
+
+    out = inject_sticker(_state(tmp_draft_with_texts))
+
+    draft = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    stickers = draft["materials"]["stickers"]
+    assert len(stickers) == 3
+    rid_by_sticker_id = {s["id"]: s["resource_id"] for s in stickers}
+    assert set(rid_by_sticker_id.values()) == {zh_id, en_id, fallback_id}
+    seg_refs = draft["tracks"][0]["segments"][0].get("extra_material_refs", [])
+    assert set(rid_by_sticker_id) <= set(seg_refs)
+    assert out["sticker_summary"]["zh"]["matched"] == 3
+    assert out["sticker_summary"]["zh"]["written"] == 3
+    assert out["sticker_summary"]["zh"]["degraded_placeholder"] == 0
+    assert not any("PLACEHOLDER" in e for e in out["error_log"])
+
+
 def test_inject_sticker_preserves_timerange_zero_deviation(
     tmp_draft_with_texts: Path, real_id_resolver: None
 ) -> None:
