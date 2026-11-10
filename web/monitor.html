@@ -76,8 +76,10 @@
     #meta.err{ color:var(--err-text); }
     #layout{ display:flex; height:calc(100vh - 53px); }
     #left{ flex:1.4; display:flex; flex-direction:column; min-width:0; border-right:1px solid var(--border); }
-    #history{ flex:0 0 auto; border-bottom:1px solid var(--border); padding-bottom:8px; }
-    #historyWrap{ max-height:260px; overflow:auto; }
+    /* 历史任务区撑满左栏(2026-11-11:事件流区块移除后下方空白由表格填满),
+       表格容器自身滚动;min-height:0 允许 flex 子项收缩,否则 overflow 不生效 */
+    #history{ flex:1 1 auto; min-height:0; display:flex; flex-direction:column; border-bottom:1px solid var(--border); padding-bottom:8px; }
+    #historyWrap{ flex:1 1 auto; min-height:0; overflow:auto; }
     #nodes{ flex:1; overflow:auto; padding:10px; }
     h2{ font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); margin:10px 10px 6px; font-weight:650; }
     table{ width:calc(100% - 20px); margin:0 10px 10px; border-collapse:collapse; font-family:var(--mono); font-size:11px; }
@@ -157,7 +159,7 @@
       <h2>节点状态</h2>
       <div id="nodeEmpty">—(订阅后显示)</div>
       <table id="ndTable" style="display:none">
-        <thead><tr><th>node</th><th style="width:90px">状态</th><th style="width:56px">attempt</th></tr></thead>
+        <thead><tr><th style="width:32px">#</th><th>node</th><th style="width:90px">状态</th><th style="width:56px">attempt</th></tr></thead>
         <tbody id="ndBody"></tbody>
       </table>
     </div>
@@ -165,7 +167,7 @@
 
   <script type="module">
     import {
-      API_PATHS, applyEvent, createMonitorState, computeCounts,
+      API_PATHS, applyEvent, computeNodeOrder, createMonitorState, computeCounts,
     } from "/static/workflow_monitor.mjs";
     import {
       CONSOLE_API_PATHS, friendlyError, HISTORY_STATE_LABEL,
@@ -204,6 +206,7 @@
     let resumeGuidanceShown = false;
     let historyRows = [];
     let NODE_NAMES = {};  // node_id -> 中文显示名(与节点图视图同一事实源;未收录回退英文 id)
+    let NODE_ORDER = new Map();  // node_id -> 执行顺序序号(1-based;由主图 schema 计算,与节点图视图同规则)
 
     try { threadInput.value = localStorage.getItem("wf_monitor_thread") || ""; } catch (e) {}
 
@@ -232,6 +235,18 @@
       } catch (e) { /* 映射不可用时保持英文 id */ }
     })();
 
+    // 节点执行顺序序号:非阻塞拉取主图 schema(首次调用后端构图可能稍慢),
+    // 按节点图视图同规则计算序号,拿到后重渲染一次。失败静默 —— 面板回退
+    // 英文 id 字典序,序号列显示 —。
+    (async () => {
+      try {
+        const r = await fetch(API_PATHS.graph, { headers: { Accept: "application/json" }, cache: "no-store" });
+        if (!r.ok) return;
+        NODE_ORDER = computeNodeOrder(await r.json());
+        renderNodes();
+      } catch (e) { /* 图 schema 不可用时保持字母序 */ }
+    })();
+
     function setChip(stateKey, extra) {
       chip.className = "s-" + (stateKey || "");
       chip.textContent = (STATE_LABEL[stateKey] || stateKey || "未连接") + (extra ? ` · ${extra}` : "");
@@ -250,12 +265,20 @@
       if (!ids.length) { ndTable.style.display = "none"; nodeEmpty.style.display = ""; return; }
       ndTable.style.display = ""; nodeEmpty.style.display = "none";
       ndBody.innerHTML = "";
-      for (const id of ids.sort()) {
+      // 按主图执行顺序排序(与节点图视图同规则);序号未就绪/未收录的节点
+      // 排最后并回退英文 id 字典序
+      ids.sort((a, b) => {
+        const sa = NODE_ORDER.get(a), sb = NODE_ORDER.get(b);
+        if (sa !== sb) return (sa ?? Number.MAX_SAFE_INTEGER) - (sb ?? Number.MAX_SAFE_INTEGER);
+        return a.localeCompare(b);
+      });
+      for (const id of ids) {
         const n = monitor.nodes[id];
         const label = NODE_ST_LABEL[n.status] || n.status || "—";
         const name = NODE_NAMES[id] || id;
+        const seq = NODE_ORDER.get(id);
         ndBody.insertAdjacentHTML("beforeend",
-          `<tr><td>${escapeHtml(name)}</td><td><span class="st ${n.status || ""}">${label}</span></td><td>${n.attempt || 1}</td></tr>`);
+          `<tr><td>${seq != null ? seq : "—"}</td><td>${escapeHtml(name)}</td><td><span class="st ${n.status || ""}">${label}</span></td><td>${n.attempt || 1}</td></tr>`);
       }
     }
     function handleEvent(esEvent) {

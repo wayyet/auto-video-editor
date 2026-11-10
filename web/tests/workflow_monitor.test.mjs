@@ -14,6 +14,7 @@ import {
   activeNodeIds,
   applyEvent,
   computeCounts,
+  computeNodeOrder,
   createMonitorState,
   deriveRunState,
   edgeStates,
@@ -278,4 +279,109 @@ test("normalizeMainGraph 推导依赖与后继,保留元数据", () => {
   assert.deepEqual(byId.b.dependencies, ["a"]);
   assert.equal(g.workflow_meta.id, "auto_video_editor_main");
   assert.equal(g.edges.length, 3);
+});
+
+// ---------------------------------------------------------------------------
+// 10. computeNodeOrder:节点状态面板的执行顺序序号(与节点图视图同规则)
+// ---------------------------------------------------------------------------
+// 注意:涉及"同深度内排序"的用例用 ASCII 名(Alpha/Beta/Gamma)——
+// localeCompare 对 CJK 的排序依赖运行时 ICU,不在单测里钉死;
+// 中文排序行为与 node_map.html 在同一浏览器运行时下天然一致。
+test("computeNodeOrder 线性链:只编 task 节点,1 起,START/END 不入映射", () => {
+  const schema = {
+    workflow_id: "auto_video_editor_main",
+    schema_version: 2,
+    mode: "auto",
+    nodes: [
+      { id: "START", name: "开始", kind: "terminal" },
+      { id: "a", name: "载入媒体", kind: "task" },
+      { id: "b", name: "分镜切分", kind: "task" },
+      { id: "END", name: "结束", kind: "terminal" },
+    ],
+    edges: [
+      { id: "START->a", from: "START", to: "a", kind: "normal" },
+      { id: "a->b", from: "a", to: "b", kind: "normal" },
+      { id: "b->END", from: "b", to: "END", kind: "normal" },
+    ],
+  };
+  const order = computeNodeOrder(schema);
+  assert.equal(order.size, 2);
+  assert.equal(order.get("a"), 1);
+  assert.equal(order.get("b"), 2);
+  assert.equal(order.has("START"), false, "terminal 不编号");
+  assert.equal(order.has("END"), false, "terminal 不编号");
+});
+
+test("computeNodeOrder 并行 fan-out:深度取最长链,同深度按中文名 localeCompare 排序", () => {
+  // id 故意与名字序交错(p1=Beta/p2=Gamma/p3=Alpha):若实现误按 id 排序会立刻暴露
+  const schema = {
+    workflow_id: "auto_video_editor_main",
+    schema_version: 2,
+    mode: "auto",
+    nodes: [
+      { id: "START", name: "开始", kind: "terminal" },
+      { id: "a", name: "生成文案", kind: "task" },
+      { id: "p1", name: "Beta", kind: "task" },
+      { id: "p2", name: "Gamma", kind: "task" },
+      { id: "p3", name: "Alpha", kind: "task" },
+      { id: "z", name: "时间线规划", kind: "task" },
+      { id: "END", name: "结束", kind: "terminal" },
+    ],
+    edges: [
+      { id: "START->a", from: "START", to: "a", kind: "normal" },
+      { id: "a->p1", from: "a", to: "p1", kind: "normal" },
+      { id: "a->p2", from: "a", to: "p2", kind: "normal" },
+      { id: "a->p3", from: "a", to: "p3", kind: "normal" },
+      { id: "p1->z", from: "p1", to: "z", kind: "normal" },
+      { id: "p2->z", from: "p2", to: "z", kind: "normal" },
+      { id: "p3->z", from: "p3", to: "z", kind: "normal" },
+      { id: "z->END", from: "z", to: "END", kind: "normal" },
+    ],
+  };
+  const order = computeNodeOrder(schema);
+  assert.equal(order.get("a"), 1);
+  assert.equal(order.get("p3"), 2); // Alpha(同深度按名序)
+  assert.equal(order.get("p1"), 3); // Beta
+  assert.equal(order.get("p2"), 4); // Gamma
+  assert.equal(order.get("z"), 5);  // 汇聚节点深度 = 并行列深度 + 1
+});
+
+test("computeNodeOrder 回环/自环不炸:回边按 0 贡献跳过,不发散(与 computeDepths 同构)", () => {
+  // QA 重试回环(q->g)+ node_07 式自环(r->r):迭代松弛会不收敛,DFS 必须跳过。
+  // 本用例从环内 g 进入(q 尚在访问中,回边贡献 0):g 经 q 绕回计为深度 3,
+  // s/q 沿 DAG 链取真实深度 —— 与 node_map.html::computeDepths 同算法同序输入,
+  // 结果必然一致;深度并列的 g/r 用 ASCII 名钉死列内名序。
+  const schema = {
+    workflow_id: "auto_video_editor_main",
+    schema_version: 2,
+    mode: "auto",
+    nodes: [
+      { id: "START", name: "开始", kind: "terminal" },
+      { id: "g", name: "Group", kind: "task" },
+      { id: "s", name: "Script", kind: "task" },
+      { id: "q", name: "QA", kind: "task" },
+      { id: "r", name: "Render", kind: "task" },
+      { id: "END", name: "结束", kind: "terminal" },
+    ],
+    edges: [
+      { id: "START->g", from: "START", to: "g", kind: "normal" },
+      { id: "g->s", from: "g", to: "s", kind: "normal" },
+      { id: "s->q", from: "s", to: "q", kind: "normal" },
+      { id: "q->g", from: "q", to: "g", kind: "conditional" }, // QA 未过,重试:回边
+      { id: "q->r", from: "q", to: "r", kind: "conditional" },
+      { id: "r->r", from: "r", to: "r", kind: "normal" },      // 自环
+      { id: "r->END", from: "r", to: "END", kind: "normal" },
+    ],
+  };
+  const order = computeNodeOrder(schema);
+  assert.equal(order.get("s"), 1); // 深度 1(s 不受回边影响)
+  assert.equal(order.get("q"), 2); // 深度 2
+  assert.deepEqual([order.get("g"), order.get("r")], [3, 4], "深度并列 3,按名序 Group<Render;回边/自环不得把深度顶上天");
+});
+
+test("computeNodeOrder 异常入参:返回空 Map(面板回退字母序)", () => {
+  assert.equal(computeNodeOrder(null).size, 0);
+  assert.equal(computeNodeOrder(undefined).size, 0);
+  assert.equal(computeNodeOrder({ nodes: "nope" }).size, 0);
+  assert.equal(computeNodeOrder({ nodes: [], edges: [] }).size, 0);
 });

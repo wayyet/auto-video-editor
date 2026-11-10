@@ -351,3 +351,57 @@ export function normalizeMainGraph(schema) {
     })),
   };
 }
+
+/**
+ * 主图 schema → 节点执行顺序序号(监控页"节点状态"面板用,2026-11-11)。
+ *
+ * 与节点图视图(node_map.html,main 视图)的展示顺序严格一致:
+ *   1. normalizeMainGraph 由 edges 推 dependencies;
+ *   2. 最长路径分层(DFS + 回边/自环按 0 贡献跳过)—— 同构于
+ *      node_map.html::computeDepths(QC/qa 重试回环与 node_07 自环在迭代
+ *      松弛下不收敛,DFS 遇 visiting 态依赖直接跳过,DAG 部分取最长链);
+ *   3. 排序 = 深度升序,同深度按(中文名 || id)localeCompare 升序 ——
+ *      即节点图视图"按列从左到右、同列自上而下"的阅读顺序
+ *      (同列内排序规则同 autoLayout)。
+ *
+ * 只给 kind === "task" 的节点编号:START"开始"/END"结束"是 terminal,
+ * 不会出现在监控面板的事件里;这样首个任务节点(载入媒体)从 1 起。
+ * 同深度节点是并行超步,列内序号只是图页同列展示序,不对应真实调度时刻。
+ *
+ * 注意:node_map.html::computeDepths/autoLayout 是本算法的渲染层同构实现
+ * (与 normalizeMainGraph / normalizeMainGraphInline 同一惯例),
+ * 任何一侧调整必须两处同步。
+ *
+ * @param {object} schema /api/workflow/graph 原始 JSON
+ * @returns {Map<string, number>} node_id -> 1-based 序号;schema 异常时为空 Map
+ */
+export function computeNodeOrder(schema) {
+  if (!schema || !Array.isArray(schema.nodes)) return new Map();
+  const norm = normalizeMainGraph(schema);
+  const byId = new Map(norm.nodes.map((n) => [n.id, n]));
+  const depsOf = new Map(norm.nodes.map((n) => [n.id,
+    (Array.isArray(n.dependencies) ? n.dependencies : []).filter((d) => byId.has(d) && d !== n.id)
+  ]));
+  const depth = new Map(norm.nodes.map((n) => [n.id, 0]));
+  const mark = new Map(); // 0=未访问 1=访问中 2=完成
+  function visit(id) {
+    const st = mark.get(id) || 0;
+    if (st === 2) return depth.get(id) || 0;
+    if (st === 1) return 0; // 回边/环:忽略,防不收敛(同 computeDepths)
+    mark.set(id, 1);
+    let d = 0;
+    for (const dep of depsOf.get(id) || []) {
+      d = Math.max(d, visit(dep) + 1);
+    }
+    mark.set(id, 2);
+    depth.set(id, d);
+    return d;
+  }
+  for (const n of norm.nodes) visit(n.id);
+  const ordered = norm.nodes
+    .filter((n) => n.kind === "task")
+    .sort((a, b) =>
+      (depth.get(a.id) - depth.get(b.id)) ||
+      ((a.name || a.id).localeCompare(b.name || b.id)));
+  return new Map(ordered.map((n, i) => [n.id, i + 1]));
+}
