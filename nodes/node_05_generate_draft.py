@@ -43,7 +43,7 @@ from storyline.output_isolation import (
     write_manifest,
 )
 from video_edit_capabilities.media_operation import video_basic_operation
-from video_edit_capabilities.render import probe_video_size
+from video_edit_capabilities.render import probe_display_size, probe_video_dimensions
 from nodes.storyline._common import resolve_video_input_paths
 
 
@@ -93,27 +93,39 @@ def generate_initial_jianying_draft(
     # ``video_path`` 保持原样(manifest / 幂等键记的是**输入**素材),
     # 草稿 materials 用归一化后的 ``draft_video_path``。
     #
-    # 多视频:
+    # 多视频(2026-11-11 阶段2 R3 修复):
     # - **legacy 路径**(shot_plan 兜底):逐视频归一化,shots 轮转分配到各源。
-    # - **canonical 路径**(storyline_plan):素材引用在 timeline 里,归一化要重写
-    #   timeline(风险远大于收益)→ 只归一化第一个(与改动前行为一致),
-    #   多源素材保持原比例(已知限制,见 docs/integration 多视频导入设计 R3)。
-    normalize_targets = (
-        source_paths
-        if (not storyline_plan and source_paths)
-        else ([video_path] if video_path else [])
-    )
+    # - **canonical 路径**(storyline_plan):素材引用在 timeline 的
+    #   ``source_media`` 里 —— 按 media 逐一归一化后把产物 file_uri **回写**
+    #   进 canonical 计划再构建草稿(此前只归一化 video_input_path,产物从不
+    #   进入 timeline 引用,草稿 materials 仍指向原始素材)。clip 的
+    #   ``source_media_id`` 不变;同一素材多处引用复用同一产物;9:16 源在
+    #   _normalize_source_video 内零转码放行。
     draft_video_paths: list[str] = []
     normalized_path: str | None = None
-    normalize_errors: list[str] = []
-    for src in normalize_targets:
-        dp, np_, errs = _normalize_source_video(src, job_id=job_id)
-        draft_video_paths.append(dp)
-        normalize_errors.extend(errs)
-        if np_ and normalized_path is None:
-            normalized_path = np_
+    normalize_notes: list[str] = []
+    if storyline_plan:
+        canonical_uri_map = _normalized_media_map_for_plan(
+            storyline_plan, job_id=job_id, errors=errors
+        )
+        if canonical_uri_map:
+            storyline_plan, replaced = _apply_normalized_media_map(
+                storyline_plan, canonical_uri_map
+            )
+            normalize_notes.append(
+                f"node_05.normalize_canonical:{replaced} 个 source_media 已指向归一化产物"
+            )
+            from storyline.mapper import file_uri_to_path
+
+            normalized_path = file_uri_to_path(next(iter(canonical_uri_map.values())))
+    else:
+        for src in source_paths:
+            dp, np_, errs = _normalize_source_video(src, job_id=job_id)
+            draft_video_paths.append(dp)
+            errors.extend(errs)
+            if np_ and normalized_path is None:
+                normalized_path = np_
     draft_video_path = draft_video_paths[0] if draft_video_paths else video_path
-    errors.extend(normalize_errors)
 
     try:
         if storyline_plan:
@@ -189,6 +201,7 @@ def generate_initial_jianying_draft(
     except Exception:  # noqa: BLE001 — 审计绝不阻断草稿生成
         pass
     log_tags = list(state.get("status_log", []) or [])
+    log_tags.extend(normalize_notes)
     if isinstance(write_result, dict) and write_result.get("jianying_running"):
         log_tags.append("[node_05] 剪映进程在跑,写入仍继续(告警不阻断)")
     draft_file = draft_dir / "draft_content.json"
@@ -342,9 +355,12 @@ def _normalize_source_video(
     - 任何失败(ffmpeg 缺失、ffprobe 失败、裁切报错)→ 退回原路径 + 写错误日志,
       **不阻断草稿生成**(计划 §5.4 环境级失败降级纪律)
 
-    注意:``storyline_plan`` 路径的素材引用在 canonical timeline 里,不在本步骤
-    归一化范围内(改它要重写 plan,风险远大于收益);本步骤只管 ``video_input_path``
-    这条 Mock / legacy 路径。
+    2026-11-11 模糊修复阶段2(设计文档 §4.3):探测与 crop 坐标统一使用
+    **显示口径**(``probe_display_size``,方案 A —— ffmpeg 自动旋转,所有
+    几何量按解码后显示方向计算,产物方向烘焙进像素、rotation 元数据清零),
+    禁止"尺寸按未旋转帧计算、滤镜按已旋转帧执行"的混合口径。裁切成功后对
+    产物复检(方向/尺寸),复检不符降级回原素材并标记
+    ``MEDIA_NORMALIZATION_FAILED``。
     """
     if not video_path or not config.DRAFT_SOURCE_NORMALIZE_ENABLED:
         return video_path, None, []
@@ -354,7 +370,7 @@ def _normalize_source_video(
         return video_path, None, []
 
     try:
-        width, height = probe_video_size(source)
+        width, height = probe_display_size(source)
     except Exception as exc:
         return video_path, None, [f"[node_05] 素材归一化跳过:探测分辨率失败({exc})"]
 
@@ -364,10 +380,10 @@ def _normalize_source_video(
     canvas_ratio = CANVAS_WIDTH / CANVAS_HEIGHT
     src_ratio = width / height
     if abs(src_ratio / canvas_ratio - 1.0) <= config.DRAFT_SOURCE_ASPECT_TOLERANCE:
-        # 比例已对齐(容差内):零开销放行
+        # 比例已对齐(容差内):零开销放行(9:16 竖屏源不重复转码)
         return video_path, None, []
 
-    # 居中取最大画布比例区域:太宽切左右,太高切上下
+    # 居中取最大画布比例区域:太宽切左右,太高切上下(显示尺寸空间)
     if src_ratio > canvas_ratio:
         crop_h = height
         crop_w = int(round(height * canvas_ratio))
@@ -398,7 +414,99 @@ def _normalize_source_video(
     )
     if result.text.startswith("[ERROR]"):
         return video_path, None, [f"[node_05] 素材归一化失败,沿用原素材: {result.text}"]
-    return str(output_path), str(output_path), []
+
+    status, detail = _reprobe_normalized_product(output_path, crop_w, crop_h)
+    if status == "ok":
+        return str(output_path), str(output_path), []
+    if status == "skip":
+        # 复检通道不可用(缺 ffprobe / 合成占位):裁切工具本身已报成功,
+        # 保留产物但把"未复检"留痕,让 QA 与操作员知道该素材未过复检。
+        return str(output_path), str(output_path), [f"[node_05] {detail}"]
+    return video_path, None, [f"[node_05] {detail}(MEDIA_NORMALIZATION_FAILED),沿用原素材"]
+
+
+def _reprobe_normalized_product(
+    output_path: Path, expected_w: int, expected_h: int
+) -> tuple[str, str]:
+    """归一化产物复检(方案 A)。返回 ``(status, detail)``:
+
+    - ``"ok"``:显示尺寸与裁切框一致且无旋转元数据(方向已烘焙);
+    - ``"skip"``:探测本身不可用(缺 ffprobe / 合成占位文件),detail 为留痕文案;
+    - ``"mismatch"``:实际尺寸/方向与预期不符,detail 为问题说明 —— 引用该产物
+      进草稿只会复现方向/比例问题,调用方应降级回原素材。
+    """
+    try:
+        dims = probe_video_dimensions(output_path)
+    except Exception as exc:  # noqa: BLE001 — 复检是增强校验,通道缺失不判死产物
+        return "skip", f"归一化产物复检未执行(探测失败:{exc}),保留裁切产物"
+    if dims.rotation_degrees != 0:
+        return (
+            "mismatch",
+            f"归一化产物复检不符:rotation={dims.rotation_degrees}(方案 A 要求已烘焙/清零)",
+        )
+    if (dims.display_width, dims.display_height) != (expected_w, expected_h):
+        return (
+            "mismatch",
+            f"归一化产物复检不符:期望 {expected_w}x{expected_h},"
+            f"实际 {dims.display_width}x{dims.display_height}",
+        )
+    return "ok", ""
+
+
+def _normalized_media_map_for_plan(
+    storyline_plan: dict, *, job_id: str | None, errors: list[str]
+) -> dict[str, str]:
+    """canonical 计划全部 ``source_media`` → ``{原 file_uri: 归一化 file_uri}``。
+
+    2026-11-11 阶段2(R3 修复):此前 canonical 分支只归一化 ``video_input_path``,
+    产物从不进入 timeline 引用。现在逐 media 归一化;同一路径多处引用只归一化
+    一次(产物复用);9:16 等已符合画布比例的源零转码、URI 保持原样。
+    """
+    from storyline.mapper import _path_to_file_uri, file_uri_to_path
+
+    uri_map: dict[str, str] = {}
+    seen_paths: set[str] = set()
+    for media in storyline_plan.get("source_media") or []:
+        if not isinstance(media, dict):
+            continue
+        uri = str(media.get("file_uri") or "")
+        if not uri.startswith("file:///") or uri in uri_map:
+            continue
+        try:
+            path = file_uri_to_path(uri)
+        except ValueError:
+            continue
+        if path in seen_paths:
+            continue
+        seen_paths.add(path)
+        draft_path, normalized, errs = _normalize_source_video(path, job_id=job_id)
+        errors.extend(errs)
+        if normalized:
+            uri_map[uri] = _path_to_file_uri(draft_path)
+    return uri_map
+
+
+def _apply_normalized_media_map(
+    storyline_plan: dict, uri_map: dict[str, str]
+) -> tuple[dict, int]:
+    """把归一化产物 file_uri 回写进 canonical 计划(**深拷贝**,不改原 state)。
+
+    只替换 ``source_media[*].file_uri``;clip 的 ``source_media_id`` 与源/目标
+    时间区间原样保留 —— mapper 据此产出指向归一化产物的 materials。返回
+    ``(新 plan, 替换条数)``。
+    """
+    import copy
+
+    plan = copy.deepcopy(storyline_plan)
+    replaced = 0
+    for media in plan.get("source_media") or []:
+        if not isinstance(media, dict):
+            continue
+        uri = str(media.get("file_uri") or "")
+        if uri in uri_map:
+            media["file_uri"] = uri_map[uri]
+            replaced += 1
+    return plan, replaced
 
 
 def _build_from_canonical(storyline_plan: dict) -> dict:
