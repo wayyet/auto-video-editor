@@ -100,7 +100,6 @@ def test_adjust_volume_warns_when_jianying_running(
         f"告警文案/条数与节点 08/09/10/11 不一致:{warnings}"
     )
     assert "node_13_adjust_volume_done" in out["status_log"]
-    assert out["volume_adjusted"] is True
     info_file = draft_with_audio.parent / "draft_info.json"
     assert info_file.exists(), "safe_write_draft 未做双写"
 
@@ -229,17 +228,15 @@ def test_role_returns_none_when_no_segments(draft_without_audio: Path) -> None:
 # 节点包装:降级 / 全角色 / 双草稿 / 幂等
 # ---------------------------------------------------------------------------
 def test_adjust_volume_node_writes_error_log_when_no_audio(draft_without_audio: Path) -> None:
-    """无 audio track 且 video 段为空 → error_log + volume_adjusted=False + 通过。"""
+    """无 audio track 且 video 段为空 → error_log + no_audio_track 标签 + 通过。"""
     out = adjust_volume(_state(draft_without_audio))
-    assert out["volume_adjusted"] is False
     assert any("audio" in e for e in out["error_log"])
     assert "node_13_adjust_volume_no_audio_track" in out["status_log"]
 
 
 def test_adjust_volume_node_applies_all_roles(draft_with_audio: Path) -> None:
-    """三角色一次跑完:audio_fade_targets 记录 bgm 条目,volume_adjusted=True。"""
+    """三角色一次跑完:audio_fade_targets 记录 bgm 条目。"""
     out = adjust_volume(_state(draft_with_audio))
-    assert out["volume_adjusted"] is True
     assert "node_13_adjust_volume_done" in out["status_log"]
     assert len(out["audio_fade_targets"]) >= 1
     assert out["audio_fade_targets"][0]["type"] == "audio_fade"
@@ -251,7 +248,6 @@ def test_adjust_volume_node_applies_all_roles(draft_with_audio: Path) -> None:
 def test_adjust_volume_node_skips_when_no_draft_path() -> None:
     """state.draft_path 缺失 → 跳过,写 error_log。"""
     out = adjust_volume({"status_log": [], "error_log": []})
-    assert out["volume_adjusted"] is False
     assert any("draft_path" in e for e in out["error_log"])
     assert "node_13_adjust_volume_skipped" in out["status_log"]
 
@@ -263,7 +259,7 @@ def test_adjust_volume_handles_missing_draft_path_file(tmp_path: Path) -> None:
         "status_log": [],
         "error_log": [],
     })
-    assert out["volume_adjusted"] is False
+    assert "node_13_adjust_volume_no_audio_track" in out["status_log"]
     assert any("不存在" in e or "no_such" in e for e in out["error_log"])
 
 
@@ -285,7 +281,6 @@ def test_adjust_volume_applies_to_en_draft_when_present(
     assert bgm_seg["volume"] == 0.35
     assert len(en["materials"]["audio_fades"]) == 1
     assert "node_13_adjust_volume_en_done" in out["status_log"]
-    assert out["volume_adjusted"] is True
 
 
 def test_adjust_volume_degrades_when_en_draft_has_no_audio(tmp_path: Path) -> None:
@@ -319,7 +314,7 @@ def test_adjust_volume_degrades_when_en_draft_has_no_audio(tmp_path: Path) -> No
              "status_log": [], "error_log": []}
     out = adjust_volume(state)
 
-    assert out["volume_adjusted"] is True
+    assert "node_13_adjust_volume_done" in out["status_log"]
     en = json.loads(en_file.read_text(encoding="utf-8"))
     assert not en.get("materials", {}).get("audio_fades")
 
@@ -332,7 +327,7 @@ def test_adjust_volume_degrades_when_en_draft_missing(
              "status_log": [], "error_log": []}
     out = adjust_volume(state)
 
-    assert out["volume_adjusted"] is True
+    assert "node_13_adjust_volume_done" in out["status_log"]
     assert "node_13_adjust_volume_en_done" not in out["status_log"]
     assert any("英文草稿不存在" in e for e in out["error_log"])
 

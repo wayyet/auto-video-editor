@@ -144,7 +144,8 @@ class WorkflowState(TypedDict, total=False):
     retry_counts: dict[str, int]      # 护栏节点重试计数,键如 "node_07"
     # Week 4:加 reducer,允许 fan-in 双分支同时写
     status_log: Annotated[list[str], _append_unique]
-    volume_adjusted: bool             # 步骤13 写:任一角色实际写入过音量/fade(阶段 5 起为真实值)
+    # 2026-11-12 noop 治理阶段5批2:volume_adjusted(node_13 审计布尔)已移除
+    # —— 全仓零读取方,执行结果由 status_log 标签留痕。
     # 节点 13 写:实际写入的 audio_fades 条目(原生形态;此前未声明被运行时静默丢弃,
     # 阶段 5 修复声明)。
     audio_fade_targets: NotRequired[list[dict]]
@@ -198,15 +199,11 @@ class WorkflowState(TypedDict, total=False):
     tts_run_id: NotRequired[Optional[str]]
     tts_issue: NotRequired[Optional[str]]
 
-    # ===== 2026-11-09 阶段 3(效果缺失修复):转场/特效落草稿可观测字段 =====
-    # 节点 9 写:{zh: {...}, en: {...}}。每份草稿的边界数与转场/特效
-    # written/cut/degraded 计数 + not_applicable(单段无边界)。
-    fx_summary: NotRequired[Optional[dict]]
+    # 2026-11-12 noop 治理阶段5批2:fx_summary(node_09)/ text_fx_summary
+    # (node_10)审计摘要已移除 —— 全仓零读取方,注入结果以草稿原生条目 +
+    # status_log 为准(sticker_summary 有 QA 消费者,保留)。
 
     # ===== 2026-11-09 阶段 4(效果缺失修复):花字动画/贴纸可观测字段 =====
-    # 节点 10 写(zh 条目;en 分支同超步并行只走 status_log 标签,避免键冲突):
-    # 我方字幕扫描数/动画写入数/降级数/无轨段数。
-    text_fx_summary: NotRequired[Optional[dict]]
     # 节点 11 写:{zh: {...}, en: {...}}。匹配数/原生写入数/占位降级数。
     sticker_summary: NotRequired[Optional[dict]]
 

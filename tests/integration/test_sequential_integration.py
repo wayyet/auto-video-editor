@@ -129,8 +129,8 @@ def test_sequential_full_run_no_reruns(seeded_state, tmp_path: Path) -> None:
     for tag in expected:
         assert log.count(tag) == 1, f"{tag} 出现 {log.count(tag)} 次(期望 1): {log}"
 
-    # 步骤 13 标记 volume_adjusted=False
-    assert final["volume_adjusted"] is False
+    # 步骤 13 执行结果由 status_log 标签留痕(volume_adjusted 已随阶段5批2 移除)
+    assert "node_13_adjust_volume_no_audio_track" in final["status_log"]
 
 
 def test_sequential_produces_complete_draft(seeded_state, tmp_path: Path) -> None:

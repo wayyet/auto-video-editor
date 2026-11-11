@@ -3,7 +3,7 @@
 验证目标(对齐计划 §8 阶段 5):
 - 走到节点 13 后 ``draft["materials"]["audio_fades"]`` 为原生条目且绑定到 BGM 段
 - BGM 段级 volume=0.35(config.NODE13_VOLUME_BGM),配音/主音轨角色互不干扰
-- ``state["volume_adjusted"] is True``、``state["audio_fade_targets"]`` 至少 1 条
+- ``state["audio_fade_targets"]`` 至少 1 条(执行结果由 status_log 标签留痕)
 - 重放幂等:整份草稿字节级一致(fade 按 id 覆盖,不翻倍)
 
 依赖:既有 fixtures (conftest) + 单测覆盖过的角色化入口;为不依赖真实剪映
@@ -49,7 +49,6 @@ def test_tc07_node_13_writes_native_fades_and_role_volumes(audio_draft: Path) ->
     out_state = adjust_volume({"draft_path": str(audio_draft), "status_log": [], "error_log": []})
 
     # 验证 1 — state 标记
-    assert out_state["volume_adjusted"] is True
     assert "node_13_adjust_volume_done" in out_state["status_log"]
     assert len(out_state["audio_fade_targets"]) >= 1, \
         "audio_fade_targets 应至少含 BGM 一条 fade"
@@ -86,7 +85,7 @@ def test_tc07_node_13_replay_is_idempotent(audio_draft: Path) -> None:
     second = audio_draft.read_bytes()
 
     assert first == second
-    assert out2["volume_adjusted"] is True
+    assert "node_13_adjust_volume_done" in out2["status_log"]
 
 
 def test_tc07_node_13_uses_safe_write_draft_entry_point(audio_draft: Path) -> None:

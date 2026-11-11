@@ -20,7 +20,8 @@
    不再伪装成功。
 3. **状态拆分**(计划任务 5):``ok``(写出并绑定)/ ``cut``(语义=硬切)/
    ``degraded``(资源未命中或占位 ID,不写)/ ``not_applicable``(无边界)/
-   模板库缺失 → failed(error_log)。汇总写入新 state 字段 ``fx_summary``。
+   模板库缺失 → failed(error_log)。(2026-11-12 阶段5批2:原汇总 state 字段
+   ``fx_summary`` 因零消费者移除,执行结果以草稿原生条目 + status_log 为准。)
 
 幂等与守卫(对齐 node_08 配音轨删除守卫):我方素材 id 用确定性模式
 ``transition-{k}`` / ``vfx-{k}``(k 从 1 起);重放先剥离我方旧 refs、清理
@@ -312,12 +313,10 @@ def inject_fx(state: WorkflowState) -> dict:
     semantics = _boundary_semantics_plan(state)
     en_file = Path(state["draft_dir_en_branch"]) / "draft_content.json" if state.get("draft_dir_en_branch") else None
 
-    fx_summary: dict[str, Any] = {}
     for tag, draft_file in targets:
         draft = load_draft(draft_file)
         warnings, summary = _inject_fx_into(draft, template_lib, semantics, f"node_09_{tag}")
         error_log.extend(warnings)
-        fx_summary[tag] = summary
         if summary.get("not_applicable"):
             status_log.append(f"node_09_inject_fx_{tag}_not_applicable")
         # Week 5:参数从 draft_path 提升为 draft_path.parent,safe_write_draft 双写
@@ -335,4 +334,4 @@ def inject_fx(state: WorkflowState) -> dict:
     if len(targets) == 1 and en_file is not None:
         error_log.append(missing_en_note(state))
 
-    return {**state, "status_log": status_log, "error_log": error_log, "fx_summary": fx_summary}
+    return {**state, "status_log": status_log, "error_log": error_log}

@@ -100,7 +100,6 @@ def test_inject_text_fx_writes_native_animations(tmp_draft_with_texts: Path) -> 
     ours = [t for t in draft["materials"]["texts"] if t["id"].startswith("text-zh-")]
     assert all("entrance_animation" not in (t.get("style") or {}) for t in ours)
 
-    assert out["text_fx_summary"]["zh"]["animations_written"] == 2
     assert "node_10_inject_text_fx_done" in out["status_log"]
 
 
@@ -183,7 +182,7 @@ def test_inject_text_fx_fallback_when_text_resource_missing(
 
     draft_after = json.loads(p.read_text(encoding="utf-8"))
     assert not draft_after["materials"].get("material_animations")
-    assert out["text_fx_summary"]["zh"]["degraded"] == 1
+    assert any("动画降级不写入" in t for t in out["status_log"])
     assert "node_10_inject_text_fx_done" in out["status_log"]
 
 
@@ -236,5 +235,4 @@ def test_inject_text_fx_en_returns_delta_with_count_tag(tmp_path: Path) -> None:
     en_draft = json.loads((en_dir / "draft_content.json").read_text(encoding="utf-8"))
     assert len(en_draft["materials"]["material_animations"]) == 1
     assert "node_10b_text_animations_written:1" in out["status_log"]
-    assert "text_fx_summary" not in out  # delta-only,不同超步键冲突
     assert "node_10b_inject_text_fx_en_done" in out["status_log"]

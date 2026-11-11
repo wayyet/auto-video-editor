@@ -86,17 +86,12 @@ def test_inject_fx_binds_transitions_to_boundaries(tmp_draft: Path) -> None:
     )
     # 引用完整性:无悬空
     assert check_track_references(draft, "zh") == []
-    # fx_summary(zh)计数
-    zh_summary = out["fx_summary"]["zh"]
-    assert zh_summary["boundaries"] == 2
-    assert zh_summary["transitions_written"] == 2
+    # 计数(fx_summary 已随阶段5批2 移除,以草稿原生条目为准):2 边界全写入
+    assert len(transitions) == 2
     # 2026-11-11:fx_template video_effects 已清空("抖动模糊"全片挂载致成片模糊)
     # → 降级不写入,每段一条 degraded 记录,error_log 留痕
-    assert zh_summary["video_effects_written"] == 0
-    assert zh_summary["video_effects_degraded"] >= 3
     assert not draft["materials"].get("video_effects")
     assert any("视频特效资源未解析" in e for e in out["error_log"])
-    assert not zh_summary["not_applicable"]
     assert "node_09_inject_fx_done" in out["status_log"]
 
 
@@ -105,7 +100,9 @@ def test_inject_fx_ignores_shot_plan(tmp_draft: Path) -> None:
     state = _state(draft_path=str(tmp_draft))
     assert "shot_plan" not in state
     out = inject_fx(state)
-    assert out["fx_summary"]["zh"]["transitions_written"] == 2
+    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
+    assert len(draft["materials"]["transitions"]) == 2
+    assert "node_09_inject_fx_done" in out["status_log"]
 
 
 def test_inject_fx_consumes_transition_semantics_fade(tmp_draft: Path) -> None:
@@ -148,7 +145,8 @@ def test_inject_fx_semantic_cut_writes_nothing(tmp_draft: Path) -> None:
         not any(str(r).startswith("transition-") for r in s.get("extra_material_refs", []))
         for s in draft["tracks"][0]["segments"]
     )
-    assert out["fx_summary"]["zh"]["transitions_cut"] == 2
+    # 2 边界均为语义硬切(fx_summary 已移除,以"零转场素材"验证)
+    assert len(draft["materials"]["transitions"]) == 0
 
 
 def test_boundary_semantics_plan_prefers_out_then_in() -> None:
@@ -187,7 +185,6 @@ def test_inject_fx_not_applicable_single_segment(tmp_path: Path) -> None:
     out = inject_fx(state)
     draft = json.loads(draft_path.read_text(encoding="utf-8"))
     assert draft["materials"]["transitions"] == []
-    assert out["fx_summary"]["zh"]["not_applicable"] is True
     assert "node_09_inject_fx_zh_not_applicable" in out["status_log"]
 
 
@@ -236,8 +233,6 @@ def test_inject_fx_handles_missing_fx_resource(tmp_path: Path, monkeypatch: pyte
     state = _state(draft_path=str(draft_path))
     out = inject_fx(state)
     assert "node_09_inject_fx_done" in out["status_log"]
-    assert out["fx_summary"]["zh"]["transitions_degraded"] == 1
-    assert out["fx_summary"]["zh"]["video_effects_degraded"] >= 1
     draft_after = json.loads(draft_path.read_text(encoding="utf-8"))
     assert draft_after["materials"]["transitions"] == []
     assert any("degraded" in e for e in out["error_log"])
@@ -317,7 +312,6 @@ def test_inject_fx_applies_to_en_draft_when_present(tmp_draft: Path, tmp_path: P
     assert len(en_draft["materials"]["video_effects"]) == 0
     assert "node_09_inject_fx_done" in out["status_log"]
     assert "node_09_inject_fx_en_done" in out["status_log"]
-    assert out["fx_summary"]["zh"]["transitions_written"] == out["fx_summary"]["en"]["transitions_written"]
 
 
 def test_inject_fx_degrades_when_en_draft_missing(tmp_draft: Path, tmp_path: Path) -> None:

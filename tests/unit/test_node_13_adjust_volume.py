@@ -40,5 +40,5 @@ def test_adjust_volume_no_audio_track_does_not_modify_draft(tmp_draft: Path) -> 
     after = tmp_draft.read_text(encoding="utf-8")
 
     assert before == after, "无 audio track 时草稿不应被修改"
-    assert out["volume_adjusted"] is False
+    assert "node_13_adjust_volume_no_audio_track" in out["status_log"]
     assert any("audio" in e for e in out["error_log"])

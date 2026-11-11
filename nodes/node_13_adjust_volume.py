@@ -261,7 +261,8 @@ def adjust_volume(state: WorkflowState) -> dict:
 
     K2=B(2026-10):对**中文主草稿 + 英文分支草稿**各跑一遍(见
     ``nodes/_dual_draft.py``)。两份草稿在同一节点内顺序处理,不跨超步,
-    ``volume_adjusted`` / ``status_log`` / ``audio_fade_targets`` 的语义不变。
+    ``status_log`` / ``audio_fade_targets`` 的语义不变(2026-11-12 阶段5批2
+    移除无人消费的 ``volume_adjusted`` 审计布尔,执行结果由 status_log 留痕)。
     无任何可调段时降级通过 + error_log,不抛异常。
     """
     draft_path = state.get("draft_path")
@@ -273,7 +274,6 @@ def adjust_volume(state: WorkflowState) -> dict:
         status_log.append("node_13_adjust_volume_skipped")
         return {
             **state,
-            "volume_adjusted": False,
             "status_log": status_log,
             "audio_fade_targets": audio_fade_targets,
         }
@@ -284,7 +284,7 @@ def adjust_volume(state: WorkflowState) -> dict:
         status_log.append("node_13_adjust_volume_skipped")
         return {
             **state,
-            "volume_adjusted": False,
+            "status_log": status_log,
             "status_log": status_log,
             "audio_fade_targets": audio_fade_targets,
         }
@@ -325,7 +325,6 @@ def adjust_volume(state: WorkflowState) -> dict:
     status_log.extend(jianying_running_tags("node_13", write_results))
     return {
         **state,
-        "volume_adjusted": adjusted_any,
         "status_log": status_log,
         "audio_fade_targets": audio_fade_targets,
     }

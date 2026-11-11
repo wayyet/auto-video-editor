@@ -168,7 +168,8 @@ def apply_text_fx(
 def inject_text_fx(state: WorkflowState) -> dict:
     """中文主线节点 10:对中文草稿(``state["draft_path"]``)的字幕写原生入场动画。
 
-    返回整份 state + 新 status_log + ``text_fx_summary``(zh 条目)。
+    返回整份 state + 新 status_log(2026-11-12 阶段5批2 移除无人消费的
+    ``text_fx_summary`` 审计摘要;注入结果以草稿内原生动画与 status_log 为准)。
     """
     raw_draft_path = state.get("draft_path")
     if not raw_draft_path:
@@ -179,13 +180,13 @@ def inject_text_fx(state: WorkflowState) -> dict:
         status_log = list(state.get("status_log", []) or [])
         status_log.append("node_10_inject_text_fx_skipped")
         return {**state, "status_log": status_log}
-    log, summary = apply_text_fx(
+    log, _ = apply_text_fx(
         Path(raw_draft_path),
         state.get("status_log"),
         node_tag="node_10",
         done_tag="node_10_inject_text_fx_done",
     )
-    return {**state, "status_log": log, "text_fx_summary": {"zh": summary}}
+    return {**state, "status_log": log}
 
 
 def inject_text_fx_en(state: WorkflowState) -> dict:
