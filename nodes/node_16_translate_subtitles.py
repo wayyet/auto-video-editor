@@ -1,4 +1,4 @@
-"""node_16_translate_subtitles — 共享纯函数 + 向后兼容 shim(Week 5 拆分后)。
+"""node_16_translate_subtitles — 共享纯函数 helper(Week 5 拆分后)。
 
 Week 5 改动(对齐第 5 周计划 §1.1 / §2.1):
 原节点 16(翻译 + layout 校验 + 关卡③ interrupt + 写 SRT)被拆成两个独立节点:
@@ -13,13 +13,19 @@ Week 5 改动(对齐第 5 周计划 §1.1 / §2.1):
   resume 后从草稿读修正结果,写 ``state["subtitle_segments_en"]``。完全无副作用,
   天然幂等。
 
-本文件:
-1. 保留两个新节点共享的纯函数(layout 校验 / 草稿读写 / SRT 序列化 / 关卡③ payload);
-2. 提供 ``node_16_translate_subtitles`` 的向后兼容 shim — 它顺序调用
-   ``node_16a_translate_and_check`` + ``node_checkpoint3_layout_review``(同步
-   模拟,不触发真实 interrupt),保证现有 ``tests/unit/test_node_16_translate_subtitles.py``
-   在 Day 1 阶段不被破坏。Day 2 ``graph.py`` 切换到新节点后,这个 shim 仅供单元
-   测试使用,Week 6+ 可删除。
+本文件**只保留**两个新节点共享的纯函数(layout 校验 / 草稿读写 / SRT 序列化 /
+关卡③ payload)。生产 import 方:
+
+- ``node_16a_translate_and_check``:``_marker_exists`` /
+  ``_read_segments_from_draft`` / ``_save_marker`` / ``_write_marker`` /
+  ``validate_layout`` / ``write_srt_from_segments``;
+- ``node_checkpoint3_layout_review``:``_build_interrupt_payload`` /
+  ``write_srt_from_segments``(+ 函数内 ``_read_segments_from_draft``)。
+
+2026-11-12 noop 治理阶段4:原文件底部的向后兼容 shim
+``node_16_translate_subtitles()``(未注册进图,仅旧单元测试调用)及其专用
+helper ``_do_after_resume`` 已删除(设计文档 §6 阶段4;删除前已 grep 全仓
+确认零生产引用)。本文件其余部分不可整文件删除。
 """
 
 from __future__ import annotations
@@ -29,7 +35,6 @@ from pathlib import Path
 from typing import Optional
 
 from PIL import Image, ImageDraw, ImageFont
-from langgraph.types import interrupt  # 模块级别 import:让 ``patch("nodes.node_16_translate_subtitles.interrupt")`` 仍能工作
 
 from draft_ops.atomic_writer_file import atomic_write_file
 from jy_common.native_text import text_display_text
@@ -256,19 +261,6 @@ def _build_interrupt_payload(state: WorkflowState, issues: list[dict]) -> dict:
     }
 
 
-def _do_after_resume(state: WorkflowState) -> dict:
-    """resume 后逻辑:重读草稿(可能已被人工修正),返回 segments_en。
-
-    纯函数(便于单测)。Week 3 节点 6/12 用同模式。
-    """
-    draft_dir = Path(state.get("draft_dir_en_branch") or "")
-    segments_en = _read_segments_from_draft(draft_dir) if draft_dir.exists() else []
-    return {
-        "segments_en": segments_en,
-        "checkpoint3_triggered": True,
-    }
-
-
 # ---------------------------------------------------------------------------
 # Week 5:写 SRT(被 node_16a 调用,在 layout 校验之后;关卡③ 触发时,resume
 # 后的 segments_en 来自人工修正,本函数被 checkpoint3_layout_review 在
@@ -280,70 +272,3 @@ def write_srt_from_segments(draft_dir: Path, segments: list[SubtitleSegment]) ->
     srt_path = draft_dir / "subtitle_en.srt"
     atomic_write_file(srt_path, srt_content.encode("utf-8"))
     return str(srt_path)
-
-
-# ---------------------------------------------------------------------------
-# 向后兼容 shim — Week 5 Day 1 阶段让现有 ``tests/unit/test_node_16_translate_subtitles.py``
-# 不被破坏。Day 2 graph.py 切换到 ``node_16a`` + ``node_checkpoint3`` 后,
-# 本 shim 仅供单元测试使用,Week 6+ 可删除。
-#
-# ⚠️ **未注册进图(2026-09-30 核查,只标记不删)**:
-# ``graph.py`` 只注册了 ``node_16a_translate_and_check`` + ``node_checkpoint3_layout_review``,
-# ``node_16_translate_subtitles`` 这个函数**没有任何 add_node / add_edge 引用**,
-# 唯一调用方是 ``tests/unit/test_node_16_translate_subtitles.py``。
-#
-# 注意:**本文件本身不可删** —— 它的纯函数被生产代码复用:
-# ``node_16a_translate_and_check`` 与 ``node_checkpoint3_layout_review`` 都 import 了
-# ``_build_interrupt_payload`` / ``write_srt_from_segments`` / ``_read_segments_from_draft``。
-# 可删的只有下面这个 shim 函数。
-# ---------------------------------------------------------------------------
-# 【遗留·只标记不删除】2026-11 重复冗余扫描:node_16_translate_subtitles 已被 node_16a 与
-# node_checkpoint3_layout_review 取代,生产代码零调用(只有测试引用)。
-# 按"遗留项只加注释、不删除"的既定决定保留。注意:本文件其余辅助函数仍被这两个节点使用,
-# 不要整文件删除。要删除时:先 grep 全仓确认零引用,再连测试一起删。
-def node_16_translate_subtitles(state: WorkflowState) -> dict:
-    """向后兼容 shim(Week 5 拆分过渡):按顺序执行"翻译+layout 校验+条件
-    interrupt 模拟+写 SRT",对外行为与 Week 4 一致,但实现委托给 16a /
-    checkpoint3 内部的纯函数。
-
-    **未注册进图,仅单元测试调用**(见上方注释)。
-
-    关键差异(相对 Week 4 原实现):
-    - 不真正触发 ``langgraph.types.interrupt``;若 layout 有 issues,直接
-      走 ``_do_after_resume``(读取草稿)分支。这是单测环境,没有 LangGraph
-      重放语义,resume 由 patch interrupt 控制。
-    - 实际生产路径(graph.py)Day 2 起会拆成两个独立节点,本 shim 仅保留
-      给尚未迁移的单元测试使用。
-    """
-    from nodes.node_16a_translate_and_check import node_16a_translate_and_check
-
-    # Step 1:翻译 + layout 校验
-    step1 = node_16a_translate_and_check(state)
-    segments_en = step1.get("subtitle_segments_en") or []
-    layout_issues = step1.get("layout_issues") or []
-    draft_dir_p = Path(state.get("draft_dir_en_branch") or "")
-
-    # 若 node_16a 跳过(asr 缺失为正常 skip / draft_dir 缺失为错误),整个透传,避免覆盖 skip 信息
-    _16a_skip_tags = {"node_16a_translate_skipped", "skipped_no_source_subtitles"}
-    if _16a_skip_tags & set(step1.get("status_log") or []):
-        return step1
-
-    # Step 2:条件关卡③(同步模拟,不真挂起)
-    checkpoint3_triggered = False
-    if layout_issues:
-        interrupt(_build_interrupt_payload(state, layout_issues))
-        resume_out = _do_after_resume(state)
-        segments_en = resume_out["segments_en"]
-        checkpoint3_triggered = resume_out["checkpoint3_triggered"]
-
-    # Step 3:写 SRT
-    srt_path: Optional[str] = None
-    if draft_dir_p and draft_dir_p.exists():
-        srt_path = write_srt_from_segments(draft_dir_p, segments_en)
-
-    return {
-        "subtitle_segments_en": list(segments_en),
-        "subtitle_srt_path": srt_path,
-        "checkpoint3_triggered": checkpoint3_triggered,
-        "status_log": ["node_16_translate_subtitles_done"],
-    }
