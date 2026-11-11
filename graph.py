@@ -705,7 +705,8 @@ def _build_state_graph():
     g.add_edge("storyline_understand_clips", "storyline_filter_clips")
     g.add_edge("storyline_filter_clips", "storyline_group_clips")
 
-    # group_clips → 三路(2026-11-12 noop 治理阶段1:A 路前置节点改挂模板推荐):
+    # group_clips 出路(2026-11-12 边治理阶段1:原 B 路 recommend_transition 改走
+    # 下方 [GC, SB] 双源屏障,不再单源直挂;A 路条件路由挂点见下):
     #   A) storyline_script_template_recommendation(主链前置节点)→ 条件路由
     #      →(检索开关开且有检索词)storyline_search_web_topic → generate_script;
     #      开关关闭或无有效检索输入 → 条件路由直达 generate_script。
@@ -714,7 +715,8 @@ def _build_state_graph():
     #      LangGraph 独立 add_edge 是"任一来源完成即触发",若保留 group_clips 条件边,
     #      web_topic 关闭时 generate_script 会被提前触发一次 + 被模板推荐边再触发一次,
     #      每轮跑两次 LLM(路由函数 docstring 详述)。
-    #   B) recommend_transition(转场) — 等 select_bgm 完成后才走
+    #   B) recommend_transition:改走下方 [GC, SB] 双源屏障 —— 原 GC→RTR 独立
+    #      单源边会在 BGM 缺席时提前触发一次(黄金轨迹实测每轮 3 次)。
     #   C) plan_timeline_pro:在下面 fan-in 列表形式统一加入
     # ⚠️ search_web_topic 是条件触发节点,不进任何 fan-in 屏障(D10,设计方案 §4.3):
     #    qa 重试部分轮次跳过它时,屏障若含它将永远凑不齐。
@@ -728,24 +730,36 @@ def _build_state_graph():
             "storyline_generate_script": "storyline_generate_script",
         },
     )
-    g.add_edge("storyline_group_clips", "storyline_recommend_transition")
     # 前置化阶段3:检索完成 → 文案(检索节点唯一的业务出边;不再是死胡同)
     g.add_edge("storyline_search_web_topic", "storyline_generate_script")
 
     # generate_script 之后并行 fan-out(plan §2.2 §3;2026-11-12 起模板推荐已前置,
     # 从这里移除,改为上方 group_clips → 模板推荐前置):
     #   A) generate_voiceover
-    #   B) select_bgm
-    #   C) recommend_text
+    #   B) recommend_text
+    # select_bgm 不再单源直挂(边治理阶段1):原 GS→SB / GV→SB 两条独立单源边是
+    # 「任一来源完成即触发」,GS 完成时 SB 提前跑一次、GV 完成后再跑一次
+    # (黄金轨迹实测每轮 2 次),两次写同一 storyline_bgm_selection 互相覆盖。
     g.add_edge("storyline_generate_script", "storyline_generate_voiceover")
-    g.add_edge("storyline_generate_script", "storyline_select_bgm")
     g.add_edge("storyline_generate_script", "storyline_recommend_text")
 
-    # voiceover 完成后 join select_bgm(便于配音时长对齐)
-    g.add_edge("storyline_generate_voiceover", "storyline_select_bgm")
+    # select_bgm 双源屏障(2026-11-12 边治理阶段1,设计文档 §5.3A):
+    # list 形式 = 等文案与配音都完成才触发一次,便于配音时长对齐。
+    # (SB 节点 docstring 提及可选读 voiceover 做音乐对齐,当前代码体未读该字段;
+    #  屏障按设计保留 GV 源 —— GV 本就是 GS 直下游,无额外等待成本。)
+    g.add_edge(
+        ["storyline_generate_script", "storyline_generate_voiceover"],
+        "storyline_select_bgm",
+    )
 
-    # select_bgm 完成后 join recommend_transition(plan §2.2:SB→RTR)
-    g.add_edge("storyline_select_bgm", "storyline_recommend_transition")
+    # recommend_transition 双源屏障(2026-11-12 边治理阶段1,设计文档 §5.3B):
+    # 节点读取 storyline_groups_artifact + storyline_bgm_selection;原 GC→RTR /
+    # SB→RTR 两条独立单源边会在 GC 完成时先跑一次(BGM 缺席)、SB 完成后再跑一次
+    # (黄金轨迹实测每轮 3 次)。list 形式 = groups 与 BGM 都就绪才执行一次。
+    g.add_edge(
+        ["storyline_group_clips", "storyline_select_bgm"],
+        "storyline_recommend_transition",
+    )
 
     # 所有 PTP 上游都到 plan_timeline_pro(plan §2.2):
     #   GC, GS, GV, SB 都到 PTP(fan-in)。用 list 形式语义(对照

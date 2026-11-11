@@ -67,6 +67,8 @@ CONDITIONAL_NODES = {
 # 变更记录:
 # - 2026-11-12 阶段1:模板推荐前置为 generate_script 主链节点
 #   (group_clips → STR → 条件路由 → web_topic|generate_script),轨迹形状随之更新。
+# - 2026-11-12 边治理阶段1:BGM/普通转场改双源屏障([GS,GV]→SB、[GC,SB]→RTR),
+#   SB/RTR 从每轮 2/3 次降为每轮各 1 次,轨迹随之更新。
 # - 旧版黄金轨迹是 _CYCLE × 4(stub BGM 90s > 目标 35s → qa 重试 3 次)。模糊修复
 #   阶段3 的逐片段速度护栏(7ad573d)落地后,planner 不再注水拉长,actual_ms=7200
 #   ≤ 目标 → qa 一轮即过、重试回路不再自触发 —— 这正是本文件 5 个存量失败用例的
@@ -80,11 +82,12 @@ _PREFIX = [
 ]
 _CYCLE = [
     ["storyline_group_clips"],
-    ["storyline_recommend_transition", "storyline_script_template_recommendation"],
+    ["storyline_script_template_recommendation"],
     ["storyline_generate_script"],
-    ["storyline_generate_voiceover", "storyline_recommend_text", "storyline_select_bgm"],
-    ["storyline_plan_timeline_pro", "storyline_recommend_transition", "storyline_select_bgm"],
-    ["storyline_qa_gate", "storyline_recommend_transition"],
+    ["storyline_generate_voiceover", "storyline_recommend_text"],
+    ["storyline_select_bgm"],
+    ["storyline_plan_timeline_pro", "storyline_recommend_transition"],
+    ["storyline_qa_gate"],
 ]
 _SUFFIX = [
     ["storyline_render_video"],
@@ -116,6 +119,12 @@ NEIGHBORS: dict[str, tuple[set[str], set[str]]] = {
     "storyline_script_template_recommendation": ({_GC}, {_GS, "storyline_search_web_topic"}),
     # 检索节点入边改自模板推荐出口(原挂 group_clips 条件路由,前置化阶段3)
     "storyline_search_web_topic": ({"storyline_script_template_recommendation"}, {_GS}),
+    # 2026-11-12 边治理阶段1:select_bgm 改为 [GS, GV] 双源屏障目标(原两条单源边);
+    # 出边 = RTR/PTP/GAT 屏障源(编译图把屏障源渲染成普通边;默认档 ai=True 含 GAT)
+    _SB: ({_GS, _GV}, {_RTR, _PTP, _GAT}),
+    # 2026-11-12 边治理阶段1:recommend_transition 改为 [GC, SB] 双源屏障目标
+    # (原 GC/SB 两条单源边);出边 = qa_gate 屏障源
+    _RTR: ({_GC, _SB}, {_QA}),
     # 与 plan_timeline_pro 并排:同一道 4 源屏障
     _GAT: ({_GC, _GS, _GV, _SB}, {_PTAT}),
     # plan_timeline_pro + generate_ai_transition 之后、qa_gate 之前
@@ -272,6 +281,8 @@ def test_ai_flag_off_graph_has_no_ai_nodes_wired_and_barriers_as_before(
     edges = _edge_set(compiled)
     assert not any(_GAT in e or _PTAT in e for e in edges)
     assert _barriers(g) == {
+        (frozenset({_GS, _GV}), _SB),
+        (frozenset({_GC, _SB}), _RTR),
         (frozenset({_GC, _GS, _GV, _SB}), _PTP),
         (frozenset({_PTP, _RT, _RTR}), _QA),
         (frozenset({"node_15_localize_covers_en", "node_17_inject_english_tts"}), "node_09_inject_fx"),
