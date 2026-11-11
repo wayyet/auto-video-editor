@@ -84,30 +84,26 @@ def post_resume(
     *,
     log_tag: str,
     notifier: Callable[[WorkflowState, str], None] | None = None,
-    notified_field: str | None = None,
 ) -> dict[str, Any]:
-    """resume 后的收尾(纯函数):可选手动通知 + 追加 status_log + 写通知标记。
+    """resume 后的收尾(纯函数):可选手动通知 + 追加 status_log。
 
     Args:
         state: LangGraph 传入的 state。
         log_tag: 追加到 ``status_log`` 的 tag,如 ``"checkpoint1_resumed"``。
         notifier: 通知函数 ``(state, checkpoint_tag) -> None``;``None`` 表示
             本关卡不发通知(当前 ①/② 均发通知,参数保留给未来关卡)。
-        notified_field: 非空时把该 state 字段置 ``True``,作为"已通知"审计位
-            (Week 2 测试依赖 ``reorder_notified`` / ``bgm_notified``)。
 
     Returns:
-        ``{**state, notified_field: True, status_log: [...]}``;``notified_field``
-        为 ``None`` 时不写该键。只追加 ``status_log``,不覆盖既有条目,也不动
-        其他字段 —— 保证重放幂等。
+        ``{**state, status_log: [...]}``。只追加 ``status_log``,不覆盖既有
+        条目,也不动其他字段 —— 保证重放幂等(幂等由 LangGraph resume 语义
+        保证;2026-11-12 noop 治理阶段5批1 移除无人消费的"已通知"审计位
+        ``reorder_notified`` / ``bgm_notified``)。
     """
     out: dict[str, Any] = {**state}
     if notifier is not None:
         # 通知 tag = log_tag 去掉 "_resumed" 后缀("checkpoint1_resumed" → "checkpoint1")
         notifier(state, log_tag.removesuffix("_resumed"))
     out["status_log"] = list(state.get("status_log") or []) + [log_tag]
-    if notified_field:
-        out[notified_field] = True
     return out
 
 

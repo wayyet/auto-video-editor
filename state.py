@@ -139,8 +139,8 @@ class WorkflowState(TypedDict, total=False):
 
     # ===== Week 3 新增字段(对应原文档 3.2 节)=====
     snapshot2_path: str               # 步骤7产出快照②路径,供后续英文分支 Week 4+ 使用
-    reorder_notified: bool            # 关卡①副作用幂等标记(本设计不依赖,见 graph.py 注释)
-    bgm_notified: bool                # 关卡②副作用幂等标记(同上)
+    # 2026-11-12 noop 治理阶段5批1:reorder_notified / bgm_notified(关卡①②
+    # "已通知"审计位)已移除 —— 全仓无任何读取方,幂等由 LangGraph resume 语义保证。
     retry_counts: dict[str, int]      # 护栏节点重试计数,键如 "node_07"
     # Week 4:加 reducer,允许 fan-in 双分支同时写
     status_log: Annotated[list[str], _append_unique]
@@ -183,8 +183,8 @@ class WorkflowState(TypedDict, total=False):
     # 显式声明后 scout 报告才真正可在 state 存活,08b 及 QA 可消费)。
     subtitle_scout_report: NotRequired[Optional[dict]]
 
-    # 关卡③ 触发标记(节点 16 写)
-    checkpoint3_triggered: NotRequired[bool]
+    # 2026-11-12 noop 治理阶段5批1:checkpoint3_triggered(关卡③ 触发审计位)
+    # 已移除 —— 全仓无读取方,关卡③ 触发事实由 status_log / interrupt payload 留痕。
 
     # 英文 TTS 音频路径(节点 17 写,Week 4 固定 None)
     en_dub_audio_path: NotRequired[Optional[str]]

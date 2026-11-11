@@ -87,14 +87,14 @@ def test_post_resume_notifier_tag_derived_from_log_tag() -> None:
         {"status_log": []},
         log_tag="checkpoint2_resumed",
         notifier=lambda s, tag: calls.append((s.get("session_id", "?"), tag)),
-        notified_field="bgm_notified",
     )
     assert calls == [("?", "checkpoint2")]
-    assert out["bgm_notified"] is True
+    assert "checkpoint2_resumed" in out["status_log"]
 
 
 def test_post_resume_without_notifier_writes_no_flag() -> None:
-    """不传 notifier / notified_field 时不得凭空加键。"""
+    """不传 notifier 时不发通知;且不再写入任何"已通知"审计位
+    (reorder_notified / bgm_notified 已随阶段5批1 移除,防回归)。"""
     out = post_resume({"status_log": []}, log_tag="checkpoint1_resumed")
     assert "reorder_notified" not in out
     assert "bgm_notified" not in out

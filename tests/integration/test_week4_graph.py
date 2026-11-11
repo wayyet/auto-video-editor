@@ -114,9 +114,7 @@ def test_week4_checkpoint3_normal_path(tmp_path: Path, monkeypatch: pytest.Monke
     )
     assert not _is_interrupted(g, config), "流程应已结束"
 
-    # Week 4 关键产物
-    # Week 5:正常路径下 c3 不触发,checkpoint3_triggered 字段未设置(None 或 False 都 OK)
-    assert not final.get("checkpoint3_triggered")
+    # Week 4 关键产物(checkpoint3_triggered 审计位已随阶段5批1 移除,不再断言)
     assert final.get("subtitle_srt_path")
     assert Path(final["subtitle_srt_path"]).exists()
     # covers 3 张都有 zh_path + en_path

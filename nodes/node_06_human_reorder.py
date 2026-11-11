@@ -3,7 +3,8 @@
 设计:副作用挪后方案。
 - ``interrupt()`` 之前**不**调用 ``send_notification``(避免重放时重复发送)
 - resume 后第一个 task 才发通知
-- 状态字段 ``reorder_notified`` 仍保留(Week 2 测试兼容),但本节点不依赖它做幂等
+- 幂等不依赖任何"已通知"状态位(由 LangGraph resume 语义保证;
+  2026-11-12 阶段5批1 移除无人消费的 ``reorder_notified`` 审计位)
 
 调用栈(Week 3 集成图):
     节点 5 (generate_draft) → 节点 6 (interrupt) ⏸
@@ -69,7 +70,6 @@ def _post_resume(state: WorkflowState, notifier=_send_notification) -> dict:
         state,
         log_tag="checkpoint1_resumed",
         notifier=notifier,
-        notified_field="reorder_notified",
     )
 
 

@@ -75,7 +75,7 @@ def test_interrupt_payload_bgm_missing_variant() -> None:
 
 
 def test_post_resume_sends_notification_and_logs() -> None:
-    """resume 后:发出通知 + 写 status_log + 设置 bgm_notified。"""
+    """resume 后:发出通知 + 写 status_log(bgm_notified 审计位已移除)。"""
     calls: list[tuple] = []
 
     def fake_notifier(state: dict, checkpoint: str) -> None:
@@ -86,7 +86,6 @@ def test_post_resume_sends_notification_and_logs() -> None:
 
     assert len(calls) == 1
     assert calls[0] == ("t1", "checkpoint2")
-    assert result["bgm_notified"] is True
     assert "checkpoint2_resumed" in result["status_log"]
 
 
@@ -190,8 +189,8 @@ def test_mirror_bgm_degrades_when_en_draft_missing(tmp_path: Path) -> None:
 
 
 def test_post_resume_mirrors_bgm_and_keeps_legacy_contract(tmp_path: Path) -> None:
-    """节点包装:resume 后既走老收尾(通知 + bgm_notified + checkpoint2_resumed),
-    也把 BGM 镜像到英文草稿 —— 旧契约字段一个都不少。"""
+    """节点包装:resume 后既走老收尾(通知 + checkpoint2_resumed),
+    也把 BGM 镜像到英文草稿。"""
     zh = _write_json(tmp_path / "zh" / "draft_content.json", _zh_draft_with_bgm())
     en = _write_json(tmp_path / "en" / "draft_content.json", _en_draft_without_audio())
 
@@ -201,7 +200,6 @@ def test_post_resume_mirrors_bgm_and_keeps_legacy_contract(tmp_path: Path) -> No
         notifier=lambda s, c: None,
     )
 
-    assert result["bgm_notified"] is True
     assert "checkpoint2_resumed" in result["status_log"]
     assert any(t.startswith("node_12_bgm_mirrored_en_done") for t in result["status_log"])
     en_draft = json.loads(en.read_text(encoding="utf-8"))

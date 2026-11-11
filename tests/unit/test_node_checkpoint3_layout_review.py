@@ -2,7 +2,7 @@
 
 覆盖:
 - interrupt payload 含 checkpoint="③" / step=16 / legacy_id / issues / draft_dir
-- resume 后从草稿读修正结果,写 subtitle_segments_en + checkpoint3_triggered=True
+- resume 后从草稿读修正结果,写 SRT
 - 完全无副作用:interrupt 之前/之后都不写 marker / 不调翻译
 """
 
@@ -77,7 +77,6 @@ def test_checkpoint3_interrupt_payload_structure(tmp_path: Path) -> None:
     assert p["issues"] == state["layout_issues"]
     assert p["draft_dir"] == str(draft_dir)
     # resume 后字段
-    assert out["checkpoint3_triggered"] is True
     assert "checkpoint3_resumed" in out["status_log"]
 
 
@@ -85,7 +84,7 @@ def test_checkpoint3_resume_writes_srt(tmp_path: Path) -> None:
     """resume 后:从草稿读修正后的 segments 并写 SRT(Week 5 修正版)。
 
     Week 5 设计:本节点不写 ``subtitle_segments_en``(由 16a 写,避免 LastValue
-    并发写冲突);只写 SRT + checkpoint3_triggered=True + status_log。
+    并发写冲突);只写 SRT + status_log。
     """
     draft_dir = _seed_en_branch_with_fix(tmp_path)
     captured: list[Any] = []
@@ -100,7 +99,6 @@ def test_checkpoint3_resume_writes_srt(tmp_path: Path) -> None:
 
     # 关键:不应写 subtitle_segments_en(避免与 16a 在同 tick 冲突)
     assert "subtitle_segments_en" not in out
-    assert out["checkpoint3_triggered"] is True
     # SRT 应被写入并基于草稿当前内容
     srt_path = out.get("subtitle_srt_path")
     assert srt_path
@@ -165,7 +163,6 @@ def test_checkpoint3_no_side_effects_when_no_draft_dir(tmp_path: Path) -> None:
         out = node_checkpoint3_layout_review(state)
 
     assert len(captured) == 1
-    assert out["checkpoint3_triggered"] is True
     # 不应写 subtitle_segments_en
     assert "subtitle_segments_en" not in out
     # SRT 不应被写(没有 draft_dir)

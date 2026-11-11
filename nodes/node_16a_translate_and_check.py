@@ -186,8 +186,6 @@ def node_16a_translate_and_check(state: WorkflowState) -> dict:
         - ``subtitle_segments_en``: 英文字幕段
         - ``layout_issues``: layout 异常列表(可能为空)
         - ``layout_issues_detected``: bool,关卡③ 触发条件
-        - ``layout_issues_source``: ``"qc_chain"`` / ``"validate_layout"`` /
-          ``"empty"`` 三选一(便于审计哪条路径产出)
         - ``preview_video_path``: 关卡③ 预览 MP4 路径(qc 链成功时)
         - ``subtitle_qc_evidence_frames``: 关卡③ 证据帧路径列表(qc 链成功时)
         - ``status_log``: 仅 delta(由 reducer ``_append_unique`` 合并)
@@ -237,7 +235,6 @@ def node_16a_translate_and_check(state: WorkflowState) -> dict:
 
     # ----- layout 校验:9 工具迁移 §6.4 step 2 优先 qc 链,失败兜底旧 validate_layout -----
     issues: list[dict[str, Any]]
-    issues_source: str
     preview_path: str | None = None
     evidence_frames: list[str] | None = None
 
@@ -268,10 +265,8 @@ def node_16a_translate_and_check(state: WorkflowState) -> dict:
             font_size=48,
             max_width_px=1500,
         )
-        issues_source = "validate_layout"
     else:
         issues = qc_issues
-        issues_source = "qc_chain"
         preview_path = qc_preview
         evidence_frames = qc_evidence or None
 
@@ -283,7 +278,6 @@ def node_16a_translate_and_check(state: WorkflowState) -> dict:
         "subtitle_srt_path": srt_path,
         "layout_issues": issues,
         "layout_issues_detected": bool(issues),
-        "layout_issues_source": issues_source,
         "status_log": ["node_16a_translate_done"],
     }
     if preview_path is not None:

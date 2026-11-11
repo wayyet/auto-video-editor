@@ -162,7 +162,7 @@ def test_node_16a_layout_issues_writes_state_without_interrupt(tmp_path: Path) -
 # ---------------------------------------------------------------------------
 def test_node_16a_qc_chain_success_writes_preview_and_evidence(tmp_path: Path) -> None:
     """qc 链全部成功 → 写 ``preview_video_path`` + ``subtitle_qc_evidence_frames``
-    + ``layout_issues_source='qc_chain'``。
+    (layout_issues_source 字段已随阶段5批1 移除)。
     """
     from unittest.mock import patch
 
@@ -210,7 +210,6 @@ def test_node_16a_qc_chain_success_writes_preview_and_evidence(tmp_path: Path) -
         out = node_16a_translate_and_check(state)
 
     # qc 链路径
-    assert out["layout_issues_source"] == "qc_chain"
     assert out["layout_issues"] == qc_issues
     assert out["layout_issues_detected"] is True
     # 预览路径
@@ -223,7 +222,7 @@ def test_node_16a_qc_chain_build_failure_falls_back_to_validate_layout(
     tmp_path: Path,
 ) -> None:
     """``subtitle_build`` 返回 ``[ERROR]`` → 降级为 ``validate_layout``,
-    ``layout_issues_source='validate_layout'``,不写 preview 字段。
+    不写 preview 字段。
     """
     from unittest.mock import patch
 
@@ -249,7 +248,7 @@ def test_node_16a_qc_chain_build_failure_falls_back_to_validate_layout(
         out = node_16a_translate_and_check(state)
 
     # 降级路径
-    assert out["layout_issues_source"] == "validate_layout"
+
     assert out["layout_issues"] == issues_to_inject
     # 不写 preview / evidence
     assert "preview_video_path" not in out
@@ -288,7 +287,7 @@ def test_node_16a_qc_chain_render_failure_falls_back_to_validate_layout(
     ):
         out = node_16a_translate_and_check(state)
 
-    assert out["layout_issues_source"] == "validate_layout"
+
     assert out["layout_issues"] == []
     assert out["layout_issues_detected"] is False
     assert "preview_video_path" not in out
@@ -307,7 +306,7 @@ def test_node_16a_qc_chain_skipped_when_no_video_path(tmp_path: Path) -> None:
     ) as mock_validate:
         out = node_16a_translate_and_check(state)
 
-    assert out["layout_issues_source"] == "validate_layout"
+
     mock_validate.assert_called_once()
 
 
@@ -324,7 +323,7 @@ def test_node_16a_qc_chain_skipped_when_video_path_does_not_exist(tmp_path: Path
     ):
         out = node_16a_translate_and_check(state)
 
-    assert out["layout_issues_source"] == "validate_layout"
+
 
 
 def test_node_16a_qc_chain_empty_transcript_falls_back(tmp_path: Path) -> None:
@@ -360,7 +359,7 @@ def test_node_16a_qc_chain_empty_transcript_falls_back(tmp_path: Path) -> None:
             out = node_16a_translate_and_check(state)
 
     # 空 segments → qc 链不跑(records 为空) → validate_layout 兜底
-    assert out["layout_issues_source"] == "validate_layout"
+
     assert out["subtitle_segments_en"] == []
     assert "preview_video_path" not in out
 
@@ -408,7 +407,7 @@ def test_node_16a_qc_chain_qc_failure_returns_only_preview(tmp_path: Path) -> No
         out = node_16a_translate_and_check(state)
 
     # qc 失败 → 降级 validate_layout
-    assert out["layout_issues_source"] == "validate_layout"
+
     assert "preview_video_path" not in out
     assert "subtitle_qc_evidence_frames" not in out
 

@@ -48,7 +48,7 @@ def test_interrupt_payload_uses_state_draft_path() -> None:
 # resume 后副作用挪后验证
 # ---------------------------------------------------------------------------
 def test_post_resume_sends_notification_and_appends_log() -> None:
-    """resume 后:发出通知 + 追加 status_log + 设置 reorder_notified。"""
+    """resume 后:发出通知 + 追加 status_log(reorder_notified 审计位已移除)。"""
     calls: list[tuple] = []
 
     def fake_notifier(state: dict, checkpoint: str) -> None:
@@ -59,7 +59,6 @@ def test_post_resume_sends_notification_and_appends_log() -> None:
 
     assert len(calls) == 1
     assert calls[0] == ("t1", "checkpoint1")
-    assert result["reorder_notified"] is True
     assert "checkpoint1_resumed" in result["status_log"]
 
 
@@ -72,14 +71,16 @@ def test_post_resume_preserves_existing_status_log() -> None:
 
 
 def test_post_resume_idempotent_via_field() -> None:
-    """若已 reorder_notified=True,通知仍会发(本节点不依赖此字段做幂等 — 由 Command(resume) 控制)。
+    """旧 checkpoint 兼容:state 里残留已移除的 reorder_notified 键时,resume 收尾
+    照常执行且不崩(幂等由 Command(resume) 控制,与该键无关;键随 ``{**state}``
+    透传无害保留)。
 
-    副作用挪后方案的核心:**重放发生在 resume 之前**(`interrupt()` 之前不会调 notify),
+    副作用挪后方案的核心:**重放发生在 resume 之前**(``interrupt()`` 之前不会调 notify),
     resume 后的代码每次都跑,但 LangGraph 不会"二次 resume"同一节点,所以通知只发一次。
     """
     state = _state(reorder_notified=True)
     result = _post_resume(state, notifier=lambda s, c: None)
-    assert result["reorder_notified"] is True
+    assert "checkpoint1_resumed" in result["status_log"]
 
 
 # ---------------------------------------------------------------------------

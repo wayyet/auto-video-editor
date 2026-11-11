@@ -283,8 +283,7 @@ def test_checkpoint3_interrupt_and_resume_path(
     assert len(captured) == 1
     assert captured[0]["checkpoint"] == "③"
     assert captured[0]["issues"] == fake_issues
-    # 写入 SRT + checkpoint3_triggered
-    assert out["checkpoint3_triggered"] is True
+    # 写入 SRT(checkpoint3_triggered 审计位已随阶段5批1 移除)
 
 
 # ---------------------------------------------------------------------------

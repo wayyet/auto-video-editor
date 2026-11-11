@@ -289,7 +289,6 @@ def _post_resume(state: WorkflowState, notifier=_send_notification) -> dict:
         state,
         log_tag="checkpoint2_resumed",
         notifier=notifier,
-        notified_field="bgm_notified",
     )
 
     status_log = list(out.get("status_log", []) or [])

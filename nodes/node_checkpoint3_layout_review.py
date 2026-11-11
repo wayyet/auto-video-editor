@@ -7,7 +7,7 @@
   验收脚本拿到正确的英文音轨时间码)。
 - **不**写 ``subtitle_segments_en`` — 因为 16a 已经写过,且 LangGraph 的
   LastValue 通道不允许同一 superstep 两个节点并发写同一 key。本节点只追加
-  ``checkpoint3_triggered=True`` + SRT 路径 + status_log,语义上仍能保证
+  SRT 路径 + status_log,语义上仍能保证
   ``subtitle_segments_en`` 最终值是正确的(16a 写一次,本节点不覆盖)。
 - 调用方由 graph.py 的条件边 ``route_after_translate`` 控制:只有
   ``state["layout_issues_detected"]`` 为真时才走到本节点。
@@ -41,7 +41,6 @@ def node_checkpoint3_layout_review(state: WorkflowState) -> dict:
     Returns:
         dict,只含变更字段:
         - ``subtitle_srt_path``: 重写后的 SRT 路径(基于人工修正后的草稿)
-        - ``checkpoint3_triggered``: True(便于状态审计)
         - ``status_log``: delta
         注:不写 ``subtitle_segments_en``,避免与 ``node_16a_translate_and_check``
         在同一 superstep 触发 LastValue 并发写冲突。
@@ -66,6 +65,5 @@ def node_checkpoint3_layout_review(state: WorkflowState) -> dict:
 
     return {
         "subtitle_srt_path": srt_path,
-        "checkpoint3_triggered": True,
         "status_log": ["checkpoint3_resumed"],
     }
