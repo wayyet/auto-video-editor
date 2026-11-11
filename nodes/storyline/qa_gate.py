@@ -189,9 +189,8 @@ def route_after_storyline_qa(state: WorkflowState) -> str:
 
     Returns:
         ``"storyline_group_clips"`` — 回退再跑(仅 qa 触发 retry 时)
-        ``"storyline_render_video"`` — 通过 / 失败 / 空 plan,统一走
-        render_video(默认 noop)→ join_storyline(让 qa_gate 不直接连 join,
-        而是经过 render_video 旁路,与 plan §2.2 拓扑一致)
+        ``"storyline_join"`` — 通过 / 失败 / 空 plan,统一进入 join_storyline
+        (边治理阶段5:render_video 预览旁支已整体删除,qa_gate 直连 join)
 
     兼容:旧 checkpoint 中途恢复时 state 可能没有信号字段 → 回退旧判据
     (``status_log[-1]``)。
@@ -201,12 +200,12 @@ def route_after_storyline_qa(state: WorkflowState) -> str:
         return (
             "storyline_group_clips"
             if signal == "storyline_qa_retry"
-            else "storyline_render_video"
+            else "storyline_join"
         )
     log = state.get("status_log", []) or []
     if log and log[-1] == "storyline_qa_retry":
         return "storyline_group_clips"
-    return "storyline_render_video"
+    return "storyline_join"
 
 
 __all__ = [

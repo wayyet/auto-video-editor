@@ -428,7 +428,6 @@ def test_node_shells_importable() -> None:
         node_generate_voiceover,
         node_select_bgm,
         node_plan_timeline_pro,
-        node_render_video,
         node_generate_ai_transition,
         node_plan_timeline_ai_transition,
     )

@@ -61,7 +61,8 @@ def test_route_and_node_share_the_same_query_builder() -> None:
 
 # ---------------------------------------------------------------------------
 # qa_gate 之后的路由:AI 转场两节点已挪到 qa_gate 之前(与 plan_timeline_pro 并排),
-# 所以 qa 之后的路由**不再被包装**,仍是原函数(重试 → group_clips,否则 → render_video)。
+# 所以 qa 之后的路由**不再被包装**,仍是原函数(重试 → group_clips,否则 → join;
+# 边治理阶段5:render_video 预览旁支已整体删除)。
 # 2026-11-12 阶段1:权威依据改为 storyline_qa_route_signal 信号字段(qa_gate 每次
 # 运行必写,不受 status_log 的 _append_unique 去重影响);旧 checkpoint 无字段时回退旧判据。
 # ---------------------------------------------------------------------------
@@ -71,7 +72,7 @@ def test_qa_route_is_the_original_function_and_no_wrapper_left() -> None:
         "storyline_group_clips"
     )
     assert qa_gate_mod.route_after_storyline_qa({"status_log": ["storyline_qa_passed"]}) == (
-        "storyline_render_video"
+        "storyline_join"
     )
 
 
@@ -84,11 +85,11 @@ def test_qa_route_follows_signal_field() -> None:
             "status_log": ["storyline_qa_retry", "storyline_timeline_warning: x"],
         }
     ) == "storyline_group_clips"
-    # done / failed / empty 信号 → render_video;同值重复写也能持续生效
+    # done / failed / empty 信号 → join;同值重复写也能持续生效
     for signal in ("storyline_qa_done", "storyline_qa_failed", "storyline_qa_done_empty"):
         assert qa_gate_mod.route_after_storyline_qa(
             {"storyline_qa_route_signal": signal, "status_log": ["storyline_qa_retry"]}
-        ) == "storyline_render_video", signal
+        ) == "storyline_join", signal
 
 
 def test_qa_route_falls_back_to_log_when_signal_missing() -> None:
@@ -96,4 +97,4 @@ def test_qa_route_falls_back_to_log_when_signal_missing() -> None:
     assert qa_gate_mod.route_after_storyline_qa({"status_log": ["storyline_qa_retry"]}) == (
         "storyline_group_clips"
     )
-    assert qa_gate_mod.route_after_storyline_qa({}) == "storyline_render_video"
+    assert qa_gate_mod.route_after_storyline_qa({}) == "storyline_join"

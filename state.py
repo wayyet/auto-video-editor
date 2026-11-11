@@ -299,12 +299,6 @@ class WorkflowState(TypedDict, total=False):
     # 接确认控件)。未批准时 0 次 Provider 外呼,只写估算。
     ai_transition_approved: NotRequired[bool]
     storyline_web_topic_artifact: Annotated[Optional[str], _last_wins]        # search_web_topic(条件)
-    # 2026-11-12 noop 治理阶段3(方案A):render_video 旁支改为真实 FFmpeg 故事线
-    # 预览(剪映草稿前的初始时间线预览;最终 MP4 仍由 node_18 负责)。旧
-    # storyline_render_smoke_test_path(JSON stub 占位)随之移除。产物经
-    # preview.* 事件进创建台交付卡,不接入图内下游。
-    storyline_render_preview_path: Annotated[Optional[str], _last_wins]       # render_video 预览 mp4(旁支)
-    storyline_render_preview_report: Annotated[Optional[dict], _last_wins]    # render_video 预览报告(renderer=ffmpeg_storyline_preview)
     # 2026-10 调序新增的独立键(避免与既有键并发写冲突):
     storyline_search_media_artifact: Annotated[Optional[str], _last_wins]     # DEPRECATED(2026-11-10):search_media 节点已删;该键历史上从无读写者(节点实际写 storyline_media_artifact),仅旧 checkpoint 兼容
     storyline_timeline_plan_ai: Annotated[Optional[str], _last_wins]          # plan_timeline_ai_transition(不覆盖 storyline_timeline_plan)

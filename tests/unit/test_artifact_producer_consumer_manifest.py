@@ -52,7 +52,6 @@ ARTIFACT_MANIFEST: dict[str, dict[str, list[str]]] = {
         ],
         "consumers": [
             "nodes/storyline/qa_gate.py",
-            "nodes/storyline/node_render_video.py",
             "nodes/storyline/join_storyline.py",
         ],
     },

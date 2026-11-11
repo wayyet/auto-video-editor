@@ -124,5 +124,5 @@ def test_qa_gate_retry_edge_still_points_at_group_clips() -> None:
     )
     assert (
         route_after_storyline_qa({"status_log": ["storyline_qa_done"]})
-        == "storyline_render_video"
+        == "storyline_join"
     )

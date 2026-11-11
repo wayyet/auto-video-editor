@@ -1,10 +1,11 @@
-"""auto-mode 端到端 + 双模式切换 + render_video 旁支集成测试。
+"""auto-mode 端到端 + 双模式切换集成测试。
 
 对应 plan_v4 §5 阶段 6 / §7.2 验收:
 - 全链路 auto-mode:19 节点全跑,产出 storyline_timeline_plan → node_05
 - 故意异常重试:已节点失败,确认重试不重复执行上游
-- render_video 冒烟:STORYLINE_ENABLE_RENDER_SMOKE_TEST=1,产物可写
 - 时长硬约束:超长素材,确认 qa_gate 回退 group_clips 重跑
+(2026-11-12 边治理阶段5:render_video 旁支节点已整体删除,相关用例移除;
+qa 非重试出口直连 join。)
 
 策略:
 - 不直接 graph.invoke() 跑完整链路(避免外部副作用)。
@@ -59,8 +60,6 @@ def _make_state(**overrides: Any) -> dict:
         "storyline_rough_cut_artifact": "",
         "storyline_ai_transition_artifact": "",
         "storyline_web_topic_artifact": "",
-        "storyline_render_preview_path": "",
-        "storyline_render_preview_report": None,
         "storyline_qa_retry_count": 0,
         "status_log": [],
         "error_log": [],
@@ -230,13 +229,13 @@ def test_qa_gate_retry_on_overshoot(
     next_node = route_after_storyline_qa({**state, **delta})
     assert next_node == "storyline_group_clips"
 
-    # 第 4 次(超 retry 上限)强制走 join(render_video)
+    # 第 4 次(超 retry 上限)强制走 join(边治理阶段5:qa 非重试出口直连 join)
     for _ in range(3):
         state.update(delta)
         delta = storyline_qa_gate_node(state)
     state.update(delta)
     next_node = route_after_storyline_qa(state)
-    assert next_node == "storyline_render_video"
+    assert next_node == "storyline_join"
 
 
 def test_join_storyline_produces_valid_canonical(
@@ -294,88 +293,9 @@ def test_join_storyline_produces_valid_canonical(
     assert canonical.clips[0].timeline_out_ms == 35000
 
 
-# ===========================================================================
-# render_video 旁支(plan §5 阶段 6 / ADR-006)
-# ===========================================================================
-def test_render_video_skipped_by_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """默认 STORYLINE_ENABLE_RENDER_SMOKE_TEST=0 → noop,append _skipped。"""
-    monkeypatch.setenv("STORYLINE_ENABLE_RENDER_SMOKE_TEST", "0")
-
-    from importlib import reload
-    import config
-    reload(config)
-
-    from nodes.storyline.node_render_video import storyline_render_video_node
-
-    outputs_root = tmp_path / "out"
-    state = _make_state(_outputs_root=str(outputs_root))
-    state["storyline_timeline_plan"] = ""
-    delta = storyline_render_video_node(state)
-    assert any("storyline_render_video_skipped" in t for t in delta["status_log"])
-    # 默认 skip 不写预览路径/报告(旁支纪律;阶段3 起旧 smoke 字段已移除)
-    assert delta.get("storyline_render_preview_path") in (None, "")
-    assert delta.get("storyline_render_preview_report") is None
-
-
-def test_render_video_disabled_path_does_not_affect_join(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """render_video 旁支 noop 时,下游 join_storyline 不被破坏。"""
-    monkeypatch.setenv("STORYLINE_ENABLE_RENDER_SMOKE_TEST", "0")
-    from importlib import reload
-    import config
-    reload(config)
-
-    from nodes.storyline.node_render_video import storyline_render_video_node
-    from nodes.storyline.join_storyline import storyline_join_node
-
-    outputs_root = tmp_path / "out"
-    state = _make_state(_outputs_root=str(outputs_root))
-
-    # 写一份 timeline_plan
-    timeline = {
-        "schema_version": "1.0",
-        "job_id": "test",
-        "created_at_ms": 0,
-        "source_media": [
-            {
-                "media_id": "m1",
-                "file_uri": "file:///x",
-                "duration_ms": 5000,
-                "media_type": "video",
-            }
-        ],
-        "clips": [
-            {
-                "clip_id": "c1",
-                "source_media_id": "m1",
-                "source_in_ms": 0,
-                "source_out_ms": 5000,
-                "timeline_in_ms": 0,
-                "timeline_out_ms": 5000,
-            }
-        ],
-        "audio": {"bgm_ref": None, "voiceover": None},
-        "subtitles": {"zh": None, "en": None},
-        "options": {
-            "enable_ai_transition": False,
-            "enable_voiceover": False,
-            "max_duration_ms": 5000,
-        },
-    }
-    tp_path = outputs_root / "storyline" / "timeline_plan.json"
-    tp_path.parent.mkdir(parents=True, exist_ok=True)
-    tp_path.write_text(json.dumps(timeline, ensure_ascii=False), encoding="utf-8")
-    state["storyline_timeline_plan"] = str(tp_path)
-
-    delta = storyline_render_video_node(state)
-    state.update(delta)
-    delta = storyline_join_node(state)
-    # join 仍能产出 storyline_plan
-    assert "storyline_plan" in delta
-    assert delta["storyline_plan"]["clips"][0]["clip_id"] == "c1"
+# (2026-11-12 边治理阶段5:原"render_video 旁支"两用例随节点整体删除。
+#  QA 非重试出口直连 join 的行为由 test_unreachable_nodes_wiring.py 的
+#  steps_of("storyline_join") == [qa[-1]+1] 与单测拓扑文件锁定。)
 
 
 # ===========================================================================

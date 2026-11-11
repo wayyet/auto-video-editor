@@ -17,7 +17,7 @@ START 直连 ``storyline_load_media``。)
 
 策略:**真实编译 LangGraph**,只把"重 IO / LLM / 外部进程"的节点换成确定性假节点
 (load_media / split_shots / understand / filter / group),
-其余(plan_timeline_pro / qa_gate / join / render_video / generate_script /
+其余(plan_timeline_pro / qa_gate / join / generate_script /
 两个 AI 转场节点 …)全部走真实实现。用 ``stream_mode="debug"`` 记录每个超步执行了哪些节点。
 
 锁定的不变量:
@@ -71,6 +71,8 @@ CONDITIONAL_NODES = {
 #   SB/RTR 从每轮 2/3 次降为每轮各 1 次,轨迹随之更新。
 # - 2026-11-12 边治理阶段2:PTP 扩 6 源(补 RTR/TXT)、QA 精简为单源(只等最终
 #   时间线),PTP 触发时机后移一个超步(等 RTR),轨迹随之更新。
+# - 2026-11-12 边治理阶段5:render_video 节点整体删除(qa_gate 条件出口直连
+#   join),轨迹后缀少一个超步。
 # - 旧版黄金轨迹是 _CYCLE × 4(stub BGM 90s > 目标 35s → qa 重试 3 次)。模糊修复
 #   阶段3 的逐片段速度护栏(7ad573d)落地后,planner 不再注水拉长,actual_ms=7200
 #   ≤ 目标 → qa 一轮即过、重试回路不再自触发 —— 这正是本文件 5 个存量失败用例的
@@ -93,7 +95,6 @@ _CYCLE = [
     ["storyline_qa_gate"],
 ]
 _SUFFIX = [
-    ["storyline_render_video"],
     ["storyline_join"],
     ["generate_draft"],
     ["node_06_human_reorder"],
@@ -133,8 +134,9 @@ NEIGHBORS: dict[str, tuple[set[str], set[str]]] = {
     # 2026-11-12 边治理阶段2:PTP 6 源屏障(补 RTR/TXT);出边 = PTAT 屏障源(默认档 ai=True)
     _PTP: ({_GC, _GS, _GV, _SB, _RTR, _RT}, {_PTAT}),
     # 2026-11-12 边治理阶段2:QA 精简为单源屏障(只等最终时间线 PTAT);
-    # 出边 = 条件路由(重试→GC,其余→render_video)
-    _QA: ({_PTAT}, {_GC, "storyline_render_video"}),
+    # 边治理阶段5:render_video 节点删除,条件出口直连 join
+    # 出边 = 条件路由(重试→GC,其余→join)
+    _QA: ({_PTAT}, {_GC, "storyline_join"}),
     # 文字样式:GS 直下;边治理阶段2 起是 PTP 6 源屏障源
     _RT: ({_GS}, {_PTP}),
     # 2026-11-12 边治理阶段3:GAT 屏障改 [GC, RTR](其全部真实输入 = groups +
@@ -780,8 +782,8 @@ def test_defaults_run_all_wired_nodes_with_expected_shape(
     assert gen == ptp == [s + 1 for s in rtr]
     assert plan == [s + 1 for s in ptp]
     assert qa == [s + 2 for s in ptp]
-    # qa 通过后直接 render_video → join(AI 转场已在 qa 之前做完)
-    assert run.steps_of("storyline_render_video") == [qa[-1] + 1]
+    # qa 通过后直连 join(边治理阶段5:render_video 节点已删除,AI 转场在 qa 之前做完)
+    assert run.steps_of("storyline_join") == [qa[-1] + 1]
     assert run.count("storyline_join") == 1
 
 

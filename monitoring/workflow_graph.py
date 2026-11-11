@@ -67,7 +67,9 @@ WORKFLOW_ID = "auto_video_editor_main"
 #: 2026-11-12 noop 治理阶段3(方案A):render_video 展示名改"故事线预览"
 #: (真实 ffmpeg 预览,非最终导出)→ bump 4(仅节点元数据文案,无拓扑变更,
 #: bump 只为让布局缓存里的旧名失效)。
-SCHEMA_VERSION = 4
+#: 2026-11-12 边治理阶段5:render_video 节点整体删除(qa_gate 直连 join,
+#: 拓扑变更)→ bump 5。
+SCHEMA_VERSION = 5
 
 #: 关卡编号全集(阶段3 删除关卡⓪后剩 ①②③)
 CHECKPOINT_MARKS = ("①", "②", "③")
@@ -308,27 +310,22 @@ _NODE_META: dict[str, dict[str, Any]] = {
     "storyline_plan_timeline_pro": {
         "name": "时间线规划",
         "group": "storyline_timeline",
-        "description": "4 源屏障(分组/文案/配音/BGM)后规划时间线",
+        "description": "6 源屏障(分组/文案/配音/BGM/普通转场/文字样式)后规划时间线",
     },
     "storyline_generate_ai_transition": {
         "name": "生成 AI 转场",
         "group": "storyline_timeline",
-        "description": "与 plan_timeline_pro 共用同一道 4 源屏障;按 STORYLINE_ENABLE_AI_TRANSITION 接边",
+        "description": "屏障 [group_clips, recommend_transition](其全部真实输入);按 STORYLINE_ENABLE_AI_TRANSITION 接边",
     },
     "storyline_plan_timeline_ai_transition": {
         "name": "AI 转场时间线规划",
         "group": "storyline_timeline",
         "description": "屏障 [plan_timeline_pro, generate_ai_transition] 之后;qa 校验含 AI 转场的最终时间线",
     },
-    "storyline_render_video": {
-        "name": "故事线预览",
-        "group": "storyline_render",
-        "description": "QA 通过后用现有 FFmpeg 导出链生成初始时间线预览 MP4(方案A;最终导出仍归 node_18)",
-    },
     "storyline_qa_gate": {
         "name": "剧情 QA 闸门",
         "group": "storyline_render",
-        "description": "3 源屏障后校验;未过回 group_clips 重试,通过走渲染",
+        "description": "最终时间线单源屏障后校验;未过回 group_clips 重试,通过进 join(边治理阶段2/5)",
     },
     "storyline_join": {
         "name": "剧情结果汇合",
@@ -379,12 +376,10 @@ _EDGE_LABELS: dict[tuple[str, str], str] = {
     ("storyline_select_bgm", "storyline_generate_ai_transition"): "列表 fan-in(4 源屏障)",
     ("storyline_plan_timeline_pro", "storyline_plan_timeline_ai_transition"): "AI 转场屏障",
     ("storyline_generate_ai_transition", "storyline_plan_timeline_ai_transition"): "AI 转场屏障",
-    ("storyline_plan_timeline_pro", "storyline_qa_gate"): "列表 fan-in(3 源屏障)",
-    ("storyline_plan_timeline_ai_transition", "storyline_qa_gate"): "列表 fan-in(3 源屏障)",
-    ("storyline_recommend_transition", "storyline_qa_gate"): "列表 fan-in(3 源屏障)",
-    ("storyline_recommend_text", "storyline_qa_gate"): "列表 fan-in(3 源屏障)",
+    ("storyline_plan_timeline_pro", "storyline_qa_gate"): "最终时间线单源(AI 关)",
+    ("storyline_plan_timeline_ai_transition", "storyline_qa_gate"): "最终时间线单源(AI 开)",
     ("storyline_qa_gate", "storyline_group_clips"): "QA 未过,重试",
-    ("storyline_qa_gate", "storyline_render_video"): "QA 通过",
+    ("storyline_qa_gate", "storyline_join"): "QA 通过/失败/空 plan(边治理阶段5 直连)",
     ("storyline_join", "generate_draft"): "有规划产物",
     ("storyline_join", "END"): "无规划产物",
     ("join_before_delivery", "export_final_video"): "QA gate 通过",

@@ -185,7 +185,6 @@ from nodes.storyline.node_plan_timeline_pro import (
 from nodes.storyline.node_plan_timeline_ai_transition import (
     storyline_plan_timeline_ai_transition_node,
 )
-from nodes.storyline.node_render_video import storyline_render_video_node
 from nodes.storyline._common import build_web_topic_query, target_duration_ms
 from storyline_capabilities.ai_transition_client import is_ai_transition_enabled
 
@@ -576,7 +575,6 @@ def _build_state_graph():
         "storyline_plan_timeline_ai_transition",
         storyline_plan_timeline_ai_transition_node,
     )
-    g.add_node("storyline_render_video", storyline_render_video_node)
     g.add_node("storyline_qa_gate", _qa_gate_mod.storyline_qa_gate_node)
     g.add_node("storyline_join", _join_storyline_mod.storyline_join_node)
 
@@ -827,19 +825,17 @@ def _build_state_graph():
     # QA 再等它们属重复依赖 —— 精简为单源(AI 开=PTAT,关=PTP)。
     g.add_edge(_plan_for_qa, "storyline_qa_gate")
 
-    # qa_gate 条件边:retry→ group_clips;通过 / 失败→ render_video(条件)→ join
+    # qa_gate 条件边:retry→ group_clips;通过 / 失败→ join(边治理阶段5:
+    # render_video 预览旁支已整体删除 —— 子图交付物是 Canonical Timeline,
+    # 最终 MP4 仍由外层 node_18 export_final_video 负责,附件 §5.9)
     g.add_conditional_edges(
         "storyline_qa_gate",
         _qa_gate_mod.route_after_storyline_qa,
         {
             "storyline_group_clips": "storyline_group_clips",
-            "storyline_render_video": "storyline_render_video",
+            "storyline_join": "storyline_join",
         },
     )
-
-    # render_video 旁支:默认 skip;开启后生成 ffmpeg 故事线预览(阶段3 方案A)→ join。
-    # 预览产物不接入图内下游(创建台经 preview.* 事件消费),最终导出仍归 node_18。
-    g.add_edge("storyline_render_video", "storyline_join")
 
     # join → generate_draft(条件边)
     g.add_conditional_edges(
