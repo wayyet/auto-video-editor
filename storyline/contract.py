@@ -168,8 +168,12 @@ class TimelineOptions(BaseModel):
 class AITransitionItem(BaseModel):
     """AI 转场清单条目(``storyline_generate_ai_transition`` 产出)。
 
-    2026-10 随"不可达节点接入"新增。``mapper`` 暂不消费这个清单,只供联调查看 /
-    后续真实转场客户端接入;``is_stub=True`` 表示是占位结果,不是真实转场。
+    2026-10 随"不可达节点接入"新增。2026-11-12 noop 治理阶段2 起:
+    真实生成条目带 ``video_path``(MP4 实测产物)与 ``status``
+    (generated / degraded / skipped_* / awaiting_approval / provider_unconfigured),
+    ``is_stub=True`` 只出现在历史 stub 数据里(现役节点不再产生)。
+    ``plan_timeline_ai_transition`` 只物化 ``is_stub=False 且 video_path 非空且
+    status=generated`` 的条目;其余保留作审计。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -178,9 +182,29 @@ class AITransitionItem(BaseModel):
     to_clip_id: str = Field(..., description="后一个 clip 的 clip_id")
     duration_ms: Annotated[int, Field(ge=0, description="转场时长(整数毫秒)")]
     provider: str = Field("stub", description="生成方:stub / 真实客户端名")
-    is_stub: bool = Field(True, description="是否占位结果")
+    is_stub: bool = Field(True, description="是否占位结果(现役节点不再产生 stub)")
     error: Optional[str] = Field(None, description="生成失败原因(成功为 null)")
-    artifact: Optional[str] = Field(None, description="转场产物文件路径")
+    artifact: Optional[str] = Field(None, description="转场产物文件路径(审计)")
+    # 2026-11-12 阶段2:真实生成产物与状态(additive,向后兼容)
+    video_path: Optional[str] = Field(
+        None, description="生成的 MP4 实测产物路径;未生成/降级时为 null"
+    )
+    status: Optional[str] = Field(
+        None,
+        description="条目状态:generated / degraded / skipped_* / awaiting_approval / provider_unconfigured",
+    )
+    # 以下为生成审计字段(ffprobe 实测/溯源;跳过类条目为 null)
+    width: Optional[int] = Field(None, ge=0, description="产物宽度(px,实测)")
+    height: Optional[int] = Field(None, ge=0, description="产物高度(px,实测)")
+    fps: Optional[float] = Field(None, ge=0.0, description="产物帧率(实测)")
+    sha256: Optional[str] = Field(None, description="产物文件 sha256(实测)")
+    request_id: Optional[str] = Field(None, description="Provider 侧任务 ID(溯源)")
+    cache_hit: Optional[bool] = Field(
+        None, description="是否命中生成缓存(qa 重试防重复付费的审计证据)"
+    )
+    prompt_method: Optional[str] = Field(
+        None, description="提示词生成方式:text_llm / deterministic_fallback"
+    )
 
 
 # ---------------------------------------------------------------------------

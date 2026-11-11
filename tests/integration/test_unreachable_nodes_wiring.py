@@ -367,12 +367,18 @@ def run_auto(
     web_snippets: list[str] | None = None,
     web_error_code: str | None = None,
     qa_target_ms: int | None = None,
+    ai_provider: bool = False,
+    ai_provider_fails: bool = False,
 ) -> Run:
     """在真实图上跑一遍 auto 模式,直到关卡①(node_06_human_reorder)挂起。
 
     ``qa_target_ms``:给定值时把 qa 的目标时长解析 patch 成该值,强制触发 qa 重试
     回路(模糊修复阶段3 速度护栏落地后,stub 跑 qa 一轮即过、重试不再自触发 ——
     本文件 5 个存量失败用例的共同根因;D10 回归用例改用此参数恢复覆盖)。
+
+    ``ai_provider``:注入 fake 转场 Provider 并置 approved(走真实生成链;
+    抽帧换成 1x1 PNG,不跑真 ffmpeg)。默认 False = 未批准,0 次外呼(与
+    生产默认一致)。``ai_provider_fails``:Provider 每次调用都失败(降级路径)。
     """
     # ---- 开关 ----
     monkeypatch.setattr(config, "STORYLINE_ENABLE_WEB_TOPIC", web)
@@ -385,6 +391,66 @@ def run_auto(
             "nodes.storyline.qa_gate.target_duration_ms",
             lambda _state, default=0: qa_target_ms,
         )
+    if ai_provider:
+        from storyline_capabilities.ai_transition_provider import (
+            PROVIDER_STATUS_FAILED,
+            PROVIDER_STATUS_GENERATED,
+            AITransitionProviderResult,
+        )
+
+        monkeypatch.setattr(config, "STORYLINE_AI_TRANSITION_PROVIDER", "minimax")
+        monkeypatch.setattr(config, "STORYLINE_AI_TRANSITION_APPROVED", True)
+
+        from PIL import Image as _pil_image
+
+        def _fake_extract(media_path, *, at_ms, output_path, position="exact", timeout=60.0):
+            out = Path(output_path)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            _pil_image.new("RGB", (4, 4), color=(1, 2, 3)).save(out, format="PNG")
+            return out
+
+        monkeypatch.setattr(
+            "nodes.storyline.node_generate_ai_transition.extract_frame", _fake_extract
+        )
+
+        class _WiringProvider:
+            name = "minimax"
+            model = "MiniMax-Hailuo-02"
+
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def generate_transition(
+                self, *, first_frame, last_frame, prompt, duration_ms, resolution, output_path
+            ) -> AITransitionProviderResult:
+                self.calls += 1
+                if ai_provider_fails:
+                    return AITransitionProviderResult(
+                        provider=self.name,
+                        model=self.model,
+                        status=PROVIDER_STATUS_FAILED,
+                        error="注入失败:provider",
+                    )
+                out = Path(output_path)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_bytes(b"wiring-fake-mp4")
+                return AITransitionProviderResult(
+                    path=out,
+                    provider=self.name,
+                    model=self.model,
+                    duration_ms=int(duration_ms),
+                    width=1080,
+                    height=1920,
+                    fps=30.0,
+                    sha256="b" * 64,
+                    request_id=f"wiring-{self.calls}",
+                    status=PROVIDER_STATUS_GENERATED,
+                )
+
+        monkeypatch.setattr(
+            "storyline_capabilities.ai_transition_provider._ACTIVE_PROVIDER",
+            _WiringProvider(),
+        )
 
     out_root = tmp_path / "outputs"
     (out_root / "storyline").mkdir(parents=True, exist_ok=True)
@@ -395,12 +461,17 @@ def run_auto(
         return str(p)
 
     # ---- 假节点(只换重 IO / LLM / 外部进程的那几个)----
+    # 媒体文件用 tmp 真实小文件(转场缓存键要做 stat;C:/fake 这类不存在路径
+    # 会让真实生成链在该处降级)。
+    fake_media_file = tmp_path / "media_src.mp4"
+    fake_media_file.write_bytes(b"0" * 256)
+
     def fake_load_media(state):
         media = [
             {
                 "media_id": "media_0001",
-                "path": "C:/fake/in.mp4",
-                "file_uri": "file:///C:/fake/in.mp4",
+                "path": str(fake_media_file),
+                "file_uri": f"file:///{fake_media_file.as_posix()}",
                 "media_type": "video",
                 "metadata": {
                     "duration_ms": 60000,
@@ -882,24 +953,60 @@ def test_web_topic_network_failure_is_soft_with_failed_artifact(
 # ---------------------------------------------------------------------------
 # 5. AI 转场链
 # ---------------------------------------------------------------------------
-def test_ai_transition_attaches_stub_items_and_stays_contract_valid(
+def test_ai_transition_awaiting_approval_keeps_base_timeline_and_zero_calls(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    run = run_auto(monkeypatch, tmp_path)
+    """默认(未批准):GAT 只写估算、0 次外呼;PTAT 无可挂条目,保留基础时间线
+    (2026-11-12 阶段2:stub 占位路径已删除,未批准绝不产生假产物)。"""
+    run = run_auto(monkeypatch, tmp_path, query="夏季防晒", web_titles=["防晒霜怎么选"])
+    artifact = Path(run.values["storyline_ai_transition_artifact"])
+    doc = json.loads(artifact.read_text(encoding="utf-8"))
+    assert doc["status"] == "awaiting_approval" and doc["approved"] is False
+    assert doc["items"] == []
+    assert doc["estimate"]["pair_count"] >= 1 and doc["is_stub"] is False
+    assert doc["pair_scope"] == "group_boundaries"
+    # 没有任何生成产物目录/文件
+    assert not (artifact.parent / "ai_transitions").exists()
+    # PTAT 无可挂条目 → 指针保持基础时间线
+    assert Path(run.values["storyline_timeline_plan"]).name == "timeline_plan.json"
+    assert run.next_nodes == ("node_06_human_reorder",)
+
+
+def test_ai_transition_real_generation_flows_into_timeline_audit_list(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """批准 + fake Provider:真实产物走完 GAT → PTAT 审计清单
+    (clips 物化属阶段2b;本阶段只验证生成链与清单接线)。"""
+    run = run_auto(
+        monkeypatch,
+        tmp_path,
+        query="夏季防晒",
+        web_titles=["防晒霜怎么选"],
+        ai_provider=True,
+    )
+    artifact = Path(run.values["storyline_ai_transition_artifact"])
+    doc = json.loads(artifact.read_text(encoding="utf-8"))
+    assert doc["status"] == "ok" and doc["approved"] is True
+    items = doc["items"]
+    assert len(items) == 1  # 2 个 group → 1 个衔接点
+    item = items[0]
+    assert item["status"] == "generated" and item["is_stub"] is False
+    assert Path(item["video_path"]).is_file()
+    assert item["provider"] == "minimax" and item["duration_ms"] > 0
+    assert item["request_id"] == "wiring-1"
+    # 时间线审计清单带着同一产物,契约校验通过
     assert run.timeline is not None
     assert Path(run.values["storyline_timeline_plan"]).name == "timeline_plan_ai.json"
-    items = run.timeline["ai_transitions"]
-    assert len(items) == 1  # 2 个 group → 1 个衔接点
-    assert (items[0]["from_clip_id"], items[0]["to_clip_id"]) == ("clip_0001", "clip_0002")
-    assert items[0]["provider"] == "stub" and items[0]["is_stub"] is True
-    # stub 不冒充真实转场
-    assert run.timeline["options"]["enable_ai_transition"] is False
+    tl_items = run.timeline["ai_transitions"]
+    assert [(i["from_clip_id"], i["to_clip_id"]) for i in tl_items] == [
+        (item["from_clip_id"], item["to_clip_id"])
+    ]
+    assert run.timeline["options"]["enable_ai_transition"] is True
     CanonicalTimeline.model_validate(run.timeline)
-    # storyline_join 之后 storyline_plan 里也带着清单,且没有契约错误
-    assert run.values["storyline_plan"]["ai_transitions"] == items
-    assert "storyline_join_contract_invalid" not in run.status_log
-    # 不改 clips / 总时长:与基础时间线一致
-    base = json.loads((Path(run.values["storyline_timeline_plan"]).parent / "timeline_plan.json").read_text(encoding="utf-8"))
+    # 阶段2b 前 clips 不变(mapper 物化后由 2b 用例接管)
+    base = json.loads(
+        (artifact.parent / "timeline_plan.json").read_text(encoding="utf-8")
+    )
     assert run.timeline["clips"] == base["clips"]
 
 
@@ -912,19 +1019,30 @@ def test_ai_transition_flag_off_skips_both_nodes(
     assert Path(run.values["storyline_timeline_plan"]).name == "timeline_plan.json"
 
 
-def test_ai_client_failure_keeps_base_timeline(
+def test_ai_provider_failure_degrades_and_keeps_base_timeline(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """Provider 全失败:每个衔接点降级硬切(留痕),无可挂转场,保留基础时间线,
+    重试回路照常(qa 重试 4 轮,Provider 只在首轮实际调用,其余轮走缓存判据失败
+    —— 失败不进缓存,所以每轮都会重试调用)。"""
     run = run_auto(
         monkeypatch,
         tmp_path,
-        boom=("storyline_capabilities.ai_transition_client.StubAITransitionClient.generate",),
+        ai_provider=True,
+        ai_provider_fails=True,
         qa_target_ms=1000,  # 强制重试回路(存量根因见 run_auto docstring)
     )
-    # 每个衔接点都失败 → 没有可挂的转场:PTAT 仍然"完成"(固定标签),保留基础时间线,屏障照常凑齐
+    doc = json.loads(
+        Path(run.values["storyline_ai_transition_artifact"]).read_text(encoding="utf-8")
+    )
+    assert all(i["status"] == "degraded" for i in doc["items"])
+    assert all(i["video_path"] is None for i in doc["items"])
+    assert doc["status"] == "ok"  # 链路本身跑通,只是逐 pair 降级
+    # 降级条目只作审计:时间线仍写出(plan_ai),但不得声称已挂真实转场
     assert "storyline_plan_timeline_ai_transition_done" in run.status_log
-    assert Path(run.values["storyline_timeline_plan"]).name == "timeline_plan.json"
+    assert Path(run.values["storyline_timeline_plan"]).name == "timeline_plan_ai.json"
     assert run.timeline is not None
+    assert run.timeline["options"]["enable_ai_transition"] is False
     CanonicalTimeline.model_validate(run.timeline)
     assert run.count("storyline_qa_gate") == 4  # 重试回路没被打断
     assert run.next_nodes == ("node_06_human_reorder",)
@@ -974,12 +1092,19 @@ def test_ai_pair_attaches_only_junctions_that_exist_in_the_final_timeline(
     """最后一轮是 2 个 group → 只有 1 个衔接点;前几轮的清单不会残留进最终时间线。
 
     (原用例依赖 stub BGM 90s 触发的 qa 重试 4 轮;模糊修复阶段3 后重试不再自触发,
-    改用 ``qa_target_ms`` 强制。)
+    改用 ``qa_target_ms`` 强制。阶段2 起衔接点条目来自真实生成链,注入 fake Provider。)
     """
-    run = run_auto(monkeypatch, tmp_path, group_counts=[3, 3, 3, 2], qa_target_ms=1000)
+    run = run_auto(
+        monkeypatch,
+        tmp_path,
+        group_counts=[3, 3, 3, 2],
+        qa_target_ms=1000,
+        ai_provider=True,
+    )
     assert run.timeline is not None
     items = run.timeline["ai_transitions"]
     assert [(i["from_clip_id"], i["to_clip_id"]) for i in items] == [("clip_0001", "clip_0002")]
+    assert all(i["status"] == "generated" for i in items)
     CanonicalTimeline.model_validate(run.timeline)
 
 

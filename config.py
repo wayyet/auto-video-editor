@@ -62,6 +62,42 @@ STORYLINE_ENABLE_AI_TRANSITION: bool = (
     os.environ.get("STORYLINE_ENABLE_AI_TRANSITION", "true").lower().strip() in ("1", "true", "yes")
 )
 
+# 2.1) AI 转场真实生成(2026-11-12 noop 治理阶段2,设计文档 §2):
+#   ``STORYLINE_ENABLE_AI_TRANSITION`` 只决定图里接不接那两个节点(功能可用性);
+#   真实的第三方付费生成还必须**同时**满足:
+#   a) 配置了 Provider(``STORYLINE_AI_TRANSITION_PROVIDER=minimax`` + API Key 环境变量);
+#   b) 本次任务获得显式批准(``STORYLINE_AI_TRANSITION_APPROVED=true`` 环境变量,
+#      或 state.ai_transition_approved=true —— 阶段6 创建台 UI 会接到确认控件)。
+#   未批准时节点只写估算(pair 数/预计时长/费用风险),0 次 Provider 外呼。
+# Key 只从服务器端环境变量读取(MINIMAX_API_KEY),不进 state / 日志 / event。
+STORYLINE_AI_TRANSITION_PROVIDER: str = (
+    os.environ.get("STORYLINE_AI_TRANSITION_PROVIDER", "").strip().lower()
+)
+STORYLINE_AI_TRANSITION_APPROVED: bool = (
+    os.environ.get("STORYLINE_AI_TRANSITION_APPROVED", "false").lower().strip()
+    in ("1", "true", "yes")
+)
+# 转场覆盖范围:group_boundaries(默认,只对相邻 group 边界生成;与时间线结构、
+# 时长预算一致)或 all_adjacent(所有相邻片段,N-1 个;费用与预算压力大,预留档位)。
+# 覆盖口径会显式写进 ai_transition.json 的 pair_scope,产品端不误判。
+STORYLINE_AI_TRANSITION_PAIR_SCOPE: str = (
+    os.environ.get("STORYLINE_AI_TRANSITION_PAIR_SCOPE", "group_boundaries").strip().lower()
+)
+# 单次任务预算上限:超过必须调整配置并重新确认(设计文档 §2.3)。
+STORYLINE_AI_TRANSITION_MAX_PAIRS: int = int(
+    os.environ.get("STORYLINE_AI_TRANSITION_MAX_PAIRS", "8") or "8"
+)
+STORYLINE_AI_TRANSITION_MAX_TOTAL_MS: int = int(
+    os.environ.get("STORYLINE_AI_TRANSITION_MAX_TOTAL_MS", "10000") or "10000"
+)
+# 单个转场生成的目标时长与 Provider 轮询超时(秒)。
+STORYLINE_AI_TRANSITION_DURATION_MS: int = int(
+    os.environ.get("STORYLINE_AI_TRANSITION_DURATION_MS", "6000") or "6000"
+)
+STORYLINE_AI_TRANSITION_TIMEOUT_S: int = int(
+    os.environ.get("STORYLINE_AI_TRANSITION_TIMEOUT_S", "600") or "600"
+)
+
 # 4) 切镜检测器(2026-11-08 选项C 治本:TransNetV2 接入,提升切镜质量)。
 #    auto(默认)= torch 可导入且权重存在才走 TransNetV2,否则/推理失败自动
 #    回退帧差版(原因写入结果 detector_fallback,节点转 error_log,不静默);

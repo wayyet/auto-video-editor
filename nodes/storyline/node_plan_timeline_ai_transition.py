@@ -111,8 +111,14 @@ def storyline_plan_timeline_ai_transition_node(state: WorkflowState) -> dict:
         if not isinstance(options, dict):
             options = {}
             merged["options"] = options
+        # 2026-11-12 阶段2:只有"真实生成成功"的条目(video_path 就位且 status=
+        # generated)才算挂上真实转场;degraded/skipped 条目仅作审计,不得让
+        # options 声称已挂转场。
         options["enable_ai_transition"] = any(
-            not bool(it.get("is_stub", True)) for it in items
+            (not bool(it.get("is_stub", True)))
+            and bool(it.get("video_path"))
+            and str(it.get("status") or "") == "generated"
+            for it in items
         )
         # 严格校验:通不过就保留基础时间线(下面 except 分支)
         CanonicalTimeline.model_validate(merged)

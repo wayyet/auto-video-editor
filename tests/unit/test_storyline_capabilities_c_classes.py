@@ -30,9 +30,9 @@ from storyline_capabilities.select_bgm import select_bgm
 from storyline_capabilities.timeline_planner import TimeLine
 from storyline_capabilities.plan_timeline_pro import plan_timeline_pro
 from storyline_capabilities.ai_transition_client import (
-    StubAITransitionClient,
     is_ai_transition_enabled,
 )
+from storyline_capabilities.ai_transition_provider import resolve_default_provider
 from storyline_capabilities.tts_runner import (
     StubTTSClient,
     load_tts_providers,
@@ -404,19 +404,14 @@ def test_plan_timeline_pro_empty_groups() -> None:
 
 
 # ===========================================================================
-# ai_transition_client
-# (asr_runner 用例已随 2026-11-08 B1 ASR 移除删除)
+# ai_transition_client / provider
+# (asr_runner 用例已随 2026-11-08 B1 ASR 移除删除;
+#  2026-11-12 阶段2:Stub 已删除,默认未配置 Provider → resolve 返回 None)
 # ===========================================================================
-def test_stub_ai_transition_writes_artifact(tmp_path: Path) -> None:
-    client = StubAITransitionClient()
-    res = client.generate(
-        from_clip={"clip_id": "c1"},
-        to_clip={"clip_id": "c2"},
-        output_dir=tmp_path,
-    )
-    assert res.provider == "stub"
-    assert res.duration_ms > 0
-    assert res.artifact_path.exists()
+def test_ai_transition_provider_unresolved_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """未配置 STORYLINE_AI_TRANSITION_PROVIDER → 显式 None(fail-closed,0 外呼)。"""
+    monkeypatch.setattr("config.STORYLINE_AI_TRANSITION_PROVIDER", "")
+    assert resolve_default_provider() is None
 
 
 def test_ai_transition_default_off() -> None:

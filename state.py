@@ -299,6 +299,10 @@ class WorkflowState(TypedDict, total=False):
     storyline_asr_artifact: Annotated[Optional[str], _last_wins]              # DEPRECATED(2026-11-08 B1):local_asr 节点已删,仅旧 checkpoint 兼容
     storyline_rough_cut_artifact: Annotated[Optional[str], _last_wins]        # DEPRECATED(2026-11-08 B1):speech_rough_cut 节点已删,仅旧 checkpoint 兼容
     storyline_ai_transition_artifact: Annotated[Optional[str], _last_wins]    # generate_ai_transition(2026-11-12 阶段2 起真实生成;未授权/未配 Provider 时显式降级)
+    # 2026-11-12 noop 治理阶段2:本次任务的第三方付费生成授权(env
+    # STORYLINE_AI_TRANSITION_APPROVED 或本字段任一为 true;阶段6 创建台 UI
+    # 接确认控件)。未批准时 0 次 Provider 外呼,只写估算。
+    ai_transition_approved: NotRequired[bool]
     storyline_web_topic_artifact: Annotated[Optional[str], _last_wins]        # search_web_topic(条件)
     storyline_render_smoke_test_path: Annotated[Optional[str], _last_wins]    # render_video(旁支)
     # 2026-10 调序新增的独立键(避免与既有键并发写冲突):

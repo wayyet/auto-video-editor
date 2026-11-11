@@ -5,26 +5,85 @@
   "description": "auto-video-editor 内部契约:整数毫秒 + file_uri,详见 storyline/contract.py。",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "job_id", "created_at_ms", "source_media", "clips"],
+  "required": [
+    "schema_version",
+    "job_id",
+    "created_at_ms",
+    "source_media",
+    "clips"
+  ],
   "properties": {
-    "schema_version": { "type": "string", "const": "1.0" },
-    "job_id": { "type": "string", "minLength": 1 },
-    "created_at_ms": { "type": "integer", "minimum": 0 },
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "job_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
     "source_media": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["media_id", "file_uri", "duration_ms"],
+        "required": [
+          "media_id",
+          "file_uri",
+          "duration_ms"
+        ],
         "properties": {
-          "media_id": { "type": "string", "minLength": 1 },
-          "file_uri": { "type": "string", "pattern": "^file:///" },
-          "sha256": { "type": ["string", "null"] },
-          "duration_ms": { "type": "integer", "minimum": 0 },
-          "media_type": { "type": "string", "enum": ["video", "image", "audio", "unknown"] },
-          "width": { "type": ["integer", "null"], "minimum": 0 },
-          "height": { "type": ["integer", "null"], "minimum": 0 },
-          "fps": { "type": ["number", "null"], "minimum": 0 }
+          "media_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "file_uri": {
+            "type": "string",
+            "pattern": "^file:///"
+          },
+          "sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "media_type": {
+            "type": "string",
+            "enum": [
+              "video",
+              "image",
+              "audio",
+              "unknown"
+            ]
+          },
+          "width": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "fps": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          }
         }
       }
     },
@@ -34,27 +93,86 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "clip_id", "source_media_id", "source_in_ms", "source_out_ms",
-          "timeline_in_ms", "timeline_out_ms"
+          "clip_id",
+          "source_media_id",
+          "source_in_ms",
+          "source_out_ms",
+          "timeline_in_ms",
+          "timeline_out_ms"
         ],
         "properties": {
-          "clip_id": { "type": "string", "minLength": 1 },
-          "source_media_id": { "type": "string", "minLength": 1 },
-          "source_in_ms": { "type": "integer", "minimum": 0 },
-          "source_out_ms": { "type": "integer", "minimum": 0 },
-          "timeline_in_ms": { "type": "integer", "minimum": 0 },
-          "timeline_out_ms": { "type": "integer", "minimum": 0 },
-          "transcript": { "type": ["string", "null"] },
-          "scene_id": { "type": ["string", "null"] },
+          "clip_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_media_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_in_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "source_out_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "timeline_in_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "timeline_out_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "transcript": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scene_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "semantic_tags": {
             "type": "array",
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
           },
-          "content_hash": { "type": ["string", "null"] },
-          "voiceover_id": { "type": ["string", "null"] },
-          "transition_in": { "type": ["string", "null"] },
-          "transition_out": { "type": ["string", "null"] },
-          "subtitle_style": { "type": ["object", "null"] }
+          "content_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "voiceover_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "transition_in": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "transition_out": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subtitle_style": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
         }
       }
     },
@@ -62,22 +180,62 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "bgm_ref": { "type": ["string", "null"] },
-        "voiceover": { "type": ["string", "null"] },
+        "bgm_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "voiceover": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "voiceovers": {
-          "type": ["array", "null"],
+          "type": [
+            "array",
+            "null"
+          ],
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["voiceover_id", "group_id", "path", "duration_ms", "provider", "stub"],
+            "required": [
+              "voiceover_id",
+              "group_id",
+              "path",
+              "duration_ms",
+              "provider",
+              "stub"
+            ],
             "properties": {
-              "voiceover_id": { "type": "string", "minLength": 1 },
-              "group_id": { "type": "string", "minLength": 1 },
-              "path": { "type": "string" },
-              "duration_ms": { "type": "integer", "minimum": 0 },
-              "provider": { "type": "string" },
-              "stub": { "type": "boolean" },
-              "error": { "type": ["string", "null"] }
+              "voiceover_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "group_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "path": {
+                "type": "string"
+              },
+              "duration_ms": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "provider": {
+                "type": "string"
+              },
+              "stub": {
+                "type": "boolean"
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
             }
           }
         }
@@ -87,39 +245,238 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "zh": { "type": ["string", "null"] },
-        "en": { "type": ["string", "null"] }
+        "zh": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "en": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
     "options": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enable_ai_transition": { "type": "boolean" },
-        "enable_voiceover": { "type": "boolean" },
-        "max_duration_ms": { "type": ["integer", "null"], "minimum": 0 }
+        "enable_ai_transition": {
+          "type": "boolean"
+        },
+        "enable_voiceover": {
+          "type": "boolean"
+        },
+        "max_duration_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
       }
     },
-    "method": { "type": ["string", "null"] },
+    "method": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "warnings": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     },
     "ai_transitions": {
       "type": "array",
       "items": {
-        "type": "object",
         "additionalProperties": false,
-        "required": ["from_clip_id", "to_clip_id", "duration_ms"],
+        "description": "AI 转场清单条目(``storyline_generate_ai_transition`` 产出)。\n\n2026-10 随\"不可达节点接入\"新增。2026-11-12 noop 治理阶段2 起:\n真实生成条目带 ``video_path``(MP4 实测产物)与 ``status``\n(generated / degraded / skipped_* / awaiting_approval / provider_unconfigured),\n``is_stub=True`` 只出现在历史 stub 数据里(现役节点不再产生)。\n``plan_timeline_ai_transition`` 只物化 ``is_stub=False 且 video_path 非空且\nstatus=generated`` 的条目;其余保留作审计。",
         "properties": {
-          "from_clip_id": { "type": "string" },
-          "to_clip_id": { "type": "string" },
-          "duration_ms": { "type": "integer", "minimum": 0 },
-          "provider": { "type": "string" },
-          "is_stub": { "type": "boolean" },
-          "error": { "type": ["string", "null"] },
-          "artifact": { "type": ["string", "null"] }
-        }
+          "from_clip_id": {
+            "description": "前一个 clip 的 clip_id",
+            "title": "From Clip Id",
+            "type": "string"
+          },
+          "to_clip_id": {
+            "description": "后一个 clip 的 clip_id",
+            "title": "To Clip Id",
+            "type": "string"
+          },
+          "duration_ms": {
+            "description": "转场时长(整数毫秒)",
+            "minimum": 0,
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "provider": {
+            "default": "stub",
+            "description": "生成方:stub / 真实客户端名",
+            "title": "Provider",
+            "type": "string"
+          },
+          "is_stub": {
+            "default": true,
+            "description": "是否占位结果(现役节点不再产生 stub)",
+            "title": "Is Stub",
+            "type": "boolean"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "生成失败原因(成功为 null)",
+            "title": "Error"
+          },
+          "artifact": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "转场产物文件路径(审计)",
+            "title": "Artifact"
+          },
+          "video_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "生成的 MP4 实测产物路径;未生成/降级时为 null",
+            "title": "Video Path"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "条目状态:generated / degraded / skipped_* / awaiting_approval / provider_unconfigured",
+            "title": "Status"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "产物宽度(px,实测)",
+            "title": "Width"
+          },
+          "height": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "产物高度(px,实测)",
+            "title": "Height"
+          },
+          "fps": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "产物帧率(实测)",
+            "title": "Fps"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "产物文件 sha256(实测)",
+            "title": "Sha256"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Provider 侧任务 ID(溯源)",
+            "title": "Request Id"
+          },
+          "cache_hit": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "是否命中生成缓存(qa 重试防重复付费的审计证据)",
+            "title": "Cache Hit"
+          },
+          "prompt_method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "提示词生成方式:text_llm / deterministic_fallback",
+            "title": "Prompt Method"
+          }
+        },
+        "required": [
+          "from_clip_id",
+          "to_clip_id",
+          "duration_ms"
+        ],
+        "type": "object"
       }
     }
   }
