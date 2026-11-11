@@ -31,8 +31,18 @@ import graph as graph_module
 
 _GC = "storyline_group_clips"
 _GS = "storyline_generate_script"
+_GV = "storyline_generate_voiceover"
+_SB = "storyline_select_bgm"
 _STR = "storyline_script_template_recommendation"
 _WT = "storyline_search_web_topic"
+_RTR = "storyline_recommend_transition"
+_TXT = "storyline_recommend_text"
+_PTP = "storyline_plan_timeline_pro"
+_GAT = "storyline_generate_ai_transition"
+_PTAT = "storyline_plan_timeline_ai_transition"
+_QA = "storyline_qa_gate"
+_JOIN = "storyline_join"
+_RV = "storyline_render_video"
 
 
 def _build() -> tuple:
@@ -128,3 +138,79 @@ def test_search_web_topic_hangs_off_template_rec_not_group_clips() -> None:
     # D10:条件触发节点不得作为任何屏障源
     assert _WT not in _barrier_sources(g)
     assert _WT not in _conditional_targets(g, _GC)
+
+
+# ---------------------------------------------------------------------------
+# 阶段5:render_video 节点整体删除(用户指令;附件 §5.9)
+# ---------------------------------------------------------------------------
+def test_render_video_node_is_completely_gone() -> None:
+    """节点注册/普通边/屏障/条件路由/开关/状态字段全部不存在。"""
+    g = _build()
+    assert _RV not in getattr(g, "nodes", {})
+    for s, t in _edge_pairs(g):
+        assert _RV not in (s, t), f"残留边 {s}→{t}"
+    for srcs, t in getattr(g, "waiting_edges", set()):
+        assert _RV not in srcs and t != _RV
+    for src in getattr(g, "branches", {}):
+        assert _RV not in _conditional_targets(g, src)
+    # 开关与状态字段随节点一并删除
+    assert not hasattr(config, "STORYLINE_ENABLE_RENDER_SMOKE_TEST")
+
+    from state import WorkflowState
+
+    for key in ("storyline_render_preview_path", "storyline_render_preview_report"):
+        assert key not in WorkflowState.__annotations__
+
+
+# ---------------------------------------------------------------------------
+# 阶段7:QA 单源等待最终时间线 + 非重试出口直连 join + 屏障形状锁定
+# ---------------------------------------------------------------------------
+def test_qa_in_is_final_timeline_only_and_out_goes_straight_to_join() -> None:
+    """QA 入边恰为最终时间线节点(默认档 AI 开=PTAT);条件出口 = {GC, join}。
+
+    阶段2:QA 只等最终时间线(不再等 RTR/TXT);阶段5:render_video 删除后
+    非重试出口直连 join —— join 也没有任何普通入边(QA→join 是条件边)。
+    """
+    g = _build()
+    edges = _edge_pairs(g)
+    normal_ins = {s for s, t in edges if t == _QA}
+    barrier_ins = {s for srcs, t in getattr(g, "waiting_edges", set()) if t == _QA}
+    assert normal_ins == {_PTAT}, f"QA 普通入边应恰为 PTAT,实际 {sorted(normal_ins)}"
+    assert barrier_ins == set(), "QA 不应再作为屏障目标(阶段2 精简为单源)"
+    assert _conditional_targets(g, _QA) == {_GC, _JOIN}, (
+        f"QA 条件出口应为 group_clips|join,实际 {sorted(_conditional_targets(g, _QA))}"
+    )
+    assert {t for s, t in edges if s == _QA} == set(), "QA 不应有普通出边"
+
+    join_normal_ins = {s for s, t in edges if t == _JOIN}
+    join_cond_ins = {
+        src for src in getattr(g, "branches", {}) if _JOIN in _conditional_targets(g, src)
+    }
+    assert join_normal_ins == set() and join_cond_ins == {_QA}
+
+
+def test_ai_off_qa_waits_ptp_directly(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AI 关档:QA 单源直等 PTP(与 wiring 集成测试 barrier 集合同口径的单元级锁定)。"""
+    monkeypatch.setattr(config, "STORYLINE_ENABLE_AI_TRANSITION", False)
+    monkeypatch.setattr(
+        "storyline_capabilities.ai_transition_client.ENABLE_AI_TRANSITION", False
+    )
+    g = _build()
+    assert {s for s, t in _edge_pairs(g) if t == _QA} == {_PTP}
+
+
+def test_storyline_barrier_shapes_locked() -> None:
+    """阶段1-3 治理结果的屏障形状锁定(只锁 storyline 段,不耦合外层 fan-in)。"""
+    g = _build()
+    barriers = {(frozenset(s), t) for s, t in getattr(g, "waiting_edges", set())}
+    storyline_barriers = {bt for bt in barriers if bt[0] and bt[1].startswith("storyline_")}
+    assert storyline_barriers == {
+        (frozenset({_GS, _GV}), _SB),                         # 阶段1:BGM 双源
+        (frozenset({_GC, _SB}), _RTR),                        # 阶段1:普通转场双源
+        (frozenset({_GC, _GS, _GV, _SB, _RTR, _TXT}), _PTP),  # 阶段2:PTP 六源
+        (frozenset({_GC, _RTR}), _GAT),                       # 阶段3:GAT 两源
+        (frozenset({_PTP, _GAT}), _PTAT),                     # AI 开:基础时间线 + AI 转场
+    }
+    # 条件触发节点永不进屏障(D10);主链前置节点 STR 也不作为屏障源
+    assert _WT not in _barrier_sources(g)
+    assert _STR not in _barrier_sources(g)

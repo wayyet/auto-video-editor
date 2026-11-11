@@ -813,6 +813,9 @@ def test_qa_retry_loop_still_retriggers_plan_timeline_pro(
     assert run.count("storyline_qa_gate") == 4
     assert run.count("storyline_generate_ai_transition") == 4
     assert run.count("storyline_plan_timeline_ai_transition") == 4
+    # 边治理阶段7:模板推荐与文案同为主链必跑节点,在重试回路内每轮恰 1 次
+    assert run.count("storyline_script_template_recommendation") == 4
+    assert run.count("storyline_generate_script") == 4
     # 前置化阶段3:检索节点进入 qa 重试回路,每轮执行;分组未变 → query_hash
     # 缓存命中,互联网请求只发 1 次(设计方案 §4.6)
     assert run.count("storyline_search_web_topic") == 4

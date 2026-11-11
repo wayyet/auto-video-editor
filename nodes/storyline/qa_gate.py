@@ -8,7 +8,11 @@
    ``actual_ms > target_ms * 1.05`` 且 ``storyline_qa_retry_count < 3`` →
    ``status_log`` append ``storyline_qa_retry`` + 写路由信号
    ``storyline_qa_route_signal``,触发条件边回到 ``storyline_group_clips`` 重新跑。
-4. **通过 / retry 耗尽** → 写 ``storyline_qa_done`` 走 join_storyline。
+4. **通过 / retry 耗尽** → 写 ``storyline_qa_done`` 走 join_storyline
+   (边治理阶段5:render_video 预览旁支已删除,QA 非重试出口直连 join)。
+5. **路由决策观测**(边治理阶段7):每次运行经 custom stream 上报 ``qa_route``
+   事件(signal + actual/target_ms/重试轮次),经 workflow_runner 通用通道
+   进创建台事件详情,任何观测异常不影响主流程。
 
 设计纪律(plan §4.2):
 - 节点 **不** 触发副作用(只读产物 + 写 status_log),避免重放副作用
@@ -102,6 +106,31 @@ def _per_clip_issues(canonical: CanonicalTimeline) -> list[str]:
     return issues
 
 
+def _emit_route_event(signal: str, *, detail: dict | None = None) -> None:
+    """经 LangGraph custom stream 上报 QA 路由决策(边治理阶段7 运行态观测)。
+
+    后端/前端零改动:``monitoring/workflow_runner.py`` 的 ``handle_custom``
+    通用通道把它作为节点进度事件透传,创建台事件详情列可见
+    ``signal`` / ``actual_ms`` / ``target_ms`` 等字段。图运行时外调用
+    ``get_stream_writer()`` 会 RuntimeError —— 观测事件绝不影响主流程,
+    任何异常吞掉即可(与原 node_render_video 的 preview.* 事件同纪律)。
+    """
+    try:
+        from langgraph.config import get_stream_writer
+
+        writer = get_stream_writer()
+        if callable(writer):
+            writer(
+                {
+                    "monitor_event": "progress",
+                    "node_id": "storyline_qa_gate",
+                    "detail": {"event": "qa_route", "signal": signal, **(detail or {})},
+                }
+            )
+    except Exception:  # noqa: BLE001 — 观测通道失败不阻断工作流
+        pass
+
+
 def storyline_qa_gate_node(state: WorkflowState) -> dict:
     """QA 闸门主入口(纯函数副作用:仅写 status_log / error_log / 重试计数 / 路由信号)。
 
@@ -116,6 +145,7 @@ def storyline_qa_gate_node(state: WorkflowState) -> dict:
     try:
         canonical = _load_timeline_from_state(state)
     except ContractInvalid as e:
+        _emit_route_event("storyline_qa_failed", detail={"reason": str(e.error_code)})
         return {
             "status_log": append_status_tag(state, "storyline_qa_failed"),
             "error_log": [
@@ -128,6 +158,7 @@ def storyline_qa_gate_node(state: WorkflowState) -> dict:
 
     if canonical is None or not canonical.clips:
         # 空 plan / timeline 路径缺失:qa 不阻塞,直接走 join(对应 plan §4.2 第 5 条)
+        _emit_route_event("storyline_qa_done_empty", detail={"reason": "空 plan / 时间线缺失"})
         return {
             "status_log": append_status_tag(
                 state, "storyline_qa_done_empty"
@@ -143,6 +174,7 @@ def storyline_qa_gate_node(state: WorkflowState) -> dict:
             if any(i.startswith("CLIP_SPEED_INVALID") for i in clip_issues)
             else "SOURCE_RANGE_INVALID"
         )
+        _emit_route_event("storyline_qa_failed", detail={"reason": code})
         return {
             "status_log": append_status_tag(state, "storyline_qa_failed"),
             "error_log": [
@@ -159,6 +191,15 @@ def storyline_qa_gate_node(state: WorkflowState) -> dict:
 
     # 1.05 容忍阈值:与 node_07 已有 "1.0 + 1e-3" 类似,允许少量 overshoot
     if actual_ms > target_ms * 1.05 and retry < 3:
+        _emit_route_event(
+            "storyline_qa_retry",
+            detail={
+                "reason": "总时长超限",
+                "actual_ms": actual_ms,
+                "target_ms": target_ms,
+                "retry_count": retry + 1,
+            },
+        )
         return {
             "status_log": append_status_tag(state, "storyline_qa_retry"),
             "storyline_qa_retry_count": retry + 1,
@@ -166,6 +207,10 @@ def storyline_qa_gate_node(state: WorkflowState) -> dict:
         }
 
     # 通过 / 重试耗尽(强制走 join)
+    _emit_route_event(
+        "storyline_qa_done",
+        detail={"actual_ms": actual_ms, "target_ms": target_ms, "retry_count": retry},
+    )
     return {
         "status_log": append_status_tag(
             state,
