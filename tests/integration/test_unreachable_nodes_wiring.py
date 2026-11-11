@@ -184,9 +184,10 @@ def test_every_registered_node_is_reachable_from_start(monkeypatch: pytest.Monke
 # 伪 →__end__ 边(langgraph 1.2.9 实测,详见 test_workflow_graph_schema.py docstring),
 # 用编译图判零出边会把死胡同误判成有出边。
 # 临时允许集:阶段0 时全图唯一零出边节点是 storyline_script_template_recommendation
-# (结构级 noop,仅有 generate_script → STR 一条入边)。阶段1 把它改造成
-# generate_script 的前置业务节点后**必须摘除**,允许集清空。
-_ALLOWED_TERMINI: set[str] = {"storyline_script_template_recommendation"}
+# (结构级 noop)。阶段1(9e2b3ab)已把它改造为 generate_script 的前置业务节点
+# (group_clips → STR → generate_script),2026-11-12 noop 治理阶段6 摘除,
+# 允许集清空 —— 此后任何零出边注册节点都会直接报警。
+_ALLOWED_TERMINI: set[str] = set()
 
 
 def _builder_outgoing_sources(compiled) -> set[str]:
