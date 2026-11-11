@@ -298,10 +298,12 @@ class WorkflowState(TypedDict, total=False):
     # STORYLINE_AI_TRANSITION_APPROVED 或本字段任一为 true;阶段6 创建台 UI
     # 接确认控件)。未批准时 0 次 Provider 外呼,只写估算。
     ai_transition_approved: NotRequired[bool]
+    # 用户对 AI 转场的自然语言要求(创建台输入;generate_ai_transition .get 容错读,
+    # 2026-11-12 边治理阶段6 补声明,无行为变化)
+    ai_transition_user_request: NotRequired[str]
     storyline_web_topic_artifact: Annotated[Optional[str], _last_wins]        # search_web_topic(条件)
     # 2026-10 调序新增的独立键(避免与既有键并发写冲突):
     storyline_search_media_artifact: Annotated[Optional[str], _last_wins]     # DEPRECATED(2026-11-10):search_media 节点已删;该键历史上从无读写者(节点实际写 storyline_media_artifact),仅旧 checkpoint 兼容
-    storyline_timeline_plan_ai: Annotated[Optional[str], _last_wins]          # plan_timeline_ai_transition(不覆盖 storyline_timeline_plan)
     storyline_auto_plan: Annotated[Optional[dict], _last_wins]                # storyline_join(不覆盖 storyline_plan)
     storyline_qa_retry_count: NotRequired[int]            # qa_gate 唯一写入者(无需 reducer)
     # 2026-11-12 noop 治理阶段1:qa 路由信号(qa_gate 唯一写入者,LastValue 每次运行
