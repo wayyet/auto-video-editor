@@ -1,0 +1,45 @@
+{
+  "schema_version": "1.0",
+  "templates": [
+    {
+      "template_id": "daily_vlog_zh_v1",
+      "path": "templates/daily_vlog_zh.txt",
+      "language": "zh",
+      "description": "日常生活记录,第一人称轻叙事,注重小瞬间的情绪与留白",
+      "tags": ["Life"],
+      "content_sha256": "6cd40d7e007bb23be70cf6f06d68e6b87dd6ab731c2d98ffcb8a7f296271a947",
+      "version": 1,
+      "enabled": true
+    },
+    {
+      "template_id": "travel_story_zh_v1",
+      "path": "templates/travel_story_zh.txt",
+      "language": "zh",
+      "description": "旅行记录,第一人称行走叙事,按出发-初见-深入-收束推进场景与情绪",
+      "tags": ["Travel", "Life"],
+      "content_sha256": "0bb29c8d4f5c2f1a319254475d2af706555fd42f92bac1c95f089eade570848c",
+      "version": 1,
+      "enabled": true
+    },
+    {
+      "template_id": "product_review_zh_v1",
+      "path": "templates/product_review_zh.txt",
+      "language": "zh",
+      "description": "产品测评,开箱-体验-优缺点-总结建议的结构化口播",
+      "tags": ["Tech", "Life"],
+      "content_sha256": "5673cd4fd728c54adcc978312abf41a74896f7e3fae8f9153e0428c8ac68ddea",
+      "version": 1,
+      "enabled": true
+    },
+    {
+      "template_id": "documentary_zh_v1",
+      "path": "templates/documentary_zh.txt",
+      "language": "zh",
+      "description": "纪录解说,设问引入,背景-展开-转折-收束的递进结构",
+      "tags": ["Knowledge"],
+      "content_sha256": "a52af9add0f4f2f94861751d0ae616a8cdf7b5daebbf5cc305dde5d59668375e",
+      "version": 1,
+      "enabled": true
+    }
+  ]
+}
