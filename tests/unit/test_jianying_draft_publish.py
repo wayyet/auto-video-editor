@@ -383,12 +383,10 @@ class TestNode05PublishWiring:
                 "draft_ops.atomic_writer", fromlist=["safe_write_draft"]
             ).safe_write_draft(d, c),
         )
-        assert out.get("draft_publish_error") is None
-        assert out["draft_published_dir"] == str(official_draft_dir(jy_root, "test-pub-1"))
         assert out["draft_path"] == str(
             official_draft_dir(jy_root, "test-pub-1") / "draft_content.json"
         )
-        assert out["_draft_dir_override"] == out["draft_published_dir"]
+        assert out["_draft_dir_override"] == str(official_draft_dir(jy_root, "test-pub-1"))
         assert any(t.startswith("draft.published:") for t in out["status_log"])
         # 正式目录就位
         assert (official_draft_dir(jy_root, "test-pub-1") / "draft_content.json").is_file()
@@ -414,7 +412,6 @@ class TestNode05PublishWiring:
         # 降级:staging 照常可用,错误进 error_log
         assert out["draft_path"] == str(staging / "draft_content.json")
         assert "_draft_dir_override" not in out
-        assert out["draft_publish_error"] is not None
         assert any("草稿发布失败" in e for e in out["error_log"])
         assert any(t.startswith("draft.publish_failed:") for t in out["status_log"])
         # staging 双文件仍在
@@ -438,7 +435,7 @@ class TestNode05PublishWiring:
             ).safe_write_draft(d, c),
         )
         assert out["draft_path"] == str(staging / "draft_content.json")
-        assert "draft_published_dir" not in out
+        assert "_draft_dir_override" not in out
         assert not jy_root.exists()
 
 

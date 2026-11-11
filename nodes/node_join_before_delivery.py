@@ -40,7 +40,9 @@ BGM 轨存在                    英文草稿有 audio 轨时,``materials.audios
 ``category``),经 :func:`draft_ops.draft_integrity.build_qa_categories` 聚合为
 逐类判定并新增"有旁白但字幕未写入"等类别专属判据;报告顶层增加
 ``sha256``(回读哈希)/ ``required_features`` 回显 / ``gate_failed``;
-``join_qa_issues`` 字符串契约与阶段 4 逐字一致。
+``error_texts`` 字符串视图与阶段 4 的 ``join_qa_issues`` 契约逐字一致
+(2026-11-12 阶段5批3:顶层 state 字段 ``join_qa_issues`` 因零消费者移除,
+字符串清单并入结构化报告)。
 """
 
 from __future__ import annotations
@@ -75,7 +77,7 @@ def _tail_chain_structured(draft: dict, draft_tag: str, label: str) -> list[dict
 
     ``label`` 取 ``"英文草稿"`` / ``"中文主草稿"``;英文侧的 issue 文本与
     K2=B 原实现逐字一致(单测契约),中文侧同构生成。``detail`` 即原文本,
-    ``join_qa_issues`` 字符串契约由调用方用 ``detail`` 原文保持。
+    ``error_texts`` 字符串视图由调用方用 ``detail`` 原文保持。
     """
     structured: list[dict[str, Any]] = []
 
@@ -246,8 +248,8 @@ def _categories_digest(categories: dict[str, dict[str, Any]]) -> dict[str, dict[
 def join_before_delivery(state: WorkflowState) -> dict:
     """LangGraph 节点(交付前 QA 闸门):检查中英两份草稿的交付物是否齐全。
 
-    只返回变更字段(``join_qa_issues`` + ``join_qa_report`` + ``error_log`` +
-    ``status_log``),避免覆盖上游未变字段。
+    只返回变更字段(``join_qa_report`` + ``error_log`` + ``status_log``),
+    避免覆盖上游未变字段。
 
     K2=B(2026-10):英文草稿存在时额外做尾链四项检查(转场/特效/贴纸/BGM 音量)。
     英文草稿从未生成时整段跳过,不产生 issues。
@@ -308,7 +310,7 @@ def join_before_delivery(state: WorkflowState) -> dict:
                     structured.append(it)
                     issues.append(it["detail"])
 
-    # 深度 QA 的 error 级 issue 并入 join_qa_issues(字符串契约);warning 只进报告。
+    # 深度 QA 的 error 级 issue 并入 error_texts(报告内字符串视图);warning 只进报告。
     # 阶段 6:深度 issue 打 category 后交给 build_qa_categories 归桶。
     deep_structured: list[dict[str, Any]] = []
     for it in qa_report.get("issues", []):
@@ -330,6 +332,7 @@ def join_before_delivery(state: WorkflowState) -> dict:
     report_out: dict[str, Any] = {
         **qa_report,
         "passed": not issues,
+        "error_texts": list(issues),
         "node_issues": [s["detail"] for s in structured if s["check"] in ("交付物", "封面", "英文字幕文件", "目录")],
         "zh_checked": zh_checked,
         "categories": categories,
@@ -361,7 +364,6 @@ def join_before_delivery(state: WorkflowState) -> dict:
     if gate_failed:
         status_tags.append("delivery_qa_gate_failed")
     return {
-        "join_qa_issues": issues,
         "join_qa_report": report_out,
         "error_log": new_errors,
         "status_log": status_tags,

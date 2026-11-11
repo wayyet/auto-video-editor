@@ -25,7 +25,7 @@ def test_join_happy_path_no_issues() -> None:
         "error_log": [],
     }
     out = join_before_delivery(state)
-    assert out["join_qa_issues"] == []
+    assert out["join_qa_report"]["error_texts"] == []
     assert "join_before_delivery_done" in out["status_log"]
     # 阶段 4:结构化报告存在,且"无英文分支"场景记 skipped(上游降级,不当缺陷)
     assert out["join_qa_report"]["skipped"] is True
@@ -45,7 +45,7 @@ def test_join_missing_en_cover() -> None:
         "error_log": [],
     }
     out = join_before_delivery(state)
-    assert any("封面英文版缺失" in i and "16:9" in i for i in out["join_qa_issues"])
+    assert any("封面英文版缺失" in i and "16:9" in i for i in out["join_qa_report"]["error_texts"])
     # error_log 也应有对应条目
     assert any("封面英文版缺失" in e for e in out["error_log"])
 
@@ -59,7 +59,7 @@ def test_join_missing_all_covers() -> None:
         "error_log": [],
     }
     out = join_before_delivery(state)
-    assert any("封面缺失" in i for i in out["join_qa_issues"])
+    assert any("封面缺失" in i for i in out["join_qa_report"]["error_texts"])
 
 
 def test_join_missing_subtitle() -> None:
@@ -75,7 +75,7 @@ def test_join_missing_subtitle() -> None:
         "error_log": [],
     }
     out = join_before_delivery(state)
-    assert any("英文字幕文件缺失" in i for i in out["join_qa_issues"])
+    assert any("英文字幕文件缺失" in i for i in out["join_qa_report"]["error_texts"])
 
 
 def test_join_preserves_existing_state() -> None:
@@ -90,8 +90,8 @@ def test_join_preserves_existing_state() -> None:
     out = join_before_delivery(state)
     # Week 4:delta-only 返回;LangGraph 运行时只更新返回的 keys
     assert "join_before_delivery_done" in out["status_log"]
-    assert "join_qa_issues" in out
     assert "join_qa_report" in out
+    assert "error_texts" in out["join_qa_report"]
     # 注:delta 返回不含 draft_path 是预期的;LangGraph 合并时保留
     assert "draft_path" not in out  # 验证是 delta-only
 
@@ -191,7 +191,7 @@ def test_join_en_draft_complete_no_issues(tmp_path: Path) -> None:
     """中英双草稿尾链齐全 + 深度 QA 全过 → 无 issue,报告 passed。"""
     state = _state_with_drafts(tmp_path)
     out = join_before_delivery(state)
-    assert out["join_qa_issues"] == [], out["join_qa_issues"]
+    assert out["join_qa_report"]["error_texts"] == [], out["join_qa_report"]["error_texts"]
     report = out["join_qa_report"]
     assert report["skipped"] is False
     assert report["passed"] is True
@@ -221,7 +221,7 @@ def test_join_en_draft_missing_tail_chain_items(tmp_path: Path) -> None:
         "error_log": [],
     }
     out = join_before_delivery(state)
-    joined = " ".join(out["join_qa_issues"])
+    joined = " ".join(out["join_qa_report"]["error_texts"])
     assert "英文草稿转场缺失" in joined
     assert "英文草稿视频特效缺失" in joined
     assert "英文草稿贴纸缺失" in joined
@@ -237,7 +237,7 @@ def test_join_en_draft_bgm_without_fade_binding(tmp_path: Path) -> None:
     (en_dir / "draft_content.json").write_text(serialized, encoding="utf-8")
     (en_dir / "draft_info.json").write_text(serialized, encoding="utf-8")
     out = join_before_delivery(state)
-    assert any("BGM 淡入淡出未绑定" in i for i in out["join_qa_issues"]), out["join_qa_issues"]
+    assert any("BGM 淡入淡出未绑定" in i for i in out["join_qa_report"]["error_texts"]), out["join_qa_report"]["error_texts"]
 
 
 def test_join_voiceover_track_exempt_from_fade_check(tmp_path: Path) -> None:
@@ -252,7 +252,7 @@ def test_join_voiceover_track_exempt_from_fade_check(tmp_path: Path) -> None:
     (zh_dir / "draft_content.json").write_text(serialized, encoding="utf-8")
     (zh_dir / "draft_info.json").write_text(serialized, encoding="utf-8")
     out = join_before_delivery(state)
-    assert not any("BGM 淡入淡出未绑定" in i for i in out["join_qa_issues"]), out["join_qa_issues"]
+    assert not any("BGM 淡入淡出未绑定" in i for i in out["join_qa_report"]["error_texts"]), out["join_qa_report"]["error_texts"]
 
 
 def test_join_sticker_unbound_reported(tmp_path: Path) -> None:
@@ -265,7 +265,7 @@ def test_join_sticker_unbound_reported(tmp_path: Path) -> None:
     (zh_dir / "draft_content.json").write_text(serialized, encoding="utf-8")
     (zh_dir / "draft_info.json").write_text(serialized, encoding="utf-8")
     out = join_before_delivery(state)
-    assert any("贴纸未挂到任何视频段" in i for i in out["join_qa_issues"]), out["join_qa_issues"]
+    assert any("贴纸未挂到任何视频段" in i for i in out["join_qa_report"]["error_texts"]), out["join_qa_report"]["error_texts"]
 
 
 def test_join_zh_text_missing_animation_reported(tmp_path: Path) -> None:
@@ -288,7 +288,7 @@ def test_join_zh_text_missing_animation_reported(tmp_path: Path) -> None:
     (zh_dir / "draft_content.json").write_text(serialized, encoding="utf-8")
     (zh_dir / "draft_info.json").write_text(serialized, encoding="utf-8")
     out = join_before_delivery(state)
-    assert any("缺入场动画绑定" in i for i in out["join_qa_issues"]), out["join_qa_issues"]
+    assert any("缺入场动画绑定" in i for i in out["join_qa_report"]["error_texts"]), out["join_qa_report"]["error_texts"]
 
 
 def test_join_zh_text_with_animation_no_issue(tmp_path: Path) -> None:
@@ -313,14 +313,14 @@ def test_join_zh_text_with_animation_no_issue(tmp_path: Path) -> None:
     (zh_dir / "draft_content.json").write_text(serialized, encoding="utf-8")
     (zh_dir / "draft_info.json").write_text(serialized, encoding="utf-8")
     out = join_before_delivery(state)
-    assert not any("缺入场动画绑定" in i for i in out["join_qa_issues"]), out["join_qa_issues"]
+    assert not any("缺入场动画绑定" in i for i in out["join_qa_report"]["error_texts"]), out["join_qa_report"]["error_texts"]
 
 
 def test_join_en_draft_missing_file_is_reported(tmp_path: Path) -> None:
     """英文草稿目录指向不存在的路径 → 报"英文分支草稿缺失"。"""
     state = _state_with_drafts(tmp_path, draft_dir_en_branch=str(tmp_path / "nope"))
     out = join_before_delivery(state)
-    assert any("英文分支草稿缺失" in i for i in out["join_qa_issues"]), out["join_qa_issues"]
+    assert any("英文分支草稿缺失" in i for i in out["join_qa_report"]["error_texts"]), out["join_qa_report"]["error_texts"]
 
 
 def test_join_skips_en_checks_when_no_en_branch() -> None:
@@ -333,7 +333,7 @@ def test_join_skips_en_checks_when_no_en_branch() -> None:
         "error_log": [],
     }
     out = join_before_delivery(state)
-    assert out["join_qa_issues"] == []
+    assert out["join_qa_report"]["error_texts"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +345,7 @@ def test_join_zh_draft_file_missing_reported(tmp_path: Path) -> None:
         tmp_path, draft_path=str(tmp_path / "ghost" / "draft_content.json")
     )
     out = join_before_delivery(state)
-    joined = " ".join(out["join_qa_issues"])
+    joined = " ".join(out["join_qa_report"]["error_texts"])
     assert "中文主草稿不可读" in joined
     assert out["join_qa_report"]["passed"] is False
     assert any(i["draft"] == "zh" for i in out["join_qa_report"]["issues"])
@@ -359,7 +359,7 @@ def test_join_dual_files_mismatch_reported(tmp_path: Path) -> None:
     info["duration"] = 1
     (en_dir / "draft_info.json").write_text(json.dumps(info), encoding="utf-8")
     out = join_before_delivery(state)
-    assert any("双文件" in i and "不一致" in i for i in out["join_qa_issues"]), out["join_qa_issues"]
+    assert any("双文件" in i and "不一致" in i for i in out["join_qa_report"]["error_texts"]), out["join_qa_report"]["error_texts"]
     assert out["join_qa_report"]["passed"] is False
 
 
@@ -373,7 +373,7 @@ def test_join_missing_material_file_fails_qa(tmp_path: Path) -> None:
     (zh_dir / "draft_content.json").write_text(serialized, encoding="utf-8")
     (zh_dir / "draft_info.json").write_text(serialized, encoding="utf-8")
     out = join_before_delivery(state)
-    assert any("素材路径" in i and "ghost.mp4" in i for i in out["join_qa_issues"]), out["join_qa_issues"]
+    assert any("素材路径" in i and "ghost.mp4" in i for i in out["join_qa_report"]["error_texts"]), out["join_qa_report"]["error_texts"]
     assert out["join_qa_report"]["passed"] is False
 
 
@@ -387,7 +387,7 @@ def test_join_broken_mirror_reported(tmp_path: Path) -> None:
     (en_dir / "draft_content.json").write_text(serialized, encoding="utf-8")
     (en_dir / "draft_info.json").write_text(serialized, encoding="utf-8")
     out = join_before_delivery(state)
-    assert any("BGM镜像" in i for i in out["join_qa_issues"]), out["join_qa_issues"]
+    assert any("BGM镜像" in i for i in out["join_qa_report"]["error_texts"]), out["join_qa_report"]["error_texts"]
 
 
 def test_join_registered_draft_missing_root_index(monkeypatch, tmp_path: Path) -> None:
@@ -405,7 +405,7 @@ def test_join_registered_draft_missing_root_index(monkeypatch, tmp_path: Path) -
     monkeypatch.setattr("config.JY_DRAFT_PUBLISH_ENABLED", True)
     monkeypatch.setattr("config.JIANYING_DRAFT_ROOT", str(jy_root))
     out = join_before_delivery(state)
-    joined = " ".join(out["join_qa_issues"])
+    joined = " ".join(out["join_qa_report"]["error_texts"])
     assert "根索引" in joined, joined
     assert out["join_qa_report"]["passed"] is False
 
@@ -429,12 +429,12 @@ def test_join_registered_draft_with_root_index_passes(monkeypatch, tmp_path: Pat
     monkeypatch.setattr("config.JY_DRAFT_PUBLISH_ENABLED", True)
     monkeypatch.setattr("config.JIANYING_DRAFT_ROOT", str(jy_root))
     out = join_before_delivery(state)
-    assert out["join_qa_issues"] == [], out["join_qa_issues"]
+    assert out["join_qa_report"]["error_texts"] == [], out["join_qa_report"]["error_texts"]
     assert "root_index" in out["join_qa_report"]["zh"]["checks"]
 
 
-def test_join_warning_not_in_join_qa_issues(tmp_path: Path) -> None:
-    """深度 QA 的 warning 只进结构化报告,不污染 join_qa_issues/error_log。"""
+def test_join_warning_not_in_error_texts(tmp_path: Path) -> None:
+    """深度 QA 的 warning 只进结构化报告,不污染 error_texts/error_log。"""
     state = _state_with_drafts(tmp_path)
     zh_dir = Path(state["draft_path"]).parent
     draft = json.loads((zh_dir / "draft_content.json").read_text(encoding="utf-8"))
@@ -446,7 +446,7 @@ def test_join_warning_not_in_join_qa_issues(tmp_path: Path) -> None:
     (zh_dir / "draft_content.json").write_text(serialized, encoding="utf-8")
     (zh_dir / "draft_info.json").write_text(serialized, encoding="utf-8")
     out = join_before_delivery(state)
-    assert out["join_qa_issues"] == [], out["join_qa_issues"]
+    assert out["join_qa_report"]["error_texts"] == [], out["join_qa_report"]["error_texts"]
     assert any(i["severity"] == "warning" for i in out["join_qa_report"]["issues"])
 
 
@@ -481,7 +481,7 @@ def test_join_gate_failed_when_required_subtitles_missing(tmp_path: Path) -> Non
     assert report["categories"]["subtitles_zh"]["status"] == "failed"
     assert "delivery_qa_gate_failed" in out["status_log"]
     # 新 issue 进入字符串契约
-    assert any("无我方字幕" in i for i in out["join_qa_issues"])
+    assert any("无我方字幕" in i for i in out["join_qa_report"]["error_texts"])
 
 
 def test_join_gate_ignores_optional_bgm_missing(tmp_path: Path) -> None:

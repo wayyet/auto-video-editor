@@ -102,7 +102,6 @@ def generate_initial_jianying_draft(
     #   ``source_media_id`` 不变;同一素材多处引用复用同一产物;9:16 源在
     #   _normalize_source_video 内零转码放行。
     draft_video_paths: list[str] = []
-    normalized_path: str | None = None
     normalize_notes: list[str] = []
     if storyline_plan:
         canonical_uri_map = _normalized_media_map_for_plan(
@@ -115,16 +114,11 @@ def generate_initial_jianying_draft(
             normalize_notes.append(
                 f"node_05.normalize_canonical:{replaced} 个 source_media 已指向归一化产物"
             )
-            from storyline.mapper import file_uri_to_path
-
-            normalized_path = file_uri_to_path(next(iter(canonical_uri_map.values())))
     else:
         for src in source_paths:
-            dp, np_, errs = _normalize_source_video(src, job_id=job_id)
+            dp, _np, errs = _normalize_source_video(src, job_id=job_id)
             draft_video_paths.append(dp)
             errors.extend(errs)
-            if np_ and normalized_path is None:
-                normalized_path = np_
     draft_video_path = draft_video_paths[0] if draft_video_paths else video_path
 
     try:
@@ -149,7 +143,6 @@ def generate_initial_jianying_draft(
             "draft_path": None,
             "draft_encryption_status": status.value,
             "draft_version_strategy": strategy.value,
-            "draft_source_normalized_path": normalized_path,
             "error_log": errors,
         }
 
@@ -298,7 +291,6 @@ def generate_initial_jianying_draft(
         "draft_path": str(draft_file),
         "draft_encryption_status": status.value,
         "draft_version_strategy": strategy.value,
-        "draft_source_normalized_path": normalized_path,
         "error_log": errors,
         # delta 语义:state.status_log 是 _append_unique reducer,这里带的既有
         # 条目会被去重(修复了改动前"剪映在跑"告警拼了 log 却从不返回的丢失问题)
@@ -306,10 +298,10 @@ def generate_initial_jianying_draft(
     }
     if published_dir is not None:
         # 后续节点经 resolve_draft_dir 读 override → 全链路改写正式草稿
+        # (2026-11-12 阶段5批3:draft_published_dir/draft_publish_error 审计
+        # 重复字段移除 —— 真实延续机制是 _draft_dir_override,发布失败原因在
+        # error_log + draft.publish_failed 事件里)
         out["_draft_dir_override"] = published_dir
-        out["draft_published_dir"] = published_dir
-    if publish_error is not None:
-        out["draft_publish_error"] = publish_error
     return out
 
 

@@ -247,11 +247,9 @@ def test_draft_materials_use_normalized_path(fake_source, monkeypatch, no_subpro
         ),
     )
 
-    assert out["draft_source_normalized_path"], "state 必须记下归一化产物路径"
     draft = json.loads(Path(out["draft_path"]).read_text(encoding="utf-8"))
     material_path = draft["materials"]["videos"][0]["path"]
-    assert material_path == out["draft_source_normalized_path"], "草稿 materials 必须用裁切后的素材"
-    assert material_path != str(fake_source)
+    assert material_path != str(fake_source), "草稿 materials 必须用裁切后的素材"
 
 
 def test_manifest_still_records_original_input(fake_source, monkeypatch, no_subprocess_guard):
@@ -280,9 +278,9 @@ def test_manifest_still_records_original_input(fake_source, monkeypatch, no_subp
     from storyline.output_isolation import compute_input_sha256
 
     assert manifest["input_sha256"] == compute_input_sha256(video_path=str(fake_source))
-    assert manifest["input_sha256"] != compute_input_sha256(
-        video_path=str(out["draft_source_normalized_path"])
-    )
+    draft = json.loads(Path(out["draft_path"]).read_text(encoding="utf-8"))
+    product_path = draft["materials"]["videos"][0]["path"]
+    assert manifest["input_sha256"] != compute_input_sha256(video_path=product_path)
 
 
 def test_draft_still_written_when_normalize_fails(fake_source, monkeypatch, no_subprocess_guard):
@@ -303,7 +301,6 @@ def test_draft_still_written_when_normalize_fails(fake_source, monkeypatch, no_s
     )
 
     assert out["draft_path"], "归一化失败也必须写出草稿"
-    assert out["draft_source_normalized_path"] is None
     assert any("素材归一化失败" in e for e in out["error_log"])
     draft = json.loads(Path(out["draft_path"]).read_text(encoding="utf-8"))
     assert draft["materials"]["videos"][0]["path"] == str(fake_source)
@@ -425,7 +422,6 @@ def test_canonical_draft_uses_normalized_media_map(
     assert draft["materials"]["videos"][0]["path"] == product, (
         "草稿 material 必须引用归一化产物,不能仍指向原始素材"
     )
-    assert out["draft_source_normalized_path"] == product
     # 原 state 里的计划不可被就地改写(checkpoint 重放以原始输入为准)
     assert plan["source_media"][0]["file_uri"] == _file_uri(fake_source)
 

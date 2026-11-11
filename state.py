@@ -152,11 +152,10 @@ class WorkflowState(TypedDict, total=False):
     _draft_dir_override: str          # 内部:节点 5 wrapper 用,从 state 读 draft_dir(测试用)
 
     # ===== 2026-11-06 阶段 1:剪映草稿发布注册(人工关卡与剪映草稿导入计划)=====
-    # 节点 5 发布成功后写:正式草稿目录(JIANYING_DRAFT_ROOT/AutoVideo_<tid>);
+    # 节点 5 发布成功后:正式草稿目录(JIANYING_DRAFT_ROOT/AutoVideo_<tid>);
     # 后续节点/snapshot②/英文分支 fork 经 _draft_dir_override 跟随同一份权威草稿。
-    draft_published_dir: NotRequired[Optional[str]]
-    # 节点 5 发布失败时写原因(降级:工作流继续用 staging 草稿,不阻断)
-    draft_publish_error: NotRequired[Optional[str]]
+    # 2026-11-12 阶段5批3:draft_published_dir / draft_publish_error 审计重复
+    # 字段移除 —— 延续机制读 _draft_dir_override,失败原因在 error_log + 事件。
 
     # ===== Week 4 新增字段(对应原文档 3.1 节)=====
     # DEPRECATED(2026-11-08 B1 ASR 移除):新流程不再产生 ASR 段,节点 8 取缺省
@@ -212,9 +211,9 @@ class WorkflowState(TypedDict, total=False):
     bgm_manual_draft_sha: NotRequired[Optional[dict]]
 
     # 汇合节点 QA 闸门结果(join_before_delivery 写)
-    join_qa_issues: NotRequired[list[str]]
     # 2026-11-07 阶段 4:结构化 QA 报告(draft_ops.draft_integrity.build_join_qa_report
-    # 的产物 + 节点级汇总);字符串版 join_qa_issues 保持兼容,结构化明细在此。
+    # 的产物 + 节点级汇总)。2026-11-12 阶段5批3:顶层字符串版 join_qa_issues 因
+    # 零消费者移除,同内容字符串视图保留在报告内(join_qa_report.error_texts)。
     join_qa_report: NotRequired[Optional[dict]]
 
     # ===== 2026-11-09 阶段 6(效果缺失修复):required-feature gate =====
@@ -342,8 +341,8 @@ class WorkflowState(TypedDict, total=False):
     # repair loop 的视觉证据汇总(可疑窗口 + 证据帧路径列表),None = 本轮
     # 未跑视觉复核(开关关闭 / QC 无时间戳类 issue / 工具失败降级)。
     assembly_repair_evidence_path: NotRequired[Optional[str]]
-    # node_05 宽高比归一化后的素材路径;None = 比例本就对齐,未做裁切。
-    draft_source_normalized_path: NotRequired[Optional[str]]
+    # 2026-11-12 阶段5批3:draft_source_normalized_path 已移除 —— 零读取方;
+    # 归一化产物以草稿 materials.videos[].path 与 manifest 幂等键为准。
 
     # ===== 2026-11-07 阶段 6:最终 MP4 导出(人工关卡与剪映草稿导入计划)=====
     # export_final_video 节点写:"succeeded" | "failed" | "skipped"(开关关闭)

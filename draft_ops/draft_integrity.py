@@ -51,7 +51,7 @@ def _issue(check: str, severity: str, draft: str, detail: str) -> dict[str, str]
 
 
 def issue_text(issue: dict[str, str]) -> str:
-    """issue → 单行文本(并入 ``join_qa_issues`` 字符串列表用)。"""
+    """issue → 单行文本(并入 ``join_qa_report.error_texts`` 字符串视图用)。"""
     draft_tag = {"zh": "中文", "en": "英文"}.get(issue.get("draft", "-"), "")
     return f"[{draft_tag}{issue['check']}] {issue['detail']}" if draft_tag else (
         f"[{issue['check']}] {issue['detail']}"
@@ -808,7 +808,7 @@ def build_qa_categories(
     Returns:
         ``(categories, new_issues, gate_failed)``;``new_issues`` 是类别判定
         **新产生**的 issue(如"有旁白但字幕未写入",已挂进对应类别的
-        ``issues``),调用方并入事件明细与 ``join_qa_issues``;``gate_failed``
+        ``issues``),调用方并入事件明细与 ``join_qa_report.error_texts``;``gate_failed``
         = 任一 required 类别处于 failed/degraded。每类
         ``{"status", "issues", "counts"?, "note"?, "required"}``。
     """
