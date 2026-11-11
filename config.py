@@ -130,10 +130,14 @@ if STORYLINE_MODE != "auto":
     )
 
 # ---------------------------------------------------------------------------
-# Phase 4 render_video 冒烟测试旁支(对应 plan_v4 §5 阶段 6 / ADR-006)
+# render_video 旁支开关(noop 治理阶段3·方案A,2026-11-12;原 ADR-006 冒烟旁支)
 # ---------------------------------------------------------------------------
-# 默认关闭;开启后 ``storyline_render_video`` 节点会跑真实渲染并把 mp4 路径写入
-# ``storyline_render_smoke_test_path``,**不**接入下游。
+# 默认关闭;开启后 ``storyline_render_video`` 节点在 QA 通过后用现有 FFmpeg
+# 导出链(draft_ops.draft_exporter)生成**初始时间线故事线预览** MP4,路径写入
+# ``storyline_render_preview_path``(报告在 ``storyline_render_preview_report``),
+# 经 preview.* 事件进创建台交付卡,**不**接入图内下游。最终 MP4 仍由
+# node_18(ADMIN_VIDEO_EDITOR_FINAL_EXPORT_ENABLED)负责,两者不重复建设。
+# 环境变量名沿用旧名,运维脚本无需改动。
 STORYLINE_ENABLE_RENDER_SMOKE_TEST: bool = (
     os.environ.get("STORYLINE_ENABLE_RENDER_SMOKE_TEST", "0").lower().strip()
     in ("1", "true", "yes")

@@ -817,7 +817,8 @@ def _build_state_graph():
         },
     )
 
-    # render_video 旁支:默认 noop → join;不接入下游(plan §2.2 旁支 + ADR-006)
+    # render_video 旁支:默认 skip;开启后生成 ffmpeg 故事线预览(阶段3 方案A)→ join。
+    # 预览产物不接入图内下游(创建台经 preview.* 事件消费),最终导出仍归 node_18。
     g.add_edge("storyline_render_video", "storyline_join")
 
     # join → generate_draft(条件边)

@@ -64,7 +64,10 @@ WORKFLOW_ID = "auto_video_editor_main"
 #: 否则浏览器布局缓存仍按 v1 旧图渲染(设计方案 §5.8)。
 #: 2026-11-12 noop 治理阶段1:模板推荐节点前置为 generate_script 主链节点、
 #: 条件路由改挂其出口 → bump 3(拓扑变更,布局缓存同步失效)。
-SCHEMA_VERSION = 3
+#: 2026-11-12 noop 治理阶段3(方案A):render_video 展示名改"故事线预览"
+#: (真实 ffmpeg 预览,非最终导出)→ bump 4(仅节点元数据文案,无拓扑变更,
+#: bump 只为让布局缓存里的旧名失效)。
+SCHEMA_VERSION = 4
 
 #: 关卡编号全集(阶段3 删除关卡⓪后剩 ①②③)
 CHECKPOINT_MARKS = ("①", "②", "③")
@@ -318,9 +321,9 @@ _NODE_META: dict[str, dict[str, Any]] = {
         "description": "屏障 [plan_timeline_pro, generate_ai_transition] 之后;qa 校验含 AI 转场的最终时间线",
     },
     "storyline_render_video": {
-        "name": "渲染视频",
+        "name": "故事线预览",
         "group": "storyline_render",
-        "description": "按时间线渲染;qa 通过后触发",
+        "description": "QA 通过后用现有 FFmpeg 导出链生成初始时间线预览 MP4(方案A;最终导出仍归 node_18)",
     },
     "storyline_qa_gate": {
         "name": "剧情 QA 闸门",

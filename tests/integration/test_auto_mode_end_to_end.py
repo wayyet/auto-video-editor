@@ -59,7 +59,8 @@ def _make_state(**overrides: Any) -> dict:
         "storyline_rough_cut_artifact": "",
         "storyline_ai_transition_artifact": "",
         "storyline_web_topic_artifact": "",
-        "storyline_render_smoke_test_path": "",
+        "storyline_render_preview_path": "",
+        "storyline_render_preview_report": None,
         "storyline_qa_retry_count": 0,
         "status_log": [],
         "error_log": [],
@@ -313,8 +314,9 @@ def test_render_video_skipped_by_default(
     state["storyline_timeline_plan"] = ""
     delta = storyline_render_video_node(state)
     assert any("storyline_render_video_skipped" in t for t in delta["status_log"])
-    # 默认 noop 不写 render_smoke_test_path
-    assert delta.get("storyline_render_smoke_test_path") in (None, "")
+    # 默认 skip 不写预览路径/报告(旁支纪律;阶段3 起旧 smoke 字段已移除)
+    assert delta.get("storyline_render_preview_path") in (None, "")
+    assert delta.get("storyline_render_preview_report") is None
 
 
 def test_render_video_disabled_path_does_not_affect_join(

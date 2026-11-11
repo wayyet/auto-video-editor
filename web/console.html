@@ -859,18 +859,22 @@
     }
 
     // ------------------------------------------------------------------
-    // 阶段 4:交付状态四态卡(草稿生成 / 草稿发布 / 交付 QA / MP4 导出)
+    // 交付状态卡(草稿生成 / 草稿发布 / 交付 QA / 故事线预览 / MP4 导出)
     // 状态只从 SSE 事件归约;SSE 断线重连按游标补发,重放即重建,不需要快照。
     // 计划 §8 阶段 4:区分"草稿生成成功 / 草稿发布成功 / 交付 QA 成功 /
     // MP4 导出成功"四种状态 —— 不把草稿文件存在误判为成片交付。
+    // 2026-11-12 noop 治理阶段3(方案A):新增"故事线预览"行,消费
+    // storyline_render_video 节点的 preview.* 事件(剪映草稿前的初始
+    // 时间线预览,与最终 MP4 导出分列)。
     // ------------------------------------------------------------------
-    const DELIVERY_ROWS = ["artifacts", "draft_generated", "draft_published", "effects", "delivery_qa", "final_export"];
+    const DELIVERY_ROWS = ["artifacts", "draft_generated", "draft_published", "effects", "delivery_qa", "storyline_preview", "final_export"];
     const DELIVERY_LABELS = {
       artifacts: "分析产物",
       draft_generated: "草稿生成",
       draft_published: "草稿发布",
       effects: "效果落盘",
       delivery_qa: "交付 QA",
+      storyline_preview: "故事线预览",
       final_export: "MP4 导出",
     };
     let delivery = {};
@@ -981,6 +985,16 @@
           note: `必需功能复检仍失败,运行已终止(run.failed):${(summary.blocked || []).join(", ")}`,
           issues: [],
         };
+      } else if (ev === "preview.succeeded") {
+        delivery.storyline_preview = { state: "ok", note: summary.output_path || "", issues: [] };
+      } else if (ev === "preview.failed") {
+        delivery.storyline_preview = {
+          state: "fail",
+          note: String(summary.reason || "").slice(0, 300),
+          issues: [],
+        };
+      } else if (ev === "preview.skipped") {
+        delivery.storyline_preview = { state: "skip", note: summary.reason || "未启用", issues: [] };
       } else if (ev === "export.succeeded") {
         delivery.final_export = { state: "ok", note: summary.output_path || "", issues: [] };
       } else if (ev === "export.failed") {
