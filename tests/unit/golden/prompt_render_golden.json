@@ -1,8 +1,8 @@
 {
   "meta": {
     "note": "单 Loader golden 基线(2026-11-04 阶段2 重录):旧聊天运行时 open_storyline.utils.prompts 已删除,唯一 Loader 为 storyline_capabilities.prompts,数据目录 prompts/tasks/。sha_* 字段供后续重构逐文件复算比对。",
-    "base_commit": "3ac0f696f3913b306e7c2aa8416e3f2d61cb0c13",
-    "generated_at": "2026-11-10T06:22:27",
+    "base_commit": "853423a7ada23ed9e6696439ba6a6e2f8a919379",
+    "generated_at": "2026-11-12T03:24:27",
     "file_count": 46
   },
   "files": [
@@ -163,9 +163,9 @@
       "kind": "generate_script",
       "lang": "en",
       "part": "system",
-      "sha_template": "805fa0921766f6b8c73b15269a566a3e0117aabdefa277a9f77c39fafe70ea62",
-      "sha_load_prompt": "805fa0921766f6b8c73b15269a566a3e0117aabdefa277a9f77c39fafe70ea62",
-      "sha_render_prompt": "805fa0921766f6b8c73b15269a566a3e0117aabdefa277a9f77c39fafe70ea62",
+      "sha_template": "f2618cebe41a4629416b05cf48bb291424712304b099dfe01d9018ac73049ce3",
+      "sha_load_prompt": "f2618cebe41a4629416b05cf48bb291424712304b099dfe01d9018ac73049ce3",
+      "sha_render_prompt": "f2618cebe41a4629416b05cf48bb291424712304b099dfe01d9018ac73049ce3",
       "variable_count": 0,
       "variables": {}
     },
@@ -174,15 +174,16 @@
       "kind": "generate_script",
       "lang": "en",
       "part": "user",
-      "sha_template": "3be5512d0feb35913dada2f1bf4666ef153d5930a65100650a5885a4b7667f66",
-      "sha_load_prompt": "3be5512d0feb35913dada2f1bf4666ef153d5930a65100650a5885a4b7667f66",
-      "sha_render_prompt": "e8b8905421956c2fc3f996f998ed135826929d599d4260377023653994e09884",
-      "variable_count": 4,
+      "sha_template": "e36f8a58d2150106b2960b1a2d43dcb77ab2108394679b3b5503e1de46305a89",
+      "sha_load_prompt": "e36f8a58d2150106b2960b1a2d43dcb77ab2108394679b3b5503e1de46305a89",
+      "sha_render_prompt": "9e59af300c8f17c8264a14e6c36f9a4844cb12c8e33e48fe29adf7b0c97cdba0",
+      "variable_count": 5,
       "variables": {
         "user_request": "<user_request>",
         "overall": "<overall>",
         "groups": "<groups>",
-        "web_research": "<web_research>"
+        "web_research": "<web_research>",
+        "script_template": "<script_template>"
       }
     },
     {
@@ -190,9 +191,9 @@
       "kind": "generate_script",
       "lang": "zh",
       "part": "system",
-      "sha_template": "0c4cdac5d14e22e08a641fab13a6c971898e4bd71706cbfbab6de1865cd390b9",
-      "sha_load_prompt": "0c4cdac5d14e22e08a641fab13a6c971898e4bd71706cbfbab6de1865cd390b9",
-      "sha_render_prompt": "0c4cdac5d14e22e08a641fab13a6c971898e4bd71706cbfbab6de1865cd390b9",
+      "sha_template": "3e12dbb85cba7c83edddeb78766c97d40ed9837598e76210ae885697ec05b4f7",
+      "sha_load_prompt": "3e12dbb85cba7c83edddeb78766c97d40ed9837598e76210ae885697ec05b4f7",
+      "sha_render_prompt": "3e12dbb85cba7c83edddeb78766c97d40ed9837598e76210ae885697ec05b4f7",
       "variable_count": 0,
       "variables": {}
     },
@@ -201,15 +202,16 @@
       "kind": "generate_script",
       "lang": "zh",
       "part": "user",
-      "sha_template": "a8b32cd26a196bb63d84e8865eeb2b5f3b41eb831dce3a9279fda6270257fd9b",
-      "sha_load_prompt": "a8b32cd26a196bb63d84e8865eeb2b5f3b41eb831dce3a9279fda6270257fd9b",
-      "sha_render_prompt": "8958e266eac783425c92334dcbee84e97e2d898fca74d0c73c96c1b8b2ad39a8",
-      "variable_count": 4,
+      "sha_template": "40642c182550ab828cb3cbe153a3572a8353cfe610d93d11f60cf4b845f781c7",
+      "sha_load_prompt": "40642c182550ab828cb3cbe153a3572a8353cfe610d93d11f60cf4b845f781c7",
+      "sha_render_prompt": "ace3d3a2fe716817a2344027bc7e8e109819f38cd42a25bb95a96bd186ef2e68",
+      "variable_count": 5,
       "variables": {
         "user_request": "<user_request>",
         "overall": "<overall>",
         "groups": "<groups>",
-        "web_research": "<web_research>"
+        "web_research": "<web_research>",
+        "script_template": "<script_template>"
       }
     },
     {

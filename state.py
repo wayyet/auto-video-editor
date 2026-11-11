@@ -286,6 +286,10 @@ class WorkflowState(TypedDict, total=False):
     storyline_understanding_artifact: Annotated[Optional[str], _last_wins]    # understand_clips
     storyline_filtered_clips: Annotated[Optional[str], _last_wins]            # filter_clips
     storyline_groups_artifact: Annotated[Optional[str], _last_wins]           # group_clips
+    # 2026-11-12 noop 治理阶段1:文案模板推荐(generate_script 的前置业务节点)。
+    # STR 节点写脚本模板推荐 artifact(script_template_plan.json)路径;
+    # generate_script 读取并注入 prompt。旧 checkpoint 缺该键时按"无模板"降级。
+    storyline_script_template_artifact: Annotated[Optional[str], _last_wins]  # script_template_recommendation
     storyline_script_artifact: Annotated[Optional[str], _last_wins]           # generate_script
     storyline_voiceover_artifact: Annotated[Optional[str], _last_wins]        # generate_voiceover
     storyline_bgm_selection: Annotated[Optional[dict], _last_wins]            # select_bgm
@@ -294,7 +298,7 @@ class WorkflowState(TypedDict, total=False):
     storyline_timeline_plan: Annotated[Optional[str], _last_wins]             # plan_timeline_pro / join
     storyline_asr_artifact: Annotated[Optional[str], _last_wins]              # DEPRECATED(2026-11-08 B1):local_asr 节点已删,仅旧 checkpoint 兼容
     storyline_rough_cut_artifact: Annotated[Optional[str], _last_wins]        # DEPRECATED(2026-11-08 B1):speech_rough_cut 节点已删,仅旧 checkpoint 兼容
-    storyline_ai_transition_artifact: Annotated[Optional[str], _last_wins]    # generate_ai_transition(ADR-005 默认关闭)
+    storyline_ai_transition_artifact: Annotated[Optional[str], _last_wins]    # generate_ai_transition(2026-11-12 阶段2 起真实生成;未授权/未配 Provider 时显式降级)
     storyline_web_topic_artifact: Annotated[Optional[str], _last_wins]        # search_web_topic(条件)
     storyline_render_smoke_test_path: Annotated[Optional[str], _last_wins]    # render_video(旁支)
     # 2026-10 调序新增的独立键(避免与既有键并发写冲突):
@@ -302,6 +306,12 @@ class WorkflowState(TypedDict, total=False):
     storyline_timeline_plan_ai: Annotated[Optional[str], _last_wins]          # plan_timeline_ai_transition(不覆盖 storyline_timeline_plan)
     storyline_auto_plan: Annotated[Optional[dict], _last_wins]                # storyline_join(不覆盖 storyline_plan)
     storyline_qa_retry_count: NotRequired[int]            # qa_gate 唯一写入者(无需 reducer)
+    # 2026-11-12 noop 治理阶段1:qa 路由信号(qa_gate 唯一写入者,LastValue 每次运行
+    # 必然刷新)。旧路由读 status_log[-1],但 status_log 走 _append_unique——固定标签
+    # 每轮重复会被去重,任何节点在 qa_retry 之后追加新标签(如 PTP 逐轮不同的
+    # warning)都会让路由静默跳过重试。路由以本字段为准;旧 checkpoint 缺字段时
+    # 回退旧判据(qa_gate.route_after_storyline_qa 内处理)。
+    storyline_qa_route_signal: NotRequired[Optional[str]]
     # storyline_targets:{ target_duration_ms, ratio, ... },qa_gate 用
     storyline_targets: NotRequired[Optional[dict]]
 

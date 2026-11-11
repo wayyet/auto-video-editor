@@ -66,6 +66,40 @@ def storyline_generate_script_node(state: WorkflowState) -> dict:
         and bool(required.get("subtitles_zh") or required.get("voiceover_zh"))
     )
 
+    # 2026-11-12 noop 治理阶段1:模板推荐是 generate_script 的前置节点,读取其
+    # artifact 把模板正文注入 prompt(风格/结构参考,非事实来源;纪律写在 prompt)。
+    # 软降级语义:artifact 缺失 / 状态非 ok / 任何异常 → 不注入,文案照常生成。
+    # 用户显式提供 custom_script 时优先级最高,跳过模板(设计文档 §1.3 任务8)。
+    template_ref: dict = {
+        "template_id": None,
+        "version": None,
+        "content_sha256": None,
+        "applied": False,
+        "reason": "no_artifact",
+    }
+    script_template_content = ""
+    try:
+        tpl_doc = _read_json_artifact(state, "storyline_script_template_artifact")
+        if state.get("custom_script"):
+            template_ref["reason"] = "custom_script_override"
+        elif isinstance(tpl_doc, dict) and str(tpl_doc.get("status") or "") == "ok":
+            content = str(tpl_doc.get("selected_template_content") or "").strip()
+            if content:
+                script_template_content = content.replace("{", "(").replace("}", ")")
+                template_ref = {
+                    "template_id": tpl_doc.get("template_id"),
+                    "version": tpl_doc.get("template_version"),
+                    "content_sha256": tpl_doc.get("content_sha256"),
+                    "applied": True,
+                    "reason": None,
+                }
+            else:
+                template_ref["reason"] = "empty_template_content"
+        elif isinstance(tpl_doc, dict):
+            template_ref["reason"] = f"status={tpl_doc.get('status')}"
+    except Exception:  # noqa: BLE001 — 模板是增强能力,缺失不阻断
+        template_ref["reason"] = "artifact_read_error"
+
     try:
         result = generate_script(
             groups=groups,
@@ -75,6 +109,7 @@ def storyline_generate_script_node(state: WorkflowState) -> dict:
             ),
             overall=overall,
             web_research=web_research,
+            script_template=script_template_content,
         )
     except Exception as e:  # noqa: BLE001
         # 能力层已不再吞异常;这里兜底留痕后 re-raise(节点红可见,不再假成功)。
@@ -89,6 +124,7 @@ def storyline_generate_script_node(state: WorkflowState) -> dict:
 
     # 证据先落盘(无论成败),再做 fail-fast 裁决。
     trace = dict(result.get("llm_trace") or {})
+    trace["template_ref"] = template_ref
     trace_path = out_dir / "script_llm_trace.json"
     trace_path.write_text(
         json.dumps(trace, ensure_ascii=False, indent=2, default=str),
@@ -99,6 +135,9 @@ def storyline_generate_script_node(state: WorkflowState) -> dict:
     # 2026-11-10 前置化阶段4:references 数组随 script.json 落盘(标题+URL+来源),
     # 供人工审核追溯资料来源;检索缺失/失败时为空数组。
     result["references"] = references
+    # 2026-11-12 阶段1:template_ref 随 script.json 落盘(模板 ID/版本/hash/是否
+    # 实际应用),script 可追溯模板来源(设计文档 §1.3 任务9)。
+    result["template_ref"] = template_ref
     out_path.write_text(
         json.dumps(result, ensure_ascii=False, default=str), encoding="utf-8"
     )

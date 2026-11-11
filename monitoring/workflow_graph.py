@@ -62,7 +62,9 @@ WORKFLOW_ID = "auto_video_editor_main"
 #: schema 结构版本;布局缓存 key 纳入它(设计 §6.2-F 第 7 条)。改字段结构时 +1。
 #: 2026-11-10 前置化阶段3/4:web_topic 拓扑移位(group_clips 条件前置)→ bump 2,
 #: 否则浏览器布局缓存仍按 v1 旧图渲染(设计方案 §5.8)。
-SCHEMA_VERSION = 2
+#: 2026-11-12 noop 治理阶段1:模板推荐节点前置为 generate_script 主链节点、
+#: 条件路由改挂其出口 → bump 3(拓扑变更,布局缓存同步失效)。
+SCHEMA_VERSION = 3
 
 #: 关卡编号全集(阶段3 删除关卡⓪后剩 ①②③)
 CHECKPOINT_MARKS = ("①", "②", "③")
@@ -278,7 +280,7 @@ _NODE_META: dict[str, dict[str, Any]] = {
     "storyline_script_template_recommendation": {
         "name": "文案模板推荐",
         "group": "storyline_script",
-        "description": "为文案推荐呈现模板",
+        "description": "文案生成前置:检索模板库并选出风格参考,供 generate_script 注入(2026-11-12 起为主链节点)",
     },
     "storyline_generate_voiceover": {
         "name": "生成配音",

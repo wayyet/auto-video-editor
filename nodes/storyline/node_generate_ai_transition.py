@@ -21,8 +21,9 @@
 接入真实客户端时,请在客户端里按输入哈希做缓存,避免重复生成 / 重复付费。
 
 ⚠️ 状态标签必须固定:重试回路里不能出现"每轮都不一样"的 ``status_log`` 标签
-(如带条数的 ``..._done:items=N``),否则新标签会排到 ``storyline_qa_retry`` 之后,
-qa 路由(看 ``status_log[-1]``)会悄悄跳过重试。生成条数写在产物 JSON 里。
+(如带条数的 ``..._done:items=N``)—— ``status_log`` 走 ``_append_unique`` 去重,
+固定标签保持通道整洁;qa 路由已改用 ``storyline_qa_route_signal`` 信号字段
+(2026-11-12 阶段1),不再依赖 ``status_log[-1]``。生成条数写在产物 JSON 里。
 
 输入:
 - ``storyline_groups_artifact``:相邻两个 group 的衔接点 = 前一组最后一个 clip → 后一组第一个 clip

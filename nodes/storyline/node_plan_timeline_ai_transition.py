@@ -21,8 +21,9 @@
   由 qa_gate 兜底校验。)
 
 ⚠️ 本节点在 qa 重试回路里,**每轮重跑一次**。状态标签必须固定(成功一律 ``_done``,
-包括"没有可挂的转场";跳过一律 ``_skipped``),不能每轮都变 —— 原因见 ``graph.py`` 文档字符串
-(qa 路由看 ``status_log[-1]``)。细节写 logger。
+包括"没有可挂的转场";跳过一律 ``_skipped``),不能每轮都变 —— ``status_log`` 走
+``_append_unique`` 去重,固定标签保持通道整洁(qa 路由已改用
+``storyline_qa_route_signal`` 信号字段,2026-11-12 阶段1)。细节写 logger。
 
 输入:
 - ``storyline_timeline_plan``(基础时间线 JSON 路径)

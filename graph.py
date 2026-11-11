@@ -206,8 +206,16 @@ def _route_after_storyline_join(state: WorkflowState) -> str:
     return "__end__"
 
 
-def _storyline_route_after_group_clips(state: WorkflowState) -> str:
-    """``storyline_group_clips`` 之后的条件路由(2026-11-10 前置化阶段3,设计方案 §4.3)。
+def _storyline_route_after_template_rec(state: WorkflowState) -> str:
+    """``storyline_script_template_recommendation`` 之后的条件路由。
+
+    2026-11-12 noop 治理阶段1:模板推荐节点前置为 ``generate_script`` 的主链
+    节点(``group_clips → 模板推荐 → 本条件路由``)。原挂点在 ``group_clips``
+    之后(2026-11-10 前置化阶段3)—— 不能保持原挂点:LangGraph 独立 ``add_edge``
+    是"任一来源完成即触发"(见下方 PTP 屏障注释),web_topic 关闭时
+    ``generate_script`` 会被条件边提前触发一次、又被模板推荐边再触发一次,
+    每轮跑两次 LLM。改挂模板推荐出口后语义等价:文案等模板推荐与检索分支
+    都完成,且每轮恰好跑一次。
 
     检索开关开启 **且** ``build_web_topic_query(state)`` 能构造出非空检索词
     (手动 query / 画面概述 / 分组主题任一非空)时,先走 ``storyline_search_web_topic``
@@ -541,8 +549,8 @@ def _build_state_graph():
     # ---- auto 链 18 节点 + qa_gate + join_storyline(plan_v4 §2.2 / §2.3)----
     # (2026-11-10:storyline_search_media「检索素材」节点已整体移除)
     g.add_node("storyline_load_media", storyline_load_media_node)
-    # 2026-11-10 前置化阶段3:检索节点改为 group_clips 后的条件前置节点
-    # (条件路由见 _storyline_route_after_group_clips;不再挂 load_media 旁支)
+    # 2026-11-10 前置化阶段3:检索节点改为条件前置节点(初始挂 group_clips 后;
+    # 2026-11-12 noop 治理阶段1 条件路由改挂模板推荐出口,见 _storyline_route_after_template_rec)
     g.add_node("storyline_search_web_topic", storyline_search_web_topic_node)
     g.add_node("storyline_split_shots", storyline_split_shots_node)
     # 2026-10 已接入:与 plan_timeline_pro 并排(同一道 4 源屏障;建图时按开关接边)
@@ -697,17 +705,24 @@ def _build_state_graph():
     g.add_edge("storyline_understand_clips", "storyline_filter_clips")
     g.add_edge("storyline_filter_clips", "storyline_group_clips")
 
-    # group_clips → 三路(2026-11-10 前置化阶段3:A 路改条件路由,设计方案 §4.3):
-    #   A) 检索开关开且能构造出非空检索词 → storyline_search_web_topic →(下方新增边)
-    #      → generate_script;开关关闭或无有效检索输入 → 条件路由直达 generate_script。
+    # group_clips → 三路(2026-11-12 noop 治理阶段1:A 路前置节点改挂模板推荐):
+    #   A) storyline_script_template_recommendation(主链前置节点)→ 条件路由
+    #      →(检索开关开且有检索词)storyline_search_web_topic → generate_script;
+    #      开关关闭或无有效检索输入 → 条件路由直达 generate_script。
     #      检索词由 ``build_web_topic_query`` 自动构造(手动 query / 画面概述 / 分组主题)。
+    #      ⚠️ 条件路由从 group_clips 改挂模板推荐出口(原挂点 2026-11-10 阶段3):
+    #      LangGraph 独立 add_edge 是"任一来源完成即触发",若保留 group_clips 条件边,
+    #      web_topic 关闭时 generate_script 会被提前触发一次 + 被模板推荐边再触发一次,
+    #      每轮跑两次 LLM(路由函数 docstring 详述)。
     #   B) recommend_transition(转场) — 等 select_bgm 完成后才走
     #   C) plan_timeline_pro:在下面 fan-in 列表形式统一加入
     # ⚠️ search_web_topic 是条件触发节点,不进任何 fan-in 屏障(D10,设计方案 §4.3):
     #    qa 重试部分轮次跳过它时,屏障若含它将永远凑不齐。
+    # 模板推荐节点本体是**每轮必跑**的主链节点(非条件分支),不踩 D10。
+    g.add_edge("storyline_group_clips", "storyline_script_template_recommendation")
     g.add_conditional_edges(
-        "storyline_group_clips",
-        _storyline_route_after_group_clips,
+        "storyline_script_template_recommendation",
+        _storyline_route_after_template_rec,
         {
             "storyline_search_web_topic": "storyline_search_web_topic",
             "storyline_generate_script": "storyline_generate_script",
@@ -717,12 +732,11 @@ def _build_state_graph():
     # 前置化阶段3:检索完成 → 文案(检索节点唯一的业务出边;不再是死胡同)
     g.add_edge("storyline_search_web_topic", "storyline_generate_script")
 
-    # generate_script 之后并行 fan-out(plan §2.2 §3):
-    #   A) script_template_recommendation
-    #   B) generate_voiceover
-    #   C) select_bgm
-    #   D) recommend_text
-    g.add_edge("storyline_generate_script", "storyline_script_template_recommendation")
+    # generate_script 之后并行 fan-out(plan §2.2 §3;2026-11-12 起模板推荐已前置,
+    # 从这里移除,改为上方 group_clips → 模板推荐前置):
+    #   A) generate_voiceover
+    #   B) select_bgm
+    #   C) recommend_text
     g.add_edge("storyline_generate_script", "storyline_generate_voiceover")
     g.add_edge("storyline_generate_script", "storyline_select_bgm")
     g.add_edge("storyline_generate_script", "storyline_recommend_text")

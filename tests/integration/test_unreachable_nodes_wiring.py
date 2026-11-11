@@ -61,8 +61,16 @@ CONDITIONAL_NODES = {
 }
 
 # ---------------------------------------------------------------------------
-# 黄金轨迹:接入前(HEAD a7cefa8)默认 stub 下 auto 模式的执行轨迹(按超步分组、组内排序)。
-# 默认 stub BGM 时长 90s > 目标 35s,所以 qa 会重试 3 次 → group_clips 共 4 轮。
+# 黄金轨迹:flags 全关(web=False, ai=False)+ 默认 stub 下 auto 模式的执行轨迹
+# (按超步分组、组内排序;2026-11-12 noop 治理阶段1 实测)。
+#
+# 变更记录:
+# - 2026-11-12 阶段1:模板推荐前置为 generate_script 主链节点
+#   (group_clips → STR → 条件路由 → web_topic|generate_script),轨迹形状随之更新。
+# - 旧版黄金轨迹是 _CYCLE × 4(stub BGM 90s > 目标 35s → qa 重试 3 次)。模糊修复
+#   阶段3 的逐片段速度护栏(7ad573d)落地后,planner 不再注水拉长,actual_ms=7200
+#   ≤ 目标 → qa 一轮即过、重试回路不再自触发 —— 这正是本文件 5 个存量失败用例的
+#   共同根因。需要覆盖重试回路的用例改用 ``run_auto(qa_target_ms=...)`` 强制触发。
 # ---------------------------------------------------------------------------
 _PREFIX = [
     ["storyline_load_media"],
@@ -72,13 +80,9 @@ _PREFIX = [
 ]
 _CYCLE = [
     ["storyline_group_clips"],
-    ["storyline_generate_script", "storyline_recommend_transition"],
-    [
-        "storyline_generate_voiceover",
-        "storyline_recommend_text",
-        "storyline_script_template_recommendation",
-        "storyline_select_bgm",
-    ],
+    ["storyline_recommend_transition", "storyline_script_template_recommendation"],
+    ["storyline_generate_script"],
+    ["storyline_generate_voiceover", "storyline_recommend_text", "storyline_select_bgm"],
     ["storyline_plan_timeline_pro", "storyline_recommend_transition", "storyline_select_bgm"],
     ["storyline_qa_gate", "storyline_recommend_transition"],
 ]
@@ -88,7 +92,7 @@ _SUFFIX = [
     ["generate_draft"],
     ["node_06_human_reorder"],
 ]
-GOLDEN_STEPS = _PREFIX + _CYCLE * 4 + _SUFFIX
+GOLDEN_STEPS = _PREFIX + _CYCLE + _SUFFIX
 
 
 # ===========================================================================
@@ -107,9 +111,11 @@ _RT = "storyline_recommend_text"
 
 # 各节点 → (入边邻居, 出边邻居)。这张表就是《关联分析表》的"放在哪":每个新节点贴着自己的相关节点。
 NEIGHBORS: dict[str, tuple[set[str], set[str]]] = {
-    # 前置化阶段3:group_clips 后的条件前置节点(检索 → 文案;条件路由来自
-    # _storyline_route_after_group_clips)。search_media 已随 2026-11-10 检索素材移除删除
-    "storyline_search_web_topic": ({_GC}, {_GS}),
+    # 2026-11-12 noop 治理阶段1:模板推荐 = group_clips → 文案 的主链前置节点,
+    # 出口挂检索条件路由(web_topic | generate_script 条件二选一)
+    "storyline_script_template_recommendation": ({_GC}, {_GS, "storyline_search_web_topic"}),
+    # 检索节点入边改自模板推荐出口(原挂 group_clips 条件路由,前置化阶段3)
+    "storyline_search_web_topic": ({"storyline_script_template_recommendation"}, {_GS}),
     # 与 plan_timeline_pro 并排:同一道 4 源屏障
     _GAT: ({_GC, _GS, _GV, _SB}, {_PTAT}),
     # plan_timeline_pro + generate_ai_transition 之后、qa_gate 之前
@@ -360,13 +366,25 @@ def run_auto(
     no_overall: bool = False,
     web_snippets: list[str] | None = None,
     web_error_code: str | None = None,
+    qa_target_ms: int | None = None,
 ) -> Run:
-    """在真实图上跑一遍 auto 模式,直到关卡①(node_06_human_reorder)挂起。"""
+    """在真实图上跑一遍 auto 模式,直到关卡①(node_06_human_reorder)挂起。
+
+    ``qa_target_ms``:给定值时把 qa 的目标时长解析 patch 成该值,强制触发 qa 重试
+    回路(模糊修复阶段3 速度护栏落地后,stub 跑 qa 一轮即过、重试不再自触发 ——
+    本文件 5 个存量失败用例的共同根因;D10 回归用例改用此参数恢复覆盖)。
+    """
     # ---- 开关 ----
     monkeypatch.setattr(config, "STORYLINE_ENABLE_WEB_TOPIC", web)
     monkeypatch.setattr(config, "STORYLINE_ENABLE_AI_TRANSITION", ai)
     monkeypatch.setattr("storyline_capabilities.ai_transition_client.ENABLE_AI_TRANSITION", ai)
     monkeypatch.setattr(config, "ASSEMBLY_QC_GATE_ENABLED", False)  # 直连 node_06,不跑 assembly 6 节点
+    if qa_target_ms is not None:
+        # qa 的目标解析函数在 qa_gate 模块命名空间绑定(from ... import),patch 使用方
+        monkeypatch.setattr(
+            "nodes.storyline.qa_gate.target_duration_ms",
+            lambda _state, default=0: qa_target_ms,
+        )
 
     out_root = tmp_path / "outputs"
     (out_root / "storyline").mkdir(parents=True, exist_ok=True)
@@ -639,12 +657,13 @@ def test_defaults_run_all_wired_nodes_with_expected_shape(
     # 阶段3 auto-only:第一个任务就是 storyline_load_media(START 直连)
     assert run.order[0][1] == "storyline_load_media"
 
-    # 前置化阶段3:检索是 group_clips 与 generate_script 之间的条件前置节点,
-    # 不再与 split_shots 同超步(load_media 旁支已拆)
+    # 2026-11-12 阶段1:模板推荐是 group_clips 与 检索/文案 之间的主链前置节点
     gc_steps = run.steps_of(_GC)
+    str_steps = run.steps_of("storyline_script_template_recommendation")
     search_steps = run.steps_of("storyline_search_web_topic")
     script_steps = run.steps_of(_GS)
-    assert search_steps == [s + 1 for s in gc_steps], "检索应紧跟每轮 group_clips"
+    assert str_steps == [s + 1 for s in gc_steps], "模板推荐应紧跟每轮 group_clips"
+    assert search_steps == [s + 1 for s in str_steps], "检索应紧跟每轮模板推荐"
     assert script_steps == [s + 1 for s in search_steps], "文案应紧跟每轮检索"
     # B1 ASR 移除:split_shots 后静态直连 understand_clips(同一条主边,无旁支)
 
@@ -667,16 +686,20 @@ def test_defaults_run_all_wired_nodes_with_expected_shape(
 def test_qa_retry_loop_still_retriggers_plan_timeline_pro(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """默认 stub BGM=90s > 目标 35s → qa 重试 3 次 → group_clips / plan_timeline_pro 各 4 轮。
+    """qa 重试 3 次 → group_clips / plan_timeline_pro 各 4 轮(D10 回归)。
 
     若条件触发的节点被放进 fan-in 屏障,第二轮 plan_timeline_pro 不会再触发,图会静默 END(next=())。
     AI 转场两个节点在回路**里面**,与 plan_timeline_pro 同频:每轮各 1 次(共 4 次)。
+
+    (模糊修复阶段3 速度护栏后 stub 跑 qa 一轮即过、重试不再自触发 —— 改用
+    ``qa_target_ms`` 强制触发;模板推荐同在回路里,每轮各 1 次。)
     """
     run = run_auto(
         monkeypatch,
         tmp_path,
         query="夏季防晒",
         web_titles=["防晒霜怎么选"],
+        qa_target_ms=1000,
     )
     assert run.count("storyline_group_clips") == 4
     assert run.count("storyline_plan_timeline_pro") == 4
@@ -896,6 +919,7 @@ def test_ai_client_failure_keeps_base_timeline(
         monkeypatch,
         tmp_path,
         boom=("storyline_capabilities.ai_transition_client.StubAITransitionClient.generate",),
+        qa_target_ms=1000,  # 强制重试回路(存量根因见 run_auto docstring)
     )
     # 每个衔接点都失败 → 没有可挂的转场:PTAT 仍然"完成"(固定标签),保留基础时间线,屏障照常凑齐
     assert "storyline_plan_timeline_ai_transition_done" in run.status_log
@@ -924,12 +948,15 @@ def test_ai_status_tags_are_fixed_so_retry_survives_changing_group_count(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """回归:重试回路里 AI 节点的状态标签若带条数(``..._done:items=N``),分组数一变就会出现新标签,
-    新标签排在 ``storyline_qa_retry`` 之后,qa 路由(看 ``status_log[-1]``)就会悄悄跳过重试。
+    破坏 status_log 通道的去重整洁性。qa 路由已改用 ``storyline_qa_route_signal``
+    信号字段(2026-11-12 阶段1;存量缺陷:重复的 storyline_qa_retry 被
+    _append_unique 去重后,PTP 逐轮不同的 warning 会让旧路由静默跳过重试)。
 
     这里让每轮 group_clips 产出的 group 数不同(2 → 3 → 2 → 3):AI 转场清单条数逐轮变化,
-    qa 仍必须重试满 3 次(group_clips 共 4 轮)。
+    qa 仍必须重试满 3 次(group_clips 共 4 轮)。重试用 ``qa_target_ms`` 强制触发
+    (存量根因见 run_auto docstring)。
     """
-    run = run_auto(monkeypatch, tmp_path, group_counts=[2, 3, 2, 3])
+    run = run_auto(monkeypatch, tmp_path, group_counts=[2, 3, 2, 3], qa_target_ms=1000)
     assert run.count("storyline_group_clips") == 4, "qa 重试被悄悄跳过了(状态标签不固定的症状)"
     assert run.count("storyline_generate_ai_transition") == 4
     assert run.next_nodes == ("node_06_human_reorder",)
@@ -944,8 +971,12 @@ def test_ai_status_tags_are_fixed_so_retry_survives_changing_group_count(
 def test_ai_pair_attaches_only_junctions_that_exist_in_the_final_timeline(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """最后一轮是 2 个 group → 只有 1 个衔接点;前几轮的清单不会残留进最终时间线。"""
-    run = run_auto(monkeypatch, tmp_path, group_counts=[3, 3, 3, 2])
+    """最后一轮是 2 个 group → 只有 1 个衔接点;前几轮的清单不会残留进最终时间线。
+
+    (原用例依赖 stub BGM 90s 触发的 qa 重试 4 轮;模糊修复阶段3 后重试不再自触发,
+    改用 ``qa_target_ms`` 强制。)
+    """
+    run = run_auto(monkeypatch, tmp_path, group_counts=[3, 3, 3, 2], qa_target_ms=1000)
     assert run.timeline is not None
     items = run.timeline["ai_transitions"]
     assert [(i["from_clip_id"], i["to_clip_id"]) for i in items] == [("clip_0001", "clip_0002")]

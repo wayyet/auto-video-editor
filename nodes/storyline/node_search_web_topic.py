@@ -70,7 +70,7 @@ def storyline_search_web_topic_node(state: WorkflowState) -> dict:
 
     # 2026-11-10 阶段1:检索词改由统一 builder 构造(手动 query 优先,缺失时
     # 由 understanding.overall + groups[].theme 自动构造;前置化设计方案 §4.1)。
-    # 与 ``graph._storyline_route_after_group_clips`` 共用同一 builder(§4.1)。
+    # 与 ``graph._storyline_route_after_template_rec`` 共用同一 builder(§4.1)。
     query = build_web_topic_query(state)
     query_hash = hashlib.sha256(query.encode("utf-8")).hexdigest()
 

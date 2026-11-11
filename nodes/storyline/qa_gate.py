@@ -6,8 +6,8 @@
 2. **算出** 实际总时长 ``actual_ms = clips[-1].timeline_out_ms``。
 3. **对照** ``storyline_targets.target_duration_ms``,若
    ``actual_ms > target_ms * 1.05`` 且 ``storyline_qa_retry_count < 3`` →
-   ``status_log`` append ``storyline_qa_retry``,触发条件边回到
-   ``storyline_group_clips`` 重新跑。
+   ``status_log`` append ``storyline_qa_retry`` + 写路由信号
+   ``storyline_qa_route_signal``,触发条件边回到 ``storyline_group_clips`` 重新跑。
 4. **通过 / retry 耗尽** → 写 ``storyline_qa_done`` 走 join_storyline。
 
 设计纪律(plan §4.2):
@@ -103,10 +103,13 @@ def _per_clip_issues(canonical: CanonicalTimeline) -> list[str]:
 
 
 def storyline_qa_gate_node(state: WorkflowState) -> dict:
-    """QA 闸门主入口(纯函数副作用:仅写 status_log / error_log / 重试计数)。
+    """QA 闸门主入口(纯函数副作用:仅写 status_log / error_log / 重试计数 / 路由信号)。
 
     返回 ``dict`` 里:
     - ``status_log``: 总是 append,要么 ``_retry`` 要么 ``_done``
+    - ``storyline_qa_route_signal``: **每次运行必写**(2026-11-12 阶段1)——
+      条件边路由的权威依据。status_log 走 ``_append_unique``(固定标签每轮重复
+      会被去重),不能作为路由依据;独立 LastValue 字段每次运行必然刷新。
     - ``storyline_qa_retry_count``: 失败时 +1
     - ``error_log``: 产线合约违例时按 ADR-007 写结构化记录
     """
@@ -120,6 +123,7 @@ def storyline_qa_gate_node(state: WorkflowState) -> dict:
                 f"[storyline:qa_gate] {e.error_code}: {e}",
             ],
             "storyline_error_code": e.error_code,
+            "storyline_qa_route_signal": "storyline_qa_failed",
         }
 
     if canonical is None or not canonical.clips:
@@ -128,6 +132,7 @@ def storyline_qa_gate_node(state: WorkflowState) -> dict:
             "status_log": append_status_tag(
                 state, "storyline_qa_done_empty"
             ),
+            "storyline_qa_route_signal": "storyline_qa_done_empty",
         }
 
     # 逐片段一致性校验(阶段3):任一违例直接 fail,不进入总时长 retry 循环。
@@ -145,6 +150,7 @@ def storyline_qa_gate_node(state: WorkflowState) -> dict:
                 *[f"[storyline:qa_gate] {msg}" for msg in clip_issues],
             ],
             "storyline_error_code": code,
+            "storyline_qa_route_signal": "storyline_qa_failed",
         }
 
     actual_ms = int(canonical.clips[-1].timeline_out_ms)
@@ -156,6 +162,7 @@ def storyline_qa_gate_node(state: WorkflowState) -> dict:
         return {
             "status_log": append_status_tag(state, "storyline_qa_retry"),
             "storyline_qa_retry_count": retry + 1,
+            "storyline_qa_route_signal": "storyline_qa_retry",
         }
 
     # 通过 / 重试耗尽(强制走 join)
@@ -164,6 +171,7 @@ def storyline_qa_gate_node(state: WorkflowState) -> dict:
             state,
             f"storyline_qa_done: actual_ms={actual_ms} target_ms={target_ms}",
         ),
+        "storyline_qa_route_signal": "storyline_qa_done",
     }
 
 
@@ -171,14 +179,30 @@ def storyline_qa_gate_node(state: WorkflowState) -> dict:
 # 条件边:qa_gate 之后走向(plan §4.2 §2.2 拓扑)
 # ---------------------------------------------------------------------------
 def route_after_storyline_qa(state: WorkflowState) -> str:
-    """读 ``status_log[-1]`` 判断走向 — 与 plan §4.2 route_after_storyline_qa 等价。
+    """按 qa 的路由信号判断走向(2026-11-12 阶段1 起;与 plan §4.2 拓扑一致)。
+
+    权威依据 = ``storyline_qa_route_signal``(qa_gate 每次运行必写的 LastValue
+    字段)。旧实现读 ``status_log[-1]``,但 status_log 走 ``_append_unique``——
+    固定标签(如 ``storyline_qa_retry``)每轮重复会被去重,任何节点在它之后
+    追加新标签(如 plan_timeline_pro 逐轮内容不同的 warning)都会让本路由
+    读到别的标签、**静默跳过重试直接渲染**(分组数逐轮变化的场景实测复现)。
 
     Returns:
         ``"storyline_group_clips"`` — 回退再跑(仅 qa 触发 retry 时)
         ``"storyline_render_video"`` — 通过 / 失败 / 空 plan,统一走
         render_video(默认 noop)→ join_storyline(让 qa_gate 不直接连 join,
         而是经过 render_video 旁路,与 plan §2.2 拓扑一致)
+
+    兼容:旧 checkpoint 中途恢复时 state 可能没有信号字段 → 回退旧判据
+    (``status_log[-1]``)。
     """
+    signal = state.get("storyline_qa_route_signal")
+    if signal is not None:
+        return (
+            "storyline_group_clips"
+            if signal == "storyline_qa_retry"
+            else "storyline_render_video"
+        )
     log = state.get("status_log", []) or []
     if log and log[-1] == "storyline_qa_retry":
         return "storyline_group_clips"

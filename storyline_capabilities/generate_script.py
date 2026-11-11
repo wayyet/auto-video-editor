@@ -42,6 +42,7 @@ def generate_script(
     user_request: str = "",
     overall: str = "",
     web_research: str = "",
+    script_template: str = "",
     client: Optional[LLMClient] = None,
 ) -> dict[str, Any]:
     """为每个 group 生成一段文案 + 配音脚本。
@@ -56,16 +57,31 @@ def generate_script(
         web_research: 外部网页检索摘要与来源 URL(来自 ``search_web_topic``
             产物,经节点层清洗;前置化设计方案 §4.4)。检索缺失/失败时为空串,
             文案照常生成。外部资料是不可信参考,模板已写明使用纪律。
+        script_template: 文案模板正文(来自 ``script_template_recommendation``
+            产物,经节点层清洗;2026-11-12 noop 治理阶段1)。空串 = 未注入模板,
+            文案照常生成。模板是风格/结构参考、不是事实来源,使用纪律写在
+            prompt(system ``[script_template]`` 段 + user 模板块)。
 
     输出 ``{"group_scripts": [{group_id, narration, summary, ...}, ...],
     "lang": ..., "llm_trace": {...}}``;``llm_trace`` 记录 LLM 调用与解析
-    留痕(节点层落盘 + 依此裁决空 narration 是否 fail-fast)。
+    留痕(节点层落盘 + 依此裁决空 narration 是否 fail-fast),
+    并带 ``script_template_injected`` 证明模板正文是否真实进入 LLM 请求。
     """
     if not groups:
         return {"group_scripts": [], "lang": lang, "llm_trace": {"note": "no groups"}}
 
-    # 模板需要 user_request / overall / groups / web_research 四个变量(D6:此前
-    # user_request 与 overall 没传,占位符原样残留;阶段4 新增 web_research)。
+    injected = bool(str(script_template or "").strip())
+    template_body = str(script_template or "").strip()
+    if not template_body:
+        # 空模板也必须渲染出明确的占位语,避免 user 模板的模板块悬空
+        template_body = (
+            "（本次运行没有注入模板，忽略本段）"
+            if lang == "zh"
+            else "(no template injected this run; ignore this section)"
+        )
+    # 模板需要 user_request / overall / groups / web_research / script_template
+    # 变量(D6:此前 user_request 与 overall 没传,占位符原样残留;阶段4 新增
+    # web_research;阶段1 新增 script_template)。
     sys_p = render_prompt("generate_script", "system", lang=lang)
     user_p = render_prompt(
         "generate_script",
@@ -74,6 +90,7 @@ def generate_script(
         user_request=str(user_request or "").strip() or "No requirements",
         overall=str(overall or ""),
         web_research=str(web_research or "").strip() or "（无外部检索资料）",
+        script_template=template_body,
         groups="\n".join(
             f"- {g.get('group_id', '?')} theme={g.get('theme', '')} "
             f"clips={len(g.get('clips') or [])}"
@@ -105,6 +122,8 @@ def generate_script(
         # 也留头部证据 —— script_llm_trace.json 可核对 web_research 是否真的
         # 进入 LLM 请求(前置化设计方案 §5.7 DoD)。
         trace["user_prompt_head"] = user_p[:4000]
+        # 2026-11-12 阶段1:模板注入证据(验收标准:trace 能证明模板正文进入 LLM 请求)
+        trace["script_template_injected"] = injected
         if trace.get("ok") and _extract_scripts(obj):
             break
 

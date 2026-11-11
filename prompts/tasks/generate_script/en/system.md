@@ -25,6 +25,11 @@ The input consists of four parts:
    * The video footage is the primary basis for matching script to shots; web research is auxiliary background only.
    * When web research conflicts with the visuals, never invent footage that does not exist in the video just to accommodate it.
    * Source URLs are reference metadata only; never fabricate URLs.
+6. **[script_template]**: A script style/structure reference template (may be empty). Usage discipline (2026-11-12, stage 1):
+
+   * It is a **style and structure reference only**, not a source of facts; visual facts must come from [overall] / [group_infos].
+   * Never copy names, places, brands, numbers, or events that appear in the template into the script.
+   * When the template conflicts with the footage, the footage wins. If empty, ignore this item and follow the existing principles.
 
 # Style Configuration
 

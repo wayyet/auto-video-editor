@@ -11,7 +11,7 @@
 / ``{"<key>": str(path)}`` 形式读写键,代码体(非 docstring)中出现该字符串
 字面量即视为证据。粒度是"模块级"而非"行级",足够拦截重命名漂移。
 
-后续扩展(设计文档既定):阶段1 追加 ``storyline_script_template_artifact``
+后续扩展(设计文档既定):阶段1 已追加 ``storyline_script_template_artifact``
 (producer=STR 节点,consumer=generate_script 节点)。
 """
 from __future__ import annotations
@@ -25,6 +25,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 #: artifact 键 → 生产/消费清单(阶段0 实测:全仓 grep 区分真实代码读写与注释提及)。
 ARTIFACT_MANIFEST: dict[str, dict[str, list[str]]] = {
+    # 2026-11-12 阶段1:模板推荐节点产 artifact,generate_script 消费(注入 prompt)
+    "storyline_script_template_artifact": {
+        "producers": ["nodes/storyline/node_script_template_recommendation.py"],
+        "consumers": ["nodes/storyline/node_generate_script.py"],
+    },
     "storyline_script_artifact": {
         "producers": ["nodes/storyline/node_generate_script.py"],
         "consumers": [
@@ -98,9 +103,10 @@ def test_manifest_producers_and_consumers(key: str) -> None:
 
 
 def test_manifest_covers_expected_keys() -> None:
-    """阶段0 至少锁定的三个键在册(阶段1/2 追加新键时同步扩表)。"""
+    """阶段0 锁定的三个键 + 阶段1 追加的模板 artifact 在册(阶段2 继续扩表)。"""
     assert {
         "storyline_script_artifact",
         "storyline_ai_transition_artifact",
         "storyline_timeline_plan",
+        "storyline_script_template_artifact",
     } <= set(ARTIFACT_MANIFEST)
