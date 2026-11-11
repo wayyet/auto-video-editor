@@ -170,6 +170,52 @@ def test_every_registered_node_is_reachable_from_start(monkeypatch: pytest.Monke
     assert not unreachable, f"这些节点注册了但从 START 不可达:{sorted(unreachable)}"
 
 
+# ---------------------------------------------------------------------------
+# 零出边守卫(2026-11-12 noop 治理阶段0,设计文档 §2.3):每个注册节点都必须有
+# 出边(普通边 / 条件路由 / waiting 屏障源,显式连 END 也算)。这是对可达性守卫的
+# 补强:可达 ≠ 有下游,"只写状态标签的死胡同"由这里拦截。
+# 边真源取 **builder** —— compiled get_graph() 会给"只入不出"的 termini 节点合成
+# 伪 →__end__ 边(langgraph 1.2.9 实测,详见 test_workflow_graph_schema.py docstring),
+# 用编译图判零出边会把死胡同误判成有出边。
+# 临时允许集:阶段0 时全图唯一零出边节点是 storyline_script_template_recommendation
+# (结构级 noop,仅有 generate_script → STR 一条入边)。阶段1 把它改造成
+# generate_script 的前置业务节点后**必须摘除**,允许集清空。
+_ALLOWED_TERMINI: set[str] = {"storyline_script_template_recommendation"}
+
+
+def _builder_outgoing_sources(compiled) -> set[str]:
+    """builder 真源:所有"作为边来源出现过"的节点(普通边源 / 屏障源 / 条件路由源,含 →END)。"""
+    b = compiled.builder
+    sources: set[str] = set()
+    for s, _d in b.edges:
+        sources.add(s)
+    for srcs, _d in getattr(b, "waiting_edges", set()):
+        for s in srcs:
+            sources.add(s)
+    for src, named in getattr(b, "branches", {}).items():
+        for _name, spec in named.items():
+            if getattr(spec, "ends", None):
+                sources.add(src)
+    return sources
+
+
+@pytest.mark.parametrize("ai", [True])
+def test_every_registered_node_has_outgoing_edges(monkeypatch: pytest.MonkeyPatch, ai: bool) -> None:
+    """零出边守卫:注册节点必须接下游或显式 END,不允许注册后既不产业务也不路由。
+
+    只在默认档(ai=True)跑,与上面的可达性守卫同口径:开关关闭时 GAT/PTAT 是
+    "注册但不接线"(建图回退拓扑),那两个节点天然零出边,不属本守卫对象。
+    """
+    _, compiled = _compiled(monkeypatch, ai=ai)
+    nodes = set(compiled.get_graph().nodes) - {"__start__", "__end__"}
+    with_out = _builder_outgoing_sources(compiled) & nodes
+    missing = nodes - with_out - _ALLOWED_TERMINI
+    assert not missing, (
+        "这些注册节点没有任何出边(普通/条件/屏障源,含显式 END),"
+        f"请接下游节点或显式连 END:{sorted(missing)}"
+    )
+
+
 @pytest.mark.parametrize("node", sorted(NEIGHBORS))
 def test_each_new_node_sits_beside_its_own_related_nodes(
     monkeypatch: pytest.MonkeyPatch, node: str
