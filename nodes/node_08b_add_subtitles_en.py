@@ -43,9 +43,10 @@ def add_subtitles_en(state: WorkflowState) -> dict:
         return {"error_log": [f"[node_08b] 英文分支草稿不存在,跳过: {draft_file}"]}
 
     draft = load_draft(draft_file)
-    # 基础样式 = 默认。注:node_08 把 scout 报告写到 state["subtitle_scout_report"],
-    # 但该键没有在 state.py 里声明,图运行时会被丢弃,这里拿不到(已知限制)。
-    # 如需与中文字幕同一份 scout 样式:先在 state.py 声明该键,再把 None 换成 state.get(...)。
+    # 基础样式 = 默认。注:node_08 把 scout 报告写到 state["subtitle_scout_report"]
+    # (该键已在 state.py 声明,2026-11-12 修正本处旧注释"未声明会被丢弃"的失真);
+    # 英文分支当前**有意**不消费它(是否复用中文 scout 样式属行为评审,另案)。
+    # 如需复用:把 None 换成 state.get("subtitle_scout_report") 即可。
     # P4(决定 2 选 A):storyline 推荐(storyline_text_style_plan.default)叠加在此
     # 基础样式之上 —— 这是推荐样式唯一真实落草稿的通道:字号/颜色/位置有剪映
     # 渲染路径会生效;字体仅检查 ASSETS_FONTS_DIR 存在性并记日志(原生 content

@@ -370,7 +370,10 @@ class ContractInvalid(Exception):
 
     2026-09 迁移解耦:原 ``mcp_clients.openstoryline_client.ContractInvalid``
     移到这里,供 node_05 mapper / node_04 plan_reader 使用,与 MCP SDK 彻底解耦。
-    携带 ``error_code=StorylineErrorCode.CONTRACT_INVALID`` 用于 graph 路由决策。
+    携带 ``error_code=StorylineErrorCode.CONTRACT_INVALID``;qa_gate 捕获后把它
+    写入 ``state["storyline_error_code"]`` 作**审计留痕**(2026-11-12 noop 治理
+    阶段5批0 修正:graph 路由实际以 status_log / storyline_qa_route_signal 为准,
+    原文"用于 graph 路由决策"为注释失真)。
     """
 
     def __init__(self, message: str, **ctx: Any) -> None:

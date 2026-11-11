@@ -798,7 +798,9 @@ def build_qa_categories(
     """按类别聚合 QA 结果并生成类别专属判定(阶段 6 required-feature gate)。
 
     Args:
-        state: 工作流 state(读 voiceover_summary/fx_summary 等摘要)。
+        state: 工作流 state(读 voiceover_summary/tts_issue/sticker_summary
+            等摘要;2026-11-12 修正:实现从不读 fx_summary,原文档字符串为
+            注释失真 —— noop 治理阶段5批0)。
         zh_draft / en_draft: 两份草稿 dict(不可得时 None)。
         deep_issues: 深度 QA(draft_integrity)+ 尾链的结构化 issue,
             每条已带 ``category`` 键(节点侧写入)。
