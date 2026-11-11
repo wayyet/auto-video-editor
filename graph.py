@@ -774,12 +774,20 @@ def _build_state_graph():
     #   图在 recommend_transition 处**静默 END**(next=[]),worker 还报
     #   "completed"。SS 在 SS→understand_clips→filter_clips→GC 这条链上,
     #   GC 完成即蕴含 SS 完成,去掉它不放松任何时序约束。
+    # 2026-11-12 边治理阶段2(设计文档 §5.5):补入 RTR/TXT 两源,扩为 6 源屏障。
+    #   PTP 节点实际还读取 storyline_transition_plan(node_plan_timeline_pro.py:56)
+    #   与 storyline_text_style_plan(:57),时间线能力把转场写进 clip 的
+    #   transition_in/out、把文字样式写进 subtitle_style —— 原 4 源屏障不等这两个
+    #   推荐,PTP 可能在字段未写入时读到空值,时间线缺转场/样式配置。
+    #   RTR/TXT 都是每轮必跑节点(在重试回路内),扩源不踩 D10。
     g.add_edge(
         [
             "storyline_group_clips",
             "storyline_generate_script",
             "storyline_generate_voiceover",
             "storyline_select_bgm",
+            "storyline_recommend_transition",
+            "storyline_recommend_text",
         ],
         "storyline_plan_timeline_pro",
     )
@@ -811,15 +819,11 @@ def _build_state_graph():
         )
         _plan_for_qa = "storyline_plan_timeline_ai_transition"
 
-    # qa_gate 也是 fan-in:PTP(开启 AI 转场时为 PTAT)+ RTR + RT(plan §2.2)。同样改 list 形式。
-    g.add_edge(
-        [
-            _plan_for_qa,
-            "storyline_recommend_transition",
-            "storyline_recommend_text",
-        ],
-        "storyline_qa_gate",
-    )
+    # qa_gate 只等最终时间线节点(2026-11-12 边治理阶段2,设计文档 §5.7):
+    # QA 实际只读取 storyline_timeline_plan 并校验 Canonical Timeline(qa_gate.py),
+    # 不直接读 transition_plan / text_style_plan;PTP 已在上方屏障等待 RTR/TXT,
+    # QA 再等它们属重复依赖 —— 精简为单源(AI 开=PTAT,关=PTP)。
+    g.add_edge(_plan_for_qa, "storyline_qa_gate")
 
     # qa_gate 条件边:retry→ group_clips;通过 / 失败→ render_video(条件)→ join
     g.add_conditional_edges(
