@@ -972,11 +972,10 @@ def test_ai_transition_awaiting_approval_keeps_base_timeline_and_zero_calls(
     assert run.next_nodes == ("node_06_human_reorder",)
 
 
-def test_ai_transition_real_generation_flows_into_timeline_audit_list(
+def test_ai_transition_real_generation_materializes_into_timeline(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """批准 + fake Provider:真实产物走完 GAT → PTAT 审计清单
-    (clips 物化属阶段2b;本阶段只验证生成链与清单接线)。"""
+    """批准 + fake Provider:真实产物走完 GAT → PTAT 物化(SourceMedia+Clip)。"""
     run = run_auto(
         monkeypatch,
         tmp_path,
@@ -994,7 +993,7 @@ def test_ai_transition_real_generation_flows_into_timeline_audit_list(
     assert Path(item["video_path"]).is_file()
     assert item["provider"] == "minimax" and item["duration_ms"] > 0
     assert item["request_id"] == "wiring-1"
-    # 时间线审计清单带着同一产物,契约校验通过
+    # 时间线物化:转场 clip 插在衔接点处,来源媒体注册进 source_media
     assert run.timeline is not None
     assert Path(run.values["storyline_timeline_plan"]).name == "timeline_plan_ai.json"
     tl_items = run.timeline["ai_transitions"]
@@ -1002,12 +1001,21 @@ def test_ai_transition_real_generation_flows_into_timeline_audit_list(
         (item["from_clip_id"], item["to_clip_id"])
     ]
     assert run.timeline["options"]["enable_ai_transition"] is True
+    transition_clips = [c for c in run.timeline["clips"] if c.get("ai_transition_pair")]
+    assert len(transition_clips) == 1
+    tc = transition_clips[0]
+    assert tc["ai_transition_pair"] == (
+        f"{item['from_clip_id']}->{item['to_clip_id']}"
+    )
+    assert tc["source_in_ms"] == 0 and tc["source_out_ms"] == item["duration_ms"]
+    media_ids = {m["media_id"] for m in run.timeline["source_media"]}
+    assert tc["source_media_id"] in media_ids
     CanonicalTimeline.model_validate(run.timeline)
-    # 阶段2b 前 clips 不变(mapper 物化后由 2b 用例接管)
+    # 基础时间线文件保持原样(可回退)
     base = json.loads(
         (artifact.parent / "timeline_plan.json").read_text(encoding="utf-8")
     )
-    assert run.timeline["clips"] == base["clips"]
+    assert all("ai_transition_pair" not in c for c in base["clips"])
 
 
 def test_ai_transition_flag_off_skips_both_nodes(

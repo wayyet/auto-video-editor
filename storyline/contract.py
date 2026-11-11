@@ -88,6 +88,12 @@ class Clip(BaseModel):
     subtitle_style: Optional[dict[str, Any]] = Field(
         None, description="该片段的字幕样式(recommend_text 产出)"
     )
+    # 2026-11-12 noop 治理阶段2b:AI 转场合成片段的溯源标记
+    # ("{from_clip_id}->{to_clip_id}");普通片段为 null。mapper 按普通视频
+    # 片段处理本字段,仅 QA/诊断消费。
+    ai_transition_pair: Optional[str] = Field(
+        None, description="AI 转场片段溯源:from_clip_id->to_clip_id(合成片段专用)"
+    )
 
     @model_validator(mode="after")
     def _validate_ranges(self) -> "Clip":

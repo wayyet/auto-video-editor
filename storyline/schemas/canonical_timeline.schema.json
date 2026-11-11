@@ -90,8 +90,157 @@
     "clips": {
       "type": "array",
       "items": {
-        "type": "object",
         "additionalProperties": false,
+        "description": "单个时间轴片段。源范围 / 时间轴范围各自独立毫秒整数。",
+        "properties": {
+          "clip_id": {
+            "description": "本地唯一 ID,形如 clip_0001",
+            "title": "Clip Id",
+            "type": "string"
+          },
+          "source_media_id": {
+            "description": "引用 source_media.media_id",
+            "title": "Source Media Id",
+            "type": "string"
+          },
+          "source_in_ms": {
+            "description": "源片段起点(整数毫秒)",
+            "minimum": 0,
+            "title": "Source In Ms",
+            "type": "integer"
+          },
+          "source_out_ms": {
+            "description": "源片段终点(整数毫秒)",
+            "minimum": 0,
+            "title": "Source Out Ms",
+            "type": "integer"
+          },
+          "timeline_in_ms": {
+            "description": "时间轴落位起点(整数毫秒)",
+            "minimum": 0,
+            "title": "Timeline In Ms",
+            "type": "integer"
+          },
+          "timeline_out_ms": {
+            "description": "时间轴落位终点(整数毫秒)",
+            "minimum": 0,
+            "title": "Timeline Out Ms",
+            "type": "integer"
+          },
+          "transcript": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "该片段字幕 / ASR 文本",
+            "title": "Transcript"
+          },
+          "scene_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "FireRed split_shots 给出的 scene/shot ID",
+            "title": "Scene Id"
+          },
+          "semantic_tags": {
+            "description": "understand_clips 给出的语义标签",
+            "items": {
+              "type": "string"
+            },
+            "title": "Semantic Tags",
+            "type": "array"
+          },
+          "content_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "可选 content_hash,用于幂等键",
+            "title": "Content Hash"
+          },
+          "voiceover_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "该片段所属配音 ID(剪映配音轨映射)",
+            "title": "Voiceover Id"
+          },
+          "transition_in": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "入场转场(fade_in / cut 等)",
+            "title": "Transition In"
+          },
+          "transition_out": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "出场转场(fade_out / cut 等)",
+            "title": "Transition Out"
+          },
+          "subtitle_style": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "该片段的字幕样式(recommend_text 产出)",
+            "title": "Subtitle Style"
+          },
+          "ai_transition_pair": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "AI 转场片段溯源:from_clip_id->to_clip_id(合成片段专用)",
+            "title": "Ai Transition Pair"
+          }
+        },
         "required": [
           "clip_id",
           "source_media_id",
@@ -100,80 +249,7 @@
           "timeline_in_ms",
           "timeline_out_ms"
         ],
-        "properties": {
-          "clip_id": {
-            "type": "string",
-            "minLength": 1
-          },
-          "source_media_id": {
-            "type": "string",
-            "minLength": 1
-          },
-          "source_in_ms": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "source_out_ms": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "timeline_in_ms": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "timeline_out_ms": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "transcript": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "scene_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "semantic_tags": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "content_hash": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "voiceover_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "transition_in": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "transition_out": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "subtitle_style": {
-            "type": [
-              "object",
-              "null"
-            ]
-          }
-        }
+        "type": "object"
       }
     },
     "audio": {
