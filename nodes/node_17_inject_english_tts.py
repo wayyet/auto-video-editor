@@ -7,15 +7,15 @@ Week 5 stub 节点 ``node_17_inject_english_tts_stub`` 升级为真实 TTS 调�
 1. 从 ``state["subtitle_segments_en"]`` 读英文字幕段,拼成一段文本
 2. 调 ``speech_synthesize({"text": text, "preferred_provider": "firered",
    "retries": 3}, ctx)``(对照 9 工具迁移 §6.3 step 5)
-3. 成功 → ``en_audio_path`` = 音频路径(同步写 ``en_dub_audio_path``)
+3. 成功 → ``en_audio_path`` = 音频路径
 4. 失败 → ``en_audio_path = None``、``error_log`` 追加一条,**不阻塞主链**
 
 失败不写静音 WAV 占位(Week 5 stub 的行为)— 主链 ``join_before_delivery``
 之后 ``en_audio_path = None`` 是合法状态,阶段六联调由人工决策是否需要补
 音频。Week 6+ 真实联调时若需要占位可在调用方统一处理。
 
-Week 5 字段命名约定保留:同时写 ``en_audio_path``(新,Week 5 验收读)与
-``en_dub_audio_path``(旧,Week 4 已写),两个字段值相同,保证兼容。
+(2026-11-12 noop 治理阶段5批4:Week 4 兼容双写字段 ``en_dub_audio_path``
+与审计短码 ``tts_run_id`` 因零消费者移除;``en_audio_path`` 为唯一路径字段。)
 
 P3b(2026-11-08):成功路径把英文配音写进**英文分支草稿** —— materials.audios
 的 ``en-dub-1`` 素材 + ``en_voiceover`` 标记音轨(时长 clamp 到草稿总时长)。
@@ -25,7 +25,6 @@ P3b(2026-11-08):成功路径把英文配音写进**英文分支草稿** —— m
 
 from __future__ import annotations
 
-import uuid
 from typing import Any
 
 from assembly_capabilities.run_context import RunContext
@@ -156,7 +155,7 @@ def _write_en_voiceover_track(
 
 
 def node_17_inject_english_tts(state: WorkflowState) -> dict:
-    """LangGraph 节点(Week 6+):真实调 TTS → 写 ``en_audio_path`` / ``en_dub_audio_path``。
+    """LangGraph 节点(Week 6+):真实调 TTS → 写 ``en_audio_path``。
 
     只返回变更字段,避免 fan-in 时与其他分支并发写同一字段。失败时
     ``en_audio_path = None`` + ``error_log`` 追加一条,但不返回
@@ -168,8 +167,6 @@ def node_17_inject_english_tts(state: WorkflowState) -> dict:
     Returns:
         dict,只含变更字段:
         - ``en_audio_path``: 合成音频路径(失败为 ``None``)
-        - ``en_dub_audio_path``: 同上(Week 4 兼容字段)
-        - ``tts_run_id``: 本次调用的 uuid 短码(状态审计用)
         - ``tts_issue``: 失败原因(成功为 ``None``,便于状态审计,不阻塞)
         - ``status_log`` / ``error_log``: delta-only
     """
@@ -180,8 +177,6 @@ def node_17_inject_english_tts(state: WorkflowState) -> dict:
         # 没有可合成文本(空字幕段 / 缺字段)→ 不阻塞,直接返回 None
         return {
             "en_audio_path": None,
-            "en_dub_audio_path": None,
-            "tts_run_id": uuid.uuid4().hex[:12],
             "tts_issue": "empty_text: no text_en segments to synthesize",
             "status_log": ["node_17_inject_english_tts_done"],
         }
@@ -203,14 +198,12 @@ def node_17_inject_english_tts(state: WorkflowState) -> dict:
         issue = result.text
         return {
             "en_audio_path": None,
-            "en_dub_audio_path": None,
-            "tts_run_id": uuid.uuid4().hex[:12],
             "tts_issue": issue,
             "error_log": [f"[node_17] TTS failed: {issue}"],
             "status_log": ["node_17_inject_english_tts_done"],
         }
 
-    # 成功 → 写 en_audio_path + en_dub_audio_path(双写兼容)
+    # 成功 → 写 en_audio_path(批4 起 en_dub_audio_path 兼容双写已移除)
     audio_path = result.data.get("audio_path")
 
     # 阶段 2(2026-11-09 效果缺失修复):时长以 WAV 头为准(与 P3 中文适配器
@@ -236,8 +229,6 @@ def node_17_inject_english_tts(state: WorkflowState) -> dict:
 
     return {
         "en_audio_path": audio_path,
-        "en_dub_audio_path": audio_path,
-        "tts_run_id": uuid.uuid4().hex[:12],
         "tts_issue": None,
         "status_log": status_log,
         **({"error_log": error_log} if error_log else {}),

@@ -2,13 +2,14 @@
 
 覆盖:
 - 空 segments → en_audio_path=None,error_log 不增(无错误,只是没内容)
-- 调 ``speech_synthesize`` 成功 → 写 en_audio_path / en_dub_audio_path,字段一致
+- 调 ``speech_synthesize`` 成功 → 写 en_audio_path
 - ``speech_synthesize`` 失败 → en_audio_path=None + error_log 追加 + tts_issue 非空
 - delta-only 返回:不包含上游字段
 - 文本拼接:多段 text_en 用空格拼成一段
-- ``tts_run_id`` 12 位 hex(状态审计字段)
 - ``status_log`` 含 ``node_17_inject_english_tts_done``
 - P3b:成功路径把英文配音写进英文分支草稿(en_voiceover 标记轨 + material)
+
+(en_dub_audio_path 双写与 tts_run_id 审计短码已随阶段5批4 移除。)
 """
 from __future__ import annotations
 
@@ -43,7 +44,6 @@ def test_node_17_empty_segments_returns_none() -> None:
     out = node_17_inject_english_tts(state)
 
     assert out["en_audio_path"] is None
-    assert out["en_dub_audio_path"] is None
     assert out["tts_issue"] is not None
     assert "empty_text" in out["tts_issue"]
     assert "node_17_inject_english_tts_done" in out["status_log"]
@@ -57,14 +57,13 @@ def test_node_17_missing_segments_key_returns_none() -> None:
     out = node_17_inject_english_tts(state)
 
     assert out["en_audio_path"] is None
-    assert out["en_dub_audio_path"] is None
 
 
 # ---------------------------------------------------------------------------
 # 2. 成功路径
 # ---------------------------------------------------------------------------
 def test_node_17_success_writes_audio_path_and_double_writes_alias() -> None:
-    """``speech_synthesize`` 成功 → 写 en_audio_path 与 en_dub_audio_path(双写)。"""
+    """``speech_synthesize`` 成功 → 写 en_audio_path。"""
     fake_result = ToolResult(
         text="firered TTS synthesized 11 chars in 0.5s",
         data={"audio_path": "/out/tts.wav", "duration_ms": 500},
@@ -83,7 +82,6 @@ def test_node_17_success_writes_audio_path_and_double_writes_alias() -> None:
 
     # 双写兼容:Week 4 / Week 5 字段值一致
     assert out["en_audio_path"] == "/out/tts.wav"
-    assert out["en_dub_audio_path"] == "/out/tts.wav"
     assert out["tts_issue"] is None
     assert "node_17_inject_english_tts_done" in out["status_log"]
     # 成功不应追加 error_log
@@ -145,26 +143,6 @@ def test_node_17_skips_segments_with_empty_text_en() -> None:
     assert captured_args[0]["text"] == "Hello World"
 
 
-def test_node_17_tts_run_id_is_12_hex() -> None:
-    """``tts_run_id`` 是 12 位 hex(uuid4 前 12 位),便于审计回溯。"""
-    fake_result = ToolResult(
-        text="ok",
-        data={"audio_path": "/x.wav", "duration_ms": 1},
-    )
-    state = _state_with_segments([{"text_en": "hi"}])
-
-    with patch(
-        "nodes.node_17_inject_english_tts.speech_synthesize",
-        return_value=fake_result,
-    ):
-        out = node_17_inject_english_tts(state)
-
-    run_id = out["tts_run_id"]
-    assert isinstance(run_id, str)
-    assert len(run_id) == 12
-    int(run_id, 16)  # 必须可解析为 hex
-
-
 def test_node_17_uses_firered_provider_and_3_retries() -> None:
     """调 ``speech_synthesize`` 时 preferred_provider=firered,retries=3
     (对照 9 工具迁移 §6.3 step 5)。
@@ -212,7 +190,6 @@ def test_node_17_failure_writes_none_and_logs_error() -> None:
 
     # 不阻塞主链:en_audio_path 写 None,而不是抛异常
     assert out["en_audio_path"] is None
-    assert out["en_dub_audio_path"] is None
     assert "all TTS attempts failed" in out["tts_issue"]
     # error_log 追加(便于审计)
     error_log = out["error_log"]
@@ -357,8 +334,6 @@ def test_node_17_writes_en_voiceover_track(tmp_path: Path) -> None:
 
     assert "node_17_en_voiceover_written" in out["status_log"]
     assert out.get("error_log", []) == []
-    # state 双写契约不变
-    assert out["en_audio_path"] == out["en_dub_audio_path"]
 
 
 def test_node_17_en_voiceover_clamps_to_draft_duration(tmp_path: Path) -> None:

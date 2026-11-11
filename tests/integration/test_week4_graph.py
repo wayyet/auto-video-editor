@@ -124,8 +124,6 @@ def test_week4_checkpoint3_normal_path(tmp_path: Path, monkeypatch: pytest.Monke
     # Week 5:节点 17 写空 wav 占位,en_audio_path 应指向存在的文件
     assert final.get("en_audio_path") is not None
     assert Path(final["en_audio_path"]).exists()
-    # 兼容旧 en_dub_audio_path
-    assert final.get("en_dub_audio_path") == final["en_audio_path"]
 
 
 # ---------------------------------------------------------------------------
