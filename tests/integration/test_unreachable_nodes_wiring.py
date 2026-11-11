@@ -123,12 +123,13 @@ NEIGHBORS: dict[str, tuple[set[str], set[str]]] = {
     # 检索节点入边改自模板推荐出口(原挂 group_clips 条件路由,前置化阶段3)
     "storyline_search_web_topic": ({"storyline_script_template_recommendation"}, {_GS}),
     # 2026-11-12 边治理阶段1:select_bgm 改为 [GS, GV] 双源屏障目标(原两条单源边);
-    # 出边 = RTR/PTP/GAT 屏障源(编译图把屏障源渲染成普通边;默认档 ai=True 含 GAT)
-    _SB: ({_GS, _GV}, {_RTR, _PTP, _GAT}),
+    # 边治理阶段3 起 GAT 屏障不再含 SB;出边 = RTR/PTP 屏障源
+    _SB: ({_GS, _GV}, {_RTR, _PTP}),
     # 2026-11-12 边治理阶段1:recommend_transition 改为 [GC, SB] 双源屏障目标
-    # (原 GC/SB 两条单源边);边治理阶段2 起还是 PTP 6 源屏障源,且不再直连 QA
-    # (QA 精简为最终时间线单源);出边 = PTP 屏障源(编译图把屏障源渲染成普通边)
-    _RTR: ({_GC, _SB}, {_PTP}),
+    # (原 GC/SB 两条单源边);边治理阶段2 起是 PTP 6 源屏障源、不再直连 QA
+    # (QA 精简为最终时间线单源);边治理阶段3 起还是 GAT 屏障源;
+    # 出边 = PTP/GAT 屏障源(编译图把屏障源渲染成普通边)
+    _RTR: ({_GC, _SB}, {_PTP, _GAT}),
     # 2026-11-12 边治理阶段2:PTP 6 源屏障(补 RTR/TXT);出边 = PTAT 屏障源(默认档 ai=True)
     _PTP: ({_GC, _GS, _GV, _SB, _RTR, _RT}, {_PTAT}),
     # 2026-11-12 边治理阶段2:QA 精简为单源屏障(只等最终时间线 PTAT);
@@ -136,8 +137,9 @@ NEIGHBORS: dict[str, tuple[set[str], set[str]]] = {
     _QA: ({_PTAT}, {_GC, "storyline_render_video"}),
     # 文字样式:GS 直下;边治理阶段2 起是 PTP 6 源屏障源
     _RT: ({_GS}, {_PTP}),
-    # 与 plan_timeline_pro 并排:同一道 4 源屏障
-    _GAT: ({_GC, _GS, _GV, _SB}, {_PTAT}),
+    # 2026-11-12 边治理阶段3:GAT 屏障改 [GC, RTR](其全部真实输入 = groups +
+    # transition_plan hints);出边 = PTAT 屏障源
+    _GAT: ({_GC, _RTR}, {_PTAT}),
     # plan_timeline_pro + generate_ai_transition 之后、qa_gate 之前
     _PTAT: ({_PTP, _GAT}, {_QA}),
 }
@@ -279,9 +281,9 @@ def test_ai_pair_is_beside_plan_timeline_pro(monkeypatch: pytest.MonkeyPatch) ->
     _, compiled = _compiled(monkeypatch)
     edges = _edge_set(compiled)
     ins, _ = _neighbors(edges)
-    # 边治理阶段2:PTP 6 源(补 RTR/TXT);GAT 仍为 4 源(阶段3 改 [GC, RTR])
+    # 边治理阶段2:PTP 6 源(补 RTR/TXT);边治理阶段3:GAT 2 源 [GC, RTR]
     assert ins[_PTP] == {_GC, _GS, _GV, _SB, _RTR, _RT}
-    assert ins[_GAT] == {_GC, _GS, _GV, _SB}
+    assert ins[_GAT] == {_GC, _RTR}
     # 边治理阶段2:QA 只等最终时间线节点
     assert ins[_QA] == {_PTAT}
     assert (_PTP, _QA) not in edges
@@ -326,7 +328,7 @@ def test_ai_nodes_are_in_barriers_only_in_the_designed_places(monkeypatch: pytes
     # ⚠️ 边治理阶段2:qa 单源屏障折叠成普通边(见 flag-off 用例注释),不再出现在
     #    waiting_edges,PTAT→qa 由 test_ai_pair_… 的 ins[_QA] 断言覆盖
     assert with_ai == {
-        (frozenset({_GC, _GS, _GV, _SB}), _GAT),
+        (frozenset({_GC, _RTR}), _GAT),
         (frozenset({_GAT, _PTP}), _PTAT),
     }
     # 边治理阶段2:PTP 6 源屏障(不含 AI 节点)
@@ -767,16 +769,15 @@ def test_defaults_run_all_wired_nodes_with_expected_shape(
     assert script_steps == [s + 1 for s in search_steps], "文案应紧跟每轮检索"
     # B1 ASR 移除:split_shots 后静态直连 understand_clips(同一条主边,无旁支)
 
-    # AI 转场两节点与 plan_timeline_pro 的并行关系(边治理阶段2 起):
-    # PTP 6 源(等 RTR/TXT),GAT 暂为 4 源 —— 两者不再同超步,GAT 与 RTR 同超步、
-    # PTP 晚一个超步;PTAT 紧随 PTP;qa 单源只等 PTAT
+    # AI 转场两节点与 plan_timeline_pro 的并行关系(边治理阶段3 起):
+    # GAT 只等 [GC, RTR]、PTP 等 6 源 —— RTR 完成后两者同超步;PTAT 紧随;
+    # qa 单源只等 PTAT
     rtr = run.steps_of(_RTR)
     ptp = run.steps_of("storyline_plan_timeline_pro")
     gen = run.steps_of("storyline_generate_ai_transition")
     plan = run.steps_of("storyline_plan_timeline_ai_transition")
     qa = run.steps_of("storyline_qa_gate")
-    assert gen == rtr
-    assert ptp == [s + 1 for s in rtr]
+    assert gen == ptp == [s + 1 for s in rtr]
     assert plan == [s + 1 for s in ptp]
     assert qa == [s + 2 for s in ptp]
     # qa 通过后直接 render_video → join(AI 转场已在 qa 之前做完)

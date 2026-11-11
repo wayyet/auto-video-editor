@@ -792,25 +792,27 @@ def _build_state_graph():
         "storyline_plan_timeline_pro",
     )
 
-    # 2026-10 AI 转场两节点:与 plan_timeline_pro 并排(设计文档 §3.2:PTP/GAT → PTAT → qa 闸门)。
-    #   - generate_ai_transition(GAT):与 PTP 共用同一道 4 源屏障,和 PTP 同一超步各跑一次。
-    #     不直接挂 recommend_transition:它每轮会被触发 3 次(group_clips / select_bgm 各一),
-    #     会让 AI 转场每轮重复 3 次。
+    # 2026-10 AI 转场两节点(设计文档 §3.2:PTP/GAT → PTAT → qa 闸门)。
+    #   - generate_ai_transition(GAT):屏障 [GC, RTR](2026-11-12 边治理阶段3,
+    #     设计文档 §5.6)。GAT 只读 storyline_groups_artifact 与
+    #     storyline_transition_plan(作 hints 参考,node_generate_ai_transition.py),
+    #     不读文案/配音/BGM —— 2 源即其全部真实输入;RTR 完成即保证本轮
+    #     transition_plan 就绪。旧方案与 PTP 共用 4 源屏障的理由(独立单源边会让
+    #     RTR 每轮重复触发 3 次)已随阶段1 双源屏障消除。
     #   - plan_timeline_ai_transition(PTAT):屏障 [PTP, GAT],紧跟其后。
-    #   - qa_gate 的屏障里用 PTAT **替换** PTP,qa 校验的就是含 AI 转场的最终时间线。
+    #   - qa_gate 只等最终时间线(阶段2 精简):AI 开时即 PTAT,qa 校验的就是
+    #     含 AI 转场的最终时间线。
     # 开关在**建图时**读取(与 ASSEMBLY_QC_GATE_ENABLED 同类):
     #   关 → 不接这两个节点,拓扑与接入前完全一致;开 → 两个节点**每轮必跑**,
     #   所以放进屏障不会踩 D10(它们不是"有时跑有时不跑"的条件分支)。
+    #   默认姿态(阶段3 固化):接线开关默认开 + 双门禁 fail-closed
+    #   (STORYLINE_AI_TRANSITION_PROVIDER 默认空 / APPROVED 默认 false)→
+    #   默认生产路径 0 次 Provider 外呼、不产生占位转场。
     # 两个节点内部都包了 try/except,失败只写 error_log,仍然正常返回 → 屏障照常凑齐。
     _plan_for_qa = "storyline_plan_timeline_pro"
     if is_ai_transition_enabled():
         g.add_edge(
-            [
-                "storyline_group_clips",
-                "storyline_generate_script",
-                "storyline_generate_voiceover",
-                "storyline_select_bgm",
-            ],
+            ["storyline_group_clips", "storyline_recommend_transition"],
             "storyline_generate_ai_transition",
         )
         g.add_edge(
