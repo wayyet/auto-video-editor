@@ -548,8 +548,9 @@ def _build_state_graph():
     g.add_node("delivery_qa_repair", delivery_qa_repair)
     g.add_node("delivery_qa_failed", delivery_qa_failed)
 
-    # ---- auto 链 18 节点 + qa_gate + join_storyline(plan_v4 §2.2 / §2.3)----
-    # (2026-11-10:storyline_search_media「检索素材」节点已整体移除)
+    # ---- auto 链 17 节点 + qa_gate + join_storyline(plan_v4 §2.2 / §2.3)----
+    # (2026-11-10:storyline_search_media「检索素材」节点已整体移除;
+    #  2026-11-12 边治理阶段5:storyline_render_video 节点已整体移除)
     g.add_node("storyline_load_media", storyline_load_media_node)
     # 2026-11-10 前置化阶段3:检索节点改为条件前置节点(初始挂 group_clips 后;
     # 2026-11-12 noop 治理阶段1 条件路由改挂模板推荐出口,见 _storyline_route_after_template_rec)
@@ -693,7 +694,7 @@ def _build_state_graph():
     g.add_edge("delivery_qa_failed", END)
     g.add_edge("export_final_video", END)
 
-    # ---- auto 链 18 节点图边(plan_v4 §2.2 / §5 阶段 0)----
+    # ---- auto 链 17 节点图边(plan_v4 §2.2 / §5 阶段 0)----
     # 起点:START 已直连 storyline_load_media(2026-11-04 阶段3)。
 
     # LM 后主干 → split_shots(2026-11-10 前置化阶段3:web_topic 并行 fan-out 条件边
