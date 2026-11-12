@@ -26,6 +26,7 @@
         "reason": "<LLM 给出或启发式>",
         "method": "llm" | "heuristic" | "default_match",
         "stub": bool,                   # 无真实音频文件
+        "voiceover_total_ms": int,      # 输入的配音可用总时长(2026-11-13 任务B;0=无配音)
     }
 """
 from __future__ import annotations
@@ -50,6 +51,7 @@ def select_bgm(
     user_request: str = "",
     groups: Optional[list[dict[str, Any]]] = None,
     narration_text: str = "",
+    voiceover_total_ms: int = 0,
     lang: str = "zh",
     library: Optional[list[dict[str, Any]]] = None,
     default_match: Optional[dict[str, Any]] = None,
@@ -61,6 +63,10 @@ def select_bgm(
         user_request: 用户对配乐的要求(可空)。
         groups: ``group_clips`` 输出,用于聚合 narration 做关键词抽取。
         narration_text: 已聚合的 narration 文本(可选;缺省时聚合 groups)。
+        voiceover_total_ms: 配音可用总时长(毫秒;2026-11-13 边审计阶段1 任务B,
+            由 ``node_select_bgm._read_voiceover_total_ms`` 聚合传入)。>0 时,
+            时长能覆盖配音的候选稳定排前(配乐不比解说先结束);0/缺省 = 行为
+            与任务B 之前完全一致。
         lang: ``"zh"`` / ``"en"``,LLM prompt 语言。
         library: 注入 BGM 库(单测 / 自定义资源时用);None 时读 yaml。
         default_match: 注入默认 fallback;None 时读 yaml。
@@ -94,6 +100,17 @@ def select_bgm(
         narration_text=narration_text,
         top_n=int((meta.get("matching") or {}).get("max_candidates_for_llm", 5) or 5),
     )
+
+    # 3.5 配音时长覆盖偏好(2026-11-13 边审计阶段1 任务B):有真实配音总时长时,
+    # 时长能覆盖配音的候选**稳定**排前(同组内保持启发式名次 —— Python sorted
+    # 是稳定排序);既决定启发式 fallback 的 candidates[0],也作为 LLM 候选列表
+    # 的顺序信号。vo_total <= 0 时完全不干预(与任务B 之前行为逐字节一致)。
+    vo_total = int(voiceover_total_ms or 0)
+    if vo_total > 0 and candidates:
+        candidates = sorted(
+            candidates,
+            key=lambda e: 0 if int(e.get("duration_ms") or 0) >= vo_total else 1,
+        )
 
     # 4. LLM 决策
     chosen: Optional[dict[str, Any]] = None
@@ -149,6 +166,7 @@ def select_bgm(
         "reason": str(chosen.get("reason") or ""),
         "method": method,
         "stub": (not bgm_path) or method == "default_match",
+        "voiceover_total_ms": vo_total,
     }
 
 
@@ -175,6 +193,7 @@ def _empty_bg_selection(reason: str) -> dict[str, Any]:
         "reason": reason,
         "method": "empty",
         "stub": True,
+        "voiceover_total_ms": 0,
     }
 
 

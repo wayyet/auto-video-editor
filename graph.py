@@ -749,9 +749,11 @@ def _build_state_graph():
     g.add_edge("storyline_generate_script", "storyline_recommend_text")
 
     # select_bgm 双源屏障(2026-11-12 边治理阶段1,设计文档 §5.3A):
-    # list 形式 = 等文案与配音都完成才触发一次,便于配音时长对齐。
-    # (SB 节点 docstring 提及可选读 voiceover 做音乐对齐,当前代码体未读该字段;
-    #  屏障按设计保留 GV 源 —— GV 本就是 GS 直下游,无额外等待成本。)
+    # list 形式 = 等文案与配音都完成才触发一次。
+    # 2026-11-13 边审计阶段1 任务B:SB 节点已真实消费配音 —— 聚合
+    # storyline_voiceover_artifact 各段 duration 传给 select_bgm 做配乐时长
+    # 覆盖偏好(node_select_bgm._read_voiceover_total_ms),屏障的 GV 源由
+    # "预留等待"变为真实数据依赖;配音缺失/失败按 0 容缺省,不阻断 BGM。
     g.add_edge(
         ["storyline_generate_script", "storyline_generate_voiceover"],
         "storyline_select_bgm",
