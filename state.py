@@ -205,6 +205,11 @@ class WorkflowState(TypedDict, total=False):
     # 节点 11 写:{zh: {...}, en: {...}}。匹配数/原生写入数/占位降级数。
     sticker_summary: NotRequired[Optional[dict]]
 
+    # ===== 2026-11-13 第四期阶段 3:开场钩子 =====
+    # 可选:控制台 / 命令行显式传入的开场大字标题;node_09b 消费。缺省(None)
+    # 时节点回落「第 1 条字幕文本切句」自动取标题(见 jy_common/hook_title.py)。
+    hook_title: NotRequired[Optional[str]]
+
     # ===== 2026-11-09 阶段 5(效果缺失修复):关卡② 审计与音量可观测字段 =====
     # 节点 12 恢复时写:人工修改后草稿 SHA-256(zh 权威稿 + en 镜像前快照)。
     bgm_manual_draft_sha: NotRequired[Optional[dict]]

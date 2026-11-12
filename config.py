@@ -544,6 +544,14 @@ FINAL_EXPORT_ENABLED: bool = _console_env_bool(
     "AUTO_VIDEO_EDITOR_FINAL_EXPORT_ENABLED", False
 )
 
+#: 开场钩子开关(第四期阶段 3,方案 A;默认**开**)。node_09b 在视频开头
+#: 0–3 秒注入免费开场特效(CCD闪光)+ 大字标题(带入场动画),不切分镜头,
+#: 第 1 个转场仍在镜头 1→2 切点。关闭时节点只记
+#: node_09b_inject_opening_hook_noop:disabled,不写草稿。
+OPENING_HOOK_ENABLED: bool = _console_env_bool(
+    "AUTO_VIDEO_EDITOR_OPENING_HOOK_ENABLED", True
+)
+
 #: 导出输出目录;空 = 任务产物根 ``outputs/<session_id>/export/``(跟随
 #: storyline_outputs_root 的 env 覆盖)。显式配置时必须是绝对目录。
 FINAL_EXPORT_DIR: str = _console_env("AUTO_VIDEO_EDITOR_FINAL_EXPORT_DIR", "")

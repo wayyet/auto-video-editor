@@ -259,3 +259,27 @@ def test_inject_sticker_degrades_when_en_draft_missing(
     assert "node_11_inject_sticker_done" in out["status_log"]
     assert "node_11_inject_sticker_en_done" not in out["status_log"]
     assert any("英文草稿不存在" in e for e in out["error_log"])
+
+
+def test_inject_sticker_skips_hook_title_texts(
+    tmp_draft_with_texts: Path, real_id_resolver
+) -> None:
+    """node_09b 的开场大字标题(hook-title- 前缀)不被贴贴纸(第四期计划 §3.2 对位表 #8)。"""
+    draft = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    draft["materials"]["texts"].append(
+        {
+            "id": "hook-title-1",           # 开场标题 id 前缀
+            "content": "真棒,给你点赞",      # 内容命中关键词,若无前缀过滤必被贴
+            "target_timerange": {"start": 0, "duration": 3_000_000},
+        }
+    )
+    tmp_draft_with_texts.write_text(
+        json.dumps(draft, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    inject_sticker(_state(tmp_draft_with_texts))
+
+    got = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    sticker_ids = [s["id"] for s in got["materials"]["stickers"]]
+    assert sticker_ids, "普通字幕仍应产出贴纸"
+    assert all(not sid.startswith("sticker-hook-title-") for sid in sticker_ids)

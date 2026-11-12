@@ -69,7 +69,7 @@ WORKFLOW_ID = "auto_video_editor_main"
 #: bump 只为让布局缓存里的旧名失效)。
 #: 2026-11-12 边治理阶段5:render_video 节点整体删除(qa_gate 直连 join,
 #: 拓扑变更)→ bump 5。
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 #: 关卡编号全集(阶段3 删除关卡⓪后剩 ①②③)
 CHECKPOINT_MARKS = ("①", "②", "③")
@@ -209,6 +209,11 @@ _NODE_META: dict[str, dict[str, Any]] = {
         "name": "注入特效",
         "group": "fx_delivery",
         "description": "转场/视频特效原生绑定到视频段(消费转场推荐计划,边界=段数-1);中英两份草稿同时处理",
+    },
+    "node_09b_inject_opening_hook": {
+        "name": "开场钩子",
+        "group": "fx_delivery",
+        "description": "开头 0-3 秒免费开场特效 + 大字标题(带入场动画),不切分镜头;中文特效+标题,英文只做特效(第四期阶段 3)",
     },
     "node_11_inject_sticker": {
         "name": "注入贴纸",

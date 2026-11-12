@@ -163,6 +163,9 @@ def _inject_sticker_into(draft: dict, tag: str) -> tuple[list[str], dict]:
     kept_ids: set[str] = set()
 
     for index, text_obj in enumerate(texts):
+        if str(text_obj.get("id") or "").startswith("hook-title-"):
+            # 开场大字标题(node_09b 产出)不被贴贴纸(第四期计划 §3.2 对位表 #8)
+            continue
         summary["texts_scanned"] += 1
         content = text_display_text(text_obj)
         resource_id = resolve_sticker_resource_id(content)

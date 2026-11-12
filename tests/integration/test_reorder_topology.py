@@ -343,9 +343,11 @@ def test_zh_draft_gets_native_subtitles(tmp_path, monkeypatch):
 
     zh = json.loads(Path(final["draft_path"]).read_text(encoding="utf-8"))
     texts = zh.get("materials", {}).get("texts") or []
-    assert [t["id"] for t in texts] == ["text-zh-1", "text-zh-2"]  # 逐句:你好。/世界
+    # 逐句:你好。/世界;hook-title-1 = 开场大字标题(node_09b,第四期阶段 3,默认开)
+    subtitle_ids = [t["id"] for t in texts if str(t["id"]).startswith("text-zh-")]
+    assert subtitle_ids == ["text-zh-1", "text-zh-2"]
     text_tracks = [t for t in zh.get("tracks", []) if t.get("type") == "text"]
-    assert len(text_tracks) == 1
+    assert len(text_tracks) == 2  # 字幕轨(track-text-1)+ 开场标题轨(track-text-hook)
     ids = {t["id"] for t in texts}
     assert all(seg["material_id"] in ids for seg in text_tracks[0]["segments"])
     # state 侧段落(供阶段 2 的 node_16a 英文翻译消费)

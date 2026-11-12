@@ -33,7 +33,8 @@
                        └─→ node_17_inject_english_tts ───────────┤
                                                                 ▼
     ⇒ node_09_inject_fx              (汇合屏障:node_15 与 node_17 都完成才触发)
-    → node_11_inject_sticker         (尾链 09/11/12/13 同时作用于中英两份草稿)
+    → node_09b_inject_opening_hook   (开场钩子:前 3 秒免费开场特效 + 大字标题,第四期阶段 3)
+    → node_11_inject_sticker         (尾链 09/09b/11/12/13 同时作用于中英两份草稿)
     → node_12_human_add_bgm          ⏸ interrupt("②")
     → node_13_adjust_volume
     → join_before_delivery           (交付 QA 闸门 + required-feature gate,单前驱)
@@ -120,6 +121,7 @@ from nodes.node_07_speed_fit import get_snapshot2_path, route_after_speed_fit, s
 from nodes.node_08_add_subtitles import add_subtitles
 from nodes.node_08b_add_subtitles_en import add_subtitles_en
 from nodes.node_09_inject_fx import inject_fx
+from nodes.node_09b_inject_opening_hook import inject_opening_hook
 from nodes.node_10_inject_text_fx import inject_text_fx, inject_text_fx_en
 from nodes.node_11_inject_sticker import inject_sticker
 from nodes.node_12_human_add_bgm import human_add_bgm
@@ -512,6 +514,7 @@ def _build_state_graph():
     g.add_node("bridge_snapshot2", bridge_snapshot2)
     g.add_node("node_08_add_subtitles", add_subtitles)
     g.add_node("node_09_inject_fx", inject_fx)
+    g.add_node("node_09b_inject_opening_hook", inject_opening_hook)
     g.add_node("node_10_inject_text_fx", inject_text_fx)
     g.add_node("node_10b_inject_text_fx_en", inject_text_fx_en)
     g.add_node("node_11_inject_sticker", inject_sticker)
@@ -662,8 +665,11 @@ def _build_state_graph():
         ["node_15_localize_covers_en", "node_17_inject_english_tts"],
         "node_09_inject_fx",
     )
-    # 尾链(K2=B:四个节点内部同时处理中文主草稿与英文分支草稿)
-    g.add_edge("node_09_inject_fx", "node_11_inject_sticker")
+    # 尾链(K2=B:节点内部同时处理中文主草稿与英文分支草稿)
+    # 09b(开场钩子)插在 09 与 11 之间:必须在 node_08 之后(标题不随字幕轨同步
+    # 被删)、node_11 之前(node_11 跳过 hook-title- 前缀文字,标题不被贴贴纸)
+    g.add_edge("node_09_inject_fx", "node_09b_inject_opening_hook")
+    g.add_edge("node_09b_inject_opening_hook", "node_11_inject_sticker")
     g.add_edge("node_11_inject_sticker", "node_12_human_add_bgm")
     g.add_edge("node_12_human_add_bgm", "node_13_adjust_volume")
     # 交付前 QA 闸门:单前驱,不再承担 fan-in
