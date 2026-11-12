@@ -16,6 +16,9 @@
 // 边界:不 fetch、不操作 DOM、不依赖浏览器全局 —— 全部由调用方(node_map.html
 // 的模块脚本)注入。
 
+// 布局 key 的 TB 算法版本常量单一来源(第5期 阶段1);纯常量依赖,不引布局逻辑。
+import { LAYOUT_ALGORITHM_VERSION } from "./workflow_layout.mjs";
+
 // ---------------------------------------------------------------------------
 // 常量
 // ---------------------------------------------------------------------------
@@ -68,9 +71,14 @@ export const API_PATHS = Object.freeze({
 /**
  * 主图布局 key:纳入 workflow_id + mode + schema_version(§6.2-F 第 7 条)。
  * human 与 auto、schema 演进互不污染。
+ * 第5期阶段1:可选 direction —— "tb" 追加纵向布局算法版本后缀(与
+ * workflow_layout.mjs::getLayoutCacheKey 同规则);其余/缺省保持历史格式,
+ * 用户已保存的横向(LR)拖拽位置零迁移兼容。
  */
-export function mainLayoutKey(workflowId, mode, schemaVersion) {
-  return `wf_layout_${String(workflowId || "workflow")}_${String(mode || "default")}_v${Number(schemaVersion) || 1}`;
+export function mainLayoutKey(workflowId, mode, schemaVersion, direction) {
+  const base = `wf_layout_${String(workflowId || "workflow")}_${String(mode || "default")}_v${Number(schemaVersion) || 1}`;
+  if (String(direction).toLowerCase() === "tb") return `${base}_tb_${LAYOUT_ALGORITHM_VERSION}`;
+  return base;
 }
 
 /** 旧 14 节点子流程沿用历史 key(node_map.html 既有规则),布局数据不受影响。 */

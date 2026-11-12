@@ -23,6 +23,7 @@ import {
   mainLayoutKey,
   normalizeMainGraph,
 } from "../static/workflow_monitor.mjs";
+import { getLayoutCacheKey } from "../static/workflow_layout.mjs";
 
 function ev(type, { id = null, node_id = null, attempt = 1, payload = {}, occurred_at = "2026-11-01T07:20:30.000Z", run_id = null } = {}) {
   return { id, event_type: type, node_id, attempt, payload, occurred_at, run_id };
@@ -237,6 +238,29 @@ test("布局 key:主图带 mode+schema_version;旧子流程 key 不变", () => {
   assert.notEqual(mainLayoutKey("wf", "human", 1), mainLayoutKey("wf", "auto", 1));
   assert.notEqual(mainLayoutKey("wf", "human", 1), mainLayoutKey("wf", "human", 2));
   assert.equal(legacyLayoutKey("video_editing_pipeline"), "node_layout_video_editing_pipeline");
+});
+
+// 第5期阶段1:TB 带算法版本后缀,LR/缺省保持历史格式(零迁移);双函数同规则。
+test("布局 key:TB/LR 方向隔离,LR 缓存不被 TB 覆盖", () => {
+  assert.equal(
+    mainLayoutKey("auto_video_editor_main", "auto", 6, "tb"),
+    "wf_layout_auto_video_editor_main_auto_v6_tb_v1"
+  );
+  assert.equal(mainLayoutKey("auto_video_editor_main", "auto", 6, "lr"), "wf_layout_auto_video_editor_main_auto_v6");
+  assert.equal(mainLayoutKey("auto_video_editor_main", "auto", 6), "wf_layout_auto_video_editor_main_auto_v6");
+  assert.notEqual(
+    mainLayoutKey("auto_video_editor_main", "auto", 6, "tb"),
+    mainLayoutKey("auto_video_editor_main", "auto", 6, "lr")
+  );
+  // 与 workflow_layout.mjs::getLayoutCacheKey 同规则(单一来源常量)
+  assert.equal(
+    mainLayoutKey("auto_video_editor_main", "auto", 6, "tb"),
+    getLayoutCacheKey({ workflowId: "auto_video_editor_main", mode: "auto", schemaVersion: 6, direction: "tb" })
+  );
+  assert.equal(
+    mainLayoutKey("auto_video_editor_main", "auto", 6, "lr"),
+    getLayoutCacheKey({ workflowId: "auto_video_editor_main", mode: "auto", schemaVersion: 6, direction: "lr" })
+  );
 });
 
 // ---------------------------------------------------------------------------

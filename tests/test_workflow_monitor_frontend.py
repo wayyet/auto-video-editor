@@ -78,3 +78,30 @@ def test_sse_frame_contract_node_tests_pass():
     output = (proc.stdout or "") + (proc.stderr or "")
     assert proc.returncode == 0, "SSE 帧契约前端用例失败:\n" + output[-4000:]
     assert "pass 0" not in output, "SSE 帧契约前端用例一个都没跑:\n" + output[-2000:]
+
+
+LAYOUT_NODE_TEST = REPO_ROOT / "web" / "tests" / "workflow_layout.test.mjs"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="本机没有 node,跳过前端单测")
+def test_workflow_layout_node_tests_pass():
+    """纵向有向图布局纯模块(第5期阶段1)的 Node 单测必须全绿。
+
+    workflow_layout.mjs 只做布局计算(反馈边识别/Kahn 分层/barycenter 层内
+    排序/坐标分配/缓存 key),不碰 DOM —— node --test 直跑。
+    """
+    assert LAYOUT_NODE_TEST.exists(), f"前端测试文件不存在: {LAYOUT_NODE_TEST}"
+
+    proc = subprocess.run(
+        ["node", "--test", str(LAYOUT_NODE_TEST)],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=180,
+    )
+
+    output = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, "布局模块前端用例失败:\n" + output[-4000:]
+    assert "pass 0" not in output, "布局模块前端用例一个都没跑:\n" + output[-2000:]
