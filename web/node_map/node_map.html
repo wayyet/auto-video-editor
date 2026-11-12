@@ -600,6 +600,10 @@
         <option value="main">完整 LangGraph 工作流</option>
         <option value="storyline">OpenStoryline 子流程</option>
       </select>
+      <select id="layoutSelect" class="btn" title="布局方向(仅主图;子流程保持原布局)">
+        <option value="tb">方向: 纵向 (TB)</option>
+        <option value="lr">方向: 横向 (LR)</option>
+      </select>
       <div class="sep"></div>
       <button class="btn" id="btnExpand">Expand All</button>
       <button class="btn" id="btnCollapse">Collapse All</button>
@@ -676,6 +680,7 @@
       const wfNameEl = document.getElementById("wfName");
       const wfDescEl = document.getElementById("wfDesc");
       const viewSelect = document.getElementById("viewSelect");
+      const layoutSelect = document.getElementById("layoutSelect");
 
       const btnExpand = document.getElementById("btnExpand");
       const btnCollapse = document.getElementById("btnCollapse");
@@ -1839,24 +1844,59 @@
         buildEdges();
         // 第5期:标记 TB 布局角色(反馈边虚线 + 侧边 lane)
         markEdgeLayoutRoles();
-        // Initial edge layout
-        requestAnimationFrame(() => {
-          updateAllEdges();
-          setOverlay("", "", true);
-        });
+        // Initial edge layout:先同步画一遍(rAF 在后台/被遮挡标签页会被节流,
+        // 曾导致连线与 overlay 收尾永不执行),再经 rAF 精修最终布局。
+        updateAllEdges();
+        setOverlay("", "", true);
+        requestAnimationFrame(() => updateAllEdges());
 
         state.nodeStatus = {};
         setEdgeStates(new Set(), new Set());
       }
 
+      // 方向(计划 §7 阶段3):URL ?layout=tb|lr 优先,刷新恢复;主图默认 TB
+      const layoutParam = params.get("layout");
+      if (layoutParam === "lr" || layoutParam === "tb") state.direction = layoutParam;
       viewSelect.value = (params.get("view") === "storyline" || params.get("data")) ? "storyline" : "main";
+      layoutSelect.value = state.direction;
+      layoutSelect.disabled = viewSelect.value !== "main";
       viewSelect.addEventListener("change", () => {
         const url = new URL(location.href);
         url.searchParams.set("view", viewSelect.value);
         url.searchParams.delete("data");
         history.replaceState(null, "", url);
+        layoutSelect.disabled = viewSelect.value !== "main";
         loadData(viewSelect.value);
       });
+
+      // 方向切换:只重排不重建 DOM —— 节点运行状态与边高亮投影保留(计划 §9.3);
+      // 各方向走各自缓存 key,互不覆盖;切换本身不写布局存储。
+      function switchDirection(next){
+        if (state.view !== "main" || next === state.direction) return;
+        state.direction = next;
+        const url = new URL(location.href);
+        url.searchParams.set("layout", next);
+        history.replaceState(null, "", url);
+        state.layoutKey = buildLayoutKey();
+        const saved = loadLayout();
+        state.positionsCustomized = !!(saved && saved.positionsCustomized && saved.positions);
+        if (state.direction === "tb"){
+          const applied = applyTBLayout({ resetCanvas: true, skipPositions: state.positionsCustomized });
+          if (applied && state.positionsCustomized) applyHorizontalPositions(saved.positions);
+          if (!applied){
+            removeBandLabel();
+            applyHorizontalPositions(saved?.positions || computeHorizontalPositions(state.data.nodes));
+          }
+        } else {
+          state.layoutResult = null;
+          removeBandLabel();
+          applyHorizontalPositions(saved?.positions || computeHorizontalPositions(state.data.nodes));
+        }
+        markEdgeLayoutRoles();
+        ensureCanvasSize();
+        updateAllEdges();
+      }
+      layoutSelect.addEventListener("change", () => switchDirection(layoutSelect.value));
 
       // Keep edges updated on window resize
       window.addEventListener("resize", () => updateAllEdges());
