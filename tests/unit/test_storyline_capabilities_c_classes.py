@@ -243,6 +243,49 @@ def test_select_bgm_with_group_narration() -> None:
     assert res["bgm_ref"] != "bgm_none"
 
 
+def test_select_bgm_prefers_track_covering_voiceover() -> None:
+    """任务B(2026-11-13 边审计阶段2):有配音总时长时,时长能覆盖配音的候选稳定排前。
+
+    构造:两条候选同 mood("欢快"→happy 同分,启发式原序 short_hit 在前);
+    voiceover_total_ms 大于短轨时长 → 覆盖重排后 fallback(candidates[0])
+    翻转为长轨;同库不传配音时长时仍选短轨 —— 证明偏好确实由配音驱动。
+    """
+    library = [
+        {"bgm_id": "short_hit", "mood": ["happy"], "duration_ms": 20000,
+         "default_volume": 0.4, "beat_period_ms": 500},
+        {"bgm_id": "long_cover", "mood": ["happy"], "duration_ms": 60000,
+         "default_volume": 0.4, "beat_period_ms": 500},
+    ]
+    res = select_bgm(
+        user_request="欢快",
+        groups=[],
+        library=library,
+        voiceover_total_ms=45000,
+    )
+    assert res["bgm_ref"] == "long_cover"
+    assert res["voiceover_total_ms"] == 45000
+
+    # 对照:同库不传配音时长 → 无覆盖重排 → 启发式原第1(short_hit)
+    res_no_vo = select_bgm(user_request="欢快", groups=[], library=library)
+    assert res_no_vo["bgm_ref"] == "short_hit"
+    assert res_no_vo["voiceover_total_ms"] == 0
+
+
+def test_select_bgm_voiceover_zero_matches_default_behavior() -> None:
+    """任务B 容缺省语义:voiceover_total_ms=0(配音缺失/失败容缺省路径)
+    与不传参数时输出逐字段一致 —— 保证存量行为零漂移。"""
+    library = [
+        {"bgm_id": "warm", "mood": ["warm"], "tempo": "slow", "duration_ms": 60000,
+         "default_volume": 0.3, "beat_period_ms": 1000},
+        {"bgm_id": "happy", "mood": ["happy"], "tempo": "fast", "duration_ms": 60000,
+         "default_volume": 0.4, "beat_period_ms": 500},
+    ]
+    a = select_bgm(user_request="温暖故事", groups=[], library=library)
+    b = select_bgm(user_request="温暖故事", groups=[], library=library, voiceover_total_ms=0)
+    assert a == b
+    assert b["voiceover_total_ms"] == 0
+
+
 # ===========================================================================
 # timeline_planner & plan_timeline_pro(阶段 5 TimeLine 简化版)
 # (speech_rough_cut 用例已随 2026-11-08 B1 ASR 移除删除)

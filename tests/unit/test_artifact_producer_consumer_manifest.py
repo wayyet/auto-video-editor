@@ -44,6 +44,16 @@ ARTIFACT_MANIFEST: dict[str, dict[str, list[str]]] = {
         "producers": ["nodes/storyline/node_generate_ai_transition.py"],
         "consumers": ["nodes/storyline/node_plan_timeline_ai_transition.py"],
     },
+    # 2026-11-13 边审计阶段1 任务B:select_bgm 真实消费配音总时长(配乐覆盖偏好)
+    # —— 此前该键仅出现在 node_select_bgm 的 docstring("可选"),代码体未读,
+    #    正是本清单 AST 口径要拦的"注释提及 ≠ 真实消费"。
+    "storyline_voiceover_artifact": {
+        "producers": ["nodes/storyline/node_generate_voiceover.py"],
+        "consumers": [
+            "nodes/storyline/node_plan_timeline_pro.py",
+            "nodes/storyline/node_select_bgm.py",
+        ],
+    },
     "storyline_timeline_plan": {
         # plan_timeline_pro 首写;开启 AI 转场时 PTAT 覆写指向 timeline_plan_ai.json
         "producers": [
@@ -102,10 +112,11 @@ def test_manifest_producers_and_consumers(key: str) -> None:
 
 
 def test_manifest_covers_expected_keys() -> None:
-    """阶段0 锁定的三个键 + 阶段1 追加的模板 artifact 在册(阶段2 继续扩表)。"""
+    """阶段0 锁定的三个键 + 阶段1 追加的模板 artifact + 20261113 任务B 的配音 artifact 在册。"""
     assert {
         "storyline_script_artifact",
         "storyline_ai_transition_artifact",
         "storyline_timeline_plan",
         "storyline_script_template_artifact",
+        "storyline_voiceover_artifact",
     } <= set(ARTIFACT_MANIFEST)
