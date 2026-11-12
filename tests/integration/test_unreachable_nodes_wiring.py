@@ -73,6 +73,10 @@ CONDITIONAL_NODES = {
 #   时间线),PTP 触发时机后移一个超步(等 RTR),轨迹随之更新。
 # - 2026-11-12 边治理阶段5:render_video 节点整体删除(qa_gate 条件出口直连
 #   join),轨迹后缀少一个超步。
+# - 2026-11-13 边审计阶段3(任务B):轨迹形状零变更([GS,GV]→SB 双源屏障保留);
+#   新增 test_select_bgm_consumes_voiceover_and_rtr_reads_bgm_selection 锁定
+#   SB 消费配音时长 / RTR 读取 bgm_selection 的运行时契约;qa 重试用例补
+#   GV/TXT/SB/RTR 每轮恰 1 次断言。
 # - 旧版黄金轨迹是 _CYCLE × 4(stub BGM 90s > 目标 35s → qa 重试 3 次)。模糊修复
 #   阶段3 的逐片段速度护栏(7ad573d)落地后,planner 不再注水拉长,actual_ms=7200
 #   ≤ 目标 → qa 一轮即过、重试回路不再自触发 —— 这正是本文件 5 个存量失败用例的

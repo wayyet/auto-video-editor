@@ -667,7 +667,8 @@
 
       const params = new URLSearchParams(location.search);
       // 视图:main=完整 LangGraph 工作流(/api/workflow/graph);
-      // storyline=旧 14 节点子流程(node_map/workflow.json,行为不变)。
+      // storyline=Storyline 子流程静态快照(node_map/workflow.json,
+      // 2026-11-13 边审计阶段5 已同步当前 17 节点拓扑;仅为示意,权威以 graph.py 为准)。
       const DEFAULT_DATA_URL = params.get("data") || "node_map/workflow.json";
       const MAIN_API_URL = "/api/workflow/graph";
 

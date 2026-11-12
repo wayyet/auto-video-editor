@@ -1,19 +1,19 @@
 {
   "workflow_meta": {
-    "id": "video_editing_pipeline",
-    "name": "Video Editing Workflow",
-    "description": "Automated video editing pipeline node map, including pro/normal nodes"
+    "id": "storyline_subflow",
+    "name": "Storyline Subflow (auto pipeline)",
+    "description": "Storyline 子流程静态快照。2026-11-13 边审计阶段5 已同步当前 graph.py 的 17 节点拓扑(双源屏障/六源 fan-in/条件路由/QA 重试回路);仅为示意,权威接线以 graph.py 与 tests 为准。本文件无 edges 数组:连接由 dependencies(数据来源,屏障即全部源)与 next_nodes(下游,含条件出口)双向表达。"
   },
   "nodes": [
     {
-      "id": "load_media",
+      "id": "storyline_load_media",
       "name": "Load Media",
-      "kind": "load_media",
+      "kind": "storyline_load_media",
       "pro": false,
       "description": "Loads and indexes input media. Entry point with no dependencies; required by all downstream operations.",
       "dependencies": [],
       "next_nodes": [
-        "split_shots"
+        "storyline_split_shots"
       ],
       "input_schema": [
         {
@@ -37,87 +37,16 @@
       ]
     },
     {
-      "id": "search_media",
-      "name": "Search Media",
-      "kind": "search_media",
-      "pro": false,
-      "description": "Search media from external sources (e.g., Pexels).",
-      "dependencies": [],
-      "next_nodes": [
-        "load_media"
-      ],
-      "input_schema": [
-        {
-          "name": "mode",
-          "type": "Enum",
-          "options": [
-            "auto",
-            "skip",
-            "default"
-          ],
-          "description": "auto: Automatically search media from pexels; skip: skip search; default: skip search",
-          "default": "auto"
-        },
-        {
-          "name": "search_keyword",
-          "type": "String",
-          "description": "Keywords of the media the user wants to obtain",
-          "default": "scenery"
-        },
-        {
-          "name": "video_number",
-          "type": "Integer",
-          "description": "The number of videos the user wants to obtain",
-          "default": 5
-        },
-        {
-          "name": "photo_number",
-          "type": "Integer",
-          "description": "The number of images the user wants to obtain",
-          "default": 0
-        },
-        {
-          "name": "orientation",
-          "type": "Enum",
-          "options": [
-            "landscape",
-            "portrait"
-          ],
-          "description": "landscape: wider horizontally; portrait: higher vertically",
-          "default": "landscape"
-        },
-        {
-          "name": "min_video_duration",
-          "type": "Integer",
-          "description": "The shortest duration of footage requested by the user (seconds)",
-          "default": 1
-        },
-        {
-          "name": "max_video_duration",
-          "type": "Integer",
-          "description": "The longest duration of footage requested by the user (seconds)",
-          "default": 30
-        }
-      ],
-      "output_schema": [
-        {
-          "name": "media",
-          "type": "List[Media]",
-          "description": "Retrieved media objects"
-        }
-      ]
-    },
-    {
-      "id": "split_shots",
+      "id": "storyline_split_shots",
       "name": "Split Shots",
-      "kind": "split_shots",
+      "kind": "storyline_split_shots",
       "pro": false,
       "description": "Automatically segment videos into shots based on scene changes; treat images as single shots.",
       "dependencies": [
-        "load_media"
+        "storyline_load_media"
       ],
       "next_nodes": [
-        "understand_clips"
+        "storyline_understand_clips"
       ],
       "input_schema": [
         {
@@ -158,17 +87,16 @@
       ]
     },
     {
-      "id": "understand_clips",
+      "id": "storyline_understand_clips",
       "name": "Understand Clips",
-      "kind": "understand_clips",
+      "kind": "storyline_understand_clips",
       "pro": false,
       "description": "Generate descriptions/captions for each clip based on media content.",
       "dependencies": [
-        "split_shots"
+        "storyline_split_shots"
       ],
       "next_nodes": [
-        "filter_clips",
-        "recommend_script_template"
+        "storyline_filter_clips"
       ],
       "input_schema": [
         {
@@ -197,16 +125,16 @@
       ]
     },
     {
-      "id": "filter_clips",
+      "id": "storyline_filter_clips",
       "name": "Filter Clips",
-      "kind": "filter_clips",
+      "kind": "storyline_filter_clips",
       "pro": false,
       "description": "Filter clips based on user requirements.",
       "dependencies": [
-        "understand_clips"
+        "storyline_understand_clips"
       ],
       "next_nodes": [
-        "group_clips"
+        "storyline_group_clips"
       ],
       "input_schema": [
         {
@@ -241,16 +169,19 @@
       ]
     },
     {
-      "id": "group_clips",
+      "id": "storyline_group_clips",
       "name": "Group Clips",
-      "kind": "group_clips",
+      "kind": "storyline_group_clips",
       "pro": false,
-      "description": "Organize clips into narrative groups and arrange playback order.",
+      "description": "Organize clips into narrative groups and arrange playback order. QA 时长超限且仍可重试时,由 storyline_qa_gate 的条件回边重新触发(重试回路起点,非数据依赖)。作为 BGM 转场/AI 转场/时间线屏障的分组来源。",
       "dependencies": [
-        "filter_clips"
+        "storyline_filter_clips"
       ],
       "next_nodes": [
-        "generate_script"
+        "storyline_script_template_recommendation",
+        "storyline_recommend_transition",
+        "storyline_plan_timeline_pro",
+        "storyline_generate_ai_transition"
       ],
       "input_schema": [
         {
@@ -280,17 +211,81 @@
       ]
     },
     {
-      "id": "generate_script",
-      "name": "Generate Script",
-      "kind": "generate_script",
+      "id": "storyline_script_template_recommendation",
+      "name": "Recommend Script Template",
+      "kind": "storyline_script_template_recommendation",
       "pro": false,
-      "description": "Generate script/subtitles for each group; supports passing a custom_script override (subtitle_units removed).",
+      "description": "Recommend/select a copywriting template based on material content and user's requirements. 2026-11-12 前置化:文案生成的主链前置节点;出口为条件路由(检索开关开启且能构造非空检索词 → search_web_topic,否则直达 generate_script)。",
       "dependencies": [
-        "group_clips"
+        "storyline_group_clips"
       ],
       "next_nodes": [
-        "generate_voiceover",
-        "recommend_text"
+        "storyline_search_web_topic",
+        "storyline_generate_script"
+      ],
+      "input_schema": [
+        {
+          "name": "mode",
+          "type": "Enum",
+          "options": [
+            "auto",
+            "skip",
+            "default"
+          ],
+          "description": "auto: Select an appropriate copywriting template based on the material content and user's requirements for voiceover style; skip: Skip;",
+          "default": "auto"
+        },
+        {
+          "name": "user_request",
+          "type": "String",
+          "description": "User's specific requirements for the script style.",
+          "default": ""
+        },
+        {
+          "name": "filter_include",
+          "type": "Dict[String,List[String]]",
+          "description": "Positive filter conditions. Multiple dimensions are combined with AND, multiple values within the same dimension are combined with OR. Supported dimensions: tags (one or more of [Life, Food, Beauty, Entertainment, Travel, Tech, Business, Vehicle, Health, Family, Pets, Knowledge]).",
+          "default": {}
+        },
+        {
+          "name": "filter_exclude",
+          "type": "Dict[String,List[String]]",
+          "description": "Negative filter conditions. Items matching these conditions will be excluded. Supported dimensions: tags, id.",
+          "default": {}
+        }
+      ],
+      "output_schema": []
+    },
+    {
+      "id": "storyline_search_web_topic",
+      "name": "Search Web Topic",
+      "kind": "storyline_search_web_topic",
+      "pro": false,
+      "description": "Conditional web topic retrieval (2026-11-10 前置化). 仅由模板推荐的条件边触发(检索开关开启且检索词非空;检索词 = 手动 query + 画面概述首句 + 分组主题自动构造);结果软降级,失败不阻断文案。条件触发节点,按设计禁止进入任何 fan-in 屏障(QA 重试轮可能跳过它)。",
+      "dependencies": [
+        "storyline_script_template_recommendation"
+      ],
+      "next_nodes": [
+        "storyline_generate_script"
+      ],
+      "input_schema": [],
+      "output_schema": []
+    },
+    {
+      "id": "storyline_generate_script",
+      "name": "Generate Script",
+      "kind": "storyline_generate_script",
+      "pro": false,
+      "description": "Generate script/subtitles for each group; supports passing a custom_script override. 入边二选一:模板推荐条件直达(检索关/无检索词),或检索节点完成后进入;fan-out 派生配音、文字推荐,并作为 BGM 双源屏障来源之一。",
+      "dependencies": [
+        "storyline_script_template_recommendation",
+        "storyline_search_web_topic"
+      ],
+      "next_nodes": [
+        "storyline_generate_voiceover",
+        "storyline_recommend_text",
+        "storyline_select_bgm",
+        "storyline_plan_timeline_pro"
       ],
       "input_schema": [
         {
@@ -331,60 +326,17 @@
       ]
     },
     {
-      "id": "recommend_script_template",
-      "name": "Recommend Script Template",
-      "kind": "recommend_script_template",
-      "pro": false,
-      "description": "Recommend/select a copywriting template based on material content and user's requirements. (Output schema not defined in the provided schema file.)",
-      "dependencies": [
-        "understand_clips"
-      ],
-      "next_nodes": [],
-      "input_schema": [
-        {
-          "name": "mode",
-          "type": "Enum",
-          "options": [
-            "auto",
-            "skip",
-            "default"
-          ],
-          "description": "auto: Select an appropriate copywriting template based on the material content and user's requirements for voiceover style; skip: Skip;",
-          "default": "auto"
-        },
-        {
-          "name": "user_request",
-          "type": "String",
-          "description": "User's specific requirements for the script style.",
-          "default": ""
-        },
-        {
-          "name": "filter_include",
-          "type": "Dict[String,List[String]]",
-          "description": "Positive filter conditions. Multiple dimensions are combined with AND, multiple values within the same dimension are combined with OR. Supported dimensions: tags (one or more of [Life, Food, Beauty, Entertainment, Travel, Tech, Business, Vehicle, Health, Family, Pets, Knowledge]).",
-          "default": {}
-        },
-        {
-          "name": "filter_exclude",
-          "type": "Dict[String,List[String]]",
-          "description": "Negative filter conditions. Items matching these conditions will be excluded. Supported dimensions: tags, id.",
-          "default": {}
-        }
-      ],
-      "output_schema": []
-    },
-    {
-      "id": "generate_voiceover",
+      "id": "storyline_generate_voiceover",
       "name": "Generate Voiceover",
-      "kind": "generate_voiceover",
+      "kind": "storyline_generate_voiceover",
       "pro": false,
-      "description": "Generate voiceover/narration items (e.g., TTS) for each group.",
+      "description": "Generate voiceover/narration items (e.g., TTS) for each group. TTS 整体失败不写 artifact(配音/字幕解耦);成功产物含各段 duration,是 BGM 时长覆盖偏好与时间线配音轨的真实输入。",
       "dependencies": [
-        "generate_script"
+        "storyline_generate_script"
       ],
       "next_nodes": [
-        "select_bgm",
-        "plan_timeline"
+        "storyline_select_bgm",
+        "storyline_plan_timeline_pro"
       ],
       "input_schema": [
         {
@@ -409,22 +361,23 @@
         {
           "name": "voiceover",
           "type": "List[Voiceover]",
-          "description": "Voiceover list"
+          "description": "Voiceover list (per-segment duration included)"
         }
       ]
     },
     {
-      "id": "select_bgm",
+      "id": "storyline_select_bgm",
       "name": "Select BGM",
-      "kind": "select_bgm",
+      "kind": "storyline_select_bgm",
       "pro": false,
-      "description": "Select appropriate background music (BGM) based on material content and user requirements; supports include/exclude filters.",
+      "description": "Select appropriate background music (BGM) based on material content and user requirements. 2026-11-13 边审计阶段1 任务B:由 [generate_script, generate_voiceover] 双源屏障触发,并真实聚合配音 artifact 各段 duration(voiceover_total_ms)作为配乐时长覆盖偏好;配音缺失按 0 容缺省,BGM 不因配音失败陪葬。",
       "dependencies": [
-        "generate_script"
+        "storyline_generate_script",
+        "storyline_generate_voiceover"
       ],
       "next_nodes": [
-        "recommend_transition",
-        "plan_timeline"
+        "storyline_recommend_transition",
+        "storyline_plan_timeline_pro"
       ],
       "input_schema": [
         {
@@ -461,21 +414,23 @@
         {
           "name": "bgm",
           "type": "List[BGM]",
-          "description": "BGM list"
+          "description": "BGM selection (with voiceover_total_ms coverage-preference input echoed)"
         }
       ]
     },
     {
-      "id": "recommend_transition",
+      "id": "storyline_recommend_transition",
       "name": "Recommend Transition",
-      "kind": "recommend_transition",
+      "kind": "storyline_recommend_transition",
       "pro": false,
-      "description": "Recommend transitions (e.g., fade in/out) at beginning and end.",
+      "description": "Recommend transitions (e.g., fade in/out) at beginning and end. 由 [group_clips, select_bgm] 双源屏障触发;真实读取分组与 BGM selection(bgm_ref 传入能力层,当前模板未渲染该占位符,为预留字段)。",
       "dependencies": [
-        "select_bgm"
+        "storyline_group_clips",
+        "storyline_select_bgm"
       ],
       "next_nodes": [
-        "render_video"
+        "storyline_plan_timeline_pro",
+        "storyline_generate_ai_transition"
       ],
       "input_schema": [
         {
@@ -505,16 +460,16 @@
       ]
     },
     {
-      "id": "recommend_text",
+      "id": "storyline_recommend_text",
       "name": "Recommend Text",
-      "kind": "recommend_text",
+      "kind": "storyline_recommend_text",
       "pro": false,
       "description": "Recommend subtitle font style/color based on user's requirements; supports include filters.",
       "dependencies": [
-        "generate_script"
+        "storyline_generate_script"
       ],
       "next_nodes": [
-        "render_video"
+        "storyline_plan_timeline_pro"
       ],
       "input_schema": [
         {
@@ -550,19 +505,21 @@
       ]
     },
     {
-      "id": "plan_timeline",
-      "name": "Plan Timeline",
-      "kind": "plan_timeline",
+      "id": "storyline_plan_timeline_pro",
+      "name": "Plan Timeline Pro",
+      "kind": "storyline_plan_timeline_pro",
       "pro": false,
-      "description": "Plan timeline tracks for video, subtitles, voiceover, and BGM; optionally sync transitions with BGM beats.",
+      "description": "Plan timeline tracks for video, subtitles, voiceover, and BGM; optionally sync transitions with BGM beats. 六源 fan-in 屏障:六个真实产物生产者全部完成后才执行;AI 开启时出边交给 plan_timeline_ai_transition,AI 关闭时直接进 qa_gate。",
       "dependencies": [
-        "group_clips",
-        "generate_script",
-        "generate_voiceover",
-        "select_bgm"
+        "storyline_group_clips",
+        "storyline_generate_script",
+        "storyline_generate_voiceover",
+        "storyline_select_bgm",
+        "storyline_recommend_transition",
+        "storyline_recommend_text"
       ],
       "next_nodes": [
-        "render_video"
+        "storyline_plan_timeline_ai_transition"
       ],
       "input_schema": [
         {
@@ -587,125 +544,84 @@
         {
           "name": "tracks",
           "type": "List[TimelineTracks]",
-          "description": "Timeline track collection"
+          "description": "Canonical Timeline track collection"
         }
       ]
     },
     {
-      "id": "render_video",
-      "name": "Render Video",
-      "kind": "render_video",
+      "id": "storyline_generate_ai_transition",
+      "name": "Generate AI Transition",
+      "kind": "storyline_generate_ai_transition",
       "pro": false,
-      "description": "Render/export the final video with canvas, subtitle, audio, and encoding parameters. (Output schema not defined in the provided schema file.)",
+      "description": "Optional AI transition generation (STORYLINE_ENABLE_AI_TRANSITION 开启时才接线;未配置/未批准 Provider 时零外呼,仅登记审计)。读取分组衔接点与普通转场提示,生成衔接转场 MP4 产物。",
       "dependencies": [
-        "plan_timeline"
+        "storyline_group_clips",
+        "storyline_recommend_transition"
+      ],
+      "next_nodes": [
+        "storyline_plan_timeline_ai_transition"
+      ],
+      "input_schema": [],
+      "output_schema": []
+    },
+    {
+      "id": "storyline_plan_timeline_ai_transition",
+      "name": "Plan Timeline AI Transition",
+      "kind": "storyline_plan_timeline_ai_transition",
+      "pro": false,
+      "description": "Merge AI transitions into the Canonical Timeline (AI 开启时接线). 校验真实生成状态/MP4 存在/两端 clip 相邻后物化为 SourceMedia + Clip;失败或未批准时保留基础时间线并留审计记录,不阻断主链。",
+      "dependencies": [
+        "storyline_plan_timeline_pro",
+        "storyline_generate_ai_transition"
+      ],
+      "next_nodes": [
+        "storyline_qa_gate"
+      ],
+      "input_schema": [],
+      "output_schema": []
+    },
+    {
+      "id": "storyline_qa_gate",
+      "name": "QA Gate",
+      "kind": "storyline_qa_gate",
+      "pro": false,
+      "description": "QA on the final Canonical Timeline(合约/源区间/速度/目标时长)。入边二选一:AI 开启等 plan_timeline_ai_transition,AI 关闭直等 plan_timeline_pro。条件出口:时长超限且仍可重试 → 回 group_clips(重试回路);通过/空计划/非时长错误/重试耗尽 → join_storyline。",
+      "dependencies": [
+        "storyline_plan_timeline_ai_transition"
+      ],
+      "next_nodes": [
+        "storyline_group_clips",
+        "storyline_join"
+      ],
+      "input_schema": [],
+      "output_schema": []
+    },
+    {
+      "id": "storyline_join",
+      "name": "Join Storyline",
+      "kind": "storyline_join",
+      "pro": false,
+      "description": "Hand the Canonical Timeline over as storyline_plan. 条件出口:存在有效 plan → 外层 generate_draft 主流程;无可用计划 → END(不生成空草稿)。",
+      "dependencies": [
+        "storyline_qa_gate"
+      ],
+      "next_nodes": [
+        "generate_draft"
+      ],
+      "input_schema": [],
+      "output_schema": []
+    },
+    {
+      "id": "generate_draft",
+      "name": "Generate Draft (outer pipeline)",
+      "kind": "generate_draft",
+      "pro": true,
+      "description": "外层剪映草稿生成主流程的入口(不在本快照范围内)。storyline_join 交接成功后进入;本快照到此为止,外层后续节点见 /api/workflow/graph 主图视图。",
+      "dependencies": [
+        "storyline_join"
       ],
       "next_nodes": [],
-      "input_schema": [
-        {
-          "name": "mode",
-          "type": "Enum",
-          "options": [
-            "auto",
-            "skip",
-            "default"
-          ],
-          "description": "auto: Automatic mode; skip: Skip mode; default: Default mode",
-          "default": "auto"
-        },
-        {
-          "name": "aspect_ratio",
-          "type": "Optional[String]",
-          "description": "Canvas aspect ratio override: one of 16:9, 4:3, 1:1, 3:4, 9:16; auto if unset.",
-          "default": null
-        },
-        {
-          "name": "output_max_dimension_px",
-          "type": "Optional[Integer]",
-          "description": "Maximum output size in pixels (longest side); defaults to 1080 and works with the aspect ratio.",
-          "default": null
-        },
-        {
-          "name": "clip_compose_mode",
-          "type": "String",
-          "description": "How to fit media into the canvas: 'padding' keeps aspect ratio and fills empty areas; 'crop' center-crops media to match the canvas aspect ratio.",
-          "default": "crop"
-        },
-        {
-          "name": "bg_color",
-          "type": "Tuple[Integer,Integer,Integer] | List[Integer] | Null",
-          "description": "Background color for canvas padding, specified as an (R, G, B) tuple (no alpha channel).",
-          "default": [
-            0,
-            0,
-            0
-          ]
-        },
-        {
-          "name": "crf",
-          "type": "Integer",
-          "description": "CRF value (10–30), lower = better quality, larger file",
-          "default": 23
-        },
-        {
-          "name": "font_color",
-          "type": "Tuple[Integer,Integer,Integer,Integer]",
-          "description": "Font color, RGBA format (R, G, B, A), values range 0-255",
-          "default": [
-            255,
-            255,
-            255,
-            255
-          ]
-        },
-        {
-          "name": "font_size",
-          "type": "Integer",
-          "description": "Font size in pixels. Recommended range: 28–120.",
-          "default": 40
-        },
-        {
-          "name": "margin_bottom",
-          "type": "Integer",
-          "description": "Bottom margin for subtitles in pixels. Defaults to 80; valid range: 40–600.",
-          "default": 80
-        },
-        {
-          "name": "stroke_width",
-          "type": "Integer",
-          "description": "Text stroke width (px), typically 0–8",
-          "default": 2
-        },
-        {
-          "name": "stroke_color",
-          "type": "Tuple[Integer,Integer,Integer,Integer]",
-          "description": "Text stroke color in RGBA format",
-          "default": [
-            0,
-            0,
-            0,
-            255
-          ]
-        },
-        {
-          "name": "bgm_volume_scale",
-          "type": "Float",
-          "description": "Background music volume multiplier, range 0.0–3.0 (1.0 = default volume)",
-          "default": 1.0
-        },
-        {
-          "name": "tts_volume_scale",
-          "type": "Float",
-          "description": "TTS volume multiplier, range 0.0–3.0 (1.0 = default volume)",
-          "default": 1.0
-        },
-        {
-          "name": "include_video_audio",
-          "type": "Boolean",
-          "description": "Whether to include the original video audio track",
-          "default": false
-        }
-      ],
+      "input_schema": [],
       "output_schema": []
     }
   ]
