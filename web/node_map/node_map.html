@@ -266,6 +266,23 @@
     }
     .edge.dim{ opacity:.18; }
     .edge.highlight{ opacity:1; stroke-width:2.2; }
+    /* 第5期 TB:条件边点线 / 反馈边虚线(计划 §4.3)。
+       必须在 traversed/active 之前声明 —— 同优先级后声明胜出,
+       已走过/活动边的状态样式才能覆盖布局语义样式。 */
+    .edge.kind-conditional{ stroke-dasharray: 3 4; opacity: .8; }
+    .edge.feedback{ stroke-dasharray: 7 5; opacity: .75; }
+    /* 「未启用/未接入」区带分隔标签(主图 TB 且存在不可达节点时,计划 §4.2) */
+    .band-label{
+      position:absolute;
+      z-index:2;
+      font-size:11px;
+      color:var(--muted);
+      background:var(--panel);
+      border:1px dashed var(--border);
+      border-radius:999px;
+      padding:4px 12px;
+      user-select:none;
+    }
     /* 已走过的路径 / 当前活动路径(§4.1 连线三种信息) */
     .edge.traversed{ stroke: var(--edge-traversed); opacity:.9; }
     .edge.active{
@@ -680,9 +697,17 @@
         workflowId: null,
         nodesById: new Map(),
         nodeEls: new Map(),
-        edges: [], // {from,to,el,id}
+        edges: [], // {from,to,el,id,kind,label,layoutRole}
         layoutKey: null,
         saveTimer: null,
+        // 第5期:纵向有向图布局(TB)
+        direction: "tb",            // 主图方向:"tb"(默认)| "lr"(备用);子流程不适用
+        layoutModule: null,         // workflow_layout.mjs(动态 import,失败降级横向)
+        layoutModulePromise: null,
+        layoutResult: null,         // 最近一次 TB 布局输出(反馈 lane/区带/角色)
+        positionsCustomized: false, // 用户手动拖拽后为 true,自动重排不再覆盖(计划 §4.4)
+        bandLabelEl: null,          // 「未启用/未接入」区带标签
+        edgeAnchorIndex: null,      // 同源/同目标多边的锚点分散索引
         // 实时层
         nodeStatus: {},      // id -> status(渲染投影,由 hooks 更新)
         programmaticScroll: false
@@ -738,7 +763,9 @@
         return depth;
       }
 
-      function autoLayout(nodes){
+      function computeHorizontalPositions(nodes){
+        /* 原横向分层布局(第5期保留为 LR 备用方向;主图默认已改走
+           workflow_layout.mjs 的纵向有向图布局)。行为与旧 autoLayout 一致。 */
         const depth = computeDepths(nodes);
         const cols = new Map(); // depth -> array of node ids
         for(const n of nodes){
@@ -771,6 +798,139 @@
           }
         }
         return positions;
+      }
+
+      // ---------------------------------------------------------------------------
+      // 第5期:纵向有向图布局(TB)——模块加载/坐标应用/区带标签/布局角色
+      // ---------------------------------------------------------------------------
+      function ensureLayoutModule(timeoutMs = 3000){
+        /* 动态加载 workflow_layout.mjs(classic 脚本内原生 dynamic import)。
+           失败不阻塞页面:主图降级横向布局并 console.warn,子流程本就不依赖模块。 */
+        if (state.layoutModule) return Promise.resolve(state.layoutModule);
+        if (!state.layoutModulePromise){
+          state.layoutModulePromise = import("/static/workflow_layout.mjs")
+            .then(m => { state.layoutModule = m; return m; })
+            .catch(err => {
+              console.warn("workflow_layout 模块不可用,纵向布局降级为横向:", err);
+              return null;
+            });
+        }
+        return Promise.race([
+          state.layoutModulePromise,
+          new Promise(resolve => setTimeout(() => resolve(state.layoutModule), timeoutMs)),
+        ]);
+      }
+
+      function resetCanvasSize(){
+        /* 回到 CSS 基准尺寸:方向切换/重渲染后由 ensureCanvasSize 按新布局
+           重新扩展,避免 LR 宽画布残留把 TB 图挤在角落(计划 §4.4)。 */
+        canvas.style.width = "";
+        canvas.style.height = "";
+      }
+
+      function applyHorizontalPositions(positions){
+        for (const n of (state.data && state.data.nodes) || []){
+          const el = state.nodeEls.get(n.id);
+          if (!el) continue;
+          const p = positions && positions[n.id] ? positions[n.id] : { x: 40, y: 40 };
+          el.style.left = p.x + "px";
+          el.style.top = p.y + "px";
+        }
+      }
+
+      function removeBandLabel(){
+        if (state.bandLabelEl){
+          state.bandLabelEl.remove();
+          state.bandLabelEl = null;
+        }
+      }
+
+      function renderBandLabel(result){
+        removeBandLabel();
+        if (!result || result.unreachableBandTopY == null) return;
+        const div = document.createElement("div");
+        div.className = "band-label";
+        div.textContent = "未启用 / 未接入(不可达节点)";
+        div.style.left = "48px";
+        div.style.top = Math.max(0, result.unreachableBandTopY - 36) + "px";
+        canvas.appendChild(div);
+        state.bandLabelEl = div;
+      }
+
+      function applyTBLayout(options){
+        /* 纵向有向图布局(主图 TB):测 DOM → 纯模块计算 → 应用坐标。
+           skipPositions=true 时只产出 lane/区带/反馈角色(用户自定义坐标场景,
+           计划 §6.2 第 6 条:渲染管线 = 建节点 → 折叠态 → 测量 → 坐标)。 */
+        const opts = options || {};
+        const mod = state.layoutModule;
+        if (!mod || !state.data || !Array.isArray(state.data.edges) || !state.data.edges.length) return false;
+        if (opts.resetCanvas) resetCanvasSize();
+        const measurements = {};
+        for (const [id, el] of state.nodeEls){
+          measurements[id] = { width: el.offsetWidth, height: el.offsetHeight };
+        }
+        let result;
+        try{
+          result = mod.computeLayeredGraphPositions(state.data.nodes, state.data.edges, measurements, {
+            direction: "TB",
+            onWarning: (msg) => console.warn(msg),
+          });
+        }catch(err){
+          console.warn("纵向布局计算失败,降级横向:", err);
+          return false;
+        }
+        state.layoutResult = result;
+        if (!opts.skipPositions){
+          for (const [id, p] of result.positions){
+            const el = state.nodeEls.get(id);
+            if (!el) continue;
+            el.style.left = p.x + "px";
+            el.style.top = p.y + "px";
+          }
+        }
+        renderBandLabel(result);
+        return true;
+      }
+
+      function buildLayoutKey(){
+        /* 布局 key(计划 §6.3):主图 TB 加算法版本后缀(_tb_v1),LR 沿用历史
+           格式零迁移(用户已保存的横向拖拽位置不受影响);子流程沿用旧 key。
+           与 workflow_monitor.mjs::mainLayoutKey 同规则,模块在时用单一来源。 */
+        if (state.view !== "main") return "node_layout_" + state.workflowId;
+        const mod = state.layoutModule;
+        if (mod && mod.getLayoutCacheKey){
+          return mod.getLayoutCacheKey({
+            workflowId: state.workflowId,
+            mode: state.mode,
+            schemaVersion: state.schemaVersion,
+            direction: state.direction,
+          });
+        }
+        const base = `wf_layout_${state.workflowId}_${state.mode || "default"}_v${state.schemaVersion || 1}`;
+        return state.direction === "tb" ? base + "_tb_v1" : base;
+      }
+
+      function markEdgeLayoutRoles(){
+        /* TB 布局角色:反馈边加虚线样式 + 侧边 lane 路由。
+           只加前端临时布局角色,不改后端 kind/label/id(计划 §6.1 职责边界)。 */
+        const fb = state.layoutResult && state.layoutResult.feedbackEdgeIds;
+        const tb = state.view === "main" && state.direction === "tb";
+        for (const e of state.edges){
+          const isFb = !!(tb && fb && fb.has(e.id));
+          e.layoutRole = isFb ? "feedback" : "forward";
+          e.el.classList.toggle("feedback", isFb);
+        }
+      }
+
+      function afterStructureChange(){
+        /* 展开/折叠改变卡片高度:TB 自动布局按新尺寸重算层距;
+           用户手动拖拽过(positionsCustomized)则不覆盖,只修连线(计划 §4.4)。 */
+        if (state.view === "main" && state.direction === "tb" && !state.positionsCustomized){
+          applyTBLayout({ resetCanvas: false });
+        }
+        ensureCanvasSize();
+        updateAllEdges();
+        saveLayoutDebounced();
       }
 
       // Ensure the scrollable canvas is big enough to contain all nodes.
@@ -835,6 +995,13 @@
           collapsed[id] = el.classList.contains("collapsed");
         }
         const payload = { positions, collapsed };
+        // 第5期:主图 payload 记录方向与自定义标记(计划 §6.3);
+        // TB 自动坐标每次渲染重算,仅 positionsCustomized 时恢复保存坐标。
+        if (state.view === "main"){
+          payload.direction = state.direction;
+          payload.layoutAlgorithmVersion = state.direction === "tb" ? "v1" : undefined;
+          payload.positionsCustomized = state.positionsCustomized;
+        }
         try{
           localStorage.setItem(state.layoutKey, JSON.stringify(payload));
         }catch(e){
@@ -843,16 +1010,15 @@
       }
 
       function resetLayout(){
+        /* Reset Layout:清当前方向 key(TB/LR 各自隔离,计划 §7 阶段3),
+           重应用当前方向算法;TB 重置画布基准尺寸再扩展。 */
         if(state.layoutKey){
           localStorage.removeItem(state.layoutKey);
         }
-        const positions = autoLayout(state.data.nodes);
-        for(const n of state.data.nodes){
-          const el = state.nodeEls.get(n.id);
-          if(!el) continue;
-          const p = positions[n.id] || {x:40,y:40};
-          el.style.left = p.x + "px";
-          el.style.top = p.y + "px";
+        state.positionsCustomized = false;
+        if(!(state.view === "main" && state.direction === "tb" && applyTBLayout({ resetCanvas: true }))){
+          removeBandLabel();
+          applyHorizontalPositions(computeHorizontalPositions(state.data.nodes));
         }
         ensureCanvasSize();
         updateAllEdges();
@@ -1039,10 +1205,8 @@
           if (onExpand) onExpand(el.dataset.id);
         }
         // Expanding/collapsing changes node height; keep the canvas large enough.
-        ensureCanvasSize();
-        // Canvas/SVG size may change, so update all edges (also refreshes SVG viewBox).
-        updateAllEdges();
-        saveLayoutDebounced();
+        // 第5期:TB 自动布局时按新高度重算层距(自定义布局只修连线)
+        afterStructureChange();
       }
 
       function attachDragAndToggle(el, header, badges){
@@ -1100,6 +1264,8 @@
             // 拖动即暂停自动跟随(设计 §6.2-F 第 6 条)
             const follow = document.getElementById("followChk");
             if (follow) follow.checked = false;
+            // 第5期:手动拖拽后布局标记为自定义,展开/折叠不再自动重排(计划 §4.4)
+            state.positionsCustomized = true;
             // Dragging may move nodes beyond current canvas bounds.
             ensureCanvasSize();
             saveLayoutDebounced();
@@ -1118,21 +1284,39 @@
         });
       }
 
-      function addEdge(fromId, toId, dedupe, edgeId){
+      function addEdge(fromId, toId, dedupe, edge){
         if(!state.nodesById.has(fromId) || !state.nodesById.has(toId)) return;
-        const key = fromId + "→" + toId;
+        // 主图按后端 edge id 去重(边完整性,计划 §9.1);子流程无 id 仍按 from→to
+        const key = (edge && edge.id) ? `id:${edge.id}` : fromId + "→" + toId;
         if(dedupe.has(key)) return;
         dedupe.add(key);
 
         const path = document.createElementNS(SVG_NS, "path");
         path.classList.add("edge");
+        if (edge && edge.kind === "conditional") path.classList.add("kind-conditional");
         path.setAttribute("marker-end", "url(#arrowHead)");
         path.dataset.from = fromId;
         path.dataset.to = toId;
-        if (edgeId) path.dataset.edgeId = edgeId;
+        if (edge && edge.id) path.dataset.edgeId = edge.id;
+        if (edge && edge.label){
+          // 条件/屏障 label 经原生 tooltip 展示(计划 §4.3:标签默认不常驻绘制)
+          const tip = document.createElementNS(SVG_NS, "title");
+          tip.textContent = (edge.kind === "conditional" ? "[条件] " : "") + edge.label;
+          path.appendChild(tip);
+        }
         edgesSvg.appendChild(path);
 
-        state.edges.push({ from: fromId, to: toId, el: path, id: edgeId || (fromId + "->" + toId) });
+        // 第5期(计划 §2.4):保存后端边的 kind/label/原始 id —— SSE 投影按 id
+        // 匹配已走边,kind/label 提供边语义;layoutRole 是前端临时布局角色。
+        state.edges.push({
+          from: fromId,
+          to: toId,
+          el: path,
+          id: (edge && edge.id) || (fromId + "->" + toId),
+          kind: (edge && edge.kind) || "normal",
+          label: (edge && edge.label != null) ? edge.label : null,
+          layoutRole: "forward",
+        });
       }
 
       function buildEdges(){
@@ -1147,20 +1331,49 @@
         // 主图:API 直接给 edges(含 kind/label);子流程:沿用 dependencies/next_nodes
         if (Array.isArray(state.data.edges) && state.data.edges.length){
           for(const e of state.data.edges){
-            addEdge(e.from, e.to, dedupe, e.id);
+            addEdge(e.from, e.to, dedupe, e);
           }
-          return;
+        } else {
+          for(const node of state.data.nodes){
+            const deps = Array.isArray(node.dependencies) ? node.dependencies : [];
+            for(const depId of deps){
+              addEdge(depId, node.id, dedupe);
+            }
+            const nexts = Array.isArray(node.next_nodes) ? node.next_nodes : [];
+            for(const nxt of nexts){
+              addEdge(node.id, nxt, dedupe);
+            }
+          }
         }
-        for(const node of state.data.nodes){
-          const deps = Array.isArray(node.dependencies) ? node.dependencies : [];
-          for(const depId of deps){
-            addEdge(depId, node.id, dedupe);
-          }
-          const nexts = Array.isArray(node.next_nodes) ? node.next_nodes : [];
-          for(const nxt of nexts){
-            addEdge(node.id, nxt, dedupe);
-          }
+        rebuildEdgeAnchorIndices();
+      }
+
+      function rebuildEdgeAnchorIndices(){
+        /* 同源多出边/同目标多入边的锚点分散索引(计划 §5.7):按 edge id
+           稳定排序编号,同一布局多次重画时锚点位置不漂移。 */
+        const index = new Map();
+        const byFrom = new Map();
+        const byTo = new Map();
+        for (const e of state.edges){
+          if (!byFrom.has(e.from)) byFrom.set(e.from, []);
+          byFrom.get(e.from).push(e);
+          if (!byTo.has(e.to)) byTo.set(e.to, []);
+          byTo.get(e.to).push(e);
         }
+        const assign = (groups, countKey, idxKey) => {
+          for (const list of groups.values()){
+            list.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+            list.forEach((e, i) => {
+              if (!index.has(e.id)) index.set(e.id, { outIndex: 0, outCount: 1, inIndex: 0, inCount: 1 });
+              const entry = index.get(e.id);
+              entry[countKey] = list.length;
+              entry[idxKey] = i;
+            });
+          }
+        };
+        assign(byFrom, "outCount", "outIndex");
+        assign(byTo, "inCount", "inIndex");
+        state.edgeAnchorIndex = index;
       }
 
       function rectInCanvas(el){
@@ -1203,7 +1416,67 @@
         }
       }
 
-      function edgePath(fromRect, toRect){
+      function edgePath(edge, fromRect, toRect){
+        /* 路由分发(计划 §5.7):主图 TB 按布局角色路由 —— 普通前向边自上而下、
+           反馈边沿侧边 lane 折返;LR 备用方向与子流程沿用原自动选边逻辑。 */
+        if (state.view === "main" && state.direction === "tb"){
+          if (edge.layoutRole === "feedback") return feedbackEdgePathTB(edge, fromRect, toRect);
+          return forwardEdgePathTB(edge, fromRect, toRect);
+        }
+        return edgePathAuto(fromRect, toRect);
+      }
+
+      function spreadAnchor(rect, side, index, count){
+        /* 锚点:同源多出边/同目标多入边在边法线方向展开,减少重叠(计划 §5.7)。 */
+        const base = anchorPoint(rect, side);
+        if (!count || count <= 1) return base;
+        const vertical = (side === "left" || side === "right");
+        const span = (vertical ? rect.height : rect.width) * 0.72;
+        const t = index / (count - 1);
+        if (vertical) return { x: base.x, y: rect.cy - span / 2 + span * t };
+        return { x: rect.cx - span / 2 + span * t, y: base.y };
+      }
+
+      function forwardEdgePathTB(edge, fromRect, toRect){
+        /* 普通前向边:源底部 → 目标顶部,垂直控制点贝塞尔(计划 §4.3)。 */
+        const anchor = state.edgeAnchorIndex ? state.edgeAnchorIndex.get(edge.id) : null;
+        const p1 = spreadAnchor(fromRect, "bottom", anchor ? anchor.outIndex : 0, anchor ? anchor.outCount : 1);
+        const p2 = spreadAnchor(toRect, "top", anchor ? anchor.inIndex : 0, anchor ? anchor.inCount : 1);
+        if (p2.y + 8 < p1.y){
+          // 防御:非典型向上边(如不可达分量指回主流程)退回自动选边
+          return edgePathAuto(fromRect, toRect);
+        }
+        const d = Math.max(40, (p2.y - p1.y) * 0.45);
+        const c1 = { x: p1.x, y: p1.y + d };
+        const c2 = { x: p2.x, y: p2.y - d };
+        return `M ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} C ${c1.x.toFixed(1)} ${c1.y.toFixed(1)}, ${c2.x.toFixed(1)} ${c2.y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+      }
+
+      function feedbackEdgePathTB(edge, fromRect, toRect){
+        /* 反馈/重试边:从源节点侧边引出,经画布左右侧 lane 折返,进入目标侧边;
+           箭头始终指向真实目标,方向不反转(计划 §4.3/§5.7)。
+           lane 由 workflow_layout.mjs 按 edge id 稳定分配,多条回路不叠线。 */
+        const lane = (state.layoutResult && state.layoutResult.feedbackLanes &&
+                      state.layoutResult.feedbackLanes.get(edge.id)) || { side: "left", index: 0 };
+        const anchor = state.edgeAnchorIndex ? state.edgeAnchorIndex.get(edge.id) : null;
+        const dir = lane.side === "left" ? -1 : 1;
+        const offset = 36 + lane.index * 26;
+        if (edge.from === edge.to){
+          // 自环:沿节点一侧绕出再绕回,不参与层级(计划 §4.3)
+          const x1 = dir < 0 ? fromRect.left : fromRect.right;
+          const y1 = fromRect.top + fromRect.height * 0.3;
+          const y2 = fromRect.top + fromRect.height * 0.7;
+          const lx = dir < 0 ? x1 - offset : x1 + offset;
+          return `M ${x1.toFixed(1)} ${y1.toFixed(1)} C ${lx.toFixed(1)} ${y1.toFixed(1)}, ${lx.toFixed(1)} ${y2.toFixed(1)}, ${x1.toFixed(1)} ${y2.toFixed(1)}`;
+        }
+        const p1 = spreadAnchor(fromRect, lane.side, anchor ? anchor.outIndex : 0, anchor ? anchor.outCount : 1);
+        const p2 = spreadAnchor(toRect, lane.side, anchor ? anchor.inIndex : 0, anchor ? anchor.inCount : 1);
+        const raw = dir < 0 ? Math.min(p1.x, p2.x) - offset : Math.max(p1.x, p2.x) + offset;
+        const laneX = dir < 0 ? Math.max(8, raw) : raw; // 左侧不越出画布可滚区
+        return `M ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} C ${laneX.toFixed(1)} ${p1.y.toFixed(1)}, ${laneX.toFixed(1)} ${p2.y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+      }
+
+      function edgePathAuto(fromRect, toRect){
         const dx = toRect.cx - fromRect.cx;
         const dy = toRect.cy - fromRect.cy;
 
@@ -1246,7 +1519,7 @@
         const fromRect = rectInCanvas(fromEl);
         const toRect = rectInCanvas(toEl);
 
-        edge.el.setAttribute("d", edgePath(fromRect, toRect));
+        edge.el.setAttribute("d", edgePath(edge, fromRect, toRect));
       }
 
       function updateAllEdges(){
@@ -1277,16 +1550,14 @@
         for(const [id, el] of state.nodeEls){
           setCollapsed(el, true);
         }
-        updateAllEdges();
-        saveLayoutDebounced();
+        afterStructureChange();
       }
 
       function expandAll(){
         for(const [id, el] of state.nodeEls){
           setCollapsed(el, false);
         }
-        updateAllEdges();
-        saveLayoutDebounced();
+        afterStructureChange();
       }
 
       btnCollapse.addEventListener("click", collapseAll);
@@ -1470,6 +1741,8 @@
           return;
         }
 
+        // 主图 TB 布局依赖纯模块;等它就绪(最多 3s),失败时渲染层自行降级横向
+        await ensureLayoutModule();
         renderWorkflow(data, view);
       }
 
@@ -1509,36 +1782,54 @@
         state.workflowId = (data.workflow_meta && data.workflow_meta.id) || "workflow";
         state.schemaVersion = data.schema_version || null;
         state.mode = data.mode || null;
-        // 布局 key(§6.2-F 第 7 条):主图带 workflow_id+mode+schema_version;
+        // 布局 key(第5期阶段1):主图带方向隔离(TB=_tb_v1 / LR=历史格式);
         // 子流程沿用旧 key,布局数据互不影响。
-        state.layoutKey = view === "main"
-          ? `wf_layout_${state.workflowId}_${state.mode || "default"}_v${state.schemaVersion || 1}`
-          : "node_layout_" + state.workflowId;
+        state.layoutKey = buildLayoutKey();
         state.nodesById = new Map((data.nodes || []).map(n => [n.id, n]));
 
         wfNameEl.textContent = (data.workflow_meta && data.workflow_meta.name) || "Workflow Node Map";
         wfDescEl.textContent = (data.workflow_meta && data.workflow_meta.description) || "";
         document.title = wfNameEl.textContent;
 
-        // Build nodes
+        // Build nodes:第5期渲染管线 = 建节点 DOM → 应用折叠态 → 测量实际尺寸
+        // → 计算坐标(TB 需要真实 offsetWidth/offsetHeight,计划 §6.2 第 6 条)
         const saved = loadLayout();
-        const positions = saved?.positions || autoLayout(data.nodes || []);
+        state.positionsCustomized = view === "main"
+          ? !!(saved && saved.positionsCustomized && saved.positions)
+          : false;
         const collapsed = saved?.collapsed || null;
+        const useTB = view === "main" && state.direction === "tb";
 
         // Clear existing nodes but keep svg
         Array.from(canvas.querySelectorAll(".node")).forEach(n => n.remove());
         state.nodeEls.clear();
+        removeBandLabel();
+        state.layoutResult = null;
+        resetCanvasSize();
 
         for(const node of (data.nodes || [])){
           const el = createNodeEl(node);
-          const p = positions[node.id] || {x:40, y:40};
-          el.style.left = p.x + "px";
-          el.style.top = p.y + "px";
           const isCollapsed = collapsed ? !!collapsed[node.id] : true;
           setCollapsed(el, isCollapsed);
+          el.style.left = "40px"; // 临时位置,TB 在测量后统一落位
+          el.style.top = "40px";
 
           canvas.appendChild(el);
           state.nodeEls.set(node.id, el);
+        }
+
+        if (useTB){
+          const customized = state.positionsCustomized;
+          const applied = applyTBLayout({ resetCanvas: false, skipPositions: customized });
+          if (customized && applied){
+            // 用户手动拖拽过:恢复保存坐标(只借 TB 结果做 lane/区带/角色)
+            applyHorizontalPositions(saved.positions);
+          } else if (!applied){
+            // 模块不可用/计算失败:降级横向(保存的或重新计算)
+            applyHorizontalPositions(saved?.positions || computeHorizontalPositions(data.nodes || []));
+          }
+        } else {
+          applyHorizontalPositions(saved?.positions || computeHorizontalPositions(data.nodes || []));
         }
 
         // Make sure the canvas is large enough to contain all nodes before drawing edges.
@@ -1546,6 +1837,8 @@
 
         // Build edges
         buildEdges();
+        // 第5期:标记 TB 布局角色(反馈边虚线 + 侧边 lane)
+        markEdgeLayoutRoles();
         // Initial edge layout
         requestAnimationFrame(() => {
           updateAllEdges();
