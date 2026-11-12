@@ -1660,11 +1660,9 @@
       function handleEvent(esEvent) {
         let data = {};
         try { data = JSON.parse(esEvent.data); } catch (e) { return; }
-        const event = {
-          id: esEvent.lastEventId ? Number(esEvent.lastEventId) : null,
-          event_type: esEvent.type,
-          ...data,
-        };
+        // 后端帧是平铺的(payload 字段直接摊在 data 顶层,协议测试锁定);eventFromSse
+        // 把它还原成 {…信封字段, payload} —— applyEvent 读 event.payload.xxx(第四期 G1)。
+        const event = wm.eventFromSse(esEvent.lastEventId, esEvent.type, data);
         if (esEvent.type === "snapshot") {
           // 快照摘要帧:冷启动基线(事件重放会覆盖细节)
           setChip(data.state || "idle", `count=${data.event_count ?? "?"}`);

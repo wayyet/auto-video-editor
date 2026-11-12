@@ -168,6 +168,7 @@
   <script type="module">
     import {
       API_PATHS, applyEvent, computeNodeOrder, createMonitorState, computeCounts,
+      eventFromSse,
     } from "/static/workflow_monitor.mjs";
     import {
       CONSOLE_API_PATHS, friendlyError, HISTORY_STATE_LABEL,
@@ -284,11 +285,9 @@
     function handleEvent(esEvent) {
       let data = {};
       try { data = JSON.parse(esEvent.data); } catch (e) { return; }
-      const event = {
-        id: esEvent.lastEventId ? Number(esEvent.lastEventId) : null,
-        event_type: esEvent.type,
-        ...data,
-      };
+      // 后端帧是平铺的(payload 字段直接摊在 data 顶层,协议测试锁定);eventFromSse
+      // 把它还原成 {…信封字段, payload} —— applyEvent 读 event.payload.xxx。
+      const event = eventFromSse(esEvent.lastEventId, esEvent.type, data);
       if (esEvent.type === "snapshot") {
         setChip(data.state || "idle", `count=${data.event_count ?? "?"}`);
         renderMeta(`thread=${data.thread_id || "-"} · cursor=${data.last_id ?? "-"}`);

@@ -18,12 +18,12 @@
 
 import {
   API_PATHS, applyEvent, createMonitorState, computeCounts, deriveRunState,
-  NODE_STATUS, RUN_STATE,
+  NODE_STATUS, RUN_STATE, eventFromSse,
 } from "./workflow_monitor.mjs";
 
 export {
   API_PATHS, applyEvent, createMonitorState, computeCounts, deriveRunState,
-  NODE_STATUS, RUN_STATE,
+  NODE_STATUS, RUN_STATE, eventFromSse,
 };
 
 // ---------------------------------------------------------------------------

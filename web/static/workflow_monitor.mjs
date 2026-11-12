@@ -405,3 +405,34 @@ export function computeNodeOrder(schema) {
       ((a.name || a.id).localeCompare(b.name || b.id)));
   return new Map(ordered.map((n, i) => [n.id, i + 1]));
 }
+
+// ---------------------------------------------------------------------------
+// SSE 帧 → applyEvent 期望的事件形状(第四期阶段 1,G1 前端契约修复)
+// ---------------------------------------------------------------------------
+// 后端 to_sse_frame(monitoring/workflow_events.py)把 payload 的字段平铺进 data:
+//   data = {thread_id, run_id, node_id, attempt, occurred_at, ...payload}
+// 而 applyEvent 与创作控制台的交付状态卡读取的是 event.payload.xxx。
+// 这里把平铺的 data 还原:信封字段留在顶层,其余字段(summary / detail / error /
+// duration_ms / waiting_kind / trigger / label / inferred / reason,即后端的
+// ALLOWED_PAYLOAD_KEYS)收回 payload。payload 白名单里没有信封字段名,拆分不会串键。
+const SSE_ENVELOPE_KEYS = new Set(["thread_id", "run_id", "node_id", "attempt", "occurred_at"]);
+
+/**
+ * @param {string|number|null|undefined} lastEventId  EventSource 的 lastEventId(事件表 id)
+ * @param {string} eventType                          EventSource 的 type,如 "node.progress"
+ * @param {object} data                               JSON.parse(esEvent.data) 的结果
+ */
+export function eventFromSse(lastEventId, eventType, data) {
+  const envelope = {};
+  const payload = {};
+  for (const [key, value] of Object.entries(data && typeof data === "object" ? data : {})) {
+    if (SSE_ENVELOPE_KEYS.has(key)) envelope[key] = value;
+    else payload[key] = value;
+  }
+  return {
+    id: lastEventId ? Number(lastEventId) : null,
+    event_type: eventType,
+    ...envelope,
+    payload,
+  };
+}

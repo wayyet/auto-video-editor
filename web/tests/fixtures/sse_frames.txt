@@ -1,0 +1,24 @@
+id: 2001
+event: node.progress
+data: {"thread_id": "console-contract-0001", "run_id": "run-1", "node_id": "generate_draft", "attempt": 1, "occurred_at": "2026-11-13T08:00:00.000Z", "summary": {"monitor_event": "progress", "event": "draft.generated", "draft_dir": "AutoVideo_x"}}
+
+id: 2002
+event: node.succeeded
+data: {"thread_id": "console-contract-0001", "run_id": "run-1", "node_id": "generate_draft", "attempt": 1, "occurred_at": "2026-11-13T08:00:00.000Z", "duration_ms": 1250}
+
+id: 2003
+event: node.failed
+data: {"thread_id": "console-contract-0001", "run_id": "run-1", "node_id": "node_13_adjust_volume", "attempt": 1, "occurred_at": "2026-11-13T08:00:00.000Z", "error": {"type": "ValueError", "message": "boom"}, "duration_ms": 80}
+
+id: 2004
+event: node.waiting_input
+data: {"thread_id": "console-contract-0001", "run_id": "run-1", "node_id": "node_12_human_add_bgm", "attempt": 1, "occurred_at": "2026-11-13T08:00:00.000Z", "waiting_kind": "web_file_handshake", "detail": {"checkpoints": ["②"]}}
+
+id: 2005
+event: branch.selected
+data: {"thread_id": "console-contract-0001", "run_id": "run-1", "node_id": "node_06_human_reorder", "attempt": 1, "occurred_at": "2026-11-13T08:00:00.000Z", "detail": {"from": ["a", "b"]}, "inferred": true, "label": "join:a+b:gate"}
+
+id: 2006
+event: node.progress
+data: {"thread_id": "console-contract-0001", "run_id": "run-1", "node_id": "join_before_delivery", "attempt": 1, "occurred_at": "2026-11-13T08:00:00.000Z", "summary": {"monitor_event": "progress", "event": "delivery.qa_issues", "issue_count": 1, "issues": [{"severity": "error", "check": "转场", "draft": "zh", "detail": "素材桶无转场"}]}}
+

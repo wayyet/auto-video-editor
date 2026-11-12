@@ -40,3 +40,26 @@ def test_workflow_console_frontend_unit_tests_pass():
     )
     # 确认真的跑起来了(不是「0 个用例」也返回 0)。
     assert "pass 0" not in output, "创建台前端单测一个都没跑:\n" + output[-2000:]
+
+
+SSE_CONTRACT_NODE_TEST = REPO_ROOT / "web" / "tests" / "sse_frame_contract.test.mjs"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="本机没有 node,跳过前端单测")
+def test_sse_frame_contract_node_tests_pass():
+    """SSE 帧契约(前端一侧,经创建台 re-export 的 eventFromSse):同监控页包装。"""
+    assert SSE_CONTRACT_NODE_TEST.exists(), f"前端测试文件不存在: {SSE_CONTRACT_NODE_TEST}"
+
+    proc = subprocess.run(
+        ["node", "--test", str(SSE_CONTRACT_NODE_TEST)],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=180,
+    )
+
+    output = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, "SSE 帧契约前端用例失败:\n" + output[-4000:]
+    assert "pass 0" not in output, "SSE 帧契约前端用例一个都没跑:\n" + output[-2000:]
