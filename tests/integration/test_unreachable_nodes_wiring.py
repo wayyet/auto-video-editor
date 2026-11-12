@@ -799,7 +799,9 @@ def test_qa_retry_loop_still_retriggers_plan_timeline_pro(
     AI 转场两个节点在回路**里面**,与 plan_timeline_pro 同频:每轮各 1 次(共 4 次)。
 
     (模糊修复阶段3 速度护栏后 stub 跑 qa 一轮即过、重试不再自触发 —— 改用
-    ``qa_target_ms`` 强制触发;模板推荐同在回路里,每轮各 1 次。)
+    ``qa_target_ms`` 强制触发;模板推荐同在回路里,每轮各 1 次。
+    2026-11-13 边审计阶段3:配音/文字/BGM/普通转场四节点的每轮次数同步锁定 ——
+    SB/RTR 双源屏障不得退化成单源边重复触发,也不得漏跑。)
     """
     run = run_auto(
         monkeypatch,
@@ -816,6 +818,12 @@ def test_qa_retry_loop_still_retriggers_plan_timeline_pro(
     # 边治理阶段7:模板推荐与文案同为主链必跑节点,在重试回路内每轮恰 1 次
     assert run.count("storyline_script_template_recommendation") == 4
     assert run.count("storyline_generate_script") == 4
+    # 2026-11-13 边审计阶段3:文案派生的配音/文字推荐与 [GS,GV]→SB、[GC,SB]→RTR
+    # 双源屏障目标,重试回路内每轮恰 1 次(计划 §8 阶段3 场景 d/e/f)
+    assert run.count(_GV) == 4
+    assert run.count(_RT) == 4
+    assert run.count(_SB) == 4
+    assert run.count(_RTR) == 4
     # 前置化阶段3:检索节点进入 qa 重试回路,每轮执行;分组未变 → query_hash
     # 缓存命中,互联网请求只发 1 次(设计方案 §4.6)
     assert run.count("storyline_search_web_topic") == 4
@@ -832,6 +840,74 @@ def test_qa_passes_first_time_runs_ai_pair_once(
     assert run.count("storyline_generate_ai_transition") == 1
     assert run.count("storyline_plan_timeline_ai_transition") == 1
     assert run.next_nodes == ("node_06_human_reorder",)
+
+
+# ---------------------------------------------------------------------------
+# 3b. BGM 配音消费与普通转场读取(2026-11-13 边审计阶段3,任务B 运行时契约)
+# ---------------------------------------------------------------------------
+def test_select_bgm_consumes_voiceover_and_rtr_reads_bgm_selection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """任务B 运行时契约:SB 真实消费配音时长、RTR 读取 BGM selection。
+
+    - select_bgm 收到的 ``voiceover_total_ms`` == GV artifact 各段可用
+      ``duration`` 之和(跳过 error 段、负数钳 0)—— 2026-11-13 阶段1 任务B
+      把 [GS,GV]→SB 屏障的 GV 源从"预留等待"变成真实数据依赖,本用例在真实
+      编译图上证明该消费确实发生(节点级聚合规则另见
+      tests/unit/nodes/test_node_select_bgm.py);
+    - ``storyline_bgm_selection`` 回写 ``voiceover_total_ms``,且 RTR 收到的
+      就是 SB 写入的这份 selection(计划 §8 阶段3 场景 d/e);
+    - 屏障时序:SB 紧随 GV、RTR 紧随 SB。
+    """
+    import nodes.storyline.node_recommend_transition as nrt
+    import nodes.storyline.node_select_bgm as nsb
+
+    seen_vo: list[int] = []
+    real_sb = nsb.select_bgm
+
+    def spy_sb(**kw):
+        seen_vo.append(int(kw.get("voiceover_total_ms") or 0))
+        return real_sb(**kw)
+
+    monkeypatch.setattr(nsb, "select_bgm", spy_sb)
+
+    seen_bgm: list[dict | None] = []
+    real_rtr = nrt.recommend_transition
+
+    def spy_rtr(**kw):
+        seen_bgm.append(kw.get("bgm_selection"))
+        return real_rtr(**kw)
+
+    monkeypatch.setattr(nrt, "recommend_transition", spy_rtr)
+
+    run = run_auto(monkeypatch, tmp_path, target_ms=120000)
+
+    # SB 每轮恰 1 次(双源屏障,不得重复触发),且真实消费配音 artifact
+    assert run.count(_SB) == 1
+    assert len(seen_vo) == 1, "select_bgm 每轮只被调用一次"
+    vo_path = run.values.get("storyline_voiceover_artifact")
+    assert vo_path and Path(vo_path).exists()
+    doc = json.loads(Path(vo_path).read_text(encoding="utf-8"))
+    expected_total_ms = sum(
+        max(0, int(v.get("duration") or 0))
+        for v in (doc.get("voiceover") or [])
+        if isinstance(v, dict) and not v.get("error")
+    )
+    assert seen_vo[0] == expected_total_ms, "SB 应聚合 GV artifact 的可用配音时长"
+
+    # bgm_selection 回写 voiceover_total_ms(能力层输出契约)
+    bgm_selection = run.values.get("storyline_bgm_selection")
+    assert isinstance(bgm_selection, dict)
+    assert bgm_selection.get("voiceover_total_ms") == seen_vo[0]
+
+    # RTR 每轮恰 1 次,读到的就是 SB 写入的 storyline_bgm_selection
+    assert run.count(_RTR) == 1
+    assert len(seen_bgm) == 1
+    assert seen_bgm[0] == bgm_selection, "RTR 应读取 SB 写入的 storyline_bgm_selection"
+
+    # 屏障时序:SB 等待双源(GV 是最后完成的来源),RTR 等待 [GC, SB]
+    assert run.steps_of(_SB) == [s + 1 for s in run.steps_of(_GV)]
+    assert run.steps_of(_RTR) == [s + 1 for s in run.steps_of(_SB)]
 
 
 # ---------------------------------------------------------------------------
