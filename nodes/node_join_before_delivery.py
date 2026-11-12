@@ -51,6 +51,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from draft_ops.draft_content_audit import orphan_ids
 from draft_ops.draft_integrity import (
     CATEGORY_KEYS,
     DEEP_CHECK_CATEGORY,
@@ -97,6 +98,24 @@ def _tail_chain_structured(draft: dict, draft_tag: str, label: str) -> list[dict
         _add("视频特效", f"{label}视频特效缺失(尾链 node_09 未对{label}生效?)", "video_effects")
     if stickers == 0:
         _add("贴纸", f"{label}贴纸缺失(尾链 node_11 未对{label}生效?)", "stickers")
+
+    # 第四期阶段 2(2026-11-13,G3 孤儿口径收口):转场/视频特效孤儿检测 ——
+    # 素材桶有条目但没有任何片段引用 = 剪映不渲染(node_09 挂载失败?),与下方
+    # 贴纸"未挂载"同一口径;此前只数条数 >0,孤儿转场/特效照样过闸。
+    # 统计复用 draft_content_audit.orphan_ids(检查脚本同款,两处口径不漂移)。
+    for bucket, check_name, noun in (
+        ("transitions", "转场绑定", "转场"),
+        ("video_effects", "视频特效绑定", "视频特效"),
+    ):
+        if _count(materials, bucket) == 0:
+            continue
+        unref = orphan_ids(draft, bucket)
+        if unref:
+            _add(
+                check_name,
+                f"{label}{noun}条目未被任何片段引用({len(unref)} 个:node_09 挂载失败?)",
+                bucket,
+            )
 
     # 阶段 4:贴纸必须真实挂到视频段(material 在、引用悬空 = 挂载失败;
     # 根因分析 §D——不能只数 materials.stickers 数量)。

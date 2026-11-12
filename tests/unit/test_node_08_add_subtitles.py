@@ -791,6 +791,31 @@ def test_zh_subtitles_preserves_foreign_texts_and_replaces_own(tmp_path: Path) -
             {"id": "old1", "material_id": "text-zh-9",
              "target_timerange": {"start": 0, "duration": 1_000_000}}]},
     )
+    draft_file = _write_draft(tmp_path, draft)
+    state = _zh_state(draft_file, tmp_path, "第一组旁白", "第二组旁白")
+
+    out = add_subtitles(state)
+
+    after = json.loads(draft_file.read_text(encoding="utf-8"))
+    texts = {t["id"]: t for t in after["materials"]["texts"]}
+    # 人工文本条目原样保留(内容/时间未被触碰)
+    assert texts["manual-1"]["content"] == "人工标题"
+    assert texts["manual-1"]["target_timerange"] == {"start": 0, "duration": 1_000_000}
+    # 我方旧条目(text-zh-9)被新产物整体替换,不再残留
+    assert "text-zh-9" not in texts
+    zh_ids = [i for i in texts if i.startswith("text-zh-")]
+    assert len(zh_ids) == 2, f"应恰好 2 条我方新字幕,实际 {sorted(texts)}"
+    # track-text-1 重建:只指向新产物,旧段(old1)不残留;人工轨道原样
+    tracks = {t.get("id"): t for t in after["tracks"]}
+    assert [t["id"] for t in after["tracks"] if t["type"] == "text"] == ["track-manual", "track-text-1"]
+    assert {s["material_id"] for s in tracks["track-manual"]["segments"]} == {"manual-1"}
+    zh_segs = tracks["track-text-1"]["segments"]
+    assert {s["material_id"] for s in zh_segs} == set(zh_ids)
+    assert all(s["id"] != "old1" for s in zh_segs)
+    # 字幕句数正确:两组各 1 句旁白 → 2 条字幕(state 段落与草稿条目同数)
+    assert len(zh_segs) == 2
+    assert len(out["subtitle_segments_zh"]) == 2
+    assert "node_08_add_subtitles_done" in out["status_log"]
 
 
 # ---------------------------------------------------------------------------

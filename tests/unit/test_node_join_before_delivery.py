@@ -147,7 +147,9 @@ def _healthy_draft(dir_path: Path, *, audio_volume: float | None = 0.35) -> dict
                         "material_id": "video-1",
                         "source_timerange": {"start": 0, "duration": 1_000_000},
                         "target_timerange": {"start": 0, "duration": 1_000_000},
-                        "extra_material_refs": ["sticker-t1"],
+                        # 健康 = 转场/特效/贴纸都被片段引用(第四期阶段 2 孤儿口径;
+                        # node_09 真实行为:转场挂后一段视频段、特效/贴纸挂视频段 refs)
+                        "extra_material_refs": ["sticker-t1", "transition-1", "vfx-default"],
                     }
                 ],
             },
@@ -266,6 +268,45 @@ def test_join_sticker_unbound_reported(tmp_path: Path) -> None:
     (zh_dir / "draft_info.json").write_text(serialized, encoding="utf-8")
     out = join_before_delivery(state)
     assert any("贴纸未挂到任何视频段" in i for i in out["join_qa_report"]["error_texts"]), out["join_qa_report"]["error_texts"]
+
+
+def test_join_orphan_transition_reported_and_gate_fails(tmp_path: Path) -> None:
+    """第四期阶段 2(G3):转场条目存在但引用被摘 → 孤儿 issue + transitions failed
+    → gate_failed(转场默认 required)—— 孤儿转场不再过闸。"""
+    state = _state_with_drafts(tmp_path)
+    zh_dir = Path(state["draft_path"]).parent
+    draft = json.loads((zh_dir / "draft_content.json").read_text(encoding="utf-8"))
+    refs = draft["tracks"][0]["segments"][0]["extra_material_refs"]
+    draft["tracks"][0]["segments"][0]["extra_material_refs"] = [r for r in refs if r != "transition-1"]
+    serialized = json.dumps(draft, ensure_ascii=False)
+    (zh_dir / "draft_content.json").write_text(serialized, encoding="utf-8")
+    (zh_dir / "draft_info.json").write_text(serialized, encoding="utf-8")
+    out = join_before_delivery(state)
+    report = out["join_qa_report"]
+    joined = " ".join(report["error_texts"])
+    assert "中文主草稿转场条目未被任何片段引用" in joined, report["error_texts"]
+    assert report["categories"]["transitions"]["status"] == "failed"
+    assert report["gate_failed"] is True
+    assert "delivery_qa_gate_failed" in out["status_log"]
+
+
+def test_join_orphan_video_effect_reported_not_blocking(tmp_path: Path) -> None:
+    """第四期阶段 2(G3):视频特效孤儿 → issue + video_effects failed,但该类别
+    非 required(gate 只看 REQUIRED_FEATURE_KEYS)→ 不阻断。"""
+    state = _state_with_drafts(tmp_path)
+    zh_dir = Path(state["draft_path"]).parent
+    draft = json.loads((zh_dir / "draft_content.json").read_text(encoding="utf-8"))
+    refs = draft["tracks"][0]["segments"][0]["extra_material_refs"]
+    draft["tracks"][0]["segments"][0]["extra_material_refs"] = [r for r in refs if r != "vfx-default"]
+    serialized = json.dumps(draft, ensure_ascii=False)
+    (zh_dir / "draft_content.json").write_text(serialized, encoding="utf-8")
+    (zh_dir / "draft_info.json").write_text(serialized, encoding="utf-8")
+    out = join_before_delivery(state)
+    report = out["join_qa_report"]
+    joined = " ".join(report["error_texts"])
+    assert "中文主草稿视频特效条目未被任何片段引用" in joined, report["error_texts"]
+    assert report["categories"]["video_effects"]["status"] == "failed"
+    assert report["gate_failed"] is False
 
 
 def test_join_zh_text_missing_animation_reported(tmp_path: Path) -> None:
