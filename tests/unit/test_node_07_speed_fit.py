@@ -115,6 +115,47 @@ def test_speed_fit_compresses_60s_to_under_35s(tmp_draft: Path) -> None:
     assert out["retry_counts"]["node_07"] == 1
 
 
+# ---------------------------------------------------------------------------
+# 快照②生产(2026-11-14 依赖约简阶段4:节点本体放行路径直写 state.snapshot2_path)
+# ---------------------------------------------------------------------------
+def test_speed_fit_produces_snapshot2_on_no_change(tmp_draft_35s: Path) -> None:
+    """已达标放行:节点本体产出快照②并写入 state.snapshot2_path。"""
+    state = {"draft_path": str(tmp_draft_35s), "retry_counts": {}, "status_log": [], "error_log": []}
+    out = speed_fit(state)
+    snap = out.get("snapshot2_path")
+    assert snap, "放行路径应写 snapshot2_path"
+    assert Path(snap).exists(), "快照②文件应存在"
+    assert Path(snap).read_text(encoding="utf-8") == tmp_draft_35s.read_text(encoding="utf-8"), (
+        "快照②内容应与当前草稿一致"
+    )
+
+
+def test_speed_fit_produces_snapshot2_after_compress(tmp_draft: Path) -> None:
+    """压缩达标放行:快照②内容 = 压缩后的草稿(不是旧版 60s)。"""
+    state = {"draft_path": str(tmp_draft), "retry_counts": {}, "status_log": [], "error_log": []}
+    out = speed_fit(state)
+    snap = out.get("snapshot2_path")
+    assert snap and Path(snap).exists()
+    snap_draft = json.loads(Path(snap).read_text(encoding="utf-8"))
+    assert snap_draft["duration"] <= 35_000_000, "快照②应是压缩后的达标草稿"
+
+
+def test_speed_fit_write_failure_skips_snapshot2(tmp_draft: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """写失败(write_draft 返回 ok=False):不产快照、不写 snapshot2_path,路由走 retry。"""
+    import nodes.node_07_speed_fit as mod
+
+    def failing_write(*args, **kwargs):
+        return {"ok": False, "reason": "unit-mock"}
+
+    monkeypatch.setattr(mod, "write_draft", failing_write)
+    state = {"draft_path": str(tmp_draft), "retry_counts": {}, "status_log": [], "error_log": []}
+    out = speed_fit(state)
+    assert "snapshot2_path" not in out, "写失败不得产快照"
+    assert "node_07_speed_fit_write_failed" in (out.get("status_log") or [])
+    # 路由:草稿文件未写成功(仍 60s > 35s)+ retry 未超限 → 自循环重试
+    assert route_after_speed_fit(out) == "node_07_speed_fit"
+
+
 def test_speed_fit_idempotent(tmp_draft: Path) -> None:
     """第二次进入:src_total 已 ≤ target,只递增 retry,不重复变速。"""
     # 第一次跑完

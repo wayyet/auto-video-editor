@@ -18,7 +18,6 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from nodes.node_07_speed_fit import (
-    get_snapshot2_path,
     route_after_speed_fit,
     speed_fit,
 )
@@ -53,8 +52,8 @@ def test_route_after_speed_fit_passes_through_without_draft() -> None:
     assert route_after_speed_fit(_state_without_draft()) == "node_08_add_subtitles"
 
 
-def test_get_snapshot2_path_returns_none_without_draft() -> None:
-    assert get_snapshot2_path(_state_without_draft()) is None
+# 2026-11-14 依赖约简阶段4:get_snapshot2_path helper 已随 bridge_snapshot2
+# 桥接节点删除(快照②生产移入 speed_fit 节点本体,直写 state.snapshot2_path)。
 
 
 def test_add_subtitles_skips_when_draft_missing() -> None:

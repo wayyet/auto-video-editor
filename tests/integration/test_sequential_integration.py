@@ -165,10 +165,10 @@ def test_sequential_produces_complete_draft(seeded_state, tmp_path: Path) -> Non
     # 步骤 7 应创建 speed materials
     assert materials.get("speeds"), "speed materials 应被创建"
 
-    # snapshot2 应被产出(节点 7 条件边后)
+    # snapshot2 应被产出(2026-11-14 依赖约简阶段4 起:节点 7 放行路径直写
+    # state.snapshot2_path,bridge_snapshot2 桥接节点已删)
     snap2 = state.get("snapshot2_path")
-    # snapshot2 实际写到 state 是由 bridge_snapshot2 完成的
-    # 这里允许 None(取决于条件边调用顺序),不强断言
+    # 这里允许 None(取决于集成桩路径是否走到放行分支),不强断言
     # 但 duration 已验证 ≤ 35s,核心目标达成
 
 

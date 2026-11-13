@@ -15,10 +15,9 @@
         → node_06_human_reorder            ⏸ interrupt("①")
       [ASSEMBLY_QC_GATE_ENABLED=False 时:generate_draft 直接到 node_06_human_reorder]
     → node_07_speed_fit                🔁 条件边(route_after_speed_fit):
-      ├─→ node_08_add_subtitles  (达标,产出 snapshot2)
+      ├─→ node_08_add_subtitles  (达标;节点本体已产出 snapshot2 并写 state)
       ├─→ node_07_speed_fit      (未达标,retry_counts < MAX_RETRY)
       └─→ escalate_guardrail_failure → END  (重试超限)
-    → bridge_snapshot2                 (写 snapshot2_path)
     → node_08_add_subtitles            (字幕主干兼容节点;B1 ASR 移除后不再转写语音)
     ├─→ [中文线] node_10_inject_text_fx
     │              → node_14_make_covers
@@ -118,7 +117,7 @@ PreflightConfig = None  # type: ignore[assignment]
 PreflightError = None   # type: ignore[assignment]
 from nodes.node_05_generate_draft import generate_initial_jianying_draft
 from nodes.node_06_human_reorder import human_reorder
-from nodes.node_07_speed_fit import get_snapshot2_path, route_after_speed_fit, speed_fit
+from nodes.node_07_speed_fit import route_after_speed_fit, speed_fit
 from nodes.node_08_add_subtitles import add_subtitles
 from nodes.node_08b_add_subtitles_en import add_subtitles_en
 from nodes.node_09_inject_fx import inject_fx
@@ -295,14 +294,10 @@ def escalate_guardrail_failure(state: WorkflowState) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 节点 7 之后桥接 snapshot2_path:把快照②路径写入 state(条件边不返回 state)
-# ---------------------------------------------------------------------------
-def bridge_snapshot2(state: WorkflowState) -> dict:
-    """条件边不能改 state —— 把 snapshot2 路径读出写到 state,再交给节点 8。"""
-    snap = get_snapshot2_path(state)
-    return {**state, "snapshot2_path": snap} if snap else state
-
-
+# (2026-11-14 依赖约简阶段4)bridge_snapshot2 桥接节点已删除:快照②生产移入
+# speed_fit 节点本体(放行路径直写 state.snapshot2_path),路由函数只返回标签,
+# 条件边 mapping 直连 node_08_add_subtitles。历史:条件边不能返回 state,曾靠
+# 本节点调 get_snapshot2_path 从磁盘重定位快照并写 state。
 # ---------------------------------------------------------------------------
 # Week 5:Postgres checkpointer asynccontextmanager
 # ---------------------------------------------------------------------------
@@ -512,7 +507,6 @@ def _build_state_graph():
     g.add_node("node_06_human_reorder", human_reorder)
     g.add_node("node_07_speed_fit", speed_fit)
     g.add_node("escalate_guardrail_failure", escalate_guardrail_failure)
-    g.add_node("bridge_snapshot2", bridge_snapshot2)
     g.add_node("node_08_add_subtitles", add_subtitles)
     g.add_node("node_09_inject_fx", inject_fx)
     g.add_node("node_09b_inject_opening_hook", inject_opening_hook)
@@ -626,18 +620,19 @@ def _build_state_graph():
 
     g.add_edge("node_06_human_reorder", "node_07_speed_fit")
 
-    # 节点 7 条件边:达标走桥接 → 节点 8;未达标自循环或升级
+    # 节点 7 条件边:达标直连节点 8(2026-11-14 依赖约简阶段4:快照②由 speed_fit
+    # 节点本体在放行路径写入 state.snapshot2_path,bridge_snapshot2 桥接节点已删,
+    # 路由函数纯路由无文件副作用);未达标自循环或升级
     g.add_conditional_edges(
         "node_07_speed_fit",
         route_after_speed_fit,
         {
-            "node_08_add_subtitles": "bridge_snapshot2",
+            "node_08_add_subtitles": "node_08_add_subtitles",
             "node_07_speed_fit": "node_07_speed_fit",
             "escalate_guardrail_failure": "escalate_guardrail_failure",
         },
     )
     g.add_edge("escalate_guardrail_failure", END)
-    g.add_edge("bridge_snapshot2", "node_08_add_subtitles")
 
     # ---- 2026-10 调序:中文线 08 → 10 → 14 → 15;英文线 fork → 16a → 08b → 10b → [③] → 17;
     #      两线汇合后才跑尾链 09 → 11 → 12(②) → 13 → join_before_delivery(QA)→ END ----

@@ -7,6 +7,9 @@ P1 决定 1 选 B 后可调),缺省 35s(``config.DEFAULT_TARGET_DURATION_MS``)�
   (该 skill 在 7 段 64.981s → 35s 的真实草稿上已验证)
 - 重试用 **图级条件边** 表达(``graph.route_after_speed_fit``),而非节点内部
   while 循环 —— 每次重试在 LangGraph 追踪里独立可见
+- 放行时(2026-11-14 依赖约简阶段4 起)由节点本体把草稿目录复制为
+  ``snapshots/snapshot2/`` 并写 ``state.snapshot2_path``(历史:该副作用曾由
+  条件路由完成,经 bridge_snapshot2 桥接节点回写 state —— 桥接已删)
 - 写入字段:
   - ``materials.speeds[]``: 速度 material 列表
   - ``segments[].speed``: 段速度引用
@@ -193,11 +196,14 @@ def speed_fit(state: WorkflowState) -> dict:
             changed = True
 
     if not changed:
-        # 已达标且无逐段违例:直接返回(由条件边判断后产出 snapshot2 → node_08)。
-        # 仍递增重试计数便于联调断言(Week 3 兼容 Week 2 测试期望)。
+        # 已达标且无逐段违例:产出快照②并放行(2026-11-14 依赖约简阶段4:
+        # 快照生产从 route_after_speed_fit 移入节点本体,路由函数不再有
+        # copytree 副作用)。仍递增重试计数便于联调断言(Week 3 兼容 Week 2 测试期望)。
         retry = dict(state.get("retry_counts") or {})
         retry["node_07"] = retry.get("node_07", 0) + 1
-        return {**state, "retry_counts": retry}
+        update: dict = {**state, "retry_counts": retry}
+        update["snapshot2_path"] = _produce_snapshot2(draft_path)
+        return update
 
     # 重算 target_timerange.start + 顶层 duration(拉长钳制/压缩都改变了时长)
     cursor = 0
@@ -219,14 +225,44 @@ def speed_fit(state: WorkflowState) -> dict:
     retry = dict(state.get("retry_counts") or {})
     retry["node_07"] = retry.get("node_07", 0) + 1
 
-    return {**state, "retry_counts": retry, "status_log": log}
+    # 2026-11-14 依赖约简阶段4:写失败(write_draft 返回 ok=False,不抛异常)时
+    # 不产快照、不写 snapshot2_path —— 路由按"草稿仍超时长"走 retry/escalate,
+    # 防御语义与写失败重试等价;写成功才产出快照②并放行。
+    write_ok = bool(write_result.get("ok"))
+    if write_ok:
+        snapshot2_path: str = _produce_snapshot2(draft_path)
+    else:
+        snapshot2_path = None
+        log.append("node_07_speed_fit_write_failed")
+
+    update = {**state, "retry_counts": retry, "status_log": log}
+    if snapshot2_path:
+        update["snapshot2_path"] = snapshot2_path
+    return update
 
 
 # ---------------------------------------------------------------------------
-# 条件边路由(由 graph.py 引用)
+# 快照②生产(2026-11-14 依赖约简阶段4:从 route_after_speed_fit 移入)
+# ---------------------------------------------------------------------------
+def _produce_snapshot2(draft_path: Path) -> str:
+    """达标放行时把草稿目录复制为 snapshots/snapshot2/,返回快照文件路径。
+
+    node_08/fork 等下游节点读 state["snapshot2_path"] 消费;复制失败向上抛
+    (与原 route 内联行为一致,炸图可见而非静默用旧草稿)。
+    """
+    snap_dir = draft_path.parent.parent / "snapshots" / "snapshot2"
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    if draft_path.parent.exists():
+        shutil.copytree(draft_path.parent, snap_dir, dirs_exist_ok=True)
+    return str(snap_dir / "draft_content.json")
+
+
+# ---------------------------------------------------------------------------
+# 条件边路由(由 graph.py 引用;2026-11-14 依赖约简阶段4 起纯路由 —— 快照
+# 生产移入 speed_fit 节点本体,本函数只读 state/草稿返回标签,不再有文件副作用)
 # ---------------------------------------------------------------------------
 def route_after_speed_fit(state: WorkflowState) -> str:
-    """节点 7 之后的条件边:达标 → 产出 snapshot2 + node_08;未达标 → 自循环 / 升级。"""
+    """节点 7 之后的条件边:达标 → node_08(快照已由节点写入 state);未达标 → 自循环 / 升级。"""
     raw_draft_path = state.get("draft_path")
     if not raw_draft_path:
         # draft 没生成(D7,2026-10-20 修):没有可调的对象,直接放行到 node_08
@@ -240,27 +276,11 @@ def route_after_speed_fit(state: WorkflowState) -> str:
     target_us = target_duration_ms(state) * 1000
 
     if duration <= target_us:
-        # 产出快照②:cp 草稿目录到 snapshots/snapshot2/
-        snap_dir = draft_path.parent.parent / "snapshots" / "snapshot2"
-        snap_dir.mkdir(parents=True, exist_ok=True)
-        if draft_path.parent.exists():
-            shutil.copytree(draft_path.parent, snap_dir, dirs_exist_ok=True)
-        snapshot2_path = str(snap_dir / "draft_content.json")
-        # 通过 Command 透传 snapshot2_path:这里不能直接改 state dict 返回值(条件边不接受 state)
-        # graph.py 会在节点 8 之前从 draft_path.parent.parent/snapshots/snapshot2 读
+        # 快照②已由 speed_fit 节点本体在放行路径产出并写入 state
+        # (写失败时不产快照,草稿保持违例状态 → 走下方 retry/escalate)。
         return "node_08_add_subtitles"
 
     retry = (state.get("retry_counts") or {}).get("node_07", 0)
     if retry >= NODE_07_MAX_RETRY:
         return "escalate_guardrail_failure"
     return "node_07_speed_fit"
-
-
-def get_snapshot2_path(state: WorkflowState) -> str | None:
-    """节点 8 之前调用:从文件系统读 snapshot2 路径,写入 state 供后续节点使用。"""
-    raw_draft_path = state.get("draft_path")
-    if not raw_draft_path:
-        return None
-    draft_path = Path(raw_draft_path)
-    snap = draft_path.parent.parent / "snapshots" / "snapshot2" / "draft_content.json"
-    return str(snap) if snap.exists() else None
