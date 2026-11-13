@@ -91,6 +91,25 @@ def test_missing_executable():
             system_prompt="s", user_prompt="u")
 
 
+def test_mcode_invoke_error_carries_stdout_tail(tmp_path, monkeypatch):
+    # console-d7e06b50ca98 复盘:_invoke 此前把 stdout 整个丢掉,exit=0 + stderr 空 时
+    # 无法区分「真空返回」与「payload 在但末行不是状态 JSON」。失败消息必须带 stdout 尾部。
+    c = McodeCLIClient(executable="definitely-not-a-real-binary-xyz")
+    monkeypatch.setattr(c, "_run", lambda cmd, stdin_text, cwd: (0, "", ""))
+    with pytest.raises(CLIBackendFailed) as ei:
+        c._invoke("s", "u", [], {"type": "object"}, tmp_path)
+    assert "stdout_tail='<空>'" in str(ei.value)
+
+    # stdout 有 payload 但末行不是完整 JSON:尾部原文进消息(repr 转义换行)
+    monkeypatch.setattr(
+        c, "_run",
+        lambda cmd, stdin_text, cwd: (0, '{"schemaVersion":2,"partial', ""))
+    with pytest.raises(CLIBackendFailed) as ei:
+        c._invoke("s", "u", [], {"type": "object"}, tmp_path)
+    msg = str(ei.value)
+    assert "stdout_tail=" in msg and "schemaVersion" in msg
+
+
 @pytest.mark.skipif(os.name == "nt", reason="用 shell 脚本造假进程,Windows 上不跑")
 def test_timeout_kills_whole_process_tree(tmp_path):
     fake = tmp_path / "fake_claude.sh"

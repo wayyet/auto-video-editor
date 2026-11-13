@@ -352,5 +352,10 @@ class McodeCLIClient(_CLIClient):
         error = res.get("error") or {}
         if error.get("code") == "STRUCTURED_OUTPUT_INVALID":
             raise _BadAnswer(str(error.get("message") or "结构化输出不合格"))
+        # 2026-11-13 留痕:exit=0 但 status 解析不到时 stderr 常为空,stdout 尾部是区分
+        # 「真空返回」与「payload 在但末行不是状态 JSON」的唯一证据(console-d7e06b50ca98
+        # 复盘:当时 stdout 整个被丢弃,raw_head='' 无法定因)。
+        out_flat = out.strip()
         raise CLIBackendFailed(f"mcode 失败:exit={code} status={status} error={error or None} "
-                               f"stderr={err.strip()[:300]}")
+                               f"stderr={err.strip()[:300]} "
+                               f"stdout_tail={(out_flat[-600:] if out_flat else '<空>')!r}")
