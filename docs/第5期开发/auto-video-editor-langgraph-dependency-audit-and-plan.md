@@ -1,5 +1,7 @@
 # auto-video-editor LangGraph 节点依赖与边关系审计、简化设计及分阶段执行计划
 
+> **⚠️ 执行结果（2026-11-14，阶段 0/1/2/4/5/6 已执行、阶段 3 跳过）：** 阶段 1 的四组 fan-in 传递性约简**已执行**（用户决策推翻 2026-11-13 边审计「任务B 保留双源屏障」的结案）——§4 的四组建议与 §8.3 代码片段均已落地（`[GS,GV]→SB` 缩 `GV→SB`、`[GC,SB]→RTR` 缩 `SB→RTR`、PTP 六源缩 `[RTR,TXT]`、GAT 缩 `RTR` 单源边）；阶段 5 并行化以**改造现有 web_topic 节点为每轮必跑 + 内部软跳过**的方式实现（§9 方案的变体：不新增 prepare_web_topic 节点）。阶段 3 跳过（根因已于 2026-11-10 修复，无新失败样本）。§7.2 bridge_snapshot2 重构已执行（桥接节点删除）。SCHEMA_VERSION=8。**最终口径以《执行记录_LangGraph依赖约简_20261114.md》（同目录）为准。**
+
 > 审计对象：[`wayyet/auto-video-editor`](https://github.com/wayyet/auto-video-editor) `main` 分支  
 > 审计日期：2026-11-13  
 > 重点对象：截图中的 `storyline_generate_script`，以及它所在的完整 auto Storyline 子图和外层剪映草稿工作流。  
