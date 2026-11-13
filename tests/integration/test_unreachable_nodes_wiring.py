@@ -782,8 +782,9 @@ def test_defaults_run_all_wired_nodes_with_expected_shape(
     assert script_steps == [s + 1 for s in search_steps], "文案应紧跟每轮检索"
     # B1 ASR 移除:split_shots 后静态直连 understand_clips(同一条主边,无旁支)
 
-    # AI 转场两节点与 plan_timeline_pro 的并行关系(边治理阶段3 起):
-    # GAT 只等 [GC, RTR]、PTP 等 6 源 —— RTR 完成后两者同超步;PTAT 紧随;
+    # AI 转场两节点与 plan_timeline_pro 的时序(2026-11-14 依赖约简阶段1 起):
+    # GAT 单源边等 RTR、PTP 两源屏障 [RTR, TXT] —— RTR 是最后完成的屏障源
+    # (RTR←SB←GV←GS 链深度大于 TXT←GS),两者紧随 RTR 同超步;PTAT 紧随;
     # qa 单源只等 PTAT
     rtr = run.steps_of(_RTR)
     ptp = run.steps_of("storyline_plan_timeline_pro")
@@ -793,6 +794,13 @@ def test_defaults_run_all_wired_nodes_with_expected_shape(
     assert gen == ptp == [s + 1 for s in rtr]
     assert plan == [s + 1 for s in ptp]
     assert qa == [s + 2 for s in ptp]
+    # 2026-11-14 依赖约简阶段2:PTP 两源屏障的另一源 TXT 也必须在 PTP 之前
+    # 完成(逐轮对齐)—— 屏障不得在文字样式未写入时提前触发
+    txt = run.steps_of(_RT)
+    assert len(txt) == len(ptp)
+    assert all(t < p for t, p in zip(txt, ptp)), (
+        f"PTP({ptp})应在当轮 TXT({txt})完成之后才触发"
+    )
     # qa 通过后直连 join(边治理阶段5:render_video 节点已删除,AI 转场在 qa 之前做完)
     assert run.steps_of("storyline_join") == [qa[-1] + 1]
     assert run.count("storyline_join") == 1
@@ -829,8 +837,9 @@ def test_qa_retry_loop_still_retriggers_plan_timeline_pro(
     # 边治理阶段7:模板推荐与文案同为主链必跑节点,在重试回路内每轮恰 1 次
     assert run.count("storyline_script_template_recommendation") == 4
     assert run.count("storyline_generate_script") == 4
-    # 2026-11-13 边审计阶段3:文案派生的配音/文字推荐与 [GS,GV]→SB、[GC,SB]→RTR
-    # 双源屏障目标,重试回路内每轮恰 1 次(计划 §8 阶段3 场景 d/e/f)
+    # 2026-11-13 边审计阶段3:文案派生的配音/文字推荐与配音/转场目标,重试回路内
+    # 每轮恰 1 次(计划 §8 阶段3 场景 d/e/f;2026-11-14 依赖约简后 SB/RTR 为
+    # 单源边,唯一入边每轮恰触发一次的断言同样有效)
     assert run.count(_GV) == 4
     assert run.count(_RT) == 4
     assert run.count(_SB) == 4
@@ -863,12 +872,13 @@ def test_select_bgm_consumes_voiceover_and_rtr_reads_bgm_selection(
 
     - select_bgm 收到的 ``voiceover_total_ms`` == GV artifact 各段可用
       ``duration`` 之和(跳过 error 段、负数钳 0)—— 2026-11-13 阶段1 任务B
-      把 [GS,GV]→SB 屏障的 GV 源从"预留等待"变成真实数据依赖,本用例在真实
-      编译图上证明该消费确实发生(节点级聚合规则另见
+      把配音等待从"预留等待"变成真实数据依赖,本用例在真实编译图上证明该消费
+      确实发生(节点级聚合规则另见
       tests/unit/nodes/test_node_select_bgm.py);
     - ``storyline_bgm_selection`` 回写 ``voiceover_total_ms``,且 RTR 收到的
       就是 SB 写入的这份 selection(计划 §8 阶段3 场景 d/e);
-    - 屏障时序:SB 紧随 GV、RTR 紧随 SB。
+    - 时序:SB 紧随 GV、RTR 紧随 SB(2026-11-14 依赖约简后为单源普通边,
+      唯一入边的超步时序保证更强)。
     """
     import nodes.storyline.node_recommend_transition as nrt
     import nodes.storyline.node_select_bgm as nsb
@@ -893,7 +903,7 @@ def test_select_bgm_consumes_voiceover_and_rtr_reads_bgm_selection(
 
     run = run_auto(monkeypatch, tmp_path, target_ms=120000)
 
-    # SB 每轮恰 1 次(双源屏障,不得重复触发),且真实消费配音 artifact
+    # SB 每轮恰 1 次(单源边唯一入边,不得重复触发),且真实消费配音 artifact
     assert run.count(_SB) == 1
     assert len(seen_vo) == 1, "select_bgm 每轮只被调用一次"
     vo_path = run.values.get("storyline_voiceover_artifact")
@@ -916,7 +926,7 @@ def test_select_bgm_consumes_voiceover_and_rtr_reads_bgm_selection(
     assert len(seen_bgm) == 1
     assert seen_bgm[0] == bgm_selection, "RTR 应读取 SB 写入的 storyline_bgm_selection"
 
-    # 屏障时序:SB 等待双源(GV 是最后完成的来源),RTR 等待 [GC, SB]
+    # 时序:SB 紧随唯一入边 GV,RTR 紧随唯一入边 SB(2026-11-14 依赖约简)
     assert run.steps_of(_SB) == [s + 1 for s in run.steps_of(_GV)]
     assert run.steps_of(_RTR) == [s + 1 for s in run.steps_of(_SB)]
 
