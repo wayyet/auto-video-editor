@@ -70,7 +70,8 @@
   ``storyline_group_clips`` →(条件路由)→ ``storyline_search_web_topic`` →
   ``storyline_generate_script``(检索开关开启且 ``build_web_topic_query`` 能构造出
   非空检索词时;否则条件路由直达文案)。不再是 load_media 后的死胡同旁支。
-- ``storyline_generate_ai_transition`` 与 ``plan_timeline_pro`` 并排共用 4 源屏障;
+- ``storyline_generate_ai_transition`` 单源边挂 ``recommend_transition`` 之后
+  (2026-11-14 依赖约简阶段1;历史:2026-11-12 边治理阶段3 曾为屏障 [GC, RTR]);
   ``plan_timeline_ai_transition`` 屏障 [PTP, GAT] 后接管 qa_gate 的屏障位
   (``STORYLINE_ENABLE_AI_TRANSITION``,默认开,**建图时读取**,改开关要重启进程)。
 - ⚠️ 屏障规则(D10):**条件触发**的节点(web_topic)
@@ -720,9 +721,12 @@ def _build_state_graph():
     #      LangGraph 独立 add_edge 是"任一来源完成即触发",若保留 group_clips 条件边,
     #      web_topic 关闭时 generate_script 会被提前触发一次 + 被模板推荐边再触发一次,
     #      每轮跑两次 LLM(路由函数 docstring 详述)。
-    #   B) recommend_transition:改走下方 [GC, SB] 双源屏障 —— 原 GC→RTR 独立
-    #      单源边会在 BGM 缺席时提前触发一次(黄金轨迹实测每轮 3 次)。
-    #   C) plan_timeline_pro:在下面 fan-in 列表形式统一加入
+    #   B) recommend_transition:2026-11-14 依赖约简阶段1 起为 SB→RTR 单源边
+    #      (历史:2026-11-12 阶段1 曾改 [GC, SB] 双源屏障,修 GC→RTR 独立单源边
+    #      在 BGM 缺席时提前触发的病;现 SB→RTR 唯一入边,病根随唯一入边消除,
+    #      GC 源由 SB 祖先链传递保证)。
+    #   C) plan_timeline_pro:不再直接依赖 GC —— 2026-11-14 约简后 PTP 屏障
+    #      只含 [RTR, TXT],GC 由 RTR 祖先链传递保证。
     # ⚠️ search_web_topic 是条件触发节点,不进任何 fan-in 屏障(D10,设计方案 §4.3):
     #    qa 重试部分轮次跳过它时,屏障若含它将永远凑不齐。
     # 模板推荐节点本体是**每轮必跑**的主链节点(非条件分支),不踩 D10。
@@ -748,51 +752,45 @@ def _build_state_graph():
     g.add_edge("storyline_generate_script", "storyline_generate_voiceover")
     g.add_edge("storyline_generate_script", "storyline_recommend_text")
 
-    # select_bgm 双源屏障(2026-11-12 边治理阶段1,设计文档 §5.3A):
-    # list 形式 = 等文案与配音都完成才触发一次。
-    # 2026-11-13 边审计阶段1 任务B:SB 节点已真实消费配音 —— 聚合
-    # storyline_voiceover_artifact 各段 duration 传给 select_bgm 做配乐时长
-    # 覆盖偏好(node_select_bgm._read_voiceover_total_ms),屏障的 GV 源由
-    # "预留等待"变为真实数据依赖;配音缺失/失败按 0 容缺省,不阻断 BGM。
-    g.add_edge(
-        ["storyline_generate_script", "storyline_generate_voiceover"],
-        "storyline_select_bgm",
-    )
+    # select_bgm 单源边(2026-11-14 依赖约简阶段1,第5期计划 §4.1:传递性约简):
+    # GV 已经由 GS→GV 普通边等待 GS,等 GV 即传递保证文案 Artifact 已写出,
+    # 原 [GS, GV] 双源屏障中的 GS 源属重复约束,删除。保留 GV 源是必要的:
+    # 2026-11-13 边审计任务B 起 SB 真实消费配音 —— 聚合 storyline_voiceover_artifact
+    # 各段 duration 传给 select_bgm 做配乐时长覆盖偏好
+    # (node_select_bgm._read_voiceover_total_ms);配音缺失/失败按 0 容缺省,
+    # 不阻断 BGM。单源边不会重现 2026-11-12 屏障化之前的重复触发病 ——
+    # 那个病根是同一目标存在多条独立单源边("任一来源完成即触发"),
+    # 约简后 SB 只剩这一条入边,每轮恰触发一次。
+    g.add_edge("storyline_generate_voiceover", "storyline_select_bgm")
 
-    # recommend_transition 双源屏障(2026-11-12 边治理阶段1,设计文档 §5.3B):
-    # 节点读取 storyline_groups_artifact + storyline_bgm_selection;原 GC→RTR /
-    # SB→RTR 两条独立单源边会在 GC 完成时先跑一次(BGM 缺席)、SB 完成后再跑一次
-    # (黄金轨迹实测每轮 3 次)。list 形式 = groups 与 BGM 都就绪才执行一次。
-    g.add_edge(
-        ["storyline_group_clips", "storyline_select_bgm"],
-        "storyline_recommend_transition",
-    )
+    # recommend_transition 单源边(2026-11-14 依赖约简阶段1,第5期计划 §4.2):
+    # SB 的祖先链已包含 GC(FC→GC→STR→GS→GV→SB),等 SB 即传递保证
+    # storyline_groups_artifact 与 storyline_bgm_selection(RTR 的全部真实输入,
+    # node_recommend_transition.py)就绪,原 [GC, SB] 双源屏障的 GC 源属重复
+    # 约束,删除。历史上(2026-11-12 阶段1 之前)GC→RTR / SB→RTR 两条独立
+    # 单源边曾导致 RTR 每轮 3 次 —— 现病根已随"目标唯一入边"消除。
+    g.add_edge("storyline_select_bgm", "storyline_recommend_transition")
 
     # 所有 PTP 上游都到 plan_timeline_pro(plan §2.2):
-    #   GC, GS, GV, SB 都到 PTP(fan-in)。用 list 形式语义(对照
-    #   ``join_before_delivery`` 注释),LangGraph 0.2 才会等所有 sources 完成才
-    #   触发目标一次;独立 ``add_edge`` 是「任一 source 完成就触发」,会导致
-    #   PTP 在 SS 完成时就跑,GS/GV/SB 还没产出 — 与 plan §2.2 拓扑不符。
-    #
-    # 2026-10-20 修 D10:**SS(split_shots)被移出这个 barrier**。
-    #   原因:qa_gate 超时重试会回到 storyline_group_clips 重跑,SS 在重试点
-    #   **上游**、不会重跑。barrier 渠道在首次触发后被清空,第二轮只有
-    #   GC/GS/GV/SB 会重新写入,SS 的名字永远补不回来 → PTP 再也不触发 →
+    # 2026-11-14 依赖约简阶段1(第5期计划 §4.3):六源屏障缩为 [RTR, TXT] 两源。
+    #   - RTR 一条链保证 groups、script、voiceover、BGM selection、transition
+    #     plan 以及上游 media 链就绪(传递链 RTR←SB←GV←GS←STR←GC←FC←UC←SS←LM,
+    #     RTR 自己还读取 BGM selection 与 transition plan);
+    #   - TXT 单独保证 text_style_plan 就绪(TXT 是 GS 之后的独立 fan-out
+    #     分支,RTR 链不含它 —— 这是不能只等 RTR 的唯一理由);
+    #   - 不把 web topic 加进屏障:检索是条件节点,某些轮次不跑(D10 ——
+    #     屏障永远凑不齐 → 图静默 END);PTP 也不直接读取检索产物。
+    # 2026-10-20 修 D10:**SS(split_shots)被移出这个 barrier**(历史教训,
+    #   保留作防回归记录):qa_gate 超时重试会回到 storyline_group_clips 重跑,
+    #   SS 在重试点**上游**、不会重跑。barrier 渠道在首次触发后被清空,第二轮
+    #   只有回路内节点会重新写入,SS 的名字永远补不回来 → PTP 再也不触发 →
     #   图在 recommend_transition 处**静默 END**(next=[]),worker 还报
     #   "completed"。SS 在 SS→understand_clips→filter_clips→GC 这条链上,
-    #   GC 完成即蕴含 SS 完成,去掉它不放松任何时序约束。
-    # 2026-11-12 边治理阶段2(设计文档 §5.5):补入 RTR/TXT 两源,扩为 6 源屏障。
-    #   PTP 节点实际还读取 storyline_transition_plan(node_plan_timeline_pro.py:56)
-    #   与 storyline_text_style_plan(:57),时间线能力把转场写进 clip 的
-    #   transition_in/out、把文字样式写进 subtitle_style —— 原 4 源屏障不等这两个
-    #   推荐,PTP 可能在字段未写入时读到空值,时间线缺转场/样式配置。
-    #   RTR/TXT 都是每轮必跑节点(在重试回路内),扩源不踩 D10。
+    #   GC 完成即蕴含 SS 完成。同理适用于一切"重试点上游"节点。
+    #   (历史:2026-11-12 边治理阶段2 曾扩为 6 源 [GC,GS,GV,SB,RTR,TXT];
+    #   2026-11-14 约简 —— 被删 4 源都在 RTR 祖先链上,重复等待不增加正确性。)
     g.add_edge(
         [
-            "storyline_group_clips",
-            "storyline_generate_script",
-            "storyline_generate_voiceover",
-            "storyline_select_bgm",
             "storyline_recommend_transition",
             "storyline_recommend_text",
         ],
@@ -800,13 +798,15 @@ def _build_state_graph():
     )
 
     # 2026-10 AI 转场两节点(设计文档 §3.2:PTP/GAT → PTAT → qa 闸门)。
-    #   - generate_ai_transition(GAT):屏障 [GC, RTR](2026-11-12 边治理阶段3,
-    #     设计文档 §5.6)。GAT 只读 storyline_groups_artifact 与
-    #     storyline_transition_plan(作 hints 参考,node_generate_ai_transition.py),
-    #     不读文案/配音/BGM —— 2 源即其全部真实输入;RTR 完成即保证本轮
-    #     transition_plan 就绪。旧方案与 PTP 共用 4 源屏障的理由(独立单源边会让
-    #     RTR 每轮重复触发 3 次)已随阶段1 双源屏障消除。
-    #   - plan_timeline_ai_transition(PTAT):屏障 [PTP, GAT],紧跟其后。
+    #   - generate_ai_transition(GAT):单源边 RTR(2026-11-14 依赖约简阶段1,
+    #     第5期计划 §4.4;历史:2026-11-12 边治理阶段3 曾为屏障 [GC, RTR])。
+    #     GAT 只读 storyline_groups_artifact 与 storyline_transition_plan
+    #     (作 hints 参考,node_generate_ai_transition.py),不读文案/配音/BGM
+    #     —— RTR 完成即传递保证 groups(GC→…→SB→RTR 链)与 transition_plan
+    #     (RTR 自产)就绪,GC 源属重复约束。单源边无重复触发风险:GAT 只有
+    #     这一条入边。
+    #   - plan_timeline_ai_transition(PTAT):屏障 [PTP, GAT],紧跟其后 ——
+    #     两份输入来自互相独立的分支,不能约成单源。
     #   - qa_gate 只等最终时间线(阶段2 精简):AI 开时即 PTAT,qa 校验的就是
     #     含 AI 转场的最终时间线。
     # 开关在**建图时**读取(与 ASSEMBLY_QC_GATE_ENABLED 同类):
@@ -819,7 +819,7 @@ def _build_state_graph():
     _plan_for_qa = "storyline_plan_timeline_pro"
     if is_ai_transition_enabled():
         g.add_edge(
-            ["storyline_group_clips", "storyline_recommend_transition"],
+            "storyline_recommend_transition",
             "storyline_generate_ai_transition",
         )
         g.add_edge(

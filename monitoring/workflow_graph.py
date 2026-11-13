@@ -69,7 +69,12 @@ WORKFLOW_ID = "auto_video_editor_main"
 #: bump 只为让布局缓存里的旧名失效)。
 #: 2026-11-12 边治理阶段5:render_video 节点整体删除(qa_gate 直连 join,
 #: 拓扑变更)→ bump 5。
-SCHEMA_VERSION = 6
+#: 2026-11-13 边审计阶段1(任务B)/节点地图阶段3-5:拓扑零变更,SCHEMA_VERSION
+#: 保持 6(任务B 只补数据消费;节点地图只加前端布局)。
+#: 2026-11-14 依赖约简阶段1(第5期计划 §4):四组 fan-in 屏障传递性约简 ——
+#: [GS,GV]→SB 与 [GC,SB]→RTR 双源屏障缩为 GV→SB / SB→RTR 单源边、PTP 六源缩
+#: [RTR,TXT] 两源、GAT [GC,RTR] 缩 RTR 单源边(拓扑变更)→ bump 7。
+SCHEMA_VERSION = 7
 
 #: 关卡编号全集(阶段3 删除关卡⓪后剩 ①②③)
 CHECKPOINT_MARKS = ("①", "②", "③")

@@ -104,12 +104,12 @@ def test_plan_timeline_pro_fan_in_excludes_split_shots() -> None:
     assert "storyline_split_shots" not in sources_of_ptp, (
         "split_shots 留在 PTP 的 fan-in 里会让 qa_gate 重试死锁(D10)"
     )
-    # 重试点上的四个上游必须在,否则第一次就会提前触发 PTP
+    # 2026-11-14 依赖约简阶段1:PTP 屏障缩为 [RTR, TXT] 两源 —— RTR 链传递
+    # 保证重试点(group_clips)就绪(RTR←SB←GV←GS←STR←GC),TXT 单独保证
+    # 文字样式;两源都必须在,否则第一次就会提前触发 PTP
     for required in (
-        "storyline_group_clips",
-        "storyline_generate_script",
-        "storyline_generate_voiceover",
-        "storyline_select_bgm",
+        "storyline_recommend_transition",
+        "storyline_recommend_text",
     ):
         assert required in sources_of_ptp
 

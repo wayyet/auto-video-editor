@@ -77,6 +77,11 @@ CONDITIONAL_NODES = {
 #   新增 test_select_bgm_consumes_voiceover_and_rtr_reads_bgm_selection 锁定
 #   SB 消费配音时长 / RTR 读取 bgm_selection 的运行时契约;qa 重试用例补
 #   GV/TXT/SB/RTR 每轮恰 1 次断言。
+# - 2026-11-14 依赖约简阶段1(第5期计划 §4,用户决策推翻任务B 屏障保留):
+#   四组屏障传递性约简 —— [GS,GV]→SB 缩为 GV→SB 单源边、[GC,SB]→RTR 缩为
+#   SB→RTR 单源边、PTP 六源缩 [RTR,TXT] 两源、GAT [GC,RTR] 缩为 RTR→GAT
+#   单源边;PTAT 双源与 QA 单源不动。轨迹形状零变更(被删源都在保留源祖先
+#   链上,SB 仍紧随 GV、RTR 仍紧随 SB、PTP 仍紧随 RTR 的超步序列不变)。
 # - 旧版黄金轨迹是 _CYCLE × 4(stub BGM 90s > 目标 35s → qa 重试 3 次)。模糊修复
 #   阶段3 的逐片段速度护栏(7ad573d)落地后,planner 不再注水拉长,actual_ms=7200
 #   ≤ 目标 → qa 一轮即过、重试回路不再自触发 —— 这正是本文件 5 个存量失败用例的
@@ -127,25 +132,27 @@ NEIGHBORS: dict[str, tuple[set[str], set[str]]] = {
     "storyline_script_template_recommendation": ({_GC}, {_GS, "storyline_search_web_topic"}),
     # 检索节点入边改自模板推荐出口(原挂 group_clips 条件路由,前置化阶段3)
     "storyline_search_web_topic": ({"storyline_script_template_recommendation"}, {_GS}),
-    # 2026-11-12 边治理阶段1:select_bgm 改为 [GS, GV] 双源屏障目标(原两条单源边);
-    # 边治理阶段3 起 GAT 屏障不再含 SB;出边 = RTR/PTP 屏障源
-    _SB: ({_GS, _GV}, {_RTR, _PTP}),
-    # 2026-11-12 边治理阶段1:recommend_transition 改为 [GC, SB] 双源屏障目标
-    # (原 GC/SB 两条单源边);边治理阶段2 起是 PTP 6 源屏障源、不再直连 QA
-    # (QA 精简为最终时间线单源);边治理阶段3 起还是 GAT 屏障源;
-    # 出边 = PTP/GAT 屏障源(编译图把屏障源渲染成普通边)
-    _RTR: ({_GC, _SB}, {_PTP, _GAT}),
-    # 2026-11-12 边治理阶段2:PTP 6 源屏障(补 RTR/TXT);出边 = PTAT 屏障源(默认档 ai=True)
-    _PTP: ({_GC, _GS, _GV, _SB, _RTR, _RT}, {_PTAT}),
+    # 2026-11-14 依赖约简阶段1:select_bgm 唯一入边 = GV 普通边(历史:
+    # 2026-11-12 曾为 [GS, GV] 双源屏障;GV 已等 GS,GS 源属重复约束);
+    # 出边 = RTR 普通边(不再是 PTP 屏障源)
+    _SB: ({_GV}, {_RTR}),
+    # 2026-11-14 依赖约简阶段1:recommend_transition 唯一入边 = SB 普通边
+    # (历史:2026-11-12 曾为 [GC, SB] 双源屏障;SB 祖先链含 GC);
+    # 出边 = PTP 屏障源(编译图渲染成普通边)+ GAT 单源边
+    _RTR: ({_SB}, {_PTP, _GAT}),
+    # 2026-11-14 依赖约简阶段1:PTP 屏障缩两源 [RTR, TXT](历史:
+    # 2026-11-12 曾扩为 6 源;被删 4 源都在 RTR 祖先链上);出边 = PTAT 屏障源(默认档 ai=True)
+    _PTP: ({_RTR, _RT}, {_PTAT}),
     # 2026-11-12 边治理阶段2:QA 精简为单源屏障(只等最终时间线 PTAT);
     # 边治理阶段5:render_video 节点删除,条件出口直连 join
     # 出边 = 条件路由(重试→GC,其余→join)
     _QA: ({_PTAT}, {_GC, "storyline_join"}),
-    # 文字样式:GS 直下;边治理阶段2 起是 PTP 6 源屏障源
+    # 文字样式:GS 直下;PTP 两源屏障的另一源(RTR 链不含它 —— 不能只等 RTR)
     _RT: ({_GS}, {_PTP}),
-    # 2026-11-12 边治理阶段3:GAT 屏障改 [GC, RTR](其全部真实输入 = groups +
-    # transition_plan hints);出边 = PTAT 屏障源
-    _GAT: ({_GC, _RTR}, {_PTAT}),
+    # 2026-11-14 依赖约简阶段1:GAT 唯一入边 = RTR 单源边(历史:
+    # 2026-11-12 曾为 [GC, RTR] 双源屏障;RTR 传递保证 groups 就绪);
+    # 出边 = PTAT 屏障源
+    _GAT: ({_RTR}, {_PTAT}),
     # plan_timeline_pro + generate_ai_transition 之后、qa_gate 之前
     _PTAT: ({_PTP, _GAT}, {_QA}),
 }
@@ -283,13 +290,14 @@ def test_wired_nodes_are_spread_out_not_clustered(monkeypatch: pytest.MonkeyPatc
 
 
 def test_ai_pair_is_beside_plan_timeline_pro(monkeypatch: pytest.MonkeyPatch) -> None:
-    """GAT 与 PTP 同挂 GC 起步的屏障;qa_gate 的屏障里 PTAT 替换了 PTP(边治理阶段2 精简)。"""
+    """GAT 单源挂 RTR(依赖约简阶段1);qa_gate 的屏障里 PTAT 替换了 PTP(边治理阶段2 精简)。"""
     _, compiled = _compiled(monkeypatch)
     edges = _edge_set(compiled)
     ins, _ = _neighbors(edges)
-    # 边治理阶段2:PTP 6 源(补 RTR/TXT);边治理阶段3:GAT 2 源 [GC, RTR]
-    assert ins[_PTP] == {_GC, _GS, _GV, _SB, _RTR, _RT}
-    assert ins[_GAT] == {_GC, _RTR}
+    # 2026-11-14 依赖约简阶段1:PTP 缩两源 [RTR, TXT](历史:边治理阶段2 曾 6 源);
+    # GAT 唯一入边 RTR(历史:边治理阶段3 曾 [GC, RTR])
+    assert ins[_PTP] == {_RTR, _RT}
+    assert ins[_GAT] == {_RTR}
     # 边治理阶段2:QA 只等最终时间线节点
     assert ins[_QA] == {_PTAT}
     assert (_PTP, _QA) not in edges
@@ -306,9 +314,7 @@ def test_ai_flag_off_graph_has_no_ai_nodes_wired_and_barriers_as_before(
     #    LangGraph 把单元素列表屏障折叠成普通边(ai=False 时 PTP→qa_gate,
     #    ai=True 时 PTAT→qa_gate),其形态由 test_ai_pair_… 的 ins[_QA] 断言覆盖
     assert _barriers(g) == {
-        (frozenset({_GS, _GV}), _SB),
-        (frozenset({_GC, _SB}), _RTR),
-        (frozenset({_GC, _GS, _GV, _SB, _RTR, _RT}), _PTP),
+        (frozenset({_RTR, _RT}), _PTP),
         (frozenset({"node_15_localize_covers_en", "node_17_inject_english_tts"}), "node_09_inject_fx"),
     }
 
@@ -331,14 +337,15 @@ def test_conditional_nodes_are_never_in_a_fan_in_barrier(monkeypatch: pytest.Mon
 def test_ai_nodes_are_in_barriers_only_in_the_designed_places(monkeypatch: pytest.MonkeyPatch) -> None:
     g, _ = _compiled(monkeypatch, ai=True)
     with_ai = {b for b in _barriers(g) if _GAT in b[0] or _PTAT in b[0] or b[1] in (_GAT, _PTAT)}
+    # 2026-11-14 依赖约简阶段1:GAT 不再是屏障源(单源边 RTR→GAT),
+    # 只剩 PTAT 双源屏障 [PTP, GAT]。
     # ⚠️ 边治理阶段2:qa 单源屏障折叠成普通边(见 flag-off 用例注释),不再出现在
     #    waiting_edges,PTAT→qa 由 test_ai_pair_… 的 ins[_QA] 断言覆盖
     assert with_ai == {
-        (frozenset({_GC, _RTR}), _GAT),
         (frozenset({_GAT, _PTP}), _PTAT),
     }
-    # 边治理阶段2:PTP 6 源屏障(不含 AI 节点)
-    assert (frozenset({_GC, _GS, _GV, _SB, _RTR, _RT}), _PTP) in _barriers(g)
+    # 2026-11-14 依赖约简阶段1:PTP 两源屏障(不含 AI 节点)
+    assert (frozenset({_RTR, _RT}), _PTP) in _barriers(g)
 
 
 # ===========================================================================

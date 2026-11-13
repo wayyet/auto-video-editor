@@ -1,10 +1,17 @@
-"""Storyline 拓扑基线冻结(2026-11-13 边审计计划 阶段0)—— 单元级全量快照,不执行图。
+"""Storyline 拓扑基线冻结(2026-11-14 依赖约简阶段1 重录)—— 单元级全量快照,不执行图。
 
-依据《auto-video-editor_OpenStoryline子图边审计与精简设计执行计划_20261113》§8 阶段0:
-把当前有效的节点、边、条件分支和屏障形状固定下来,作为阶段1 的对照基线 ——
-阶段1 采用**任务B**(BGM 补配音时长消费、保留 ``[GS, GV]→SB`` 双源屏障),
-**不改任何边**,因此本快照在阶段1/2 落地后必须保持全绿;任何拓扑漂移
-(屏障被误改形状、边被误加/误删、条件路由漂移)都会在这里报警。
+依据《auto-video-editor-langgraph-dependency-audit-and-plan》(第5期)§4/§10 阶段1:
+四组 fan-in 屏障传递性约简 —— ``[GS, GV]→SB`` 缩为 ``GV→SB`` 单源边(GV 已等
+GS)、``[GC, SB]→RTR`` 缩为 ``SB→RTR`` 单源边(SB 祖先链含 GC)、PTP 六源缩为
+``[RTR, TXT]`` 两源(RTR 链覆盖其余四源)、GAT ``[GC, RTR]`` 缩为 ``RTR→GAT``
+单源边。被删的源都在保留源的祖先链上,等待属重复约束;单元素列表屏障会被
+LangGraph 折叠成普通边,故约简后的 SB/RTR/GAT 以普通边形式出现在
+``_STORYLINE_NORMAL_EDGES_BASE``。PTAT ``[PTP, GAT]`` 双源与 QA 单源**保留不动**
+(两份输入来自独立分支,不能约简)。
+
+用户决策记录:本阶段推翻 2026-11-13 边审计「任务B 保留 [GS, GV]→SB 双源屏障」
+的结案(当时计划默认的任务A 是"精简为 GS→SB";本次约简保留的是 GV 源 ——
+配音时长消费不丢,删的是被 GV 传递保证的 GS 源,方向与旧任务A 相反)。
 
 图真源 = ``graph._build_state_graph()`` 的 builder 边(不 compile),与
 ``test_storyline_edge_governance_topology.py`` / wiring 集成测试同口径:
@@ -51,7 +58,9 @@ STORYLINE_NODES: set[str] = {
     _GV, _SB, _RTR, _TXT, _PTP, _PTAT, _QA, _JOIN,
 }
 
-#: 素材主链 + 模板前置 + 检索直连 + 文案 fan-out(与 AI 开关无关的普通边部分)
+#: 素材主链 + 模板前置 + 检索直连 + 文案 fan-out + 约简后的单源链
+#: (与 AI 开关无关的普通边部分;2026-11-14 约简:原双源屏障 [GS,GV]→SB 与
+#: [GC,SB]→RTR 的目标只剩唯一入边,单元素屏障被 LangGraph 折叠回普通边)
 _STORYLINE_NORMAL_EDGES_BASE: set[tuple[str, str]] = {
     ("__start__", _LM),
     (_LM, _SS),
@@ -62,13 +71,14 @@ _STORYLINE_NORMAL_EDGES_BASE: set[tuple[str, str]] = {
     (_WT, _GS),
     (_GS, _GV),
     (_GS, _TXT),
+    (_GV, _SB),   # 2026-11-14 依赖约简阶段1:GV 唯一入边(GV 已等 GS)
+    (_SB, _RTR),  # 2026-11-14 依赖约简阶段1:SB 唯一入边(SB 祖先链含 GC)
 }
 
-#: 与 AI 开关无关的 fan-in 屏障(BGM 双源 / 普通转场双源 / PTP 六源)
+#: 与 AI 开关无关的 fan-in 屏障(仅剩 PTP 两源;历史:2026-11-12 曾有三道 ——
+#: BGM 双源/普通转场双源/PTP 六源,2026-11-14 依赖约简阶段1 缩并)
 _STORYLINE_BARRIERS_BASE: set[tuple[frozenset[str], str]] = {
-    (frozenset({_GS, _GV}), _SB),                         # 2026-11-12 边治理阶段1
-    (frozenset({_GC, _SB}), _RTR),                        # 2026-11-12 边治理阶段1
-    (frozenset({_GC, _GS, _GV, _SB, _RTR, _TXT}), _PTP),  # 2026-11-12 边治理阶段2 扩为六源
+    (frozenset({_RTR, _TXT}), _PTP),  # 2026-11-14 依赖约简阶段1:六源缩两源
 }
 
 #: 条件路由出口(三种,其余 storyline 节点不得有条件路由)
@@ -103,13 +113,17 @@ def _assert_storyline_section(g, *, ai_on: bool) -> None:
     """AI 单档下的 storyline 段全量快照断言(普通边 / 屏障 / 条件路由 / 边界)。"""
     edges = _edge_pairs(g)
 
-    # 普通边:两端均为 storyline_*(QA 的最终时间线入边随开关切换)
+    # 普通边:两端均为 storyline_*(QA 的最终时间线入边随开关切换;
+    # AI 开时 GAT 还有一条 RTR 单源边)
     storyline_edges = {
         (s, t) for s, t in edges
         if s.startswith("storyline_") and t.startswith("storyline_")
     }
     final_timeline_edge = (_PTAT if ai_on else _PTP, _QA)
-    assert storyline_edges == (_STORYLINE_NORMAL_EDGES_BASE - {("__start__", _LM)}) | {final_timeline_edge}, (
+    expected_edges = (_STORYLINE_NORMAL_EDGES_BASE - {("__start__", _LM)}) | {final_timeline_edge}
+    if ai_on:
+        expected_edges |= {(_RTR, _GAT)}   # 2026-11-14 依赖约简阶段1:GAT 单源边
+    assert storyline_edges == expected_edges, (
         f"storyline 普通边漂移(ai_on={ai_on}),实际 {sorted(storyline_edges)}"
     )
 
@@ -126,12 +140,12 @@ def _assert_storyline_section(g, *, ai_on: bool) -> None:
     }
     assert not mixed, f"storyline 段与外层出现普通边直连:{sorted(mixed)}"
 
-    # 屏障:AI 开 = 基础三道 + GAT/PTAT 两道;AI 关 = 仅基础三道
+    # 屏障:AI 开 = PTP 两源 + PTAT 双源;AI 关 = 仅 PTP 两源
+    # (2026-11-14 依赖约简阶段1:BGM/转场/GAT 三道屏障缩为单源普通边)
     storyline_barriers = {bt for bt in _barriers(g) if bt[0] and bt[1].startswith("storyline_")}
     expected_barriers = set(_STORYLINE_BARRIERS_BASE)
     if ai_on:
         expected_barriers |= {
-            (frozenset({_GC, _RTR}), _GAT),       # 2026-11-12 边治理阶段3
             (frozenset({_PTP, _GAT}), _PTAT),     # AI 开:基础时间线 + AI 转场结果
         }
     assert storyline_barriers == expected_barriers, (

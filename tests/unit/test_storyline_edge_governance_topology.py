@@ -200,16 +200,17 @@ def test_ai_off_qa_waits_ptp_directly(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_storyline_barrier_shapes_locked() -> None:
-    """阶段1-3 治理结果的屏障形状锁定(只锁 storyline 段,不耦合外层 fan-in)。"""
+    """约简后屏障形状锁定(2026-11-14 依赖约简阶段1;只锁 storyline 段,不耦合外层 fan-in)。
+
+    BGM/转场/GAT 三道屏障已缩为单源普通边(GV→SB、SB→RTR、RTR→GAT,
+    形状由 wiring 的 NEIGHBORS 表锁定);屏障只剩 PTP 两源与 PTAT 双源。
+    """
     g = _build()
     barriers = {(frozenset(s), t) for s, t in getattr(g, "waiting_edges", set())}
     storyline_barriers = {bt for bt in barriers if bt[0] and bt[1].startswith("storyline_")}
     assert storyline_barriers == {
-        (frozenset({_GS, _GV}), _SB),                         # 阶段1:BGM 双源
-        (frozenset({_GC, _SB}), _RTR),                        # 阶段1:普通转场双源
-        (frozenset({_GC, _GS, _GV, _SB, _RTR, _TXT}), _PTP),  # 阶段2:PTP 六源
-        (frozenset({_GC, _RTR}), _GAT),                       # 阶段3:GAT 两源
-        (frozenset({_PTP, _GAT}), _PTAT),                     # AI 开:基础时间线 + AI 转场
+        (frozenset({_RTR, _TXT}), _PTP),      # 2026-11-14 依赖约简:六源缩两源
+        (frozenset({_PTP, _GAT}), _PTAT),     # AI 开:基础时间线 + AI 转场
     }
     # 条件触发节点永不进屏障(D10);主链前置节点 STR 也不作为屏障源
     assert _WT not in _barrier_sources(g)

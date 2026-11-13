@@ -2,7 +2,7 @@
   "workflow_meta": {
     "id": "storyline_subflow",
     "name": "Storyline Subflow (auto pipeline)",
-    "description": "Storyline 子流程静态快照。2026-11-13 边审计阶段5 已同步当前 graph.py 的 17 节点拓扑(双源屏障/六源 fan-in/条件路由/QA 重试回路);仅为示意,权威接线以 graph.py 与 tests 为准。本文件无 edges 数组:连接由 dependencies(数据来源,屏障即全部源)与 next_nodes(下游,含条件出口)双向表达。"
+      "description": "Storyline 子流程静态快照。2026-11-14 依赖约简阶段1 已同步当前 graph.py 的 17 节点拓扑(单源链 GV→SB→RTR→GAT / PTP 两源 fan-in / 条件路由 / QA 重试回路);仅为示意,权威接线以 graph.py 与 tests 为准。本文件无 edges 数组:连接由 dependencies(数据来源,屏障即全部源)与 next_nodes(下游,含条件出口)双向表达。"
   },
   "nodes": [
     {
@@ -173,15 +173,12 @@
       "name": "Group Clips",
       "kind": "storyline_group_clips",
       "pro": false,
-      "description": "Organize clips into narrative groups and arrange playback order. QA 时长超限且仍可重试时,由 storyline_qa_gate 的条件回边重新触发(重试回路起点,非数据依赖)。作为 BGM 转场/AI 转场/时间线屏障的分组来源。",
+      "description": "Organize clips into narrative groups and arrange playback order. QA 时长超限且仍可重试时,由 storyline_qa_gate 的条件回边重新触发(重试回路起点,非数据依赖)。作为模板推荐主链的分组来源(2026-11-14 依赖约简:BGM/转场/AI 转场/时间线不再把分组列为直接屏障来源,由保留链传递保证)。",
       "dependencies": [
         "storyline_filter_clips"
       ],
       "next_nodes": [
-        "storyline_script_template_recommendation",
-        "storyline_recommend_transition",
-        "storyline_plan_timeline_pro",
-        "storyline_generate_ai_transition"
+        "storyline_script_template_recommendation"
       ],
       "input_schema": [
         {
@@ -276,16 +273,14 @@
       "name": "Generate Script",
       "kind": "storyline_generate_script",
       "pro": false,
-      "description": "Generate script/subtitles for each group; supports passing a custom_script override. 入边二选一:模板推荐条件直达(检索关/无检索词),或检索节点完成后进入;fan-out 派生配音、文字推荐,并作为 BGM 双源屏障来源之一。",
+      "description": "Generate script/subtitles for each group; supports passing a custom_script override. 入边二选一:模板推荐条件直达(检索关/无检索词),或检索节点完成后进入;fan-out 派生配音、文字推荐(2026-11-14 依赖约简:BGM 与时间线不再把文案列为直接屏障来源,由配音/转场/文字链传递保证)。",
       "dependencies": [
         "storyline_script_template_recommendation",
         "storyline_search_web_topic"
       ],
       "next_nodes": [
         "storyline_generate_voiceover",
-        "storyline_recommend_text",
-        "storyline_select_bgm",
-        "storyline_plan_timeline_pro"
+        "storyline_recommend_text"
       ],
       "input_schema": [
         {
@@ -335,8 +330,7 @@
         "storyline_generate_script"
       ],
       "next_nodes": [
-        "storyline_select_bgm",
-        "storyline_plan_timeline_pro"
+        "storyline_select_bgm"
       ],
       "input_schema": [
         {
@@ -370,14 +364,12 @@
       "name": "Select BGM",
       "kind": "storyline_select_bgm",
       "pro": false,
-      "description": "Select appropriate background music (BGM) based on material content and user requirements. 2026-11-13 边审计阶段1 任务B:由 [generate_script, generate_voiceover] 双源屏障触发,并真实聚合配音 artifact 各段 duration(voiceover_total_ms)作为配乐时长覆盖偏好;配音缺失按 0 容缺省,BGM 不因配音失败陪葬。",
+      "description": "Select appropriate background music (BGM) based on material content and user requirements. 由 generate_voiceover 单源边触发(2026-11-14 依赖约简:配音已等文案,文案来源属重复约束;2026-11-13 任务B 的配音消费保留 —— 真实聚合配音 artifact 各段 duration(voiceover_total_ms)作为配乐时长覆盖偏好);配音缺失按 0 容缺省,BGM 不因配音失败陪葬。",
       "dependencies": [
-        "storyline_generate_script",
         "storyline_generate_voiceover"
       ],
       "next_nodes": [
-        "storyline_recommend_transition",
-        "storyline_plan_timeline_pro"
+        "storyline_recommend_transition"
       ],
       "input_schema": [
         {
@@ -423,9 +415,8 @@
       "name": "Recommend Transition",
       "kind": "storyline_recommend_transition",
       "pro": false,
-      "description": "Recommend transitions (e.g., fade in/out) at beginning and end. 由 [group_clips, select_bgm] 双源屏障触发;真实读取分组与 BGM selection(bgm_ref 传入能力层,当前模板未渲染该占位符,为预留字段)。",
+      "description": "Recommend transitions (e.g., fade in/out) at beginning and end. 由 select_bgm 单源边触发(2026-11-14 依赖约简:BGM 的祖先链已含分组节点,分组来源属重复约束);真实读取分组与 BGM selection(bgm_ref 传入能力层,当前模板未渲染该占位符,为预留字段)。",
       "dependencies": [
-        "storyline_group_clips",
         "storyline_select_bgm"
       ],
       "next_nodes": [
@@ -509,12 +500,8 @@
       "name": "Plan Timeline Pro",
       "kind": "storyline_plan_timeline_pro",
       "pro": false,
-      "description": "Plan timeline tracks for video, subtitles, voiceover, and BGM; optionally sync transitions with BGM beats. 六源 fan-in 屏障:六个真实产物生产者全部完成后才执行;AI 开启时出边交给 plan_timeline_ai_transition,AI 关闭时直接进 qa_gate。",
+      "description": "Plan timeline tracks for video, subtitles, voiceover, and BGM; optionally sync transitions with BGM beats. 两源 fan-in 屏障(2026-11-14 依赖约简:六源缩 [recommend_transition, recommend_text] —— 转场链传递保证分组/文案/配音/BGM/素材就绪,文字推荐单独保证文字样式;历史:2026-11-12 曾扩为六源);AI 开启时出边交给 plan_timeline_ai_transition,AI 关闭时直接进 qa_gate。",
       "dependencies": [
-        "storyline_group_clips",
-        "storyline_generate_script",
-        "storyline_generate_voiceover",
-        "storyline_select_bgm",
         "storyline_recommend_transition",
         "storyline_recommend_text"
       ],
@@ -553,9 +540,8 @@
       "name": "Generate AI Transition",
       "kind": "storyline_generate_ai_transition",
       "pro": false,
-      "description": "Optional AI transition generation (STORYLINE_ENABLE_AI_TRANSITION 开启时才接线;未配置/未批准 Provider 时零外呼,仅登记审计)。读取分组衔接点与普通转场提示,生成衔接转场 MP4 产物。",
+      "description": "Optional AI transition generation (STORYLINE_ENABLE_AI_TRANSITION 开启时才接线;未配置/未批准 Provider 时零外呼,仅登记审计)。读取分组衔接点与普通转场提示(分组由转场推荐链传递保证,2026-11-14 依赖约简),生成衔接转场 MP4 产物。",
       "dependencies": [
-        "storyline_group_clips",
         "storyline_recommend_transition"
       ],
       "next_nodes": [
