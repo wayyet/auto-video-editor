@@ -74,7 +74,9 @@ WORKFLOW_ID = "auto_video_editor_main"
 #: 2026-11-14 依赖约简阶段1(第5期计划 §4):四组 fan-in 屏障传递性约简 ——
 #: [GS,GV]→SB 与 [GC,SB]→RTR 双源屏障缩为 GV→SB / SB→RTR 单源边、PTP 六源缩
 #: [RTR,TXT] 两源、GAT [GC,RTR] 缩 RTR 单源边(拓扑变更)→ bump 7。
-SCHEMA_VERSION = 7
+#: 2026-11-14 依赖约简阶段5(第5期计划 §9):web_topic 条件路由改并行 fan-out
+#: (GC 双出边 + [STR,WT]→GS 双源屏障,条件路由删除;拓扑变更)→ bump 8。
+SCHEMA_VERSION = 8
 
 #: 关卡编号全集(阶段3 删除关卡⓪后剩 ①②③)
 CHECKPOINT_MARKS = ("①", "②", "③")

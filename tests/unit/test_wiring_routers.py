@@ -1,16 +1,18 @@
 """单测:路由函数(纯函数,不编译图)。
 
-- ``_storyline_route_after_template_rec`` 检索条件路由(初始挂 ``group_clips``
-  之后,2026-11-12 noop 治理阶段1 改挂模板推荐出口):检索开关 AND ``build_web_topic_query`` 非空 →
-  先检索再文案;否则直达文案。路由与检索节点共用同一 builder(设计方案 §4.1)。
+- 2026-11-14 依赖约简阶段5:``_storyline_route_after_template_rec`` 检索条件路由
+  已删除 —— web_topic 节点改为每轮必跑,「检索开关 AND 检索词非空」的判定移入
+  节点内部(关闭/为空 → skipped 标签,不发网络请求、不写产物);原三态路由矩阵
+  改写为节点级 skipped/执行矩阵(见下方 web topic 节点用例)。
 - qa_gate 之后的路由不再被包装(AI 转场两节点在 qa_gate 之前,由建图时的屏障接线决定)
 
 (原 ``_asr_branch_enabled`` / ``_storyline_route_after_split_shots`` 已随
 2026-11-08 B1 ASR 移除删除。原 ``_web_topic_branch_enabled`` /
-``_storyline_route_after_load_media`` 已随 2026-11-10 前置化阶段3 删除:
-``load_media`` 改静态直连 ``split_shots``,检索条件路由移到 ``group_clips`` 之后(阶段1 再改挂模板推荐出口),
-检索词改由 ``build_web_topic_query`` 自动构造 —— 其矩阵用例见
-``tests/unit/test_web_topic_reference.py`` 的 builder 用例与 wiring 集成用例。)
+``_storyline_route_after_load_media`` 已随 2026-11-10 前置化阶段3 删除;
+``_storyline_route_after_template_rec`` 已随 2026-11-14 依赖约简阶段5 删除 ——
+检索词改由 ``build_web_topic_query`` 自动构造,矩阵用例见
+``tests/unit/test_web_topic_reference.py`` 的 builder 用例、下方节点用例与
+wiring 集成用例。)
 """
 from __future__ import annotations
 
@@ -24,38 +26,54 @@ from nodes.storyline import _common as common_mod
 
 
 # ---------------------------------------------------------------------------
-# _storyline_route_after_template_rec(前置化阶段3,设计方案 §4.3)
+# web topic 节点内部判定(2026-11-14 依赖约简阶段5:每轮必跑 + 内部软跳过)
 # ---------------------------------------------------------------------------
-def test_route_after_group_clips_flag_off_goes_straight_to_script(
+def test_web_topic_node_skips_without_network_when_flag_off(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """开关关闭 → 条件路由直达文案,即使检索词可构造。"""
+    """开关关闭 → 节点正常返回(不抛、不发网络请求、不写产物),只落 skipped 标签。"""
     monkeypatch.setattr(config, "STORYLINE_ENABLE_WEB_TOPIC", False)
-    monkeypatch.setattr(g, "build_web_topic_query", lambda _state: "夏季防晒")
-    assert g._storyline_route_after_template_rec({}) == "storyline_generate_script"
+    calls: list[str] = []
+    monkeypatch.setattr(node_search_mod, "cap_topic", lambda **kw: calls.append(kw) or {})
+    out = node_search_mod.storyline_search_web_topic_node({})
+    assert calls == [], "开关关闭不得发起网络请求"
+    assert "storyline_web_topic_artifact" not in out, "skipped 不写产物(GS 软降级)"
+    assert node_search_mod.SKIPPED_STATUS_TAG in (out.get("status_log") or [])
 
 
-def test_route_after_group_clips_empty_builder_skips_search(
+def test_web_topic_node_skips_when_query_builder_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """开关开启但 builder 构造为空(query/overall/themes 全空)→ 直达文案。"""
+    """开关开启但 builder 构造为空(query/overall/themes 全空)→ 同款软跳过。"""
     monkeypatch.setattr(config, "STORYLINE_ENABLE_WEB_TOPIC", True)
-    monkeypatch.setattr(g, "build_web_topic_query", lambda _state: "")
-    assert g._storyline_route_after_template_rec({}) == "storyline_generate_script"
+    monkeypatch.setattr(node_search_mod, "build_web_topic_query", lambda _state: "")
+    calls: list[str] = []
+    monkeypatch.setattr(node_search_mod, "cap_topic", lambda **kw: calls.append(kw) or {})
+    out = node_search_mod.storyline_search_web_topic_node({})
+    assert calls == [], "无检索词不得发起网络请求"
+    assert "storyline_web_topic_artifact" not in out
+    assert node_search_mod.SKIPPED_STATUS_TAG in (out.get("status_log") or [])
 
 
-def test_route_after_group_clips_routes_to_search_when_builder_non_empty(
-    monkeypatch: pytest.MonkeyPatch,
+def test_web_topic_node_runs_when_flag_on_and_query_available(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
-    """开关开启且能构造出检索词 → 先检索再文案。"""
+    """开关开启且能构造出检索词 → 正常检索并写产物(沿用既有能力层链)。"""
     monkeypatch.setattr(config, "STORYLINE_ENABLE_WEB_TOPIC", True)
-    monkeypatch.setattr(g, "build_web_topic_query", lambda _state: "夏季防晒、整体概述")
-    assert g._storyline_route_after_template_rec({}) == "storyline_search_web_topic"
+    monkeypatch.setattr(node_search_mod, "build_web_topic_query", lambda _state: "夏季防晒")
+    monkeypatch.setattr(
+        node_search_mod, "cap_topic",
+        lambda **kw: {"search_web_topic": [], "status": "no_results",
+                      "error_code": "NO_RESULTS", "query_hash": kw.get("query", "")},
+    )
+    state = {"storyline_outputs_root": str(tmp_path)}
+    out = node_search_mod.storyline_search_web_topic_node(state)
+    assert "storyline_web_topic_artifact" in out, "执行轮应写检索产物"
+    assert "storyline_search_web_topic_no_results" in (out.get("status_log") or [])
 
 
-def test_route_and_node_share_the_same_query_builder() -> None:
-    """§4.1 一致性约束:路由判定与检索节点必须共用同一个 build_web_topic_query。"""
-    assert g.build_web_topic_query is common_mod.build_web_topic_query
+def test_node_uses_the_same_query_builder_as_capabilities() -> None:
+    """一致性约束(§4.1 承接):检索节点必须共用同一个 build_web_topic_query。"""
     assert node_search_mod.build_web_topic_query is common_mod.build_web_topic_query
 
 

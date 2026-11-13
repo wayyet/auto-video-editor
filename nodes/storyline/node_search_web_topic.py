@@ -5,6 +5,12 @@ DuckDuckGo html 端点(无 key),结果写到 storyline_web_topic_artifact。
 2026-11-10 前置化阶段3:节点移到 ``group_clips`` → ``generate_script`` 之间的
 QA 重试回路内(设计方案 §4.3/§4.6)—— 同一 query_hash 的产物直接 ``cache_hit``
 复用,不重复请求互联网;检索词与条件路由共用 ``build_web_topic_query``(§4.1)。
+
+2026-11-14 依赖约简阶段5(第5期计划 §9):节点改为**每轮必跑**(与模板推荐
+并行 fan-out,汇入 ``[STR, WT]→GS`` 双源屏障)—— 开关关闭或检索词为空时写
+``storyline_search_web_topic_skipped`` 标签直接返回,**不发网络请求、不写产物**
+(与既有硬异常降级同款纪律:GS 读不到 artifact 按无检索参考软降级,零改动)。
+节点每轮必跑才不踩 D10:进入必需屏障的节点不允许"有时跑有时不跑"。
 """
 from __future__ import annotations
 
@@ -12,6 +18,7 @@ import hashlib
 import json
 from pathlib import Path
 
+import config
 from state import WorkflowState
 from storyline_capabilities.search_web_topic import search_web_topic as cap_topic
 from nodes.storyline._common import (
@@ -33,6 +40,9 @@ _ERROR_STATUS_TAGS: dict[str, str] = {
 
 # 产物四态(能力层 _result 的取值域);cache_hit 复用时结构校验以此为有效域。
 _KNOWN_STATUSES = ("ok", "no_results", "failed", "cache_hit")
+
+# 开关关闭 / 检索词为空时的固定标签(2026-11-14 依赖约简阶段5)。
+SKIPPED_STATUS_TAG = "storyline_search_web_topic_skipped"
 
 
 def _load_reusable_cache(state: WorkflowState, query_hash: str) -> dict | None:
@@ -68,10 +78,17 @@ def storyline_search_web_topic_node(state: WorkflowState) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "search_web_topic.json"
 
-    # 2026-11-10 阶段1:检索词改由统一 builder 构造(手动 query 优先,缺失时
-    # 由 understanding.overall + groups[].theme 自动构造;前置化设计方案 §4.1)。
-    # 与 ``graph._storyline_route_after_template_rec`` 共用同一 builder(§4.1)。
+    # 2026-11-14 依赖约简阶段5:节点每轮必跑(不踩 D10),开关关闭或检索词为空
+    # 在节点内部软跳过 —— 只落标签,不发网络请求、不写产物(§9 方案 1)。
+    if not config.STORYLINE_ENABLE_WEB_TOPIC:
+        return {
+            "status_log": append_status_tag(state, SKIPPED_STATUS_TAG),
+        }
     query = build_web_topic_query(state)
+    if not query:
+        return {
+            "status_log": append_status_tag(state, SKIPPED_STATUS_TAG),
+        }
     query_hash = hashlib.sha256(query.encode("utf-8")).hexdigest()
 
     # 2026-11-10 前置化阶段3:query_hash 一致且结构有效 → cache_hit 直接复用,

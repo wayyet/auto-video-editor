@@ -58,9 +58,11 @@ STORYLINE_NODES: set[str] = {
     _GV, _SB, _RTR, _TXT, _PTP, _PTAT, _QA, _JOIN,
 }
 
-#: 素材主链 + 模板前置 + 检索直连 + 文案 fan-out + 约简后的单源链
-#: (与 AI 开关无关的普通边部分;2026-11-14 约简:原双源屏障 [GS,GV]→SB 与
-#: [GC,SB]→RTR 的目标只剩唯一入边,单元素屏障被 LangGraph 折叠回普通边)
+#: 素材主链 + 模板前置 + 检索并行 fan-out + 文案 fan-out + 约简后的单源链
+#: (与 AI 开关无关的普通边部分;2026-11-14 阶段1 约简:原双源屏障 [GS,GV]→SB 与
+#: [GC,SB]→RTR 的目标只剩唯一入边,单元素屏障被 LangGraph 折叠回普通边;
+#: 2026-11-14 阶段5:检索改并行 fan-out —— 原 WT→GS 普通边与 STR 条件路由删除,
+#: 改为 GC→WT 普通边 + [STR, WT]→GS 双源屏障)
 _STORYLINE_NORMAL_EDGES_BASE: set[tuple[str, str]] = {
     ("__start__", _LM),
     (_LM, _SS),
@@ -68,21 +70,22 @@ _STORYLINE_NORMAL_EDGES_BASE: set[tuple[str, str]] = {
     (_UC, _FC),
     (_FC, _GC),
     (_GC, _STR),
-    (_WT, _GS),
+    (_GC, _WT),   # 2026-11-14 依赖约简阶段5:检索并行 fan-out
     (_GS, _GV),
     (_GS, _TXT),
     (_GV, _SB),   # 2026-11-14 依赖约简阶段1:GV 唯一入边(GV 已等 GS)
     (_SB, _RTR),  # 2026-11-14 依赖约简阶段1:SB 唯一入边(SB 祖先链含 GC)
 }
 
-#: 与 AI 开关无关的 fan-in 屏障(仅剩 PTP 两源;历史:2026-11-12 曾有三道 ——
-#: BGM 双源/普通转场双源/PTP 六源,2026-11-14 依赖约简阶段1 缩并)
+#: 与 AI 开关无关的 fan-in 屏障(PTP 两源 + GS 双源;历史:2026-11-12 曾有
+#: BGM/转场/PTP 六源三道,2026-11-14 阶段1 缩并、阶段5 新增 GS 双源)
 _STORYLINE_BARRIERS_BASE: set[tuple[frozenset[str], str]] = {
-    (frozenset({_RTR, _TXT}), _PTP),  # 2026-11-14 依赖约简阶段1:六源缩两源
+    (frozenset({_RTR, _TXT}), _PTP),      # 2026-11-14 依赖约简阶段1:六源缩两源
+    (frozenset({_STR, _WT}), _GS),        # 2026-11-14 依赖约简阶段5:检索并行汇入
 }
 
-#: 条件路由出口(三种,其余 storyline 节点不得有条件路由)
-_STR_CONDITIONAL_EXITS = {_WT, _GS}
+#: 条件路由出口(2026-11-14 阶段5 起 STR 不再有条件路由,剩 QA/JOIN 两种,
+#: 其余 storyline 节点不得有条件路由)
 _QA_CONDITIONAL_EXITS = {_GC, _JOIN}
 _JOIN_CONDITIONAL_EXITS = {"generate_draft", "__end__"}
 
@@ -152,14 +155,13 @@ def _assert_storyline_section(g, *, ai_on: bool) -> None:
         f"storyline 屏障形状漂移(ai_on={ai_on}),实际 {sorted(storyline_barriers)}"
     )
 
-    # 条件路由:恰好三种源,出口集合逐一锁定
+    # 条件路由:恰好两种源(2026-11-14 阶段5 起 STR 不再有条件路由),出口逐一锁定
     branch_sources = {
         src for src in getattr(g, "branches", {}) if src.startswith("storyline_")
     }
-    assert branch_sources == {_STR, _QA, _JOIN}, (
+    assert branch_sources == {_QA, _JOIN}, (
         f"storyline 条件路由源漂移:实际 {sorted(branch_sources)}"
     )
-    assert _conditional_targets(g, _STR) == _STR_CONDITIONAL_EXITS
     assert _conditional_targets(g, _QA) == _QA_CONDITIONAL_EXITS
     assert _conditional_targets(g, _JOIN) == _JOIN_CONDITIONAL_EXITS
 

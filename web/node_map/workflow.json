@@ -178,7 +178,8 @@
         "storyline_filter_clips"
       ],
       "next_nodes": [
-        "storyline_script_template_recommendation"
+        "storyline_script_template_recommendation",
+        "storyline_search_web_topic"
       ],
       "input_schema": [
         {
@@ -212,12 +213,11 @@
       "name": "Recommend Script Template",
       "kind": "storyline_script_template_recommendation",
       "pro": false,
-      "description": "Recommend/select a copywriting template based on material content and user's requirements. 2026-11-12 前置化:文案生成的主链前置节点;出口为条件路由(检索开关开启且能构造非空检索词 → search_web_topic,否则直达 generate_script)。",
+      "description": "Recommend/select a copywriting template based on material content and user's requirements. 2026-11-14 依赖约简阶段5:文案生成的主链前置节点,与检索节点并行 fan-out;经 [template_recommendation, search_web_topic]→generate_script 双源屏障汇入文案(原出口条件路由已删)。",
       "dependencies": [
         "storyline_group_clips"
       ],
       "next_nodes": [
-        "storyline_search_web_topic",
         "storyline_generate_script"
       ],
       "input_schema": [
@@ -258,9 +258,9 @@
       "name": "Search Web Topic",
       "kind": "storyline_search_web_topic",
       "pro": false,
-      "description": "Conditional web topic retrieval (2026-11-10 前置化). 仅由模板推荐的条件边触发(检索开关开启且检索词非空;检索词 = 手动 query + 画面概述首句 + 分组主题自动构造);结果软降级,失败不阻断文案。条件触发节点,按设计禁止进入任何 fan-in 屏障(QA 重试轮可能跳过它)。",
+      "description": "Web topic retrieval (2026-11-14 依赖约简阶段5:每轮必跑,与模板推荐并行 fan-out,经 [template_recommendation, search_web_topic]→generate_script 双源屏障汇入;历史:2026-11-10 前置化为条件路由节点)。检索开关关闭或检索词为空时节点内部软跳过(只落 skipped 标签,不发网络请求、不写产物);检索词 = 手动 query + 画面概述首句 + 分组主题自动构造;结果软降级,失败不阻断文案。",
       "dependencies": [
-        "storyline_script_template_recommendation"
+        "storyline_group_clips"
       ],
       "next_nodes": [
         "storyline_generate_script"
@@ -273,7 +273,7 @@
       "name": "Generate Script",
       "kind": "storyline_generate_script",
       "pro": false,
-      "description": "Generate script/subtitles for each group; supports passing a custom_script override. 入边二选一:模板推荐条件直达(检索关/无检索词),或检索节点完成后进入;fan-out 派生配音、文字推荐(2026-11-14 依赖约简:BGM 与时间线不再把文案列为直接屏障来源,由配音/转场/文字链传递保证)。",
+      "description": "Generate script/subtitles for each group; supports passing a custom_script override. 入边 = [模板推荐, 网页检索] 双源屏障(2026-11-14 依赖约简阶段5:两分支并行 fan-out 后汇入,原条件路由删除);fan-out 派生配音、文字推荐(2026-11-14 依赖约简:BGM 与时间线不再把文案列为直接屏障来源,由配音/转场/文字链传递保证)。",
       "dependencies": [
         "storyline_script_template_recommendation",
         "storyline_search_web_topic"

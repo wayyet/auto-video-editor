@@ -65,17 +65,20 @@
 - ②与③ 永不同时挂起(②在尾链,③在英文线)。
 
 2026-10 接入原"不可达节点"(保留,见《不可达节点接入LangGraph设计与执行计划》):
-- ``storyline_search_web_topic``:2026-11-10 前置化阶段3 起改为
-  ``storyline_group_clips`` →(条件路由)→ ``storyline_search_web_topic`` →
-  ``storyline_generate_script``(检索开关开启且 ``build_web_topic_query`` 能构造出
-  非空检索词时;否则条件路由直达文案)。不再是 load_media 后的死胡同旁支。
+- ``storyline_search_web_topic``:2026-11-14 依赖约简阶段5 起改为
+  ``storyline_group_clips`` **并行 fan-out** 触发(与模板推荐同时),经
+  ``[模板推荐, 检索]→generate_script`` 双源屏障汇入;节点每轮必跑 —— 检索开关
+  关闭或 ``build_web_topic_query`` 构造不出非空检索词时节点内部软跳过(不发
+  网络请求)。不再是 load_media 后的死胡同旁支,也不再是条件路由分支。
 - ``storyline_generate_ai_transition`` 单源边挂 ``recommend_transition`` 之后
   (2026-11-14 依赖约简阶段1;历史:2026-11-12 边治理阶段3 曾为屏障 [GC, RTR]);
   ``plan_timeline_ai_transition`` 屏障 [PTP, GAT] 后接管 qa_gate 的屏障位
   (``STORYLINE_ENABLE_AI_TRANSITION``,默认开,**建图时读取**,改开关要重启进程)。
-- ⚠️ 屏障规则(D10):**条件触发**的节点(web_topic)
-  **绝不能**放进任何 fan-in 屏障 —— qa 重试回路不会重跑它们的上游,屏障永远
-  凑不齐,图会静默 END。AI 转场两节点每轮必跑(建图时按开关决定接不接),可以进屏障。
+- ⚠️ 屏障规则(D10):**每轮并非必跑**的节点绝不能放进任何 fan-in 屏障 ——
+  qa 重试回路不会重跑它们的上游,屏障永远凑不齐,图会静默 END。
+  (历史:web_topic 曾是条件触发节点受此约束;2026-11-14 依赖约简阶段5 起它
+  每轮必跑、内部软跳过,已可进入 ``[STR, WT]→GS`` 屏障。)
+  AI 转场两节点每轮必跑(建图时按开关决定接不接),可以进屏障。
   (``storyline_local_asr`` / ``storyline_speech_rough_cut`` 曾是条件旁支,
   2026-11-08 B1 ASR 移除已整体删除,``split_shots`` 改为静态直连 ``understand_clips``。)
 - ⚠️ qa 重试路由靠 ``status_log[-1] == "storyline_qa_retry"`` 判断:重试回路内的
@@ -187,7 +190,7 @@ from nodes.storyline.node_plan_timeline_pro import (
 from nodes.storyline.node_plan_timeline_ai_transition import (
     storyline_plan_timeline_ai_transition_node,
 )
-from nodes.storyline._common import build_web_topic_query, target_duration_ms
+from nodes.storyline._common import target_duration_ms
 from storyline_capabilities.ai_transition_client import is_ai_transition_enabled
 
 
@@ -207,32 +210,14 @@ def _route_after_storyline_join(state: WorkflowState) -> str:
     return "__end__"
 
 
-def _storyline_route_after_template_rec(state: WorkflowState) -> str:
-    """``storyline_script_template_recommendation`` 之后的条件路由。
-
-    2026-11-12 noop 治理阶段1:模板推荐节点前置为 ``generate_script`` 的主链
-    节点(``group_clips → 模板推荐 → 本条件路由``)。原挂点在 ``group_clips``
-    之后(2026-11-10 前置化阶段3)—— 不能保持原挂点:LangGraph 独立 ``add_edge``
-    是"任一来源完成即触发"(见下方 PTP 屏障注释),web_topic 关闭时
-    ``generate_script`` 会被条件边提前触发一次、又被模板推荐边再触发一次,
-    每轮跑两次 LLM。改挂模板推荐出口后语义等价:文案等模板推荐与检索分支
-    都完成,且每轮恰好跑一次。
-
-    检索开关开启 **且** ``build_web_topic_query(state)`` 能构造出非空检索词
-    (手动 query / 画面概述 / 分组主题任一非空)时,先走 ``storyline_search_web_topic``
-    再进文案;开关关闭或无有效检索输入时直达 ``storyline_generate_script``。
-
-    一致性约束(设计方案 §4.1):路由判定与检索节点必须共用同一个
-    ``build_web_topic_query`` —— ``node_search_web_topic`` 节点内构造最终检索词
-    用的就是它,保证「路由放行 ⇒ 节点必能构造出检索词」。
-    """
-    import config as _config
-
-    if not _config.STORYLINE_ENABLE_WEB_TOPIC:
-        return "storyline_generate_script"
-    if not build_web_topic_query(state):
-        return "storyline_generate_script"
-    return "storyline_search_web_topic"
+# ---------------------------------------------------------------------------
+# (2026-11-14 依赖约简阶段5)``_storyline_route_after_template_rec`` 条件路由
+# 已删除:web_topic 节点改为每轮必跑(开关关闭/检索词为空时节点内部软跳过,
+# 只落 skipped 标签、不发网络请求),与模板推荐并行 fan-out 后经
+# ``[STR, WT]→GS`` 双源屏障汇入文案。历史:2026-11-12 noop 治理阶段1 曾把
+# 检索条件路由挂到模板推荐出口(更早挂 group_clips)—— 条件路由改为并行屏障
+# 后「路由放行 ⇒ 节点能构造检索词」的一致性约束由节点内部的同一 builder 自检。
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -547,8 +532,9 @@ def _build_state_graph():
     # (2026-11-10:storyline_search_media「检索素材」节点已整体移除;
     #  2026-11-12 边治理阶段5:storyline_render_video 节点已整体移除)
     g.add_node("storyline_load_media", storyline_load_media_node)
-    # 2026-11-10 前置化阶段3:检索节点改为条件前置节点(初始挂 group_clips 后;
-    # 2026-11-12 noop 治理阶段1 条件路由改挂模板推荐出口,见 _storyline_route_after_template_rec)
+    # 检索节点:2026-11-14 依赖约简阶段5 起每轮必跑(与模板推荐并行 fan-out,
+    # 开关关/无检索词时节点内部软跳过);历史:2026-11-10 前置化阶段3 条件前置、
+    # 2026-11-12 noop 治理阶段1 条件路由挂模板推荐出口 —— 均已随并行化删除
     g.add_node("storyline_search_web_topic", storyline_search_web_topic_node)
     g.add_node("storyline_split_shots", storyline_split_shots_node)
     # 2026-10 已接入:与 plan_timeline_pro 并排(同一道 4 源屏障;建图时按开关接边)
@@ -706,36 +692,35 @@ def _build_state_graph():
     g.add_edge("storyline_understand_clips", "storyline_filter_clips")
     g.add_edge("storyline_filter_clips", "storyline_group_clips")
 
-    # group_clips 出路(2026-11-12 边治理阶段1:原 B 路 recommend_transition 改走
-    # 下方 [GC, SB] 双源屏障,不再单源直挂;A 路条件路由挂点见下):
-    #   A) storyline_script_template_recommendation(主链前置节点)→ 条件路由
-    #      →(检索开关开且有检索词)storyline_search_web_topic → generate_script;
-    #      开关关闭或无有效检索输入 → 条件路由直达 generate_script。
-    #      检索词由 ``build_web_topic_query`` 自动构造(手动 query / 画面概述 / 分组主题)。
-    #      ⚠️ 条件路由从 group_clips 改挂模板推荐出口(原挂点 2026-11-10 阶段3):
-    #      LangGraph 独立 add_edge 是"任一来源完成即触发",若保留 group_clips 条件边,
-    #      web_topic 关闭时 generate_script 会被提前触发一次 + 被模板推荐边再触发一次,
-    #      每轮跑两次 LLM(路由函数 docstring 详述)。
+    # group_clips 出路(2026-11-14 依赖约简阶段5 起:A/B 两路并行 fan-out):
+    #   A) storyline_script_template_recommendation(主链前置节点)
+    #   A')storyline_search_web_topic —— 与模板推荐**并行**触发(第5期计划 §9:
+    #      检索构造 query 只读 targets/overall/groups[].theme,不读模板产物,
+    #      两能力间无数据依赖)。节点每轮必跑:开关关闭或检索词为空时内部
+    #      软跳过(只落 skipped 标签,不发网络请求),因此可以进入必需屏障
+    #      而不踩 D10(历史:2026-11-10 前置化阶段3 曾以条件路由表达"检索
+    #      可选性";2026-11-12 noop 治理阶段1 条件路由改挂模板推荐出口 ——
+    #      两者都已随并行化删除,检索词仍由 ``build_web_topic_query`` 自动构造)。
+    #   A'')generate_script —— 双源屏障 [STR, WT],等模板推荐与检索节点都完成。
+    #      (历史:条件路由时代曾担心"两条独立单源边让 GS 每轮跑两次 LLM" ——
+    #      屏障 list 形式等齐所有来源才触发一次,不存在该竞态。)
     #   B) recommend_transition:2026-11-14 依赖约简阶段1 起为 SB→RTR 单源边
     #      (历史:2026-11-12 阶段1 曾改 [GC, SB] 双源屏障,修 GC→RTR 独立单源边
     #      在 BGM 缺席时提前触发的病;现 SB→RTR 唯一入边,病根随唯一入边消除,
     #      GC 源由 SB 祖先链传递保证)。
     #   C) plan_timeline_pro:不再直接依赖 GC —— 2026-11-14 约简后 PTP 屏障
     #      只含 [RTR, TXT],GC 由 RTR 祖先链传递保证。
-    # ⚠️ search_web_topic 是条件触发节点,不进任何 fan-in 屏障(D10,设计方案 §4.3):
-    #    qa 重试部分轮次跳过它时,屏障若含它将永远凑不齐。
-    # 模板推荐节点本体是**每轮必跑**的主链节点(非条件分支),不踩 D10。
     g.add_edge("storyline_group_clips", "storyline_script_template_recommendation")
-    g.add_conditional_edges(
-        "storyline_script_template_recommendation",
-        _storyline_route_after_template_rec,
-        {
-            "storyline_search_web_topic": "storyline_search_web_topic",
-            "storyline_generate_script": "storyline_generate_script",
-        },
+    g.add_edge("storyline_group_clips", "storyline_search_web_topic")
+    # [STR, WT] 双源屏障 → 文案:模板推荐与检索分支每轮都会到达,屏障必凑齐;
+    # QA 重试轮两者都在回路内(qa → GC → A/A'),不会静默 END。
+    g.add_edge(
+        [
+            "storyline_script_template_recommendation",
+            "storyline_search_web_topic",
+        ],
+        "storyline_generate_script",
     )
-    # 前置化阶段3:检索完成 → 文案(检索节点唯一的业务出边;不再是死胡同)
-    g.add_edge("storyline_search_web_topic", "storyline_generate_script")
 
     # generate_script 之后并行 fan-out(plan §2.2 §3;2026-11-12 起模板推荐已前置,
     # 从这里移除,改为上方 group_clips → 模板推荐前置):

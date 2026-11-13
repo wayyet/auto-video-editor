@@ -98,46 +98,48 @@ def test_no_reverse_edge_from_generate_script_to_template_rec() -> None:
 
 
 def test_template_rec_is_main_chain_node_before_generate_script() -> None:
-    """STR 是主链节点:入边恰为 group_clips(普通边),出口 = 检索条件路由二选一。
+    """STR 是主链节点:入边恰为 group_clips(普通边),无普通出边、无条件路由。
 
-    主链节点每轮必跑,因此不在任何屏障源里(与 search_web_topic 的 D10 纪律不同:
-    STR 不是条件触发节点,但它也不作为屏障源 —— 它的下游用条件路由表达)。
+    2026-11-14 依赖约简阶段5:原出口条件路由已删除 —— STR 现在是
+    ``[STR, WT]→GS`` 双源屏障的源之一(每轮必跑,进屏障不踩 D10)。
     """
     g = _build()
     edges = _edge_pairs(g)
 
     ins = {s for s, t in edges if t == _STR}
     assert ins == {_GC}, f"STR 入边应恰为 group_clips,实际 {sorted(ins)}"
-    # 普通出边应为空:出口走条件路由
+    # 普通出边应为空:下游以屏障源身份汇入 GS(屏障不出现在 edges 里)
     outs = {t for s, t in edges if s == _STR}
     assert outs == set(), f"STR 不应有普通出边,实际 {sorted(outs)}"
 
+    # 2026-11-14 阶段5:STR 不再有任何条件路由;但必须作为 GS 屏障源存在
     cond = _conditional_targets(g, _STR)
-    assert cond == {_WT, _GS}, f"STR 条件出口应为 search_web_topic|generate_script,实际 {sorted(cond)}"
+    assert cond == set(), f"STR 不应有条件路由,实际 {sorted(cond)}"
+    assert (frozenset({_STR, _WT}), _GS) in {
+        (frozenset(s), t) for s, t in getattr(g, "waiting_edges", set())
+    }, "STR 应是 [STR, WT]→GS 双源屏障的源"
 
 
-def test_search_web_topic_hangs_off_template_rec_not_group_clips() -> None:
-    """检索节点挂在 STR 出口(入边=STR、出边=GS 普通边),不是条件屏障(附件 §4.2/§5.2)。
+def test_search_web_topic_runs_every_round_into_the_script_barrier() -> None:
+    """检索节点 2026-11-14 阶段5 起每轮必跑:入边=GC 普通边、GS 双源屏障源。
 
-    入边口径:builder 普通边 + "所有把 _WT 作为条件目的地的源" —— STR→WT 是
-    条件边,不在 builder.edges 里(与 wiring 集成测试用 compiled get_graph()
-    渲染条件边同效果,但这里直接读 builder 真源)。
+    历史(前置化阶段3→noop 治理阶段1):曾以条件路由挂 STR 出口,受 D10
+    约束不得进屏障;并行化后节点内部软跳过(开关关/无检索词 → skipped 标签,
+    不发网络请求),「每轮必跑」使它可以安全进入必需屏障。
     """
     g = _build()
     edges = _edge_pairs(g)
     normal_ins = {s for s, t in edges if t == _WT}
-    conditional_ins = {
-        src
-        for src in getattr(g, "branches", {})
-        if _WT in _conditional_targets(g, src)
-    }
     outs = {t for s, t in edges if s == _WT}
-    assert normal_ins == set(), f"search_web_topic 不应有普通入边,实际 {sorted(normal_ins)}"
-    assert conditional_ins == {_STR}, f"search_web_topic 条件入边应恰为 STR,实际 {sorted(conditional_ins)}"
-    assert outs == {_GS}, f"search_web_topic 出边应恰为 generate_script,实际 {sorted(outs)}"
-    # D10:条件触发节点不得作为任何屏障源
-    assert _WT not in _barrier_sources(g)
-    assert _WT not in _conditional_targets(g, _GC)
+    assert normal_ins == {_GC}, f"search_web_topic 入边应恰为 group_clips,实际 {sorted(normal_ins)}"
+    assert outs == set(), f"search_web_topic 不应有普通出边(以屏障源汇入 GS),实际 {sorted(outs)}"
+    # 检索节点不得再有任何条件路由挂点(条件路由已整体删除)
+    assert not any(
+        _WT in _conditional_targets(g, src) for src in getattr(g, "branches", {})
+    ), "search_web_topic 不应再作为条件目的地"
+    assert (frozenset({_STR, _WT}), _GS) in {
+        (frozenset(s), t) for s, t in getattr(g, "waiting_edges", set())
+    }, "search_web_topic 应是 [STR, WT]→GS 双源屏障的源"
 
 
 # ---------------------------------------------------------------------------
@@ -210,8 +212,10 @@ def test_storyline_barrier_shapes_locked() -> None:
     storyline_barriers = {bt for bt in barriers if bt[0] and bt[1].startswith("storyline_")}
     assert storyline_barriers == {
         (frozenset({_RTR, _TXT}), _PTP),      # 2026-11-14 依赖约简:六源缩两源
+        (frozenset({_STR, _WT}), _GS),        # 2026-11-14 阶段5:检索并行汇入(每轮必跑)
         (frozenset({_PTP, _GAT}), _PTAT),     # AI 开:基础时间线 + AI 转场
     }
-    # 条件触发节点永不进屏障(D10);主链前置节点 STR 也不作为屏障源
-    assert _WT not in _barrier_sources(g)
-    assert _STR not in _barrier_sources(g)
+    # D10 语义更新(2026-11-14 阶段5):STR/WT 均为每轮必跑节点,合法作为
+    # [STR, WT]→GS 屏障源;「每轮并非必跑的节点不得进屏障」由 wiring 的
+    # CONDITIONAL_NODES 集合(现为空)与 D10 结构守卫用例持续锁定。
+    assert not ({_WT, _STR} - _barrier_sources(g)), "STR/WT 应都在屏障源里(阶段5)"

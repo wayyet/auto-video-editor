@@ -48,17 +48,20 @@ import config
 import graph as graph_module
 from storyline.contract import CanonicalTimeline
 
+# 「开关控制才执行」的节点(建图时按开关接线):flags 关闭时不得出现在执行轨迹里。
+# 2026-11-14 依赖约简阶段5:web_topic 改为每轮必跑(节点内部软跳过),不再是
+# 开关控制节点,已移出本集合 —— 它在 flags 全关时也执行(零网络请求),由
+# GOLDEN_STEPS 与 skipped 用例锁定。
 WIRED_NODES = {
-    "storyline_search_web_topic",
     "storyline_generate_ai_transition",
     "storyline_plan_timeline_ai_transition",
 }
 # 条件触发的节点("有时跑有时不跑"):任何一个都不允许出现在 fan-in 屏障(add_edge([...], X))的源里 —— D10。
 # AI 转场两个节点不在此列:建图时按开关决定接不接,接了就**每轮必跑**,所以可以进屏障。
-CONDITIONAL_NODES = {
-    "storyline_search_web_topic",
-    # (storyline_search_media 已随 2026-11-10 检索素材移除删除)
-}
+# 2026-11-14 依赖约简阶段5:web_topic 改为每轮必跑(开关关/无检索词 → 节点内部
+# skipped,不发网络请求),不再条件触发,已移出本集合并进入 [STR, WT]→GS 屏障。
+CONDITIONAL_NODES: set[str] = set()  # (storyline_search_web_topic 已随 2026-11-14 依赖约简阶段5 改每轮必跑;
+#  storyline_search_media 已随 2026-11-10 检索素材移除删除)
 
 # ---------------------------------------------------------------------------
 # 黄金轨迹:flags 全关(web=False, ai=False)+ 默认 stub 下 auto 模式的执行轨迹
@@ -82,6 +85,10 @@ CONDITIONAL_NODES = {
 #   SB→RTR 单源边、PTP 六源缩 [RTR,TXT] 两源、GAT [GC,RTR] 缩为 RTR→GAT
 #   单源边;PTAT 双源与 QA 单源不动。轨迹形状零变更(被删源都在保留源祖先
 #   链上,SB 仍紧随 GV、RTR 仍紧随 SB、PTP 仍紧随 RTR 的超步序列不变)。
+# - 2026-11-14 依赖约简阶段5(第5期计划 §9):web_topic 改每轮必跑 + 与模板
+#   推荐**并行 fan-out**(GC 双出边 + [STR, WT]→GS 双源屏障,条件路由删除)——
+#   轨迹形状变更:原「STR 单独一超步 → GS」变为「STR+WT 同超步 → GS」;
+#   web=False 时 WT 也出现在轨迹中(内部 skipped,零网络请求)。
 # - 旧版黄金轨迹是 _CYCLE × 4(stub BGM 90s > 目标 35s → qa 重试 3 次)。模糊修复
 #   阶段3 的逐片段速度护栏(7ad573d)落地后,planner 不再注水拉长,actual_ms=7200
 #   ≤ 目标 → qa 一轮即过、重试回路不再自触发 —— 这正是本文件 5 个存量失败用例的
@@ -95,7 +102,7 @@ _PREFIX = [
 ]
 _CYCLE = [
     ["storyline_group_clips"],
-    ["storyline_script_template_recommendation"],
+    ["storyline_script_template_recommendation", "storyline_search_web_topic"],
     ["storyline_generate_script"],
     ["storyline_generate_voiceover", "storyline_recommend_text"],
     ["storyline_select_bgm"],
@@ -127,11 +134,13 @@ _RT = "storyline_recommend_text"
 
 # 各节点 → (入边邻居, 出边邻居)。这张表就是《关联分析表》的"放在哪":每个新节点贴着自己的相关节点。
 NEIGHBORS: dict[str, tuple[set[str], set[str]]] = {
-    # 2026-11-12 noop 治理阶段1:模板推荐 = group_clips → 文案 的主链前置节点,
-    # 出口挂检索条件路由(web_topic | generate_script 条件二选一)
-    "storyline_script_template_recommendation": ({_GC}, {_GS, "storyline_search_web_topic"}),
-    # 检索节点入边改自模板推荐出口(原挂 group_clips 条件路由,前置化阶段3)
-    "storyline_search_web_topic": ({"storyline_script_template_recommendation"}, {_GS}),
+    # 2026-11-14 依赖约简阶段5:模板推荐 = group_clips → [STR, WT]→GS 屏障 的
+    # 主链前置节点(原出口条件路由已删);无普通出边(以屏障源身份汇入 GS,
+    # 编译图把屏障源渲染成普通边)
+    "storyline_script_template_recommendation": ({_GC}, {_GS}),
+    # 2026-11-14 依赖约简阶段5:检索节点改并行 fan-out(入边=GC 普通边,原挂
+    # STR 条件出口已删);出边 = GS 屏障源(每轮必跑,进屏障不踩 D10)
+    "storyline_search_web_topic": ({_GC}, {_GS}),
     # 2026-11-14 依赖约简阶段1:select_bgm 唯一入边 = GV 普通边(历史:
     # 2026-11-12 曾为 [GS, GV] 双源屏障;GV 已等 GS,GS 源属重复约束);
     # 出边 = RTR 普通边(不再是 PTP 屏障源)
@@ -315,6 +324,7 @@ def test_ai_flag_off_graph_has_no_ai_nodes_wired_and_barriers_as_before(
     #    ai=True 时 PTAT→qa_gate),其形态由 test_ai_pair_… 的 ins[_QA] 断言覆盖
     assert _barriers(g) == {
         (frozenset({_RTR, _RT}), _PTP),
+        (frozenset({"storyline_script_template_recommendation", "storyline_search_web_topic"}), _GS),  # 2026-11-14 阶段5 并行化
         (frozenset({"node_15_localize_covers_en", "node_17_inject_english_tts"}), "node_09_inject_fx"),
     }
 
@@ -772,14 +782,18 @@ def test_defaults_run_all_wired_nodes_with_expected_shape(
     # 阶段3 auto-only:第一个任务就是 storyline_load_media(START 直连)
     assert run.order[0][1] == "storyline_load_media"
 
-    # 2026-11-12 阶段1:模板推荐是 group_clips 与 检索/文案 之间的主链前置节点
+    # 2026-11-14 依赖约简阶段5:模板推荐与检索并行 fan-out,同超步触发;
+    # 文案紧跟两者的双源屏障(每轮各恰 1 次)
     gc_steps = run.steps_of(_GC)
     str_steps = run.steps_of("storyline_script_template_recommendation")
     search_steps = run.steps_of("storyline_search_web_topic")
     script_steps = run.steps_of(_GS)
     assert str_steps == [s + 1 for s in gc_steps], "模板推荐应紧跟每轮 group_clips"
-    assert search_steps == [s + 1 for s in str_steps], "检索应紧跟每轮模板推荐"
-    assert script_steps == [s + 1 for s in search_steps], "文案应紧跟每轮检索"
+    assert search_steps == str_steps, "检索应与模板推荐同超步并行触发(阶段5)"
+    assert script_steps == [s + 1 for s in str_steps], "文案应紧跟模板推荐+检索的双源屏障"
+    assert run.count("storyline_search_web_topic") == run.count(_GC), (
+        "检索节点每轮必跑(并行 fan-out 后进必需屏障,不得漏跑)"
+    )
     # B1 ASR 移除:split_shots 后静态直连 understand_clips(同一条主边,无旁支)
 
     # AI 转场两节点与 plan_timeline_pro 的时序(2026-11-14 依赖约简阶段1 起):
@@ -978,19 +992,30 @@ def test_web_topic_runs_on_auto_query_without_manual_query(
 def test_web_topic_skipped_when_no_retrievable_input(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """手动 query、画面概述、分组主题全空 → 条件路由直达文案,不跑检索(§4.1 判空跳过)。"""
+    """手动 query、画面概述、分组主题全空 → 节点每轮必跑但内部软跳过(§4.1 判空)。
+
+    2026-11-14 依赖约简阶段5:节点不再被条件路由跳过(进 [STR, WT]→GS 必需
+    屏障,每轮必跑),改为节点内部 skipped —— 不发网络请求、不写产物,文案
+    读不到检索产物按无参考软降级。
+    """
     run = run_auto(
         monkeypatch, tmp_path, query="", web_titles=["不应被调用"], no_analysis=True
     )
-    assert "storyline_search_web_topic" not in run.names()
-    assert run.web_queries == []
+    assert "storyline_search_web_topic" in run.names(), "每轮必跑节点不得缺席"
+    assert run.web_queries == [], "skipped 不得发起网络请求"
+    assert "storyline_search_web_topic_skipped" in run.status_log
     assert all(r == "" for r in run.seen_web_research)
     assert run.next_nodes == ("node_06_human_reorder",)
 
 
 def test_web_topic_not_run_when_flag_off(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """开关关闭 → 节点照常执行但内部软跳过:零网络请求、零产物、落 skipped 标签。"""
     run = run_auto(monkeypatch, tmp_path, web=False, query="夏季防晒", web_titles=["不应被调用"])
-    assert "storyline_search_web_topic" not in run.names()
+    assert "storyline_search_web_topic" in run.names(), "每轮必跑节点不得缺席"
+    assert run.web_queries == [], "开关关闭不得发起网络请求"
+    assert "storyline_search_web_topic_skipped" in run.status_log
+    assert "storyline_web_topic_artifact" not in run.values
+    assert all(r == "" for r in run.seen_web_research)
 
 
 def test_web_topic_failure_is_isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
