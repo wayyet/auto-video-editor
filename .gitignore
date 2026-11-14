@@ -82,3 +82,6 @@ out/
 
 # 误落在仓库根的字幕产物(字幕应写到各草稿目录里)
 /subtitle_en.srt
+
+# 剪映音乐库本机索引(BGM选曲 20261114 阶段1;含本机缓存路径与 raw_material,严禁入库)
+runtime/jianying_music_library.local.jsonl
