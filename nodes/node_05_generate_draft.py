@@ -167,6 +167,54 @@ def generate_initial_jianying_draft(
         native_sidecar = None
         errors.append(f"[node_05] 原生草稿转换失败,保留 storyline 格式: {exc!r}")
 
+    # 3c. 云音乐自动铺轨(20261114 修订执行计划 阶段5):原生转换成功后、写盘前
+    # 注入 storyline_bgm_selection 选定的剪映云音乐 BGM —— BGM 随本次原子双写
+    # 落盘,发布副本(publish_draft copytree)自动携带,不走旁路草稿。守卫链:
+    #   - ``config.JY_AUTO_BGM`` 开关(默认开;设 0 紧急回退关卡②人工补轨);
+    #   - 原生转换成功(native_sidecar 非空):转换失败时 draft 仍是 mapper 旧
+    #     格式,注入会把原生 materials.audios/track 结构混进旧 schema —— 明确
+    #     跳过(修订 §1.5 禁混写;失败原因已由 3b 记录);
+    #   - selection 带 ``music_id``(云音乐模式):旧 selection / 未选曲任务
+    #     行为不变,照旧走 node_12 关卡②人工添加。
+    # helper(阶段4 ``nodes/_auto_bgm``)事务式:任何失败原 draft 零污染,
+    # 错误写 error_log 继续运行,node_12 检测到 BGM 缺失会挂起人工补充。
+    auto_bgm_notes: list[str] = []
+    if config.JY_AUTO_BGM and native_sidecar is not None:
+        bgm_selection = state.get("storyline_bgm_selection") or {}
+        if str((bgm_selection or {}).get("music_id") or "").strip():
+            try:
+                from jy_common.jianying_music_library import load_jianying_music_library
+                from nodes._auto_bgm import apply_auto_bgm_track
+
+                music_id = str(bgm_selection["music_id"]).strip()
+                # 曲库条目按 music_id 现查(loader 按 (路径,mtime_ns) 缓存,重复调用廉价);
+                # 条目缺失(未 harvest/缓存被清)时 entry=None,helper 内 fail-closed 报错。
+                library_entry = next(
+                    (
+                        e
+                        for e in (load_jianying_music_library().get("library") or [])
+                        if e.get("music_id") == music_id
+                    ),
+                    None,
+                )
+                bgm_result = apply_auto_bgm_track(
+                    draft=draft_content,
+                    selection=bgm_selection,
+                    library_entry=library_entry,
+                    job_id=str(job_id or ""),
+                )
+            except Exception as exc:  # noqa: BLE001 — 铺轨失败不阻断草稿生成
+                bgm_result = {
+                    "applied": False,
+                    "status_notes": [],
+                    "errors": [f"自动铺轨异常(不阻断): {exc!r}"],
+                }
+            if bgm_result.get("applied") and isinstance(bgm_result.get("draft"), dict):
+                draft_content = bgm_result["draft"]
+            auto_bgm_notes = list(bgm_result.get("status_notes") or [])
+            for note in bgm_result.get("errors") or []:
+                errors.append(f"[node_05] {note}")
+
     # 4. 原子双写(content + info,Week 5 新增 — 剪映 5.9+ 期望二者一致)
     draft_dir = Path(draft_dir)
     draft_dir.mkdir(parents=True, exist_ok=True)
@@ -195,6 +243,7 @@ def generate_initial_jianying_draft(
         pass
     log_tags = list(state.get("status_log", []) or [])
     log_tags.extend(normalize_notes)
+    log_tags.extend(auto_bgm_notes)
     if isinstance(write_result, dict) and write_result.get("jianying_running"):
         log_tags.append("[node_05] 剪映进程在跑,写入仍继续(告警不阻断)")
     draft_file = draft_dir / "draft_content.json"

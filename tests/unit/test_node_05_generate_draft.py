@@ -149,3 +149,220 @@ def test_build_draft_content_top_level_shape() -> None:
     assert set(content.keys()) == {"canvas_config", "materials", "tracks"}
     assert "videos" in content["materials"]
     assert isinstance(content["tracks"], list)
+
+
+# ---------------------------------------------------------------------------
+# 20261114 阶段5:云音乐自动铺轨接线(修订执行计划 §阶段5)
+# node_05 内对 helper/曲库是调用点延迟 import —— 按源模块打桩即可命中。
+# ---------------------------------------------------------------------------
+from copy import deepcopy  # noqa: E402
+
+from nodes._auto_bgm import AUTO_BGM_TRACK_NAME  # noqa: E402
+
+_GOLDEN_MUSIC_ID = "7553871402870491155"
+
+
+def _fake_library_loader(entries: list[dict]):
+    """load_jianying_music_library 替身:返回固定曲库(外层契约三键)。"""
+
+    def _load(*, path=None, refresh=False):
+        return {
+            "library": [dict(e) for e in entries],
+            "default_match": {},
+            "matching": {},
+        }
+
+    return _load
+
+
+def _bgm_state(selection: dict | None) -> dict:
+    return {
+        "shot_plan": {
+            "shots": [
+                {"id": "s1", "video_ref": "v1", "start_s": 0.0, "end_s": 5.0},
+                {"id": "s2", "video_ref": "v1", "start_s": 5.0, "end_s": 10.0},
+            ]
+        },
+        "video_input_path": "/tmp/30s.mp4",
+        "error_log": [],
+        "storyline_bgm_selection": selection,
+    }
+
+
+def _plain_encrypt(_draft_dir):
+    return DraftStatus.PLAINTEXT
+
+
+def _fake_writer_factory(called: list):
+    def fake_writer(draft_dir, content):
+        called.append((draft_dir, content))
+        from draft_ops.atomic_writer import safe_write_draft
+
+        safe_write_draft(draft_dir, content, proc_checker=lambda: False)
+
+    return fake_writer
+
+
+def test_auto_bgm_injected_before_writer(tmp_path: Path, monkeypatch) -> None:
+    """云音乐 selection → helper 在 writer 前调用;writer 收到的草稿含 BGM 轨。"""
+    calls: dict = {}
+
+    def fake_apply(*, draft, selection, library_entry, job_id):
+        calls["draft_native"] = "new_version" in draft
+        calls["selection_music_id"] = selection.get("music_id")
+        calls["entry_music_id"] = (library_entry or {}).get("music_id")
+        calls["job_id"] = job_id
+        out = deepcopy(draft)
+        out.setdefault("tracks", []).append(
+            {
+                "type": "audio",
+                "name": AUTO_BGM_TRACK_NAME,
+                "segments": [{"id": "seg-bgm-test", "marker": "auto-bgm"}],
+            }
+        )
+        return {
+            "applied": True,
+            "draft": out,
+            "music_id": selection["music_id"],
+            "music_name": "旅途的风景",
+            "track_id": "track-x",
+            "status_notes": [f"自动铺轨: 旅途的风景({_GOLDEN_MUSIC_ID})"],
+            "errors": [],
+        }
+
+    monkeypatch.setattr("nodes._auto_bgm.apply_auto_bgm_track", fake_apply)
+    monkeypatch.setattr(
+        "jy_common.jianying_music_library.load_jianying_music_library",
+        _fake_library_loader([{"music_id": _GOLDEN_MUSIC_ID, "name": "旅途的风景"}]),
+    )
+
+    called: list = []
+    out = generate_initial_jianying_draft(
+        _bgm_state({"music_id": _GOLDEN_MUSIC_ID, "method": "llm"}),
+        tmp_path,
+        encrypt_detector=_plain_encrypt,
+        writer=_fake_writer_factory(called),
+    )
+
+    # helper 收到:原生草稿(已过 storyline_to_native)/ selection / 曲库条目
+    assert calls["draft_native"] is True, "helper 应收到原生格式草稿"
+    assert calls["selection_music_id"] == _GOLDEN_MUSIC_ID
+    assert calls["entry_music_id"] == _GOLDEN_MUSIC_ID
+    # BGM 落在写盘前:writer 只被调一次,写出的就是含 BGM 轨的草稿
+    assert len(called) == 1
+    loaded = json.loads(Path(out["draft_path"]).read_text(encoding="utf-8"))
+    assert any(t.get("name") == AUTO_BGM_TRACK_NAME for t in loaded.get("tracks") or [])
+    assert any("自动铺轨" in s for s in out["status_log"])
+    assert out["error_log"] == []
+
+
+def test_auto_bgm_disabled_env_skips(tmp_path: Path, monkeypatch) -> None:
+    """JY_AUTO_BGM=0(紧急回退)→ 完全不调 helper,草稿照常生成(关卡②兜底)。"""
+    import config
+
+    monkeypatch.setattr(config, "JY_AUTO_BGM", False)
+
+    def _must_not_call(**_kwargs):
+        raise AssertionError("开关关闭时不应调用自动铺轨 helper")
+
+    monkeypatch.setattr("nodes._auto_bgm.apply_auto_bgm_track", _must_not_call)
+    monkeypatch.setattr(
+        "jy_common.jianying_music_library.load_jianying_music_library",
+        _fake_library_loader([]),
+    )
+
+    called: list = []
+    out = generate_initial_jianying_draft(
+        _bgm_state({"music_id": _GOLDEN_MUSIC_ID}),
+        tmp_path,
+        encrypt_detector=_plain_encrypt,
+        writer=_fake_writer_factory(called),
+    )
+    assert len(called) == 1
+    loaded = json.loads(Path(out["draft_path"]).read_text(encoding="utf-8"))
+    assert not any(
+        t.get("name") == AUTO_BGM_TRACK_NAME for t in loaded.get("tracks") or []
+    )
+    assert out["error_log"] == []
+
+
+def test_auto_bgm_legacy_selection_skips(tmp_path: Path, monkeypatch) -> None:
+    """旧 selection(无 music_id,YAML 占位形态)→ 行为不变,不触发自动铺轨。"""
+
+    def _must_not_call(**_kwargs):
+        raise AssertionError("旧 selection 不应触发自动铺轨")
+
+    monkeypatch.setattr("nodes._auto_bgm.apply_auto_bgm_track", _must_not_call)
+
+    called: list = []
+    out = generate_initial_jianying_draft(
+        _bgm_state({"bgm_ref": "bgm_calm_lofi", "stub": True}),
+        tmp_path,
+        encrypt_detector=_plain_encrypt,
+        writer=_fake_writer_factory(called),
+    )
+    assert len(called) == 1
+    assert out["error_log"] == []
+
+
+def test_auto_bgm_conversion_failed_skips(tmp_path: Path, monkeypatch) -> None:
+    """原生转换失败 → 不注入(禁混写 schema);转换失败原因照旧记录,写盘不阻断。"""
+
+    def _boom(_draft):
+        raise RuntimeError("转换炸了")
+
+    monkeypatch.setattr("nodes.node_05_generate_draft.storyline_to_native", _boom)
+
+    def _must_not_call(**_kwargs):
+        raise AssertionError("转换失败分支不应注入 BGM")
+
+    monkeypatch.setattr("nodes._auto_bgm.apply_auto_bgm_track", _must_not_call)
+
+    called: list = []
+    out = generate_initial_jianying_draft(
+        _bgm_state({"music_id": _GOLDEN_MUSIC_ID}),
+        tmp_path,
+        encrypt_detector=_plain_encrypt,
+        writer=_fake_writer_factory(called),
+    )
+    assert len(called) == 1, "转换失败仍应写盘(既有降级策略)"
+    assert any("原生草稿转换失败" in e for e in out["error_log"])
+
+
+def test_auto_bgm_helper_failure_continues(tmp_path: Path, monkeypatch) -> None:
+    """helper 报错(曲库无此曲/缓存失效)→ error_log 留痕、草稿照常写出、流程继续。"""
+    monkeypatch.setattr(
+        "jy_common.jianying_music_library.load_jianying_music_library",
+        _fake_library_loader([]),  # 曲库查无此 music_id → entry=None
+    )
+
+    def fake_apply(*, draft, selection, library_entry, job_id):
+        assert library_entry is None, "曲库查无此曲时应传 None(helper 内 fail-closed)"
+        return {
+            "applied": False,
+            "draft": None,
+            "music_id": selection.get("music_id", ""),
+            "music_name": "",
+            "track_id": "",
+            "status_notes": [],
+            "errors": [
+                f"曲库条目缺 raw_material(music_id={selection.get('music_id')}),"
+                "重新 harvest 后重试"
+            ],
+        }
+
+    monkeypatch.setattr("nodes._auto_bgm.apply_auto_bgm_track", fake_apply)
+
+    called: list = []
+    out = generate_initial_jianying_draft(
+        _bgm_state({"music_id": _GOLDEN_MUSIC_ID}),
+        tmp_path,
+        encrypt_detector=_plain_encrypt,
+        writer=_fake_writer_factory(called),
+    )
+    assert len(called) == 1, "铺轨失败不阻断草稿生成"
+    loaded = json.loads(Path(out["draft_path"]).read_text(encoding="utf-8"))
+    assert not any(
+        t.get("name") == AUTO_BGM_TRACK_NAME for t in loaded.get("tracks") or []
+    )
+    assert any("曲库条目缺 raw_material" in e for e in out["error_log"])
