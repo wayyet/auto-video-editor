@@ -110,6 +110,36 @@ def test_mcode_invoke_error_carries_stdout_tail(tmp_path, monkeypatch):
     assert "stdout_tail=" in msg and "schemaVersion" in msg
 
 
+def test_mcode_status_line_after_log_noise_still_succeeds(tmp_path, monkeypatch):
+    # 20261115 console-32312f69d6da 实证:模型完整跑完,但 mcode 打印结果 envelope
+    # 之后又向 stdout 追加了一行 eval-capture WARN,旧「末行-only」提取把成功结果
+    # 误杀成 status=None。状态提取必须容忍「结果行之后混入日志行」。
+    c = McodeCLIClient(executable="definitely-not-a-real-binary-xyz")
+    envelope = json.dumps({
+        "status": "succeeded",
+        "output": {"group_scripts": [{"narration": "穹顶一帧帧掠过。"}]},
+    }, ensure_ascii=False)
+    warn = ('[00:07:02.456] WARN: [eval-capture] local eval_steps upload failed '
+            '{"sessionId":"mvs_x","error":"The operation was aborted due to timeout"}')
+    stdout = f"provider add --use ok\n{envelope}\n{warn}\n"
+    monkeypatch.setattr(c, "_run", lambda cmd, stdin_text, cwd: (0, stdout, ""))
+    out = c._invoke("s", "u", [], {"type": "object"}, tmp_path)
+    assert out == {"group_scripts": [{"narration": "穹顶一帧帧掠过。"}]}
+
+
+def test_mcode_log_line_without_status_never_passes_as_result(tmp_path, monkeypatch):
+    # 日志行里内嵌的 JSON(无 status 键)不能被向前扫描当成状态 envelope;
+    # 全 stdout 都没有状态行时仍走 CLIBackendFailed,错误串带 stdout_tail 留痕。
+    c = McodeCLIClient(executable="definitely-not-a-real-binary-xyz")
+    warn = ('[00:07:02.456] WARN: [eval-capture] local eval_steps upload failed '
+            '{"sessionId":"mvs_x","error":"timeout"}')
+    monkeypatch.setattr(c, "_run", lambda cmd, stdin_text, cwd: (0, f"{warn}\n", ""))
+    with pytest.raises(CLIBackendFailed) as ei:
+        c._invoke("s", "u", [], {"type": "object"}, tmp_path)
+    msg = str(ei.value)
+    assert "status=None" in msg and "stdout_tail=" in msg and "eval-capture" in msg
+
+
 @pytest.mark.skipif(os.name == "nt", reason="用 shell 脚本造假进程,Windows 上不跑")
 def test_timeout_kills_whole_process_tree(tmp_path):
     fake = tmp_path / "fake_claude.sh"

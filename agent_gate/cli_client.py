@@ -342,10 +342,23 @@ class McodeCLIClient(_CLIClient):
                 json_schema: Optional[dict[str, Any]], tmp: Path) -> Any:
         code, out, err = self._run(self.build_command(tmp, system_prompt, images, json_schema),
                                    self.compose_prompt(system_prompt, prompt), tmp)
-        try:
-            res = json.loads(out.strip().splitlines()[-1]) if out.strip() else {}
-        except (json.JSONDecodeError, IndexError):
-            res = {}
+        # 状态 envelope 不一定是最后一行:20261115 console-32312f69d6da 实证,模型
+        # 成功跑完(96.5s/6215 tokens),但 mcode 打印结果后又向 stdout 追加了一行
+        # eval-capture WARN,末行-only 提取把整份成功结果误杀成 status=None。
+        # 改成从末尾向前扫描,取第一条能解析成 dict 且含 status 键的行
+        # (写法对齐 ClaudeCLIClient.parse_result 的逐行扫描)。
+        res: dict[str, Any] = {}
+        for line in reversed(out.strip().splitlines()):
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                cand = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(cand, dict) and "status" in cand:
+                res = cand
+                break
         status = res.get("status")
         if status == "succeeded":
             return res.get("output")
@@ -353,8 +366,9 @@ class McodeCLIClient(_CLIClient):
         if error.get("code") == "STRUCTURED_OUTPUT_INVALID":
             raise _BadAnswer(str(error.get("message") or "结构化输出不合格"))
         # 2026-11-13 留痕:exit=0 但 status 解析不到时 stderr 常为空,stdout 尾部是区分
-        # 「真空返回」与「payload 在但末行不是状态 JSON」的唯一证据(console-d7e06b50ca98
-        # 复盘:当时 stdout 整个被丢弃,raw_head='' 无法定因)。
+        # 「真空返回」与「payload 在但无可解析状态行」的唯一证据(console-d7e06b50ca98
+        # 复盘:当时 stdout 整个被丢弃,raw_head='' 无法定因;20261115 stdout_tail
+        # 首次实证到 WARN 污染末行,提取逻辑随即改成向前扫描)。
         out_flat = out.strip()
         raise CLIBackendFailed(f"mcode 失败:exit={code} status={status} error={error or None} "
                                f"stderr={err.strip()[:300]} "
