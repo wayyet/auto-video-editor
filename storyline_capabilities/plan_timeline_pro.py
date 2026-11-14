@@ -157,7 +157,16 @@ def plan_timeline_pro(
         "source_media": list(source_media),
         "clips": clips,
         "audio": {
-            "bgm_ref": bgm_selection.get("bgm_ref") if bgm_selection else None,
+            # 20261114 阶段3(修订 §阶段3):剪映云音乐素材模式(selection 带
+            # music_id)下 bgm_ref 置 None —— 抑制 mapper 生成 bgm-1/segment-bgm-1
+            # 占位素材(占位 ref 非本地文件,原生转换必丢弃);BGM 由 node_05 内
+            # 自动铺轨 helper 写入真实云音乐素材,节拍仍由 _bgm_to_internal 提供。
+            # 旧 selection(无 music_id)行为逐字节不变。
+            "bgm_ref": (
+                None
+                if (bgm_selection or {}).get("music_id")
+                else (bgm_selection.get("bgm_ref") if bgm_selection else None)
+            ),
             # CanonicalTimeline.audio.voiceover 是 Optional[str];空时 None,有映射
             # 时存 JSON 字符串(group_id → voiceover_id),mapper 不读、联调可查。
             "voiceover": json.dumps(voiceover_id_map, ensure_ascii=False)

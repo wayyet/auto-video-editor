@@ -617,3 +617,81 @@ def test_load_bgm_library_falls_back_to_yaml_when_local_missing(
     meta = load_bgm_library()
     assert len(meta["library"]) >= 3
     assert all(e["bgm_id"].startswith("bgm_") for e in meta["library"])
+
+
+# ---------------------------------------------------------------------------
+# 20261114 阶段3:云音乐模式抑制 mapper 占位音轨(audio.bgm_ref=None)
+# ---------------------------------------------------------------------------
+def _plan_groups_min() -> list[dict[str, Any]]:
+    return [
+        {
+            "group_id": "g1",
+            "clips": [
+                {
+                    "clip_id": "c1",
+                    "media_id": "media_0001",
+                    "source_in_ms": 0,
+                    "source_out_ms": 5000,
+                }
+            ],
+        }
+    ]
+
+
+def test_plan_timeline_pro_cloud_music_suppresses_bgm_ref() -> None:
+    """selection 带 music_id(云音乐模式)→ audio.bgm_ref=None,节拍仍驱动 beat_align。"""
+    from storyline.contract import CanonicalTimeline
+
+    cloud_bgm = {
+        "bgm_ref": "7553871402870491155",
+        "music_id": "7553871402870491155",
+        "beats": [3000, 6000],
+        "duration_ms": 9000,
+        "beat_period_ms": 3000,
+    }
+    timeline = plan_timeline_pro(
+        groups=_plan_groups_min(),
+        voiceover={},
+        bgm_selection=cloud_bgm,
+        targets={"target_duration_ms": 9000},
+        source_media=[
+            {
+                "media_id": "media_0001",
+                "file_uri": "file:///x.mp4",
+                "duration_ms": 5000,
+                "media_type": "video",
+            }
+        ],
+        job_id="job_cloud",
+    )
+    assert timeline["audio"]["bgm_ref"] is None
+    # 节拍规划与 audio.bgm_ref 相互独立:beat 仍参与切镜节奏(method=beat_align)
+    assert timeline["method"] == "beat_align"
+    # 契约不破:CanonicalTimeline(extra="forbid")照常校验通过
+    CanonicalTimeline.model_validate(timeline)
+
+
+def test_plan_timeline_pro_legacy_selection_bgm_ref_unchanged() -> None:
+    """旧 selection(无 music_id):bgm_ref 原样写入,行为逐字节不变。"""
+    legacy_bgm = {
+        "bgm_ref": "bgm_story_warm",
+        "beats": [3000, 6000],
+        "duration_ms": 9000,
+        "beat_period_ms": 3000,
+    }
+    timeline = plan_timeline_pro(
+        groups=_plan_groups_min(),
+        voiceover={},
+        bgm_selection=legacy_bgm,
+        targets={"target_duration_ms": 9000},
+        source_media=[
+            {
+                "media_id": "media_0001",
+                "file_uri": "file:///x.mp4",
+                "duration_ms": 5000,
+                "media_type": "video",
+            }
+        ],
+        job_id="job_legacy",
+    )
+    assert timeline["audio"]["bgm_ref"] == "bgm_story_warm"
