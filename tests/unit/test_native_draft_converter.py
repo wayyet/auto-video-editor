@@ -9,11 +9,18 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from storyline_capabilities.plan_timeline_pro import plan_timeline_pro
 from storyline.native_draft import (
     _MATERIAL_BUCKETS,
     NATIVE_DRAFT_SIDECAR_NAME,
+    build_native_music_library_material,
+    build_native_music_library_track,
+    build_native_sound_channel_mapping_material,
+    build_native_vocal_separation_material,
     is_native_draft,
+    music_library_track_id,
     storyline_to_native,
     write_sidecar,
 )
@@ -446,3 +453,76 @@ class TestProbeSizeDisplayOrientation:
         m = native["materials"]["videos"][0]
         assert (m["width"], m["height"]) == (1080, 1920)
         assert calls == [], "文件不存在时不得发起探测"
+
+
+# ===========================================================================
+# 20261114 阶段4:剪映云音乐素材/轨道构造器(黄金样本盘点形状)
+# ===========================================================================
+class TestMusicLibraryBuilders:
+    def _raw_material(self, tmp_path: Path) -> tuple[dict, Path]:
+        cache = tmp_path / "cache" / "db0778.mp3"
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_bytes(b"x" * 2048)
+        raw = {
+            "id": "464B08A6-0130-4e69-815A-4B59E58852B6",
+            "type": "music",
+            "music_id": "7553871402870491155",
+            "name": "旅途的风景",
+            "category_id": "7405872200315882277",
+            "category_name": "会员热榜",
+            "duration": 190766666,
+            "request_id": "202611141637071AFBCBFBF08506E9B10E",
+            "local_material_id": "",
+            "source_platform": 0,
+            "wave_points": [],
+            "path": str(cache),
+        }
+        return raw, cache
+
+    def test_material_preserves_raw_fields_and_sets_id_path(self, tmp_path: Path) -> None:
+        """37 键原始字段全保留;仅 id(uuid5)与 path(当前设备)变化;type 不动。"""
+        raw, cache = self._raw_material(tmp_path)
+        mat = build_native_music_library_material(
+            id_seed="job1:7553871402870491155", raw_material=raw, cache_path=str(cache)
+        )
+        assert mat["id"] != raw["id"]  # uuid5 再生
+        assert mat["id"] == mat["id"].upper()
+        assert mat["path"] == str(cache)
+        for key in ("music_id", "name", "category_id", "category_name",
+                    "duration", "request_id", "source_platform"):
+            assert mat[key] == raw[key]
+        assert mat["type"] == "music"  # 不改 extract_music
+        assert set(raw.keys()) <= set(mat.keys())  # 原始键零丢失
+        # 幂等:同种子同输出
+        again = build_native_music_library_material(
+            id_seed="job1:7553871402870491155", raw_material=raw, cache_path=str(cache)
+        )
+        assert again == mat
+
+    def test_material_fail_closed(self, tmp_path: Path) -> None:
+        raw, cache = self._raw_material(tmp_path)
+        no_id = dict(raw, music_id="")
+        with pytest.raises(ValueError, match="music_id"):
+            build_native_music_library_material(id_seed="s", raw_material=no_id, cache_path=str(cache))
+        bad_dur = dict(raw, duration=0)
+        with pytest.raises(ValueError, match="duration"):
+            build_native_music_library_material(id_seed="s", raw_material=bad_dur, cache_path=str(cache))
+        with pytest.raises(ValueError, match="缓存"):
+            build_native_music_library_material(
+                id_seed="s", raw_material=raw, cache_path=str(tmp_path / "gone.mp3")
+            )
+
+    def test_track_seven_keys_named_bgm(self) -> None:
+        track = build_native_music_library_track(id_seed="job1:m1", segments=[])
+        assert set(track.keys()) == {"attribute", "flag", "id", "is_default_name", "name", "segments", "type"}
+        assert track["type"] == "audio"
+        assert track["name"] == "BGM"
+        assert track["is_default_name"] is False
+        assert track["id"] == music_library_track_id("job1:m1")
+
+    def test_scm_vocal_shapes_match_golden_sample(self) -> None:
+        scm = build_native_sound_channel_mapping_material(material_id="X")
+        assert scm == {"audio_channel_mapping": 0, "id": "X", "is_config_open": False, "type": "none"}
+        vocal = build_native_vocal_separation_material(material_id="X")
+        assert vocal == {"choice": 0, "id": "X", "production_path": "", "time_range": None,
+                         "type": "vocal_separation"}

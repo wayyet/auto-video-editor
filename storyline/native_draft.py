@@ -462,6 +462,75 @@ def _new_track(old_track: dict[str, Any], new_id: str, segments: list[dict[str, 
 
 
 # ---------------------------------------------------------------------------
+# 剪映云音乐素材/轨道构造器(20261114 阶段4,修订 §4.4/§4.5)
+# 形状依据 = 阶段0黄金样本盘点(AutoVideo_console-50cd4c6af941):
+#   37 键 type="music" 素材 + 7 键 audio 轨 + speed/SCM/vocal 伴随;
+#   fade 交给 node_13,beats 按 D5 省略(见执行记录 §1.2)。
+# ---------------------------------------------------------------------------
+def music_library_track_id(id_seed: str) -> str:
+    """云音乐自动轨的确定性 track id(uuid5;幂等重放的识别键)。"""
+    return _new_id(id_seed, "music_library_track")
+
+
+def build_native_music_library_material(
+    *, id_seed: str, raw_material: dict[str, Any], cache_path: str
+) -> dict[str, Any]:
+    """由收割的原始云音乐素材构造原生 materials.audios 素材(fail-closed)。
+
+    - deepcopy ``raw_material`` 保留全部原始字段(music_id/request_id/
+      category_id/duration 原样,type 保持 "music" 不改 extract_music);
+    - 仅改草稿内 ``id``(uuid5 确定性)与 ``path``(当前设备缓存路径);
+    - ``music_id`` 非空、缓存文件存在且非空、duration>0 三项校验,缺失即拒构造。
+    """
+    music_id = str(raw_material.get("music_id") or "").strip()
+    if not music_id:
+        raise ValueError("raw_material 缺 music_id,拒绝构造云音乐素材")
+    duration_us = int(raw_material.get("duration") or 0)
+    if duration_us <= 0:
+        raise ValueError(f"raw_material duration 非法({duration_us}),拒绝构造云音乐素材")
+    if not cache_path or not Path(cache_path).is_file() or Path(cache_path).stat().st_size <= 0:
+        raise ValueError(f"缓存文件不可用({cache_path!r}),拒绝构造云音乐素材")
+
+    material = json.loads(json.dumps(raw_material))  # deepcopy(json 安全子集)
+    material["id"] = _new_id(id_seed, "music_library_material")
+    material["path"] = str(cache_path)
+    return material
+
+
+def build_native_sound_channel_mapping_material(
+    *, material_id: str, channel_type: str = "none"
+) -> dict[str, Any]:
+    """4 键 SCM 伴随素材(黄金样本形态,type 默认 "none")。"""
+    return {
+        "audio_channel_mapping": 0,
+        "id": material_id,
+        "is_config_open": False,
+        "type": channel_type,
+    }
+
+
+def build_native_vocal_separation_material(*, material_id: str) -> dict[str, Any]:
+    """5 键 vocal_separation 伴随素材(与 _companion_materials 逐键一致)。"""
+    return {
+        "choice": 0,
+        "id": material_id,
+        "production_path": "",
+        "time_range": None,
+        "type": "vocal_separation",
+    }
+
+
+def build_native_music_library_track(
+    *, id_seed: str, segments: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """7 键原生 audio 轨,name="BGM"(node_13/_bgm_segment_count/镜像的非配音分类口径)。"""
+    track = _new_track({"type": "audio"}, music_library_track_id(id_seed), segments)
+    track["name"] = "BGM"
+    track["is_default_name"] = False
+    return track
+
+
+# ---------------------------------------------------------------------------
 # 主转换
 # ---------------------------------------------------------------------------
 def storyline_to_native(draft: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
