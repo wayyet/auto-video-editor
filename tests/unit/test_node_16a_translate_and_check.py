@@ -139,7 +139,11 @@ def test_node_16a_no_draft_dir_skips() -> None:
 
 
 def test_node_16a_layout_issues_writes_state_without_interrupt(tmp_path: Path) -> None:
-    """layout 异常时:写 layout_issues + layout_issues_detected=True,但不调 interrupt。"""
+    """layout 异常时:写 layout_issues + layout_issues_detected=True,但不调 interrupt。
+
+    validate_layout 旧形态 issue 无 severity 字段 → 缺 severity 视为 error,
+    仍触发关卡③(排版硬伤必须人工复核)。
+    """
     draft_dir = _seed_en_branch(tmp_path)
     issues_to_inject = [{"index": 0, "reason": "text_too_wide", "width_px": 2000}]
 
@@ -161,8 +165,9 @@ def test_node_16a_layout_issues_writes_state_without_interrupt(tmp_path: Path) -
 # 9 工具迁移 §6.4 step 2:qc 链集成测试
 # ---------------------------------------------------------------------------
 def test_node_16a_qc_chain_success_writes_preview_and_evidence(tmp_path: Path) -> None:
-    """qc 链全部成功 → 写 ``preview_video_path`` + ``subtitle_qc_evidence_frames``
-    (layout_issues_source 字段已随阶段5批1 移除)。
+    """qc 链全部成功且仅 warning 级 issue → 写 ``preview_video_path`` +
+    ``subtitle_qc_evidence_frames``,``layout_issues`` 保留 warning,但
+    ``layout_issues_detected`` 为 False(2026-11-14 起仅 error 触发关卡③)。
     """
     from unittest.mock import patch
 
@@ -209,13 +214,59 @@ def test_node_16a_qc_chain_success_writes_preview_and_evidence(tmp_path: Path) -
     ):
         out = node_16a_translate_and_check(state)
 
-    # qc 链路径
+    # qc 链路径:warning 保留在 layout_issues,但不触发关卡③
     assert out["layout_issues"] == qc_issues
-    assert out["layout_issues_detected"] is True
+    assert out["layout_issues_detected"] is False
+    assert "node_16a_layout_warnings_only" in out["status_log"]
     # 预览路径
     assert out["preview_video_path"] == str(tmp_path / "preview.mp4")
     # 证据帧(同时来自 data.evidence_frames 与 image_paths,合并去重)
     assert str(tmp_path / "frame_001.jpg") in out["subtitle_qc_evidence_frames"]
+
+
+def test_node_16a_qc_chain_error_issue_triggers_checkpoint3(tmp_path: Path) -> None:
+    """qc 链产出含 error 级 issue → ``layout_issues_detected`` 为 True
+    (error 是关卡③ 的唯一触发严重级;warning 混在列表里不影响判定)。
+    """
+    from unittest.mock import patch
+
+    from assembly_capabilities.result import ToolResult
+
+    draft_dir = _seed_en_branch(tmp_path)
+    set_default_client(MockTranslateClient())
+
+    fake_video = tmp_path / "fake.mp4"
+    fake_video.write_bytes(b"\x00")
+
+    state = _state(_normal_asr(), draft_dir)
+    state["video_input_path"] = str(fake_video)
+
+    qc_issues = [{"index": 0, "severity": "error", "message": "overflow"}]
+
+    def fake_build(args, ctx):
+        sub = tmp_path / "subtitles.json"
+        sub.write_text(json.dumps({"cues": [], "style": {}}), encoding="utf-8")
+        return ToolResult(text="ok", data={}, artifacts=[str(sub)])
+
+    def fake_render(args, ctx):
+        return ToolResult(
+            text="ok",
+            data={"outputs": {"burned": str(tmp_path / "preview.mp4")}},
+        )
+
+    def fake_qc(args, ctx):
+        return ToolResult(text="ok", data={"issues": qc_issues, "evidence_frames": []})
+
+    with (
+        patch("nodes.node_16a_translate_and_check.subtitle_build", side_effect=fake_build),
+        patch("nodes.node_16a_translate_and_check.subtitle_render", side_effect=fake_render),
+        patch("nodes.node_16a_translate_and_check.subtitle_qc", side_effect=fake_qc),
+    ):
+        out = node_16a_translate_and_check(state)
+
+    assert out["layout_issues"] == qc_issues
+    assert out["layout_issues_detected"] is True
+    assert "node_16a_layout_warnings_only" not in out["status_log"]
 
 
 def test_node_16a_qc_chain_build_failure_falls_back_to_validate_layout(
@@ -459,7 +510,7 @@ def test_node_16a_qc_chain_layout_issues_field_contract_unchanged(tmp_path: Path
     assert isinstance(out["layout_issues"], list)
     assert all(isinstance(i, dict) for i in out["layout_issues"])
     assert out["layout_issues_detected"] is True
-    # 关卡③ 触发条件:layout_issues_detected == True(只要 issues 非空)
+    # 关卡③ 触发条件:列表里存在 error 级 issue(2026-11-14 起 warning 不再触发)
     assert out["layout_issues"] == qc_issues
 
 

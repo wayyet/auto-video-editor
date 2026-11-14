@@ -7,6 +7,11 @@
   (附件"关键发现①/③")。
 - ``layout_issues`` / ``layout_issues_detected`` 写到 state,后续
   ``node_checkpoint3_layout_review`` 据此决定是否触发关卡③。
+  2026-11-14 触发语义收紧:``layout_issues_detected`` 仅在存在 **error** 级
+  issue 时为真(缺 severity 视为 error,兼容旧 ``validate_layout`` 形态);
+  warning 级(reading speed / 时长)记录进 ``layout_issues`` 但不挂起人工,
+  以 ``node_16a_layout_warnings_only`` 状态标记。qc 链预设同步改为英文校准的
+  ``broadcast_en``(原误用中文预设 ``shortform_zh`` 的预算量英文文本)。
 - SRT 写入:正常路径下(无 layout 异常)在 16a 内一次性写完,与 Week 4 原
   ``node_16_translate_subtitles`` 行为对齐;关卡③ 触发路径下 SRT 由
   ``node_checkpoint3_layout_review`` resume 后重写。
@@ -108,11 +113,14 @@ def _check_layout_via_subtitle_qc(
 
     try:
         # 1. subtitle_build
+        # 英文分支 QC 用英文校准预设 broadcast_en(对照 subtitle_style.py:英文
+        # 每字符阅读速度 ~14 vs 中文 ~9,预算/字符帽/行数一体设计)。预览仅供
+        # QC 证据,草稿排版仍由草稿本体决定。
         build_out = subtitle_build(
             {
                 "transcript_path": str(transcript_path),
                 "video_path": str(video_p),
-                "preset": "shortform_zh",
+                "preset": "broadcast_en",
             },
             ctx,
         )
@@ -273,13 +281,22 @@ def node_16a_translate_and_check(state: WorkflowState) -> dict:
     # ----- 正常路径下写 SRT(关卡③ 触发时由 c3 resume 后重写)-----
     srt_path = write_srt_from_segments(draft_dir_p, segments_en)
 
+    # 关卡③ 只对 error 级排版硬伤(超宽/重叠/无文本等)挂起人工复核;warning
+    # (reading speed / 时长偏差)记录但放行 —— 人工按"字号/换行/位置"无法处置
+    # timing 类 warning。缺 severity 视为 error(validate_layout 旧形态均为硬伤)。
+    errors = [
+        i for i in issues
+        if str(i.get("severity") or "error") == "error"
+    ]
     out: dict[str, Any] = {
         "subtitle_segments_en": list(segments_en),
         "subtitle_srt_path": srt_path,
         "layout_issues": issues,
-        "layout_issues_detected": bool(issues),
+        "layout_issues_detected": bool(errors),
         "status_log": ["node_16a_translate_done"],
     }
+    if issues and not errors:
+        out["status_log"].append("node_16a_layout_warnings_only")
     if preview_path is not None:
         out["preview_video_path"] = preview_path
     if evidence_frames is not None:
