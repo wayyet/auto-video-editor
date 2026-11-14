@@ -266,11 +266,18 @@
     }
     .edge.dim{ opacity:.18; }
     .edge.highlight{ opacity:1; stroke-width:2.2; }
-    /* 第5期 TB:条件边点线 / 反馈边虚线(计划 §4.3)。
+    /* 第5期 TB:条件边点线 / 反馈边加粗实线(计划 §4.3;2026-11-14 反馈边
+       由长虚线改为加粗实线,区分维度=线宽:普通 1.6 < 高亮 2.2 < 活动 2.6 < 反馈 3)。
        必须在 traversed/active 之前声明 —— 同优先级后声明胜出,
        已走过/活动边的状态样式才能覆盖布局语义样式。 */
     .edge.kind-conditional{ stroke-dasharray: 3 4; opacity: .8; }
-    .edge.feedback{ stroke-dasharray: 7 5; opacity: .75; }
+    /* 反馈边常同时带 kind-conditional(重试边出自条件路由),dasharray:none
+       压掉点线,保证"加粗实线"语义;声明序在 conditional 之后,同优先级后者胜。 */
+    .edge.feedback{ stroke-dasharray: none; stroke-width: 3; opacity: .75; }
+    /* 反馈边光晕双描边(20261114 用户反馈不够明显):halo path 垫在 SVG 最底层,
+       同色半透明宽光带 —— 空白区呈柔和光带,交叉区抬升主线层次;色随 --edge 适配双主题。 */
+    .edge-halo{ stroke: var(--edge); stroke-width: 9; opacity: .18; fill: none; stroke-linecap: round; }
+    .edge-halo.dim{ opacity: .05; }
     /* 「未启用/未接入」区带分隔标签(主图 TB 且存在不可达节点时,计划 §4.2) */
     .band-label{
       position:absolute;
@@ -916,14 +923,27 @@
       }
 
       function markEdgeLayoutRoles(){
-        /* TB 布局角色:反馈边加虚线样式 + 侧边 lane 路由。
-           只加前端临时布局角色,不改后端 kind/label/id(计划 §6.1 职责边界)。 */
+        /* TB 布局角色:反馈边加粗实线样式 + 光晕双描边 + 侧边 lane 路由。
+           只加前端临时布局角色,不改后端 kind/label/id(计划 §6.1 职责边界)。
+           halo(20261114):随布局角色建/删,置于 SVG 最底层垫在所有主 path 之下。 */
         const fb = state.layoutResult && state.layoutResult.feedbackEdgeIds;
         const tb = state.view === "main" && state.direction === "tb";
         for (const e of state.edges){
           const isFb = !!(tb && fb && fb.has(e.id));
           e.layoutRole = isFb ? "feedback" : "forward";
           e.el.classList.toggle("feedback", isFb);
+          if (isFb && !e.haloEl){
+            const halo = document.createElementNS(SVG_NS, "path");
+            halo.classList.add("edge-halo");
+            halo.setAttribute("d", e.el.getAttribute("d") || "");
+            e.haloEl = halo;
+            // defs 之后、所有主 path 之前:光带垫底,交叉线画在其上
+            const defs = edgesSvg.querySelector("defs");
+            edgesSvg.insertBefore(halo, defs ? defs.nextSibling : edgesSvg.firstChild);
+          } else if (!isFb && e.haloEl){
+            e.haloEl.remove();
+            e.haloEl = null;
+          }
         }
       }
 
@@ -1524,7 +1544,10 @@
         const fromRect = rectInCanvas(fromEl);
         const toRect = rectInCanvas(toEl);
 
-        edge.el.setAttribute("d", edgePath(edge, fromRect, toRect));
+        const d = edgePath(edge, fromRect, toRect);
+        edge.el.setAttribute("d", d);
+        // 光晕双描边(20261114):halo 与主线同一几何,拖拽/折叠/重排自动跟随
+        if (edge.haloEl) edge.haloEl.setAttribute("d", d);
       }
 
       function updateAllEdges(){
@@ -1548,6 +1571,8 @@
           const connected = (e.from === nodeId || e.to === nodeId);
           e.el.classList.toggle("dim", on && !connected);
           e.el.classList.toggle("highlight", on && connected);
+          // 光晕随主线同步淡出,避免"主线隐身、光带仍亮"的错层
+          if (e.haloEl) e.haloEl.classList.toggle("dim", on && !connected);
         }
       }
 
@@ -1842,7 +1867,7 @@
 
         // Build edges
         buildEdges();
-        // 第5期:标记 TB 布局角色(反馈边虚线 + 侧边 lane)
+        // 第5期:标记 TB 布局角色(反馈边加粗实线 + 侧边 lane)
         markEdgeLayoutRoles();
         // Initial edge layout:先同步画一遍(rAF 在后台/被遮挡标签页会被节流,
         // 曾导致连线与 overlay 收尾永不执行),再经 rAF 精修最终布局。
