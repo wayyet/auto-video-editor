@@ -29,6 +29,8 @@ const SMALL_LIMITS = {
   prompt_max_chars: 20,
   target_duration_ms_default: 35000,
   target_duration_ms_max: 600000,
+  speed_multiplier_default: 1,
+  speed_multiplier_max: 4,
   allowed_video_exts: [".mp4", ".mov"],
   ratios: ["9:16", "16:9", "4:3"],
   langs: ["zh", "en"],
@@ -98,6 +100,19 @@ test("validateParams:空提示词/超长/非法时长/非法比例与语言", ()
   assert.match(validateParams({ ...base, lang: "fr" }, SMALL_LIMITS).lang, /语言/);
 });
 
+test("validateParams:快进速度缺省合法/越界报错(2026-11-14)", () => {
+  const base = { prompt: "p", target_duration_ms: 35000, ratio: "9:16", lang: "zh" };
+  // 缺省(speed_multiplier 键缺失)与 1.0 都合法
+  assert.equal(hasErrors(validateParams(base, SMALL_LIMITS)), false);
+  assert.equal(hasErrors(validateParams({ ...base, speed_multiplier: 1 }, SMALL_LIMITS)), false);
+  assert.equal(hasErrors(validateParams({ ...base, speed_multiplier: 2.5 }, SMALL_LIMITS)), false);
+  // 非有限数 / 越界
+  for (const sp of [0.5, 0, -1, 4.1, NaN, Infinity]) {
+    const errs = validateParams({ ...base, speed_multiplier: sp }, SMALL_LIMITS);
+    assert.match(errs.speed, /快进速度/);
+  }
+});
+
 test("canSubmit:仅空闲态 + 有视频 + 参数合法", () => {
   const params = { prompt: "p", target_duration_ms: 35000, ratio: "9:16", lang: "zh" };
   const state = createConsoleState();
@@ -151,6 +166,13 @@ test("buildCreateFormData 字段与冻结契约一致", () => {
   assert.equal(fd.get("target_duration_ms"), "35000");
   assert.equal(fd.get("ratio"), "9:16");
   assert.equal(fd.get("lang"), "zh");
+  // 2026-11-14 快进速度:缺省恒下发 1(自动),显式值原样下发
+  assert.equal(fd.get("speed_multiplier"), "1");
+  const fdSp = buildCreateFormData(
+    state,
+    { prompt: "p", target_duration_ms: 35000, ratio: "9:16", lang: "zh", speed_multiplier: 2.5 },
+  );
+  assert.equal(fdSp.get("speed_multiplier"), "2.5");
   const videos = fd.getAll("videos");
   assert.equal(videos.length, 2);
   assert.deepEqual([...videos.map((f) => f.name)].sort(), ["a.mp4", "b.mov"]);

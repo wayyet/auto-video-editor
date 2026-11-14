@@ -68,6 +68,7 @@ def prepare_run(
     required_features: dict[str, bool] | None = None,
     outputs_root: Path | None = None,
     probe: Callable[[Path], dict[str, Any]] | None = None,
+    speed_multiplier: float = 1.0,
 ) -> dict:
     """接收一次创建请求,完成"素材落盘 + 初始 State + 运行记录"。
 
@@ -79,6 +80,8 @@ def prepare_run(
             按运行时能力推导);透传 build_initial_state 落进 initial state。
         outputs_root: 任务根目录;缺省读 ``config.CONSOLE_OUTPUTS_ROOT``(运行时读)。
         probe: 视频探测函数(缺省 ffprobe;单测注入)。
+        speed_multiplier: 2026-11-14 快进速度(倍),API 层已校验,透传
+            build_initial_state 落进 ``storyline_targets``。
 
     Returns:
         ::
@@ -113,6 +116,7 @@ def prepare_run(
             lang=lang,
             required_features=required_features,
             outputs_root=root,
+            speed_multiplier=speed_multiplier,
         )
         state_path = write_initial_state_json(task_dir, state)
         # 预创建草稿目录(AUTO_VIDEO_EDITOR_DRAFT_DIR 的指向;阶段 2 的子进程 env 用)

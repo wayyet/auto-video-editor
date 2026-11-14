@@ -24,6 +24,7 @@ helper 原本在 ``node_plan_timeline_pro.py`` 与 ``node_plan_timeline_ai_trans
 from __future__ import annotations
 
 import json
+import math
 import urllib.parse
 from pathlib import Path
 
@@ -238,6 +239,26 @@ def target_duration_ms(
     return ms if ms > 0 else default
 
 
+def speed_multiplier(state: WorkflowState, default: float = 1.0) -> float:
+    """创建台「快进速度(倍)」:每段最低播放倍数(智能保同步语义)。
+
+    规则与 :func:`target_duration_ms` 一致:``storyline_targets.speed_multiplier``
+    缺省/非法(非有限数/≤0)回落 ``default``(1.0 = 不启用,规划器仍全自动)。
+    >1 时仅规划期消费(2026-11-14):timeline_planner 优先在同一素材内向后
+    扩 source_out 提速度,配音段素材不足时保原速并告警;contract/qa_gate/
+    node_07 护栏保持 0.5 权威不变。
+    """
+    targets = state.get("storyline_targets") or {}
+    raw = targets.get("speed_multiplier") if isinstance(targets, dict) else None
+    try:
+        value = float(raw) if raw is not None else 0.0
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(value) or value <= 0:
+        return default
+    return value
+
+
 # ---------------------------------------------------------------------------
 # 2026-10 接入原"不可达节点"所需的 helper(图路由 / 文案节点共用)
 # (media_has_audio 已随 2026-11-08 B1 ASR 移除删除:唯一调用方 _asr_branch_enabled 不存在了)
@@ -432,6 +453,7 @@ __all__ = [
     "resolve_lang",
     "extract_user_request",
     "target_duration_ms",
+    "speed_multiplier",
     "web_topic_query",
     "format_web_topic_reference",
     "extract_web_topic_references",

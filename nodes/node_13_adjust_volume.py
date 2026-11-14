@@ -158,7 +158,8 @@ def jianying_adjust_volume(
         role: ``"main"``(video 轨段)/ ``"bgm"``(非配音 audio 轨)/
             ``"voiceover"``(配音轨)。
         volume_level / fade_in_seconds / fade_out_seconds: None 时按角色取
-            config 缺省(main 1.0 无 fade;bgm 0.35 + 2s/3s;voiceover 1.0)。
+            config 缺省(main 0.0 = 默认静音原始视频,env NODE13_VOLUME_MAIN
+            可恢复;bgm 0.35 + 2s/3s;voiceover 1.0)。
 
     Raises:
         FileNotFoundError: draft_path 不存在。
@@ -174,7 +175,9 @@ def jianying_adjust_volume(
     return entry
 
 
-#: 角色缺省音量/淡入淡出(计划文档 §4.8 口径:main 1.0 无 fade,bgm 0.35 + 2s/3s)
+#: 角色缺省音量/淡入淡出(计划文档 §4.8 口径:main 1.0 无 fade,bgm 0.35 + 2s/3s;
+#: 2026-11-14 起 main 默认静音原始视频 —— config.NODE13_VOLUME_MAIN 默认 0.0,
+#: 写段级 volume=0 且不动 last_nonzero_volume,即"静音但可恢复"的原生表示)
 _ROLE_DEFAULTS: dict[str, dict] = {
     "main": {"volume": NODE13_VOLUME_MAIN, "fade_in": 0.0, "fade_out": 0.0},
     "bgm": {
@@ -295,7 +298,8 @@ def adjust_volume(state: WorkflowState) -> dict:
 
     for tag, draft_file in targets:
         prefix = f"node_13_{tag}"
-        # 角色与缺省值(计划文档 §4.8):main 1.0 无 fade;bgm 0.35 + 2s/3s;voiceover 1.0
+        # 角色与缺省值(计划文档 §4.8 口径;2026-11-14 起 main 默认静音):
+        # main 0.0 无 fade;bgm 0.35 + 2s/3s;voiceover 1.0
         for role in ("main", "bgm", "voiceover"):
             entry, write_result = _try_role(
                 state, role, draft_file=draft_file, log_prefix=prefix

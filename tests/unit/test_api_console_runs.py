@@ -210,6 +210,39 @@ class TestParamValidation400:
         )
         assert resp.status_code == 400
 
+    @pytest.mark.parametrize("speed", ["0.5", "0", "-1", "9", "4.1"])
+    def test_bad_speed_multiplier(self, console_env, speed):
+        """2026-11-14 快进速度:缺省 1.0;范围外(下限/上限)一律 400。"""
+        resp = client.post(
+            "/api/console/runs", data={"prompt": "p", "speed_multiplier": speed},
+            files=_files(("a.mp4", b"x")),
+        )
+        assert resp.status_code == 400
+        assert "speed_multiplier" in resp.json()["detail"]
+
+    def test_speed_multiplier_default_and_passthrough(self, console_env):
+        """缺省落 1.0(不启用);显式值透传 storyline_targets。"""
+        resp = client.post(
+            "/api/console/runs", data={"prompt": "p", "speed_multiplier": "2.5"},
+            files=_files(("a.mp4", b"x")),
+        )
+        assert resp.status_code == 202
+        tid = resp.json()["thread_id"]
+        state = json.loads(
+            (console_env / tid / "initial_state.json").read_text(encoding="utf-8")
+        )
+        assert state["storyline_targets"]["speed_multiplier"] == 2.5
+        resp2 = client.post(
+            "/api/console/runs", data={"prompt": "p"},
+            files=_files(("b.mp4", b"y")),
+        )
+        assert resp2.status_code == 202
+        tid2 = resp2.json()["thread_id"]
+        state2 = json.loads(
+            (console_env / tid2 / "initial_state.json").read_text(encoding="utf-8")
+        )
+        assert state2["storyline_targets"]["speed_multiplier"] == 1.0
+
     @pytest.mark.parametrize("backend", ["stub", "gate", "gpt-4", "claude cli"])
     def test_bad_llm_backend(self, console_env, backend):
         """stub/gate 等不在表单白名单;浏览器只允许 claude-cli / mcode-cli。"""

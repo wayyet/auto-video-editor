@@ -68,6 +68,16 @@ class TestPrepareRunHappyPath:
         assert (task_dir / "inputs" / "0002.mov").exists()
         assert len(result["record"]["files"]) == 2
 
+    def test_speed_multiplier_passthrough(self, tmp_path):
+        """2026-11-14 快进速度:透传进 storyline_targets(API 层已校验范围)。"""
+        result = prepare_run(
+            prompt="p", uploads=[_upload("a.mp4", b"1")],
+            target_duration_ms=35000, ratio="9:16", lang="zh",
+            outputs_root=tmp_path, probe=_ok_probe, speed_multiplier=2.0,
+        )
+        targets = result["initial_state"]["storyline_targets"]
+        assert targets["speed_multiplier"] == 2.0
+
 
 class TestPrepareRunRollback:
     def test_upload_error_rolls_back_task_dir(self, tmp_path):

@@ -35,6 +35,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import secrets
 import subprocess
@@ -194,6 +195,9 @@ def console_config(request: Request) -> dict:
         "prompt_max_chars": config.CONSOLE_PROMPT_MAX_CHARS,
         "target_duration_ms_default": config.CONSOLE_TARGET_DURATION_MS_DEFAULT,
         "target_duration_ms_max": config.CONSOLE_TARGET_DURATION_MS_MAX,
+        # 2026-11-14:快进速度(倍)默认/上限(前端校验与 input max 用)
+        "speed_multiplier_default": config.CONSOLE_SPEED_MULTIPLIER_DEFAULT,
+        "speed_multiplier_max": config.CONSOLE_SPEED_MULTIPLIER_MAX,
         "allowed_video_exts": sorted(ALLOWED_VIDEO_EXTS),
         "ratios": list(ALLOWED_RATIOS),
         "langs": list(ALLOWED_LANGS),
@@ -224,6 +228,7 @@ def create_run(
     target_duration_ms: Optional[int] = Form(None),
     ratio: str = Form("9:16"),
     lang: str = Form("zh"),
+    speed_multiplier: Optional[float] = Form(None),
     llm_backend: str = Form(""),
     require_subtitles_zh: Optional[bool] = Form(None),
     require_subtitles_en: Optional[bool] = Form(None),
@@ -274,6 +279,22 @@ def create_run(
         raise _bad_request(f"ratio 非法: {ratio!r}(允许: {', '.join(ALLOWED_RATIOS)})")
     if lang not in ALLOWED_LANGS:
         raise _bad_request(f"lang 非法: {lang!r}(允许: {', '.join(ALLOWED_LANGS)})")
+    # 2026-11-14 快进速度(倍):缺省 1.0(不启用);NaN/Inf 与范围外一律 400
+    speed = (
+        speed_multiplier
+        if speed_multiplier is not None
+        else config.CONSOLE_SPEED_MULTIPLIER_DEFAULT
+    )
+    if (
+        not math.isfinite(speed)
+        or speed < config.CONSOLE_SPEED_MULTIPLIER_DEFAULT
+        or speed > config.CONSOLE_SPEED_MULTIPLIER_MAX
+    ):
+        raise _bad_request(
+            f"speed_multiplier 非法: {speed!r}(须为 "
+            f"{config.CONSOLE_SPEED_MULTIPLIER_DEFAULT} ≤ v ≤ "
+            f"{config.CONSOLE_SPEED_MULTIPLIER_MAX})"
+        )
     backend = str(llm_backend or "").strip().lower()
     if backend and backend not in CONSOLE_FORM_BACKENDS:
         raise _bad_request(
@@ -323,6 +344,7 @@ def create_run(
             ratio=ratio,
             lang=lang,
             required_features=required_features,
+            speed_multiplier=speed,
         )
     except ConsoleUploadError as e:
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e

@@ -22,6 +22,7 @@ tuning,只保证 produce 出 ``CanonicalTimeline`` 兼容 dict 的 clip 时长�
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ class TimeLine:
         tts_res: list[dict[str, Any]],
         bgm: Optional[dict[str, Any]],
         targets: dict[str, Any],
+        media_durations: Optional[dict[str, int]] = None,
     ) -> dict[str, Any]:
         """把 group → clip 时长分配方案,返回可写进 ``CanonicalTimeline.clips`` 的
         数组 + 元信息。
@@ -52,7 +54,12 @@ class TimeLine:
                 ``duration_ms``)。可空。
             bgm: ``select_bgm`` 输出;有 ``beats`` / ``beat_period_ms`` /
                 ``duration_ms`` 时启用节拍对齐。可空。
-            targets: ``{"target_duration_ms": int, "min_clip_duration_ms": int?}``。
+            targets: ``{"target_duration_ms": int, "min_clip_duration_ms": int?,
+            "speed_multiplier": float?}``。``speed_multiplier`` 是 2026-11-14
+            创建台「快进速度(倍)」(每段最低播放倍数,1.0/缺省 = 不启用)。
+        media_durations: ``{media_id: duration_ms}``(load_media 素材总时长;
+            2026-11-14 快进下限扩 span 用)。None 时扩 span 只能利用同素材内
+            clip 之间的空隙,末尾段按无余量处理(联调直调 distribute 的兼容态)。
 
         Returns:
             ``{"clips": [{clip_id, timeline_in_ms, timeline_out_ms, ...}, ...],
@@ -142,15 +149,35 @@ class TimeLine:
                 min_clip=min_clip,
             )
 
+        # 2.4 用户快进下限(2026-11-14 创建台「快进速度(倍)」,智能保同步):
+        # speed = 源跨度/目标跨度 < N 的段,优先在同一素材内向后扩 source_out
+        # 提速度 —— 段时长/时间戳/配音全部不动(快进的本质:同样时间展示更多
+        # 内容)。素材余量不足时:TTS 段保持原速并告警(护配音同步),非 TTS
+        # 段交给 2.5 的抬高下限压短兜底。
+        user_floor = self._parse_speed_floor(targets)
+        if user_floor is not None:
+            self._widen_source_spans(
+                flat_clips=flat_clips,
+                durations=durations,
+                media_durations=media_durations,
+                floor=user_floor,
+                warnings=warnings,
+                warn_unmet=has_tts,
+            )
+
         # 2.5 逐片段源跨度护栏(2026-11-11 模糊修复阶段3):任何分配模式产出
         # 的目标时长都不得超过 源跨度/MIN_CLIP_SPEED(允许慢动作的下限)。
         # 短素材被均分/节拍对齐拉长到 13 倍(实机:0.883s → 11.593s)会停帧/
         # 重复帧,禁止;超出部分重分配给仍有余量的段,余量也不足时接受总长
         # 短于计划并告警 —— 不注水、不虚标 speed。
+        # 2026-11-14:非 TTS 模式把下限抬到用户快进倍数(扩 span 后仍不足的段
+        # 压短时长兜底);TTS 模式保持 0.5 权威不动 —— 段时长=配音时长,压短
+        # 会把配音挤到后续画面(音画错位)。
         durations, material_budget_ms = self._apply_source_span_caps(
             durations=durations,
             flat_clips=flat_clips,
             warnings=warnings,
+            min_speed_floor=None if has_tts else user_floor,
         )
 
         # 3. 实际累计时间戳
@@ -193,6 +220,96 @@ class TimeLine:
             "warnings": warnings,
             "voiceover_id_map": voiceover_id_map,
         }
+
+    # ------------------------------------------------------------------
+    # 用户快进下限(2026-11-14 创建台「快进速度(倍)」,智能保同步)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _parse_speed_floor(targets: dict[str, Any]) -> float | None:
+        """解析 ``targets.speed_multiplier``;仅 >1 返回有效下限,否则 None。
+
+        非法值(非有限数/≤1/缺省 1.0)一律视为"不启用",与
+        ``nodes.storyline._common.speed_multiplier`` 的解析纪律一致(本层在
+        capabilities 层,不反向依赖 nodes,故本地重复这份小解析)。
+        """
+        raw = (targets or {}).get("speed_multiplier")
+        try:
+            value = float(raw) if raw is not None else 0.0
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(value) or value <= 1.0:
+            return None
+        return value
+
+    def _widen_source_spans(
+        self,
+        *,
+        flat_clips: list[dict[str, Any]],
+        durations: list[int],
+        media_durations: Optional[dict[str, int]],
+        floor: float,
+        warnings: list[str],
+        warn_unmet: bool,
+    ) -> None:
+        """快进下限的第一优先手段:向后扩 ``source_out``(原地改,不返回)。
+
+        对 ``speed = 源跨度/目标跨度 < floor`` 的 clip,把 source_out 向后扩到
+        ``ceil(floor × 目标跨度)`` —— 段时长/时间戳/配音全部不动,仅"多吃"
+        同一素材内的后续画面。扩展硬上界 = 同 media 内按 ``source_in`` 排序的
+        下一个 clip 的 ``source_in``(绝不吞并别人已选的取材区间)与该素材
+        ``duration_ms`` 的较小者。扩不够的段**不改时长**:TTS 模式(``warn_unmet``)
+        写告警保原速护配音;非 TTS 模式由 ``_apply_source_span_caps`` 的抬高
+        下限压短兜底。仅改 ``distribute`` 内部的 dict 副本,不污染调用方 groups。
+        """
+        if floor <= 1.0 or not flat_clips:
+            return
+        # 每 clip 的扩展硬上界:同素材内 source_in 排序的下一个 clip 的起点;
+        # 素材内最后一个 clip 用素材总时长兜底(media_durations 缺失则 0 = 无余量)。
+        by_media: dict[str, list[int]] = {}
+        for idx, c in enumerate(flat_clips):
+            by_media.setdefault(str(c.get("media_id") or ""), []).append(idx)
+        bounds: dict[int, int] = {}
+        for indices in by_media.values():
+            ordered = sorted(
+                indices,
+                key=lambda i: (
+                    int(flat_clips[i].get("source_in_ms", 0) or 0),
+                    int(flat_clips[i].get("source_out_ms", 0) or 0),
+                    i,
+                ),
+            )
+            for pos, idx in enumerate(ordered):
+                if pos + 1 < len(ordered):
+                    bounds[idx] = int(flat_clips[ordered[pos + 1]].get("source_in_ms", 0) or 0)
+                else:
+                    media_id = str(flat_clips[idx].get("media_id") or "")
+                    bounds[idx] = int((media_durations or {}).get(media_id, 0) or 0)
+
+        for idx, c in enumerate(flat_clips):
+            slot = int(durations[idx])
+            if slot <= 0:
+                continue
+            src_out = int(c.get("source_out_ms", 0) or 0)
+            span = src_out - max(0, int(c.get("source_in_ms", 0) or 0))
+            required = math.ceil(floor * slot)  # 向上取整:span/slot 恒 ≥ floor
+            if span >= required:
+                continue
+            room = bounds.get(idx, 0) - src_out
+            if room <= 0:
+                if warn_unmet:
+                    warnings.append(
+                        f"clip {c.get('clip_id')} 源跨度 {span}ms 达不到快进 "
+                        f"{floor}x 所需 {required}ms(同素材内无可用余量),"
+                        "按原速保留(护配音同步)"
+                    )
+                continue
+            gain = min(room, required - span)
+            c["source_out_ms"] = src_out + gain
+            if span + gain < required and warn_unmet:
+                warnings.append(
+                    f"clip {c.get('clip_id')} 源跨度扩到 {span + gain}ms 仍达不到快进 "
+                    f"{floor}x 所需 {required}ms(素材余量不足),按原速保留(护配音同步)"
+                )
 
     # ------------------------------------------------------------------
     # 三种分配策略
@@ -286,21 +403,28 @@ class TimeLine:
         durations: list[int],
         flat_clips: list[dict[str, Any]],
         warnings: list[str],
+        min_speed_floor: float | None = None,
     ) -> tuple[list[int], int | None]:
-        """把每段目标时长钳到 ``源跨度 / MIN_CLIP_SPEED`` 并重分配溢出。
+        """把每段目标时长钳到 ``源跨度 / 最低速度`` 并重分配溢出。
 
         速度语义(全链路唯一):``speed = 源跨度 / 目标跨度``。目标时长超过
-        ``源跨度 / MIN_CLIP_SPEED`` 即低于允许最低速度(短素材被拉长冒充有效
+        ``源跨度 / 最低速度`` 即低于允许最低速度(短素材被拉长冒充有效
         画面),先钳制;被钳掉的毫秒按**余量比例**重分配给其他段(每段同样不
         超其上限);总余量仍不够时接受总长短于计划 —— 禁止注水、禁止虚标
         speed,缺口写 warning 交给上游(替换素材/缩短成片)决策。
 
-        返回 ``(钳制+重分配后的时长, 素材预算毫秒)``;``MIN_CLIP_SPEED <= 0``
+        ``min_speed_floor``(2026-11-14):用户快进倍数抬高生效下限
+        ``max(STORYLINE_MIN_CLIP_SPEED, floor)``,扩 span 后仍不足的段在此压短
+        (仅非 TTS 模式传入;TTS 段时长=配音时长,压短会音画错位)。
+
+        返回 ``(钳制+重分配后的时长, 素材预算毫秒)``;生效下限 ``<= 0``
         视为关闭护栏(仅联调),行为与旧版一致,素材预算返回 ``None``。
         """
         from config import STORYLINE_MIN_CLIP_SPEED
 
         min_speed = float(STORYLINE_MIN_CLIP_SPEED)
+        if min_speed_floor is not None and min_speed_floor > min_speed:
+            min_speed = float(min_speed_floor)
         if min_speed <= 0 or not durations:
             return durations, None
 

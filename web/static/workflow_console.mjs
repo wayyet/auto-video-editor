@@ -69,6 +69,8 @@ export const DEFAULT_LIMITS = Object.freeze({
   prompt_max_chars: 4000,
   target_duration_ms_default: 35000,
   target_duration_ms_max: 600000,
+  speed_multiplier_default: 1,
+  speed_multiplier_max: 4,
   allowed_video_exts: [".mp4", ".mov"],
   ratios: ["9:16", "16:9", "4:3"],
   langs: ["zh", "en"],
@@ -156,13 +158,14 @@ export function removeFile(state, index) {
 // ---------------------------------------------------------------------------
 
 /**
- * 校验提交参数;返回错误对象 { prompt, duration, ratio, lang, backend },全空表示通过。
- * params: { prompt, target_duration_ms, ratio, lang, llm_backend? }
+ * 校验提交参数;返回错误对象 { prompt, duration, ratio, lang, speed, backend },全空表示通过。
+ * params: { prompt, target_duration_ms, ratio, lang, speed_multiplier?, llm_backend? }
  * llm_backend 为空 = 跟随服务端默认(合法);非空必须 ∈ CONSOLE_BACKENDS。
+ * speed_multiplier 缺省按 1(自动)处理;非法(非有限数/越界)报 speed 错误。
  */
 export function validateParams(params, limits) {
   const lim = { ...DEFAULT_LIMITS, ...(limits || {}) };
-  const errors = { prompt: "", duration: "", ratio: "", lang: "", backend: "" };
+  const errors = { prompt: "", duration: "", ratio: "", lang: "", speed: "", backend: "" };
   const prompt = String((params && params.prompt) || "").trim();
   if (!prompt) errors.prompt = "请输入剪辑提示词";
   else if (prompt.length > lim.prompt_max_chars) {
@@ -174,6 +177,14 @@ export function validateParams(params, limits) {
   }
   if (!(lim.ratios || []).includes(params && params.ratio)) errors.ratio = "画幅比例非法";
   if (!(lim.langs || []).includes(params && params.lang)) errors.lang = "输出语言非法";
+  const rawSpeed = params && params.speed_multiplier;
+  const speed =
+    rawSpeed === undefined || rawSpeed === null || rawSpeed === ""
+      ? lim.speed_multiplier_default
+      : Number(rawSpeed);
+  if (!Number.isFinite(speed) || speed < lim.speed_multiplier_default || speed > lim.speed_multiplier_max) {
+    errors.speed = `快进速度须为 ${lim.speed_multiplier_default} ≤ 值 ≤ ${lim.speed_multiplier_max}`;
+  }
   const backend = String((params && params.llm_backend) || "").trim();
   if (backend && !CONSOLE_BACKENDS.includes(backend)) errors.backend = "Agent 智能体非法";
   return errors;
@@ -268,6 +279,8 @@ export function buildCreateFormData(state, params) {
   fd.append("target_duration_ms", String(Math.round(Number(params && params.target_duration_ms))));
   fd.append("ratio", String((params && params.ratio) || ""));
   fd.append("lang", String((params && params.lang) || ""));
+  // 快进速度(倍)(2026-11-14):恒下发,缺省 1 = 自动;服务端二次校验范围
+  fd.append("speed_multiplier", String(Number(params && params.speed_multiplier) || 1));
   // Agent 智能体选择(2026-11-07):非空才下发,保持旧契约向后兼容(缺省 = 服务端默认)
   const backend = String((params && params.llm_backend) || "").trim();
   if (backend) fd.append("llm_backend", backend);

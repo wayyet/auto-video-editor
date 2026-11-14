@@ -165,7 +165,10 @@ TEXT_FX_INTRO_ANIMATION: str = os.environ.get("TEXT_FX_INTRO_ANIMATION", "新年
 # volume/last_nonzero_volume(34 键样本实证键);淡入淡出写原生 audio_fades
 # 素材(曲线类型按 linear,待 GUI diff 复核)。注意:节点会按这里的配置覆盖
 # 关卡② 人工在剪映里调过的 BGM 音量 —— 需要人工值时改环境变量或这里。
-NODE13_VOLUME_MAIN: float = float(os.environ.get("NODE13_VOLUME_MAIN", "1.0") or 0)
+# 2026-11-14 需求:main(原始视频画面自带声音)默认静音 —— 只改剪映草稿段级
+# volume=0(last_nonzero_volume 不被 0 覆盖,即"静音但可恢复"的原生表示),
+# 原始视频文件不动;需要恢复原声时设环境变量 NODE13_VOLUME_MAIN=1.0。
+NODE13_VOLUME_MAIN: float = float(os.environ.get("NODE13_VOLUME_MAIN", "0.0") or 0)
 NODE13_VOLUME_BGM: float = float(os.environ.get("NODE13_VOLUME_BGM", "0.35") or 0)
 NODE13_VOLUME_VOICEOVER: float = float(os.environ.get("NODE13_VOLUME_VOICEOVER", "1.0") or 0)
 NODE13_FADE_IN_SECONDS: float = float(os.environ.get("NODE13_FADE_IN_SECONDS", "2.0") or 0)
@@ -243,6 +246,18 @@ NODE_07_DEFAULT_FPS: int = 30              # 缺省 fps(段上无 fps 字段时�
 #: (仅联调用,生产不建议)。
 STORYLINE_MIN_CLIP_SPEED: float = float(
     os.environ.get("STORYLINE_MIN_CLIP_SPEED", "0.5").strip() or "0.5"
+)
+
+# ---------------------------------------------------------------------------
+# 2026-11-14 — 创建台「快进速度(倍)」参数(智能保同步语义)
+# ---------------------------------------------------------------------------
+#: 用户指定的每段最低播放倍数(快进下限),随 ``storyline_targets.speed_multiplier``
+#: 下发。1.0 = 不启用(现状全自动,速度仍由 目标时长/配音 分配派生);
+#: >1 时规划器优先在同一素材内向后多取画面提速度(段时长/配音/总时长不变),
+#: 素材不足时无配音段压短段时长兜底、配音段保原速并告警。仅规划期生效。
+CONSOLE_SPEED_MULTIPLIER_DEFAULT: float = 1.0
+CONSOLE_SPEED_MULTIPLIER_MAX: float = float(
+    os.environ.get("CONSOLE_SPEED_MULTIPLIER_MAX", "4.0").strip() or "4.0"
 )
 
 

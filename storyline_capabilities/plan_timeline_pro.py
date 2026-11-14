@@ -92,12 +92,14 @@ def plan_timeline_pro(
         else []
     )
 
-    # 1. 分配时长
+    # 1. 分配时长(2026-11-14:media_durations 供「快进速度」下限扩 source_out
+    # 用;键与 normalize_source_media 的 media_id 兜底规则一致,保证查表命中)
     timeline = TimeLine().distribute(
         groups=groups,
         tts_res=tts_res,
         bgm=bgm,
         targets=targets,
+        media_durations=_media_durations(source_media),
     )
     clips = timeline["clips"]
     voiceover_id_map = timeline.get("voiceover_id_map") or {}
@@ -322,6 +324,28 @@ def _subtitle_text(
         if narration:
             lines.append(narration)
     return "\n".join(lines) if lines else None
+
+
+def _media_durations(source_media: Optional[list[dict[str, Any]]]) -> dict[str, int]:
+    """提取 ``{media_id: duration_ms}``(2026-11-14 快进下限扩 source_out 用)。
+
+    ``load_media`` 运维形状的时长在顶层 ``duration_ms`` 或
+    ``metadata.duration_ms``;media_id 兜底规则与 ``normalize_source_media``
+    一致(``media_{idx+1:04d}``),保证扩 span 查表键与归一化后的 media_id 对得上。
+    """
+    out: dict[str, int] = {}
+    for idx, raw in enumerate(source_media or []):
+        if not isinstance(raw, dict):
+            continue
+        meta = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
+        media_id = str(raw.get("media_id") or f"media_{idx + 1:04d}")
+        try:
+            duration_ms = int(raw.get("duration_ms") or meta.get("duration_ms") or 0)
+        except (TypeError, ValueError):
+            duration_ms = 0
+        if media_id and duration_ms > 0:
+            out[media_id] = duration_ms
+    return out
 
 
 def _bgm_to_internal(bgm_selection: dict[str, Any]) -> Optional[dict[str, Any]]:

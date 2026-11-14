@@ -182,6 +182,7 @@
             <option value="en">英文</option>
           </select>
         </label>
+        <label>快进速度(倍)<input id="speedInput" type="number" min="1" step="0.1" value="1" title="每个片段的最低播放倍速;1=自动(按配音与目标时长自动适配)。优先在同一素材内多取画面提速度,配音不受影响" /></label>
       </div>
       <div class="params" style="margin-top:8px">
         <label style="display:block; width:100%">必需功能<span class="hint" style="margin-left:6px">交付 QA 将逐项把关,勾选项缺失/降级时阻断交付(阶段 6)</span></label>
@@ -286,6 +287,7 @@
     const dropZone = $("dropZone"), fileInput = $("fileInput"), fileMeta = $("fileMeta");
     const fileTable = $("fileTable"), fileBody = $("fileBody"), fileErrors = $("fileErrors");
     const durationInput = $("durationInput"), ratioSelect = $("ratioSelect"), langSelect = $("langSelect");
+    const speedInput = $("speedInput");
     const backendSelect = $("backendSelect");
     const btnCreate = $("btnCreate"), formMeta = $("formMeta");
     const progressWrap = $("progressWrap"), progressBar = $("progressBar"), progressText = $("progressText");
@@ -341,6 +343,8 @@
             prompt_max_chars: Number(cfg.prompt_max_chars) || DEFAULT_LIMITS.prompt_max_chars,
             target_duration_ms_default: Number(cfg.target_duration_ms_default) || DEFAULT_LIMITS.target_duration_ms_default,
             target_duration_ms_max: Number(cfg.target_duration_ms_max) || DEFAULT_LIMITS.target_duration_ms_max,
+            speed_multiplier_default: Number(cfg.speed_multiplier_default) || DEFAULT_LIMITS.speed_multiplier_default,
+            speed_multiplier_max: Number(cfg.speed_multiplier_max) || DEFAULT_LIMITS.speed_multiplier_max,
             allowed_video_exts: Array.isArray(cfg.allowed_video_exts) && cfg.allowed_video_exts.length
               ? cfg.allowed_video_exts : DEFAULT_LIMITS.allowed_video_exts,
             ratios: Array.isArray(cfg.ratios) && cfg.ratios.length ? cfg.ratios : DEFAULT_LIMITS.ratios,
@@ -368,6 +372,7 @@
       durationInput.readOnly = true;
       ratioSelect.disabled = true;
       langSelect.disabled = true;
+      speedInput.readOnly = true;
       backendSelect.disabled = true;
       dropZone.style.display = "none";
       (async () => {
@@ -406,6 +411,8 @@
       const defSec = Math.round(limits.target_duration_ms_default / 1000);
       durationInput.value = String(defSec);
       durationInput.max = String(Math.round(limits.target_duration_ms_max / 1000));
+      speedInput.value = String(limits.speed_multiplier_default);
+      speedInput.max = String(limits.speed_multiplier_max);
       renderPromptCount();
       rebuildSelect(ratioSelect, limits.ratios);
       rebuildSelect(langSelect, limits.langs, { zh: "中文", en: "英文" });
@@ -471,6 +478,11 @@
       }
       ensureSelectOption(ratioSelect, targets.ratio);
       ensureSelectOption(langSelect, targets.lang, { zh: "中文", en: "英文" });
+      // 2026-11-14 快进速度:旧任务 initial_state 无此键,回落默认 1(自动)
+      const sp = Number(targets.speed_multiplier);
+      if (Number.isFinite(sp) && sp > 0) {
+        speedInput.value = String(sp);
+      }
       // 阶段 6:必需功能按任务 initial_state 回填(config 默认之后覆盖)
       applyRequiredFeatures(
         (detail && detail.initial_state && detail.initial_state.required_features) || null
@@ -608,7 +620,7 @@
     });
     fileInput.addEventListener("change", () => { handleFiles(fileInput.files); fileInput.value = ""; });
     promptInput.addEventListener("input", () => { renderPromptCount(); renderSubmitControls(); });
-    for (const el of [durationInput, ratioSelect, langSelect]) {
+    for (const el of [durationInput, ratioSelect, langSelect, speedInput]) {
       el.addEventListener("change", renderSubmitControls);
     }
 
@@ -714,6 +726,7 @@
         target_duration_ms: Math.round(Number(durationInput.value || 0) * 1000),
         ratio: ratioSelect.value,
         lang: langSelect.value,
+        speed_multiplier: Number(speedInput.value || 1),
         llm_backend: backendSelect.value,
         required_features: readRequiredFeatures(),
       };
@@ -756,7 +769,7 @@
       const params = readParams();
       if (!canSubmit(consoleState, params, limits)) {
         const errs = validateParams(params, limits);
-        const first = [errs.prompt, errs.duration, errs.ratio, errs.lang, errs.backend].find(Boolean)
+        const first = [errs.prompt, errs.duration, errs.ratio, errs.lang, errs.speed, errs.backend].find(Boolean)
           || (consoleState.files.length ? "" : "请至少导入一个视频");
         renderFormMeta(first || "无法提交", true);
         return;

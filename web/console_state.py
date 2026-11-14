@@ -4,7 +4,8 @@
 
 关键纪律:
 - 键集合**固定**为下方 ``build_initial_state`` 写死的键(2026-11-09 阶段 6 起
-  含 ``required_features``,值全为布尔、键名走 ``REQUIRED_FEATURE_KEYS`` 白名单)——
+  含 ``required_features``,值全为布尔、键名走 ``REQUIRED_FEATURE_KEYS`` 白名单;
+  2026-11-14 起 ``storyline_targets`` 含 ``speed_multiplier`` 快进速度)——
   ``scripts/run_workflow.py --initial-state-json`` 对 JSON 无字段白名单
   (整体透传进 WorkflowState),所以白名单责任在本创建台,不透传任何额外键;
 - 提示词只映射 ``storyline_targets.user_request / script_request``,
@@ -43,6 +44,7 @@ def build_initial_state(
     lang: str,
     outputs_root: Path,
     required_features: dict[str, bool] | None = None,
+    speed_multiplier: float = 1.0,
 ) -> dict:
     """构建冻结契约的初始 WorkflowState。
 
@@ -57,6 +59,9 @@ def build_initial_state(
         required_features: 阶段 6(效果缺失修复)必需功能显式声明(9 类布尔,
             API 层白名单过滤);``None`` = 不写该键,由 QA 侧
             ``resolve_required_features`` 按运行时能力推导。
+        speed_multiplier: 2026-11-14 创建台「快进速度(倍)」;每段最低播放倍数,
+            1.0 = 不启用(规划器仍全自动),>1 智能保同步语义(API 层已校验
+            1.0 ≤ v ≤ ``config.CONSOLE_SPEED_MULTIPLIER_MAX``)。
 
     Returns:
         只含冻结键集合的 dict(可直接 json.dumps 落盘)。
@@ -81,6 +86,9 @@ def build_initial_state(
             "target_duration_ms": int(target_duration_ms),
             "ratio": str(ratio),
             "lang": str(lang),
+            # 2026-11-14:快进速度(倍);1.0 = 自动。消费方
+            # nodes/storyline/_common.speed_multiplier → plan_timeline_pro/timeline_planner
+            "speed_multiplier": float(speed_multiplier),
         },
         "error_log": [],
     }

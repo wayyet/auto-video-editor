@@ -130,16 +130,55 @@ def test_adjust_volume_no_warning_when_jianying_not_running(
 # 角色化:main / bgm / voiceover
 # ---------------------------------------------------------------------------
 def test_main_role_sets_video_segment_volume(draft_with_audio: Path) -> None:
-    """main:video 轨段 volume=1.0(last_nonzero_volume 同步),无 fade。"""
+    """main:video 轨段 volume=0.0(2026-11-14 默认静音原始视频),无 fade。
+
+    静音不写 last_nonzero_volume(仅非零同步)—— 段上原有的非零音量记录
+    保留,即剪映"静音但可恢复"的原生表示。
+    """
     jianying_adjust_volume(str(draft_with_audio), "main")
 
     draft = json.loads(draft_with_audio.read_text(encoding="utf-8"))
     seg = draft["tracks"][0]["segments"][0]
-    assert seg["volume"] == 1.0
-    assert seg["last_nonzero_volume"] == 1.0
+    assert seg["volume"] == 0.0
+    assert "last_nonzero_volume" not in seg
     assert not any(
         str(r).startswith("audio-fade-") for r in seg.get("extra_material_refs", [])
     )
+
+
+def test_main_mute_preserves_existing_last_nonzero_volume(tmp_path: Path) -> None:
+    """段上已有 last_nonzero_volume=1.0 时静音:volume=0,恢复值原样保留。"""
+    draft = {
+        "canvas_config": {"width": 1080, "height": 1920},
+        "duration": 35_000_000,
+        "materials": {},
+        "tracks": [{
+            "type": "video",
+            "segments": [{
+                "id": "v1",
+                "volume": 1.0,
+                "last_nonzero_volume": 1.0,
+                "target_timerange": {"start": 0, "duration": 35_000_000},
+            }],
+        }],
+    }
+    p = tmp_path / "draft" / "draft_content.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
+    jianying_adjust_volume(str(p), "main")
+
+    seg = json.loads(p.read_text(encoding="utf-8"))["tracks"][0]["segments"][0]
+    assert seg["volume"] == 0.0
+    assert seg["last_nonzero_volume"] == 1.0  # 不被 0 覆盖(可恢复)
+
+
+def test_main_explicit_volume_level_overrides_default(draft_with_audio: Path) -> None:
+    """显式传 volume_level 仍按传入值生效(env/调用方覆盖默认静音的通道)。"""
+    jianying_adjust_volume(str(draft_with_audio), "main", volume_level=1.0)
+
+    seg = json.loads(draft_with_audio.read_text(encoding="utf-8"))["tracks"][0]["segments"][0]
+    assert seg["volume"] == 1.0
+    assert seg["last_nonzero_volume"] == 1.0
 
 
 def test_bgm_role_sets_volume_and_native_fade(draft_with_audio: Path) -> None:

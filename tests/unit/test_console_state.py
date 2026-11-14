@@ -108,7 +108,24 @@ class TestBuildInitialState:
         }
         assert set(state["storyline_targets"].keys()) == {
             "user_request", "script_request", "target_duration_ms", "ratio", "lang",
+            "speed_multiplier",
         }
+
+    def test_speed_multiplier_default_and_passthrough(self, tmp_path):
+        """2026-11-14 快进速度:缺省 1.0(不启用);显式值透传 storyline_targets。"""
+        videos = self._videos(tmp_path, 1)
+        state = build_initial_state(
+            thread_id=self.TID, video_paths=videos, prompt="p",
+            target_duration_ms=35000, ratio="9:16", lang="zh",
+            outputs_root=tmp_path,
+        )
+        assert state["storyline_targets"]["speed_multiplier"] == 1.0
+        state2 = build_initial_state(
+            thread_id=self.TID, video_paths=videos, prompt="p",
+            target_duration_ms=35000, ratio="9:16", lang="zh",
+            outputs_root=tmp_path, speed_multiplier=2.5,
+        )
+        assert state2["storyline_targets"]["speed_multiplier"] == 2.5
 
     def test_paths_are_absolute(self, tmp_path):
         videos = self._videos(tmp_path, 1)

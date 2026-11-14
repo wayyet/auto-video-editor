@@ -63,7 +63,8 @@ def test_tc07_node_13_writes_native_fades_and_role_volumes(audio_draft: Path) ->
     assert bgm_fade["fade_out_duration"] == 3_000_000
     assert not rest, "fade 不应翻倍"
 
-    # 验证 3 — 分角色段级音量:BGM 0.35,配音/主音轨 1.0;fade 只绑 BGM 段
+    # 验证 3 — 分角色段级音量:BGM 0.35,配音 1.0,主音轨 0.0(2026-11-14
+    # 起默认静音原始视频,config.NODE13_VOLUME_MAIN=0);fade 只绑 BGM 段
     bgm_seg = draft["tracks"][1]["segments"][0]
     vo_seg = draft["tracks"][2]["segments"][0]
     video_seg = draft["tracks"][0]["segments"][0]
@@ -71,7 +72,7 @@ def test_tc07_node_13_writes_native_fades_and_role_volumes(audio_draft: Path) ->
     assert bgm_fade["id"] in bgm_seg["extra_material_refs"]
     assert vo_seg["volume"] == 1.0
     assert not any(str(r).startswith("audio-fade-") for r in vo_seg.get("extra_material_refs", []))
-    assert video_seg["volume"] == 1.0
+    assert video_seg["volume"] == 0.0
 
 
 def test_tc07_node_13_replay_is_idempotent(audio_draft: Path) -> None:
