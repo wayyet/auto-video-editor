@@ -50,6 +50,30 @@ def _seed_draft(draft_dir: Path, duration_us: int = 60_000_000) -> Path:
     return draft_file
 
 
+def _add_manual_bgm(draft_file: Path) -> None:
+    """模拟操作员在关卡② 于剪映里人工拖入 BGM(20261114 阶段6 起过门必需)。
+
+    关卡② 改造(修订 §2.11)后:恢复时磁盘草稿仍无 BGM 会**再次挂起** ——
+    集成流程在最终 resume 前必须先把 BGM 写进磁盘草稿。
+    """
+    draft = json.loads(draft_file.read_text(encoding="utf-8"))
+    tracks = draft.setdefault("tracks", [])
+    if not any(t.get("type") == "audio" and t.get("name") == "manual_bgm" for t in tracks):
+        tracks.append({
+            "type": "audio",
+            "id": "track-audio-manual-bgm",
+            "name": "manual_bgm",
+            "segments": [{
+                "id": "seg-manual-bgm",
+                "material_id": "audio-manual-bgm",
+                "target_timerange": {"start": 0, "duration": draft.get("duration") or 35_000_000},
+            }],
+        })
+        mats = draft.setdefault("materials", {})
+        mats.setdefault("audios", []).append({"id": "audio-manual-bgm", "name": "manual_bgm"})
+    draft_file.write_text(json.dumps(draft, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 @pytest.fixture
 def seeded_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[WorkflowState, Path]:
     """构造一个已通过节点 1-5 的 state(draft 已写入,draft_path 已设置)。
@@ -90,7 +114,7 @@ def seeded_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Workf
 # ---------------------------------------------------------------------------
 def test_sequential_full_run_no_reruns(seeded_state, tmp_path: Path) -> None:
     """6→13 全链路顺序跑,各 *_done 打点应各出现 1 次。"""
-    state, _ = seeded_state
+    state, draft_file = seeded_state
     thread_id = "seq-no-reruns"
 
     g = build_graph(checkpointer=InMemorySaver(), thread_id=thread_id, start_heartbeat_thread=False)
@@ -108,6 +132,8 @@ def test_sequential_full_run_no_reruns(seeded_state, tmp_path: Path) -> None:
         pass
 
     # resume 关卡② → 节点 13 → join(QA)→ END
+    # 20261114 阶段6:先补 BGM(关卡② 恢复时重读磁盘,仍无 BGM 会再次挂起)
+    _add_manual_bgm(draft_file)
     final = g.invoke(Command(resume=True), config={"configurable": {"thread_id": thread_id}})
 
     log = final["status_log"]
@@ -129,8 +155,9 @@ def test_sequential_full_run_no_reruns(seeded_state, tmp_path: Path) -> None:
     for tag in expected:
         assert log.count(tag) == 1, f"{tag} 出现 {log.count(tag)} 次(期望 1): {log}"
 
-    # 步骤 13 执行结果由 status_log 标签留痕(volume_adjusted 已随阶段5批2 移除)
-    assert "node_13_adjust_volume_no_audio_track" in final["status_log"]
+    # 步骤 13 执行结果由 status_log 标签留痕(volume_adjusted 已随阶段5批2 移除)。
+    # 20261114 阶段6 起流程带 BGM 过门② → 节点 13 走 done 路径(audio track 存在)。
+    assert "node_13_adjust_volume_done" in final["status_log"]
 
 
 def test_sequential_produces_complete_draft(seeded_state, tmp_path: Path) -> None:
@@ -148,6 +175,8 @@ def test_sequential_produces_complete_draft(seeded_state, tmp_path: Path) -> Non
         g.invoke(Command(resume=True), config={"configurable": {"thread_id": thread_id}})
     except GraphInterrupt:
         pass
+    # 20261114 阶段6:先补 BGM(关卡② 恢复时重读磁盘,仍无 BGM 会再次挂起)
+    _add_manual_bgm(draft_file)
     g.invoke(Command(resume=True), config={"configurable": {"thread_id": thread_id}})
 
     draft = json.loads(draft_file.read_text(encoding="utf-8"))

@@ -44,6 +44,31 @@ def _seed_draft(draft_dir: Path, duration_us: int = 35_000_000) -> Path:
     return draft_file
 
 
+def _add_manual_bgm(draft_file: Path) -> None:
+    """模拟操作员在关卡② 于剪映里人工拖入 BGM(20261114 阶段6 起过门必需)。
+
+    关卡② 改造(修订 §2.11)后:恢复时磁盘草稿仍无 BGM 会**再次挂起** ——
+    与真实操作员"先补轨、再点继续"的行为一致。集成流程在最终 resume 前
+    必须先把 BGM 写进磁盘草稿,否则流程按设计停在关卡②。
+    """
+    draft = json.loads(draft_file.read_text(encoding="utf-8"))
+    tracks = draft.setdefault("tracks", [])
+    if not any(t.get("type") == "audio" and t.get("name") == "manual_bgm" for t in tracks):
+        tracks.append({
+            "type": "audio",
+            "id": "track-audio-manual-bgm",
+            "name": "manual_bgm",
+            "segments": [{
+                "id": "seg-manual-bgm",
+                "material_id": "audio-manual-bgm",
+                "target_timerange": {"start": 0, "duration": draft.get("duration") or 35_000_000},
+            }],
+        })
+        mats = draft.setdefault("materials", {})
+        mats.setdefault("audios", []).append({"id": "audio-manual-bgm", "name": "manual_bgm"})
+    draft_file.write_text(json.dumps(draft, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 _TEST_REQUIRED_FEATURES = {key: False for key in REQUIRED_FEATURE_KEYS}
 
 
@@ -108,6 +133,8 @@ def test_week4_checkpoint3_normal_path(tmp_path: Path, monkeypatch: pytest.Monke
     # resume 关卡② → 尾链 09 → 11 → 13 → join(QA)→ END
     # (2026-10 调序后:① 之后走 08 →〔中文线 10→14→15 ‖ 英文线 fork→16a→08b→10b→(③)→17〕
     #  两条线汇合后才进尾链 09→11→12(②)→13→join;正常路径 ③ 不触发,关卡② 仍是第 2 次也是最后一次挂起)
+    # 20261114 阶段6:关卡② 恢复时重读磁盘草稿,仍无 BGM 会再次挂起 —— 先补轨再过门。
+    _add_manual_bgm(draft_file)
     final = g.invoke(
         __import__("langgraph.types", fromlist=["Command"]).Command(resume=True),
         config=config,
@@ -157,6 +184,8 @@ def test_week4_zh_branch_no_rerun_after_en_resume(
     g.invoke(Command(resume=True), config=config)
 
     # 直接 resume 关卡② → 中文分支 + 英文分支(无 interrupt)→ join → END
+    # 20261114 阶段6:先补 BGM(关卡② 恢复时重读磁盘,仍无 BGM 会再次挂起)
+    _add_manual_bgm(draft_file)
     final = g.invoke(Command(resume=True), config=config)
 
     log = final["status_log"]
@@ -255,6 +284,8 @@ def test_week4_branch_parallel_dispatch(
     # 跑到 END
     g.invoke(state, config=config)
     g.invoke(Command(resume=True), config=config)
+    # 20261114 阶段6:先补 BGM(关卡② 恢复时重读磁盘,仍无 BGM 会再次挂起)
+    _add_manual_bgm(draft_file)
     final = g.invoke(Command(resume=True), config=config)
 
     log = final["status_log"]
@@ -316,6 +347,8 @@ def test_week4_join_called_only_once(
 
     g.invoke(state, config=config)
     g.invoke(Command(resume=True), config=config)
+    # 20261114 阶段6:先补 BGM(关卡② 恢复时重读磁盘,仍无 BGM 会再次挂起)
+    _add_manual_bgm(draft_file)
     g.invoke(Command(resume=True), config=config)
 
     assert calls["n"] == 1, (

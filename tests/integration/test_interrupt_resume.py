@@ -64,6 +64,31 @@ def _seed_draft(path: Path, duration_us: int = 35_000_000) -> None:
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _add_manual_bgm(path: Path) -> None:
+    """模拟操作员在关卡② 于剪映里人工拖入 BGM(20261114 阶段6 起过门必需)。
+
+    关卡② 改造(修订 §2.11)后:恢复时磁盘草稿仍无 BGM 会**再次挂起** ——
+    与真实操作员"先补轨、再点继续"的行为一致。集成流程在最终 resume 前
+    必须先把 BGM 写进磁盘草稿。
+    """
+    draft = json.loads(path.read_text(encoding="utf-8"))
+    tracks = draft.setdefault("tracks", [])
+    if not any(t.get("type") == "audio" and t.get("name") == "manual_bgm" for t in tracks):
+        tracks.append({
+            "type": "audio",
+            "id": "track-audio-manual-bgm",
+            "name": "manual_bgm",
+            "segments": [{
+                "id": "seg-manual-bgm",
+                "material_id": "audio-manual-bgm",
+                "target_timerange": {"start": 0, "duration": draft.get("duration") or 35_000_000},
+            }],
+        })
+        mats = draft.setdefault("materials", {})
+        mats.setdefault("audios", []).append({"id": "audio-manual-bgm", "name": "manual_bgm"})
+    path.write_text(json.dumps(draft, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 @pytest.fixture
 def seeded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[WorkflowState, Path]:
     """35s 草稿 + state(节点 7 一次通过);storyline 产物隔离到 tmp。"""
@@ -105,7 +130,7 @@ def test_checkpoint1_interrupt_and_resume_basic(seeded) -> None:
     阶段3 后:第一次 invoke 跑完 storyline 链停在关卡①,再 resume → 关卡②,
     再 resume → END(关卡⓪ 已删除)。
     """
-    state, _ = seeded
+    state, draft_file = seeded
     config = {"configurable": {"thread_id": "int-basic"}}
 
     g = _build_inmemory_graph("int-basic")
@@ -119,6 +144,8 @@ def test_checkpoint1_interrupt_and_resume_basic(seeded) -> None:
     assert _is_interrupted(g, config), "应停在节点 12 interrupt"
 
     # resume 关卡② → 节点 13 → END
+    # 20261114 阶段6:先补 BGM(关卡② 恢复时重读磁盘,仍无 BGM 会再次挂起)
+    _add_manual_bgm(draft_file)
     final = g.invoke(Command(resume=True), config=config)
     assert not _is_interrupted(g, config), "流程应已结束"
 
@@ -149,7 +176,7 @@ def test_multi_day_resume_via_shared_checkpointer(seeded) -> None:
     真正的新数据库连接(Postgres)恢复覆盖见
     ``tests/integration/test_postgres_resume.py``。
     """
-    state, _ = seeded
+    state, draft_file = seeded
     thread_id = "multi-day"
     config = {"configurable": {"thread_id": thread_id}}
 
@@ -164,6 +191,8 @@ def test_multi_day_resume_via_shared_checkpointer(seeded) -> None:
     g2.invoke(Command(resume=True), config=config)
     assert _is_interrupted(g2, config), "g2 resume 关卡① 后应在节点 12 interrupt"
 
+    # 20261114 阶段6:先补 BGM(关卡② 恢复时重读磁盘,仍无 BGM 会再次挂起)
+    _add_manual_bgm(draft_file)
     final = g2.invoke(Command(resume=True), config=config)
     assert not _is_interrupted(g2, config), "g2 应已结束"
 
@@ -250,13 +279,16 @@ def test_thread_id_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, se
     assert _is_interrupted(g_b, config_b)
 
     # 乱序 resume:b 先到结束,a 后到结束
+    # 20261114 阶段6:关卡② 恢复时重读磁盘草稿,仍无 BGM 会再次挂起 —— 过门前补轨
     g_b.invoke(Command(resume=True), config=config_b)
     g_b.invoke(Command(resume=True), config=config_b)
+    _add_manual_bgm(draft_b)
     final_b = g_b.invoke(Command(resume=True), config=config_b)
     assert not _is_interrupted(g_b, config_b)
 
     g_a.invoke(Command(resume=True), config=config_a)
     g_a.invoke(Command(resume=True), config=config_a)
+    _add_manual_bgm(draft_a)
     final_a = g_a.invoke(Command(resume=True), config=config_a)
     assert not _is_interrupted(g_a, config_a)
 

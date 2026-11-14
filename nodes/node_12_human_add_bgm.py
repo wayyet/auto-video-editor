@@ -15,7 +15,17 @@ Week 5 改动(对齐第 5 周计划 §1.1):
 ``node_17`` 写入英文分支草稿的配音轨(``EN_VOICEOVER_TRACK_NAME`` 标记)原样
 保留,只替换其余 audio 轨。
 
-测试策略:与 node_06 一致 — 纯函数单测覆盖 payload + post_resume,
+2026-11-14 关卡②改造(修订执行计划 §2.11/§2.12,阶段6):
+- node_05 自动铺轨上线后,BGM 常态已在草稿里 —— **已有 BGM 零 interrupt 直接
+  放行**(D1);缺失才挂起,恢复后重读磁盘复查,仍缺再次挂起;
+- 校验**不再依赖** ``required_features.bgm`` 勾选(原实现:未勾选时确认即过,
+  自动铺轨失败也会放行 —— 与"缺失必须人工补充"矛盾);
+- 草稿读取失败(文件缺失/JSON 损坏/I/O)改三态判别并 **fail-closed 抛
+  ``BgmGateDraftReadError``**:不再混同"BGM 缺失"无限重挂,也不静默放行。
+
+测试策略:纯函数单测覆盖 payload + post_resume + mirror;``human_add_bgm``
+本体的 interrupt 控制路径打桩 ``nodes.node_12_human_add_bgm.interrupt`` 直接
+调用覆盖(修订 §6.1:只测 helper 不足以证明"已有 BGM 不 interrupt");
 真实 interrupt() 行为由集成测试覆盖。
 """
 
@@ -28,7 +38,6 @@ from langgraph.types import interrupt
 from draft_ops.draft_integrity import (
     _bgm_segment_count,
     check_track_references,
-    resolve_required_features,
 )
 from draft_ops.draft_lock import hash_draft_files
 from nodes._checkpoint import build_interrupt_payload, post_resume
@@ -78,15 +87,51 @@ def _zh_bgm_missing(draft: dict | None) -> bool:
     return _bgm_segment_count(draft) == 0
 
 
-def _load_zh_draft_for_gate(state: WorkflowState) -> dict | None:
-    """读中文主草稿;读取失败返回 None(校验降级放行,不无限卡关卡)。"""
+class BgmGateDraftReadError(RuntimeError):
+    """关卡② 中文草稿读取失败(fail-closed,修订 §2.12)。
+
+    文件缺失 / JSON 损坏 / I/O 异常都不是"BGM 缺失":旧实现把读取失败折叠成
+    ``None → 缺失``,在 required_features.bgm 勾选时会反复 interrupt 死循环,
+    未勾选时又静默放行。两种都是错的 —— 读取失败必须带着可操作的原因明确失败。
+    """
+
+
+def _read_zh_draft_for_gate(state: WorkflowState) -> dict[str, Any]:
+    """三态读取中文主草稿(修订 §2.12)。
+
+    Returns:
+        ``{"status": "ok"|"missing_file"|"invalid_json"|"io_error",
+        "draft": dict|None, "reason": str}``。只有 ``ok`` 才携带草稿;
+        其余状态交由 :func:`human_add_bgm` fail-closed,不得当作 BGM 缺失。
+    """
     zh_path = state.get("draft_path")
     if not zh_path:
-        return None
+        return {
+            "status": "missing_file",
+            "draft": None,
+            "reason": "state.draft_path 为空(节点05 未产出草稿?)",
+        }
     try:
-        return load_draft(zh_path)
-    except (FileNotFoundError, ValueError, OSError):
-        return None
+        return {"status": "ok", "draft": load_draft(zh_path), "reason": ""}
+    except FileNotFoundError as exc:
+        return {"status": "missing_file", "draft": None, "reason": str(exc)}
+    except ValueError as exc:  # JSONDecodeError / 编码错误
+        return {"status": "invalid_json", "draft": None, "reason": repr(exc)}
+    except OSError as exc:
+        return {"status": "io_error", "draft": None, "reason": repr(exc)}
+
+
+def _read_error_detail(read: dict[str, Any]) -> str:
+    """把三态读取结果转成带修复提示的报错文案(透出到监控/创建台)。"""
+    hint = {
+        "missing_file": "确认 draft_path 草稿是否存在(节点05 是否成功落盘/发布)",
+        "invalid_json": "draft_content.json 可能损坏或被外部工具改坏,检查文件完整性",
+        "io_error": "草稿可能被剪映占用或权限不足,关闭剪映/检查权限后重试",
+    }.get(str(read.get("status")), "未知读取错误")
+    return (
+        f"关卡② 中文草稿读取失败({read.get('status')}): "
+        f"{read.get('reason')} —— {hint}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -310,20 +355,33 @@ def _post_resume(state: WorkflowState, notifier=_send_notification) -> dict:
 
 
 def human_add_bgm(state: WorkflowState) -> dict:
-    """关卡②:挂起等待用户确认;BGM 必选时校验草稿确有 BGM 轨后才放行。
+    """关卡②:已有 BGM 零 interrupt 直接放行;缺失才挂起并复查(2026-11-14 修订)。
 
-    2026-11-10(console-5aa2606e546b 复盘):此前 resume 即通过,操作员未真正
-    拖入 BGM 也会放行,缺口要拖到交付 QA 才兜住。现 required_features.bgm 为真
-    时,resume 后重读磁盘上的中文草稿做校验,BGM 缺失 → 带告警再次 interrupt
-    (LangGraph 顺序多次 interrupt:重跑时首个 interrupt 回放已答复的 resume 值,
-    新 interrupt 重新挂起;草稿每次从磁盘现读,人工编辑即时可见)。未勾选 BGM
-    的任务保持原行为(确认即过);草稿读取失败也放行(降级,不无限卡关)。
+    2026-11-10(console-5aa2606e546b 复盘)引入"resume 后校验草稿确有 BGM",
+    但当时仍由 ``required_features.bgm`` 勾选控制 —— 未勾选的任务即使自动铺轨
+    失败、人工也没补,确认后照样放行。本版按修订 §2.11 改为**只认磁盘草稿的
+    真实状态**:
+
+    1. 读取成功且已有非配音音轨(node_05 自动铺轨成功,或人工已补)→
+       不 interrupt,直接 :func:`_post_resume`(SHA 记录 + 英文镜像不绕过);
+    2. 读取成功但无 BGM → interrupt 挂起;恢复后**重新读磁盘**(不复用内存
+       旧对象,人工编辑即时可见),仍缺则再次挂起;
+    3. 读取失败(路径空/文件缺失/JSON 损坏/I/O)→ 抛
+       :class:`BgmGateDraftReadError` 明确失败 —— 不当作"无 BGM"无限重挂,
+       也不静默放行(修订 §2.12)。
+
+    LangGraph 顺序多次 interrupt:重跑时首个 interrupt 回放已答复的 resume 值,
+    新 interrupt 重新挂起。
     """
-    bgm_required = bool(resolve_required_features(state).get("bgm"))
-    interrupt(_build_interrupt_payload(state))
-    while bgm_required:
-        draft = _load_zh_draft_for_gate(state)
-        if not _zh_bgm_missing(draft):
-            break
+    read = _read_zh_draft_for_gate(state)
+    if read["status"] != "ok":
+        raise BgmGateDraftReadError(_read_error_detail(read))
+    if not _zh_bgm_missing(read["draft"]):
+        return _post_resume(state)
+    while True:
         interrupt(_build_interrupt_payload(state, bgm_missing=True))
-    return _post_resume(state)
+        read = _read_zh_draft_for_gate(state)
+        if read["status"] != "ok":
+            raise BgmGateDraftReadError(_read_error_detail(read))
+        if not _zh_bgm_missing(read["draft"]):
+            return _post_resume(state)

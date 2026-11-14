@@ -51,6 +51,30 @@ def _seed_draft(draft_dir: Path, duration_us: int = 35_000_000) -> Path:
     return draft_file
 
 
+def _add_manual_bgm(draft_file: Path) -> None:
+    """模拟操作员在关卡② 于剪映里人工拖入 BGM(20261114 阶段6 起过门必需)。
+
+    关卡② 改造(修订 §2.11)后:恢复时磁盘草稿仍无 BGM 会**再次挂起** ——
+    集成流程在最终 resume 前必须先把 BGM 写进磁盘草稿。
+    """
+    draft = json.loads(draft_file.read_text(encoding="utf-8"))
+    tracks = draft.setdefault("tracks", [])
+    if not any(t.get("type") == "audio" and t.get("name") == "manual_bgm" for t in tracks):
+        tracks.append({
+            "type": "audio",
+            "id": "track-audio-manual-bgm",
+            "name": "manual_bgm",
+            "segments": [{
+                "id": "seg-manual-bgm",
+                "material_id": "audio-manual-bgm",
+                "target_timerange": {"start": 0, "duration": draft.get("duration") or 35_000_000},
+            }],
+        })
+        mats = draft.setdefault("materials", {})
+        mats.setdefault("audios", []).append({"id": "audio-manual-bgm", "name": "manual_bgm"})
+    draft_file.write_text(json.dumps(draft, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 REQUIRED_FEATURES_NONE = {key: False for key in REQUIRED_FEATURE_KEYS}
 
 
@@ -129,6 +153,8 @@ def test_resume_all_three_checkpoints_via_shared_checkpointer(
     assert p2["checkpoint"] == "②"
 
     # ---- 正常路径下:resume 关卡② → 流程一路到 END(不触发关卡③)----
+    # 20261114 阶段6:先补 BGM(关卡② 恢复时重读磁盘,仍无 BGM 会再次挂起)
+    _add_manual_bgm(draft_file)
     final = g2.invoke(Command(resume=True), config=config)
     assert not _is_interrupted(g2, config), "流程应已结束"
     log = final["status_log"]
@@ -184,6 +210,8 @@ def test_side_effects_only_once_across_resumes(
     # 完整跑通
     g.invoke(state, config=config)
     g.invoke(Command(resume=True), config=config)
+    # 20261114 阶段6:先补 BGM(关卡② 恢复时重读磁盘,仍无 BGM 会再次挂起)
+    _add_manual_bgm(draft_file)
     final = g.invoke(Command(resume=True), config=config)
     assert not _is_interrupted(g, config)
     assert translate_calls["n"] == 1
@@ -310,6 +338,8 @@ def test_node_17_writes_empty_wav_placeholder(
 
     g.invoke(state, config=config)
     g.invoke(Command(resume=True), config=config)
+    # 20261114 阶段6:先补 BGM(关卡② 恢复时重读磁盘,仍无 BGM 会再次挂起)
+    _add_manual_bgm(draft_file)
     final = g.invoke(Command(resume=True), config=config)
     assert not _is_interrupted(g, config)
 

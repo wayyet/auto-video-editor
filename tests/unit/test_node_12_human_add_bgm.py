@@ -369,3 +369,154 @@ def test_post_resume_records_manual_draft_sha(tmp_path: Path) -> None:
     assert all(len(v) == 64 for v in sha["zh"].values())  # sha256 hex
     assert "en_pre_mirror" in sha
     assert "node_12_manual_draft_sha_recorded" in result["status_log"]
+
+
+def test_post_resume_routes_mirror_failures_to_error_log(tmp_path: Path) -> None:
+    """镜像降级 note(非 done tag)必须落 error_log,不得混进 status_log 假成功。"""
+    zh = _write_json(tmp_path / "zh" / "draft_content.json", _en_draft_without_audio())
+    en = _write_json(tmp_path / "en" / "draft_content.json", _en_draft_without_audio())
+
+    result = _post_resume(
+        {"session_id": "t1", "draft_path": str(zh), "draft_dir_en_branch": str(en.parent),
+         "status_log": [], "error_log": []},
+        notifier=lambda s, c: None,
+    )
+
+    assert any("无 audio track" in e for e in result["error_log"])
+    assert not any("无 audio track" in s for s in result["status_log"])
+
+
+# ---------------------------------------------------------------------------
+# 20261114 阶段6:human_add_bgm 本体的 interrupt 控制路径(修订 §2.11/§2.12)
+# 修订 §6.1:只测 _zh_bgm_missing / mirror 两个 helper 不足以证明
+# "已有 BGM 不 interrupt" —— 这里打桩 nodes.node_12_human_add_bgm.interrupt
+# 直接调用节点本体;真实 interrupt 行为仍由集成测试覆盖。
+# ---------------------------------------------------------------------------
+import pytest  # noqa: E402
+
+import nodes.node_12_human_add_bgm as node_12  # noqa: E402
+
+
+class _ResumeExhausted(Exception):
+    """fake interrupt 的终止哨兵:模拟"挂了两次仍不放行就到此为止"。"""
+
+
+def _gate_state(zh_path: Path, en_dir: Path) -> dict:
+    return {
+        "session_id": "t1",
+        "draft_path": str(zh_path),
+        "draft_dir_en_branch": str(en_dir),
+        "status_log": [],
+        "error_log": [],
+    }
+
+
+def test_human_add_bgm_with_bgm_zero_interrupt(tmp_path: Path, monkeypatch) -> None:
+    """磁盘草稿已有非配音音轨(node_05 自动铺轨成功)→ 零 interrupt 直接放行(D1)。"""
+    zh = _write_json(tmp_path / "zh" / "draft_content.json", _zh_draft_with_bgm())
+    en = _write_json(tmp_path / "en" / "draft_content.json", _en_draft_without_audio())
+
+    def _must_not_interrupt(_payload=None):
+        raise AssertionError("已有 BGM 时不应 interrupt")
+
+    monkeypatch.setattr(node_12, "interrupt", _must_not_interrupt)
+
+    out = node_12.human_add_bgm(_gate_state(zh, en.parent))
+
+    assert "checkpoint2_resumed" in out["status_log"]
+    assert any(t.startswith("node_12_bgm_mirrored_en_done") for t in out["status_log"])
+    en_draft = json.loads(en.read_text(encoding="utf-8"))
+    assert [t for t in en_draft["tracks"] if t["type"] == "audio"]
+
+
+def test_human_add_bgm_missing_interrupts_then_resumes_when_added(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """无 BGM → 挂起一次;操作员补入(磁盘草稿变化)后 resume → 放行 + 镜像。"""
+    zh = _write_json(tmp_path / "zh" / "draft_content.json", _en_draft_without_audio())
+    en = _write_json(tmp_path / "en" / "draft_content.json", _en_draft_without_audio())
+
+    interrupts: list[dict] = []
+
+    def fake_interrupt(payload: dict) -> None:
+        interrupts.append(payload)
+        # 模拟操作员在剪映里拖入 BGM 后点继续:磁盘草稿被人工修改
+        _write_json(zh, _zh_draft_with_bgm())
+
+    monkeypatch.setattr(node_12, "interrupt", fake_interrupt)
+
+    out = node_12.human_add_bgm(_gate_state(zh, en.parent))
+
+    assert len(interrupts) == 1, "补入后应立即放行,只挂起一次"
+    assert interrupts[0]["checkpoint"] == "②"
+    assert interrupts[0]["bgm_missing"] is True
+    assert "checkpoint2_resumed" in out["status_log"]
+    en_draft = json.loads(en.read_text(encoding="utf-8"))
+    assert [t for t in en_draft["tracks"] if t["type"] == "audio"]
+
+
+def test_human_add_bgm_resume_still_missing_interrupts_again(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """恢复后仍无 BGM → 再次挂起,不受 required_features.bgm 影响(修订 §阶段6 DoD)。"""
+    zh = _write_json(tmp_path / "zh" / "draft_content.json", _en_draft_without_audio())
+    en = _write_json(tmp_path / "en" / "draft_content.json", _en_draft_without_audio())
+
+    interrupts: list[dict] = []
+
+    def fake_interrupt(payload: dict) -> None:
+        interrupts.append(payload)
+        if len(interrupts) >= 2:
+            raise _ResumeExhausted()  # 第二次挂起即终止测试(真实链路会一直挂)
+        # 第一次 resume:操作员没补 BGM
+
+    monkeypatch.setattr(node_12, "interrupt", fake_interrupt)
+
+    with pytest.raises(_ResumeExhausted):
+        node_12.human_add_bgm(_gate_state(zh, en.parent))
+
+    assert len(interrupts) == 2
+    assert all(p.get("bgm_missing") is True for p in interrupts)
+
+
+def test_human_add_bgm_read_error_invalid_json_raises(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """草稿 JSON 损坏 → fail-closed 明确失败(invalid_json),不当"BGM 缺失"重挂。"""
+    zh = _write_json(tmp_path / "zh" / "draft_content.json", _zh_draft_with_bgm())
+    zh.write_text("{invalid json", encoding="utf-8")
+    en = _write_json(tmp_path / "en" / "draft_content.json", _en_draft_without_audio())
+
+    def _must_not_interrupt(_payload=None):
+        raise AssertionError("读取失败不应进入 interrupt 循环")
+
+    monkeypatch.setattr(node_12, "interrupt", _must_not_interrupt)
+
+    with pytest.raises(node_12.BgmGateDraftReadError) as ei:
+        node_12.human_add_bgm(_gate_state(zh, en.parent))
+    assert "invalid_json" in str(ei.value)
+    assert "draft_content.json" in str(ei.value)
+
+
+def test_human_add_bgm_missing_file_raises(tmp_path: Path, monkeypatch) -> None:
+    """draft_path 指向的文件不存在 → fail-closed(missing_file),零 interrupt。"""
+    en = _write_json(tmp_path / "en" / "draft_content.json", _en_draft_without_audio())
+    zh = tmp_path / "nope" / "draft_content.json"
+
+    monkeypatch.setattr(node_12, "interrupt", lambda _p=None: None)
+
+    with pytest.raises(node_12.BgmGateDraftReadError) as ei:
+        node_12.human_add_bgm(_gate_state(zh, en.parent))
+    assert "missing_file" in str(ei.value)
+
+
+def test_human_add_bgm_no_draft_path_raises(monkeypatch) -> None:
+    """state.draft_path 为空 → fail-closed,报因含修复指向(节点05 未产出)。"""
+    monkeypatch.setattr(node_12, "interrupt", lambda _p=None: None)
+
+    with pytest.raises(node_12.BgmGateDraftReadError) as ei:
+        node_12.human_add_bgm(
+            {"session_id": "t1", "status_log": [], "error_log": []}
+        )
+    assert "missing_file" in str(ei.value)
+    assert "draft_path" in str(ei.value)
