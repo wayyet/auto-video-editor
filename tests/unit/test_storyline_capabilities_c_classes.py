@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import json
 import wave
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ from storyline_capabilities.bgm_selector import (
     compute_beats_ms,
     load_bgm_library,
     rank_candidates,
+    rank_candidates_with_llm,
     _match_mood_tags,
 )
 from storyline_capabilities.generate_voiceover import generate_voiceover
@@ -474,3 +476,144 @@ def test_node_shells_importable() -> None:
         node_generate_ai_transition,
         node_plan_timeline_ai_transition,
     )
+
+# ---------------------------------------------------------------------------
+# 20261114 阶段2:stub 语义修正 / LLM 候选白名单投影 / 新情绪标签 / 本机曲库接入
+# ---------------------------------------------------------------------------
+class _CapturingLLMClient:
+    """捕获 prompt 的假 client(chat_json 只要求 .chat)。"""
+
+    def __init__(self, response: dict[str, str]) -> None:
+        self._response = response
+        self.captured: dict[str, str] = {}
+
+    def chat(self, *, system_prompt: str, user_prompt: str, media=None,
+             json_schema=None, temperature: float = 0.3, max_tokens: int = 4096) -> str:
+        self.captured = {"system_prompt": system_prompt, "user_prompt": user_prompt}
+        import json as _json
+        return _json.dumps(self._response, ensure_ascii=False)
+
+
+def _cache_file(tmp_path: Path, name: str = "m.mp3") -> Path:
+    p = tmp_path / name
+    p.write_bytes(b"x" * 128)
+    return p
+
+
+def test_select_bgm_default_match_with_valid_cache_is_not_stub(tmp_path: Path) -> None:
+    """修订 §2.5:stub 只由缓存有效性决定,与选择策略(method)无关。
+
+    说明:stub 环境下 LLM 让位启发式,单候选时 method="heuristic";
+    default_match 标签仅在空库路径可达(空库 → empty selection,仍 stub=True,
+    由 test_select_bgm_empty_library_returns_empty 覆盖)。
+    """
+    cache = _cache_file(tmp_path)
+    lib = [{
+        "bgm_id": "m1", "name": "旅途的风景", "path": "", "cache_path": str(cache),
+        "mood": ["calm"], "tempo": "unknown", "duration_ms": 50000,
+        "music_id": "m1", "category_name": "会员热榜", "asset_kind": "jianying_music",
+    }]
+    res = select_bgm(user_request="", groups=[], library=lib, default_match={"bgm_id": "m1"})
+    assert res["method"] == "heuristic"
+    assert res["stub"] is False
+    assert res["asset_available"] is True
+    assert res["selection_source"] == "heuristic"
+    assert res["music_id"] == "m1"
+    assert res["music_name"] == "旅途的风景"
+    assert res["cache_path"] == str(cache)
+    assert res["asset_kind"] == "jianying_music"
+    assert res["tempo"] == "unknown"
+
+
+def test_select_bgm_missing_cache_is_stub(tmp_path: Path) -> None:
+    """缓存文件缺失 → stub=True(哪怕 method 不是 default_match)。"""
+    lib = [{
+        "bgm_id": "m1", "path": "", "cache_path": str(tmp_path / "gone.mp3"),
+        "mood": ["calm"], "tempo": "unknown", "duration_ms": 50000,
+    }]
+    res = select_bgm(user_request="", groups=[], library=lib, default_match={"bgm_id": "m1"})
+    assert res["stub"] is True
+    assert res["asset_available"] is False
+
+
+def test_select_bgm_yaml_placeholder_still_stub(tmp_path: Path) -> None:
+    """旧 YAML 占位条目(path 为空):行为与阶段2之前一致(stub=True)。"""
+    lib = [{
+        "bgm_id": "bgm_calm_lofi", "path": "", "mood": ["calm"],
+        "tempo": "medium", "duration_ms": 180000,
+    }]
+    res = select_bgm(user_request="", groups=[], library=lib, default_match={"bgm_id": "bgm_calm_lofi"})
+    assert res["stub"] is True
+
+
+def test_select_bgm_duration_falls_back_to_duration_us() -> None:
+    """新曲库条目只有 duration_us 时按 //1000 规范换算。"""
+    lib = [{
+        "bgm_id": "m1", "path": "", "mood": [], "tempo": "unknown",
+        "duration_us": 190766666,
+    }]
+    res = select_bgm(user_request="", groups=[], library=lib, default_match={})
+    assert res["duration_ms"] == 190766
+
+
+def test_rank_candidates_travel_and_fresh_hit() -> None:
+    """新增 travel/fresh 标签:"旅行"命中 travel,"清新"命中 fresh。"""
+    lib = [
+        {"bgm_id": "travel_1", "mood": ["travel", "fresh"]},
+        {"bgm_id": "calm_1", "mood": ["calm", "soft"]},
+        {"bgm_id": "upbeat_1", "mood": ["happy"]},
+    ]
+    ranked = rank_candidates(library=lib, user_request="旅行视频", narration_text="")
+    assert ranked[0]["bgm_id"] == "travel_1"
+    ranked = rank_candidates(library=lib, user_request="清新舒缓旅行", narration_text="")
+    # 非命中条目不会被剔除(upbeat_1 仍在列表尾),但前二必须是命中者
+    assert {r["bgm_id"] for r in ranked[:2]} == {"travel_1", "calm_1"}
+    assert ranked[-1]["bgm_id"] == "upbeat_1"
+    assert _match_mood_tags("清新旅行vlog") == {"fresh", "travel"}
+
+
+def test_rank_candidates_llm_prompt_projection(tmp_path: Path) -> None:
+    """修订 §4.3 红线:本机缓存路径/request_id/原始素材对象不进 LLM prompt。"""
+    cache = _cache_file(tmp_path)
+    candidates = [{
+        "bgm_id": "m1", "name": "旅途的风景", "mood": ["calm"], "tempo": "unknown",
+        "duration_ms": 1000, "notes": "钢琴", "cache_path": str(cache),
+        "request_id": "REQ_SECRET", "path": str(cache),
+        "raw_material": {"secret_field": 1},
+    }]
+    fake = _CapturingLLMClient({"bgm_id": "m1", "reason": "ok"})
+    res = rank_candidates_with_llm(candidates=candidates, user_request="u", client=fake)
+    assert res and res["bgm_id"] == "m1"
+    prompt = fake.captured["user_prompt"]
+    assert "旅途的风景" in prompt and "m1" in prompt
+    for banned in ("cache_path", "request_id", "raw_material", "REQ_SECRET", "secret_field"):
+        assert banned not in prompt
+
+
+def test_load_bgm_library_prefers_local_music_library(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """本机曲库非空时优先;契约外层形状不变。"""
+    cache = _cache_file(tmp_path)
+    entry = {
+        "music_id": "cloud1", "name": "云端曲", "duration_us": 60000000,
+        "mood": ["calm"], "tempo": "unknown", "is_default": True,
+        "raw_material": {"path": str(cache)},
+    }
+    idx = tmp_path / "lib.jsonl"
+    idx.write_text(json.dumps(entry, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setenv("JY_MUSIC_LIBRARY_PATH", str(idx))
+    meta = load_bgm_library()
+    assert [e["bgm_id"] for e in meta["library"]] == ["cloud1"]
+    assert meta["default_match"] == {"bgm_id": "cloud1"}
+    assert meta["matching"]["max_candidates_for_llm"] == 10
+
+
+def test_load_bgm_library_falls_back_to_yaml_when_local_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """索引缺失 → 回退 YAML 占位库(旧环境兼容)。"""
+    monkeypatch.setenv("JY_MUSIC_LIBRARY_PATH", str(tmp_path / "missing.jsonl"))
+    meta = load_bgm_library()
+    assert len(meta["library"]) >= 3
+    assert all(e["bgm_id"].startswith("bgm_") for e in meta["library"])

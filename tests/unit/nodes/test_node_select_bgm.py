@@ -159,3 +159,52 @@ def test_node_capability_exception_falls_back(
     assert sel["stub"] is True
     assert "select_bgm exception" in sel["reason"]
     assert any("BGM_FALLBACK" in e for e in delta["error_log"])
+
+
+# ---------------------------------------------------------------------------
+# 20261114 阶段2:云音乐命中时的可读状态日志(曲名/music_id/选择来源)
+# ---------------------------------------------------------------------------
+def test_node_status_log_includes_music_metadata(
+    base_state, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """云音乐素材命中:status_log 带曲名+music_id+selection_source;无 error_log。"""
+
+    def fake_select_bgm(**_kw):
+        return {
+            "bgm_ref": "7553871402870491155",
+            "method": "llm",
+            "stub": False,
+            "music_id": "7553871402870491155",
+            "music_name": "旅途的风景",
+            "selection_source": "llm",
+            "asset_available": True,
+        }
+
+    monkeypatch.setattr(nsb, "select_bgm", fake_select_bgm)
+    delta = storyline_select_bgm_node(_groups_state(base_state, tmp_path))
+
+    tags = [s for s in delta["status_log"] if "storyline_select_bgm_done" in s]
+    assert tags and "music=旅途的风景(7553871402870491155)" in tags[0]
+    assert ":source=llm" in tags[0]
+    assert "error_log" not in delta
+
+
+def test_node_stub_without_music_id_keeps_legacy_log(
+    base_state, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """旧 YAML 降级路径(无 music_id):日志保持旧形态,BGM_FALLBACK 照记。"""
+
+    def fake_select_bgm(**_kw):
+        return {
+            "bgm_ref": "bgm_calm_lofi",
+            "method": "heuristic",
+            "stub": True,
+            "reason": "素材不可用",
+        }
+
+    monkeypatch.setattr(nsb, "select_bgm", fake_select_bgm)
+    delta = storyline_select_bgm_node(_groups_state(base_state, tmp_path))
+
+    tags = [s for s in delta["status_log"] if "storyline_select_bgm_done" in s]
+    assert tags and tags[0] == "storyline_select_bgm_done:bgm_ref=bgm_calm_lofi"
+    assert any("BGM_FALLBACK" in e for e in delta["error_log"])

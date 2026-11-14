@@ -20,6 +20,7 @@ import re
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
+from jy_common.jianying_music_library import load_jianying_music_library
 from storyline_capabilities.prompts import render_prompt
 from storyline_capabilities.vlm_client import (
     LLMClient,
@@ -37,7 +38,7 @@ logger = logging.getLogger(__name__)
 # 中文 / 英文常见情绪 / 风格关键词;匹配到任何一条就作为 tag 命中。
 _MOOD_KEYWORDS: dict[str, list[str]] = {
     "warm": ["温暖", "温情", "暖", "温暖", "温馨", "warm", "cozy"],
-    "calm": ["安静", "平静", "轻", "calm", "quiet", "soft"],
+    "calm": ["安静", "平静", "轻", "舒缓", "calm", "quiet", "soft"],
     "storytelling": ["故事", "叙事", "叙述", "story", "narrative"],
     "happy": ["欢快", "开心", "高兴", "happy", "joyful", "cheerful"],
     "energetic": ["活力", "动感", "热血", "energetic", "dynamic"],
@@ -48,8 +49,11 @@ _MOOD_KEYWORDS: dict[str, list[str]] = {
     "epic": ["史诗", "壮阔", "epic", "cinematic"],
     "tense": ["紧张", "悬疑", "tense", "thriller"],
     "sad": ["伤感", "忧伤", "悲伤", "sad", "melancholy"],
-    "soft": ["柔和", "温柔", "soft", "tender"],
+    "soft": ["柔和", "温柔", "舒缓", "soft", "tender"],
     "memory": ["回忆", "怀旧", "memory", "nostalgic"],
+    # 剪映云音乐曲库常用标签(20261114 阶段2):旅行/清新同义词
+    "travel": ["旅行", "旅途", "travel", "journey", "adventure"],
+    "fresh": ["清新", "清爽", "fresh", "light", "bright"],
 }
 
 
@@ -171,7 +175,18 @@ _DEFAULT_BGM_META_PATH: Path = (
 def load_bgm_library(
     yaml_path: Optional[Path] = None,
 ) -> dict[str, Any]:
-    """加载 BGM 资源描述(plan §6.1 选项 B)。"""
+    """加载 BGM 资源描述(plan §6.1 选项 B;20261114 阶段2 接入本机曲库)。
+
+    数据源优先级:本机剪映音乐曲库(harvest 收割,素材真实可用)> YAML
+    占位库(旧环境兼容,path 为空的条目仍走 stub 降级)。显式传 ``yaml_path``
+    时尊重调用方,直接读该 YAML。外层契约 ``{"library","default_match",
+    "matching"}`` 与旧版完全一致,``select_bgm()`` 无需感知数据源切换。
+    """
+    if yaml_path is None:
+        meta = load_jianying_music_library()
+        if meta.get("library"):
+            return meta
+        logger.info("[bgm_selector] 本机音乐曲库为空,回退 YAML 占位库")
     return _parse_bgm_meta_yaml(yaml_path or _DEFAULT_BGM_META_PATH)
 
 
@@ -197,6 +212,31 @@ def rank_candidates(
     return scored[:top_n]
 
 
+#: LLM 候选白名单投影键(20261114 阶段2,修订 §4.3):严禁把本机缓存路径、
+#: request_id、原始素材对象交给 LLM;prompt 模板键名保持不变(D3)。
+_PROMPT_CANDIDATE_FIELDS: tuple[str, ...] = (
+    "bgm_id",
+    "name",
+    "mood",
+    "genre",
+    "tempo",
+    "duration_ms",
+    "notes",
+)
+
+
+def _project_candidates_for_prompt(
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """候选白名单投影:只保留业务字段,剔除 path/cache_path/request_id/raw_material。"""
+    projected: list[dict[str, Any]] = []
+    for c in candidates:
+        if not isinstance(c, dict):
+            continue
+        projected.append({k: c.get(k) for k in _PROMPT_CANDIDATE_FIELDS if k in c})
+    return projected
+
+
 def rank_candidates_with_llm(
     *,
     candidates: list[dict[str, Any]],
@@ -208,6 +248,7 @@ def rank_candidates_with_llm(
 
     返回选中的 candidate dict,失败 / 解析失败 / LLM 不可用时返回 ``None``
     (由调用方 fallback 到 ``rank_candidates`` 第一条或 default_match)。
+    进 prompt 前先做白名单投影(本机路径/请求ID/原始素材对象不出域)。
     """
     if not candidates:
         return None
@@ -217,7 +258,9 @@ def rank_candidates_with_llm(
         "select_bgm",
         "user",
         lang=lang,
-        candidates=json.dumps(candidates, ensure_ascii=False, indent=2),
+        candidates=json.dumps(
+            _project_candidates_for_prompt(candidates), ensure_ascii=False, indent=2
+        ),
         user_request=str(user_request or ""),
     )
 

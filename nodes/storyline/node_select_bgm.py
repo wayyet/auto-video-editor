@@ -111,15 +111,23 @@ def storyline_select_bgm_node(state: WorkflowState) -> dict:
             "stub": True,
         }
 
+    # 20261114 阶段2:日志可读性 —— 云音乐命中时带曲名/music_id/选择来源;
+    # stub(=素材不可用)才记 BGM_FALLBACK,默认策略选中有效素材走普通 status_log。
+    music_desc = ""
+    if result.get("music_id"):
+        music_desc = (
+            f":music={result.get('music_name') or result.get('music_id')}"
+            f"({result.get('music_id')}):source={result.get('selection_source') or result.get('method', '?')}"
+        )
     delta: dict = {
         "storyline_bgm_selection": result,
         "status_log": append_status_tag(
             state,
-            f"storyline_select_bgm_done:bgm_ref={result.get('bgm_ref', '?')}",
+            f"storyline_select_bgm_done:bgm_ref={result.get('bgm_ref', '?')}{music_desc}",
         ),
     }
 
-    # stub 兜底时告知调试;不阻断下游
+    # stub(素材不可用/空库)兜底时告知调试;不阻断下游
     if result.get("stub"):
         delta["error_log"] = [
             *list(state.get("error_log", []) or []),

@@ -21,12 +21,17 @@
         "bgm_path": "<真实文件路径或空>",
         "beats": [int, ...],            # 毫秒等距节拍
         "duration_ms": int,
-        "tempo": "slow"|"medium"|"fast",
+        "tempo": "slow"|"medium"|"fast"|"unknown",   # 不伪造 medium
         "default_volume": float,        # 0~1
         "reason": "<LLM 给出或启发式>",
         "method": "llm" | "heuristic" | "default_match",
-        "stub": bool,                   # 无真实音频文件
+        "stub": bool,                   # 素材不可用(20261114 阶段2:仅由缓存有效性决定)
         "voiceover_total_ms": int,      # 输入的配音可用总时长(2026-11-13 任务B;0=无配音)
+        "asset_available": bool,        # 等价于 not stub
+        "selection_source": "<同 method>",
+        # 云音乐素材模式(本机曲库命中)时透传:
+        "music_id"/"music_name"/"category_id"/"category_name"/
+        "request_id"/"cache_path"/"asset_kind": ...
     }
 """
 from __future__ import annotations
@@ -150,24 +155,43 @@ def select_bgm(
         return _empty_bg_selection(reason="no library")
 
     # 6. 节拍 + 时长
-    duration_ms = int(chosen.get("duration_ms") or 35000)
+    duration_ms = int(
+        chosen.get("duration_ms")
+        or (int(chosen.get("duration_us") or 0) // 1000)
+        or 35000
+    )
     beat_period = int(chosen.get("beat_period_ms") or 1000)
     beats = compute_beats_ms(duration_ms=duration_ms, beat_period_ms=beat_period)
 
     bgm_path = str(chosen.get("path") or "")
+    cache_path = str(chosen.get("cache_path") or bgm_path or "")
+    # 20261114 阶段2(修订 §2.5):stub 只表达"素材不可用",选择策略另由
+    # method/selection_source 表达 —— default_match 选中有效缓存时不是 stub。
+    cache_valid = bool(cache_path) and Path(cache_path).is_file()
+    music_name = str(chosen.get("music_name") or chosen.get("name") or "")
 
-    return {
+    result: dict[str, Any] = {
         "bgm_ref": str(chosen.get("bgm_id") or "bgm_unknown"),
         "bgm_path": bgm_path,
         "beats": beats,
         "duration_ms": duration_ms,
-        "tempo": str(chosen.get("tempo") or "medium"),
+        "tempo": str(chosen.get("tempo") or "unknown"),
         "default_volume": float(chosen.get("default_volume") or 0.35),
         "reason": str(chosen.get("reason") or ""),
         "method": method,
-        "stub": (not bgm_path) or method == "default_match",
+        "stub": not cache_valid,
         "voiceover_total_ms": vo_total,
+        "asset_available": cache_valid,
+        "selection_source": method,
     }
+    # 云音乐素材元数据透传(存在才写;cache_path 不进 LLM prompt,只走状态)
+    if music_name:
+        result["music_name"] = music_name
+    for key in ("music_id", "category_id", "category_name", "request_id", "cache_path", "asset_kind"):
+        val = chosen.get(key)
+        if val not in (None, ""):
+            result[key] = val
+    return result
 
 
 def _lookup_default(
@@ -188,12 +212,14 @@ def _empty_bg_selection(reason: str) -> dict[str, Any]:
         "bgm_path": "",
         "beats": [],
         "duration_ms": 0,
-        "tempo": "medium",
+        "tempo": "unknown",
         "default_volume": 0.0,
         "reason": reason,
         "method": "empty",
         "stub": True,
         "voiceover_total_ms": 0,
+        "asset_available": False,
+        "selection_source": "empty",
     }
 
 
