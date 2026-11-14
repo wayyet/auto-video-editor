@@ -60,6 +60,30 @@ def _seed_draft(draft_dir: Path, duration_us: int = 35_000_000) -> Path:
     return draft_file
 
 
+def _add_manual_bgm(draft_file: Path) -> None:
+    """模拟操作员在关卡② 于剪映里人工拖入 BGM(20261114 阶段6 起过门必需)。
+
+    关卡② 改造(修订 §2.11)后:恢复时磁盘草稿仍无 BGM 会**再次挂起** ——
+    集成流程在最终 resume 前必须先把 BGM 写进磁盘草稿。
+    """
+    draft = json.loads(draft_file.read_text(encoding="utf-8"))
+    tracks = draft.setdefault("tracks", [])
+    if not any(t.get("type") == "audio" and t.get("name") == "manual_bgm" for t in tracks):
+        tracks.append({
+            "type": "audio",
+            "id": "track-audio-manual-bgm",
+            "name": "manual_bgm",
+            "segments": [{
+                "id": "seg-manual-bgm",
+                "material_id": "audio-manual-bgm",
+                "target_timerange": {"start": 0, "duration": draft.get("duration") or 35_000_000},
+            }],
+        })
+        mats = draft.setdefault("materials", {})
+        mats.setdefault("audios", []).append({"id": "audio-manual-bgm", "name": "manual_bgm"})
+    draft_file.write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
+
+
 def _legacy_week4_state(draft_path: str) -> dict:
     """模拟 Week 4 生成的 state — 不含 Week 5 新字段。
 
@@ -126,6 +150,8 @@ def test_legacy_state_schema_resume_through_full_graph(
     # 完整跑通,不应抛 KeyError
     g.invoke(state, config=config)
     g.invoke(Command(resume=True), config=config)
+    # 20261114 阶段6:先补 BGM(关卡② 恢复时重读磁盘,仍无 BGM 会再次挂起)
+    _add_manual_bgm(draft_file)
     final = g.invoke(Command(resume=True), config=config)
 
     assert not _is_interrupted(g, config), "流程应已结束"
@@ -249,6 +275,8 @@ def test_en_audio_path_produced_by_node_17(
     )
     g.invoke(state, config=config)
     g.invoke(Command(resume=True), config=config)
+    # 20261114 阶段6:先补 BGM(关卡② 恢复时重读磁盘,仍无 BGM 会再次挂起)
+    _add_manual_bgm(draft_file)
     final = g.invoke(Command(resume=True), config=config)
     assert not _is_interrupted(g, config)
 

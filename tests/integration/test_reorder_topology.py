@@ -114,7 +114,9 @@ def _drive(state: dict, *, force_layout_issue: bool = False, human_edit: str | N
                 if ev["type"] == "task":
                     steps.append((ev["step"], ev["payload"]["name"]))
             snap = g.get_state(config)
-            if not snap.next:
+            # 20261114 阶段6:langgraph 1.2.9 中节点内第二次 interrupt 挂起时
+            # snap.next 为空而 interrupts 非空 —— 结束判定必须两者都空。
+            if not snap.next and not snap.interrupts:
                 break
             pend = list(snap.interrupts)
             labels = [str((i.value or {}).get("checkpoint")) if isinstance(i.value, dict) else "?" for i in pend]
@@ -125,10 +127,34 @@ def _drive(state: dict, *, force_layout_issue: bool = False, human_edit: str | N
                 d = json.loads(f.read_text(encoding="utf-8"))
                 d["materials"]["texts"][0]["content"] = human_edit  # 模拟人工在剪映里校对
                 f.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+            if "②" in labels:
+                # 20261114 阶段6:关卡② 恢复时重读磁盘草稿,仍无 BGM 会再次挂起
+                # (修订 §2.11)—— 模拟操作员先补轨再继续。
+                _add_manual_bgm(Path(snap.values["draft_path"]))
             inp = Command(resume={i.id: True for i in pend})
         else:  # pragma: no cover
             pytest.fail("14 轮仍未结束:疑似死循环")
     return steps, stops, g.get_state(config).values
+
+
+def _add_manual_bgm(draft_file: Path) -> None:
+    """模拟操作员在关卡② 于剪映里人工拖入 BGM(20261114 阶段6 起过门必需)。"""
+    draft = json.loads(draft_file.read_text(encoding="utf-8"))
+    tracks = draft.setdefault("tracks", [])
+    if not any(t.get("type") == "audio" and t.get("name") == "manual_bgm" for t in tracks):
+        tracks.append({
+            "type": "audio",
+            "id": "track-audio-manual-bgm",
+            "name": "manual_bgm",
+            "segments": [{
+                "id": "seg-manual-bgm",
+                "material_id": "audio-manual-bgm",
+                "target_timerange": {"start": 0, "duration": draft.get("duration") or 35_000_000},
+            }],
+        })
+        mats = draft.setdefault("materials", {})
+        mats.setdefault("audios", []).append({"id": "audio-manual-bgm", "name": "manual_bgm"})
+    draft_file.write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
 
 
 def _first_step(steps: list[tuple[int, str]], name: str) -> int:
