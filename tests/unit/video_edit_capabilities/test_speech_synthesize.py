@@ -63,6 +63,68 @@ def test_speech_synthesize_unknown_provider_returns_error() -> None:
     assert out.data.get("param_error") is True
 
 
+# ---------------------------------------------------------------------------
+# 1.5 jianying(SAMI)后端分派 — 2026-11-14
+# ---------------------------------------------------------------------------
+def test_speech_synthesize_jianying_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``preferred_provider="jianying"``/``sami`` → SAMI 客户端;结果带
+    ``speaker``/``resolved_voice``,``selected_provider=jianying``。"""
+    calls: list[dict] = []
+
+    class _FakeSami:
+        def synthesize(self, text, *, voice=None, speed=None):
+            calls.append({"text": text, "voice": voice, "speed": speed})
+            return {
+                "audio_path": "/tmp/fake.wav",
+                "duration_ms": 800,
+                "voice": "英语女王",
+                "speaker": "en_female_kat_clone2",
+                "provider": "jianying",
+            }
+
+    monkeypatch.setattr(
+        "video_edit_capabilities.speech_synthesize._get_sami_client",
+        lambda: _FakeSami(),
+    )
+    out = speech_synthesize(
+        {
+            "text": "hi",
+            "voice": "英语女王",
+            "preferred_provider": "sami",
+            "retries": 0,
+        },
+        RunContext(),
+    )
+    assert not out.text.startswith("[ERROR]"), out.text
+    assert out.data["selected_provider"] == "jianying"
+    assert out.data["speaker"] == "en_female_kat_clone2"
+    assert out.data["resolved_voice"] == "英语女王"
+    assert calls[0]["voice"] == "英语女王"
+
+
+def test_speech_synthesize_jianying_error_prefix_mentions_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SAMI 失败 → ``[ERROR] jianying TTS failed: ...``(后端名进消息)。"""
+
+    class _FakeSami:
+        def synthesize(self, text, *, voice=None, speed=None):
+            raise TTSUnavailable("sami down")
+
+    monkeypatch.setattr(
+        "video_edit_capabilities.speech_synthesize._get_sami_client",
+        lambda: _FakeSami(),
+    )
+    out = speech_synthesize(
+        {"text": "hi", "preferred_provider": "jianying", "retries": 0},
+        RunContext(),
+    )
+    assert out.text.startswith("[ERROR]")
+    assert "jianying TTS failed" in out.text
+    assert "sami down" in out.text
+    assert out.data["selected_provider"] == "jianying"
+
+
 def test_speech_synthesize_speed_zero_returns_error() -> None:
     """``speed=0`` → ``[ERROR] speed must be a finite number > 0``。"""
     ctx = RunContext()

@@ -1,7 +1,9 @@
 """TTS 客户端 — Week 6+ 阶段三使用(对照 9 工具迁移计划 §6.3)。
 
 Week 6+ 默认 ``MockTTSClient``(写空 wav 占位),新增 ``FireRedTTS2Client`` 真
-实骨架;通过环境变量 ``TTS_BACKEND=firered`` 切换。
+实骨架;通过环境变量 ``TTS_BACKEND`` 切换(``firered`` = 本地 FireRed 服务
+:8010;``jianying`` = 剪映朗读音色 SAMI 云端,2026-11-14 新增,见
+``jy_common/jianying_tts.py``)。
 
 接口约定:返回值是 ``dict``:
 - ``audio_path: str`` — 合成的音频文件绝对路径
@@ -204,6 +206,12 @@ def _resolve_default_client() -> TTSClient:
     backend = os.environ.get("TTS_BACKEND", "mock").lower().strip()
     if backend == "firered":
         return FireRedTTS2Client()
+    if backend in ("jianying", "sami"):
+        # 2026-11-14:剪映朗读音色(SAMI 云端,见 jy_common/jianying_tts.py);
+        # 懒 import 防 tts_client 模块级单例解析期的循环初始化。
+        from jy_common.jianying_tts import JianYingSamiClient
+
+        return JianYingSamiClient()
     if backend != "mock":
         # 未知 backend:降级为 Mock(不抛错,避免污染单测 / 主链)
         pass
@@ -241,6 +249,7 @@ def get_active_backend() -> str:
     """返回当前默认 client 对应的 backend 名称(便于状态记录)。
 
     - ``FireRedTTS2Client`` 实例 → ``"firered"``
+    - ``JianYingSamiClient`` 实例 → ``"jianying"``
     - ``MockTTSClient`` 实例 → ``"mock"``
     - 其他 → ``"custom"``
     """
@@ -249,4 +258,12 @@ def get_active_backend() -> str:
         return "firered"
     if isinstance(client, MockTTSClient):
         return "mock"
+    try:
+        # 懒 import:TTS_BACKEND≠jianying 的进程不该为此付出导入成本
+        from jy_common.jianying_tts import JianYingSamiClient
+
+        if isinstance(client, JianYingSamiClient):
+            return "jianying"
+    except ImportError:
+        pass
     return "custom"

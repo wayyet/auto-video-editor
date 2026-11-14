@@ -12,6 +12,32 @@
 # 录(未携带二进制资源),所以本地化版本是参考描述,不是 vendored 字节拷贝。
 
 providers:
+  jianying:
+    description: "剪映朗读音色(字节 SAMI 云端;TTS_BACKEND=jianying 适配器同口径,2026-11-14)。voice 可传中文名或 speaker_id,全量音色表见 jy_common/jianying_tts_speakers.csv;解析不了回落默认 清亮男声"
+    default_base_url: "wss://sami.bytedance.com/internal/api/v2/ws"
+    env_key_prefix: "TTS_JIANYING_"
+    env_var_overrides: {}
+    params_schema:
+      voice:
+        type: "str"
+        enum:
+          - "清亮男声"
+          - "磁性男声"
+          - "甜美女声"
+          - "温柔姐姐"
+          - "解说小帅"
+          - "沉稳解说"
+          - "译制片男"
+          - "小孩"
+          - "猴哥"
+          - "熊二"
+          - "英语女王"
+        description: "剪映朗读音色(热门列表节选)"
+      speed:
+        type: "float"
+        range: [0.5, 2.0]
+        description: "语速倍率(ffmpeg atempo 链实现)"
+
   minimax:
     description: "默认供应商(plan §5 阶段 4 决策 1)"
     default_base_url: "https://api.minimax.chat"

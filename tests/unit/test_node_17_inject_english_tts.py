@@ -143,10 +143,14 @@ def test_node_17_skips_segments_with_empty_text_en() -> None:
     assert captured_args[0]["text"] == "Hello World"
 
 
-def test_node_17_uses_firered_provider_and_3_retries() -> None:
-    """调 ``speech_synthesize`` 时 preferred_provider=firered,retries=3
-    (对照 9 工具迁移 §6.3 step 5)。
+def test_node_17_uses_jianying_provider_and_3_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """调 ``speech_synthesize`` 时 preferred_provider=jianying,retries=3
+    (对照 9 工具迁移 §6.3 step 5;2026-11-14 起 provider 默认剪映 SAMI,
+    英文默认音色=英语女王,env TTS_VOICE_EN 可覆盖)。
     """
+    monkeypatch.delenv("TTS_VOICE_EN", raising=False)
     captured_args: list[dict] = []
 
     def capture(args, ctx):
@@ -165,8 +169,9 @@ def test_node_17_uses_firered_provider_and_3_retries() -> None:
         node_17_inject_english_tts(state)
 
     sent = captured_args[0]
-    assert sent["preferred_provider"] == "firered"
+    assert sent["preferred_provider"] == "jianying"
     assert sent["retries"] == 3
+    assert sent["voice"] == "英语女王"
 
 
 # ---------------------------------------------------------------------------

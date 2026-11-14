@@ -17,6 +17,7 @@ import pytest
 from jy_common.tts_client import TTSUnavailable
 from nodes.storyline._tts_adapter import (
     StorylineFireRedTTSClient,
+    StorylineJianYingTTSClient,
     install_tts_client_from_env,
 )
 from storyline_capabilities.tts_runner import (
@@ -209,6 +210,8 @@ def test_production_tts_backend_gate(monkeypatch) -> None:
     assert _production_tts_backend_violation() is not None  # mock(stub)→ 违规
     monkeypatch.setenv("TTS_BACKEND", "firered")
     assert _production_tts_backend_violation() is None      # 显式 firered → 放行
+    monkeypatch.setenv("TTS_BACKEND", "jianying")
+    assert _production_tts_backend_violation() is None      # 剪映 SAMI 后端 → 放行(2026-11-14)
 
     monkeypatch.setenv("APP_ENV", "dev")
     monkeypatch.setenv("TTS_BACKEND", "mock")
@@ -221,3 +224,99 @@ def test_production_tts_backend_gate(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="TTS_BACKEND"):
         storyline_generate_voiceover_node({})
+
+
+# ---------------------------------------------------------------------------
+# jianying(SAMI)适配器(2026-11-14,剪映朗读音色)
+# ---------------------------------------------------------------------------
+class _FakeSamiClient:
+    """``JianYingSamiClient`` 替身:可控行为 + 调用捕获。"""
+
+    def __init__(self, ret: Any, capture: list[dict] | None = None) -> None:
+        self._ret = ret
+        self._capture = capture
+
+    def synthesize(self, text: str, *, voice=None, speed=None) -> dict:
+        if self._capture is not None:
+            self._capture.append({"text": text, "voice": voice, "speed": speed})
+        if isinstance(self._ret, Exception):
+            raise self._ret
+        return self._ret
+
+
+def test_install_jianying_when_env_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TTS_BACKEND", "jianying")
+    assert install_tts_client_from_env() == "jianying"
+    assert isinstance(get_default_tts_client(), StorylineJianYingTTSClient)
+
+
+def test_install_sami_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``sami`` 是 ``jianying`` 的别名(同一适配器)。"""
+    monkeypatch.setenv("TTS_BACKEND", "sami")
+    assert install_tts_client_from_env() == "jianying"
+    assert isinstance(get_default_tts_client(), StorylineJianYingTTSClient)
+
+
+def test_jianying_adapter_converts_dict_to_tts_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    src = _make_real_wav(tmp_path)
+    captured: list[dict] = []
+    fake = _FakeSamiClient(
+        {
+            "audio_path": str(src),
+            "duration_ms": 999,  # 干扰值:必须以 WAV 头为准
+            "voice": "清亮男声",
+            "speaker": "zh_male_iclvop_xiaolinkepu",
+            "provider": "jianying",
+        },
+        capture=captured,
+    )
+    monkeypatch.setattr(
+        "nodes.storyline._tts_adapter.JianYingSamiClient", lambda: fake
+    )
+
+    target = tmp_path / "out" / "voiceover_0001_1.wav"
+    out = StorylineJianYingTTSClient().synthesize(
+        text="hello", wav_path=target, params={"voice": "清亮男声", "speed": "1.3"}
+    )
+
+    # 协议实现校验(runtime_checkable)
+    assert isinstance(StorylineJianYingTTSClient(), TTSClient)
+    assert captured[0]["voice"] == "清亮男声"
+    assert captured[0]["speed"] == 1.3
+    assert out.wav_path == target
+    assert target.exists()
+    assert out.duration_ms == read_wav_duration_ms(target)
+    assert out.duration_ms != 999
+    assert out.error is None
+    assert out.provider == "jianying"
+    assert out.params_used == {"voice": "清亮男声", "speed": "1.3"}
+
+
+def test_jianying_adapter_call_failure_writes_error_no_raise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "nodes.storyline._tts_adapter.JianYingSamiClient",
+        lambda: _FakeSamiClient(TTSUnavailable("sami down")),
+    )
+    target = tmp_path / "out" / "v.wav"
+    out = StorylineJianYingTTSClient().synthesize(text="x", wav_path=target, params={})
+    assert out.error is not None
+    assert "jianying tts failed" in out.error and "sami down" in out.error
+    assert out.duration_ms == 0
+    assert out.provider == "jianying"
+
+
+def test_jianying_adapter_missing_audio_path_writes_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "nodes.storyline._tts_adapter.JianYingSamiClient",
+        lambda: _FakeSamiClient({"audio_path": "", "duration_ms": 500}),
+    )
+    target = tmp_path / "out" / "v.wav"
+    out = StorylineJianYingTTSClient().synthesize(text="x", wav_path=target, params={})
+    assert out.error is not None and "audio_path" in out.error
+    assert out.duration_ms == 0

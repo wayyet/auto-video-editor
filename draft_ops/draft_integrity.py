@@ -673,18 +673,22 @@ def default_required_features() -> dict[str, bool]:
     推导原则(计划 §7.1 原则 6"按用户配置区分必需能力"):
     - 字幕/转场/动画/淡入淡出 = 阶段 1-5 已承诺能力,默认必选
       (单镜头转场、无旁白字幕等由 QA 判 not_applicable,不会误伤);
-    - 配音 = 仅 ``TTS_BACKEND=firered``(与 ``nodes/storyline/_tts_adapter.py``
-      同口径)时默认必选 —— stub 环境不默认阻断联调,但表单显式勾选后
-      stub 即 degraded 阻断(「stub 不冒充成功」);
+    - 配音 = ``TTS_BACKEND`` 为真实后端(``firered`` / ``jianying``,与
+      ``nodes/storyline/_tts_adapter.py`` 生产门禁同口径)时默认必选 ——
+      stub 环境不默认阻断联调,但表单显式勾选后 stub 即 degraded 阻断
+      (「stub 不冒充成功」);2026-11-14 起 jianying(剪映朗读音色 SAMI
+      云端)为生产默认后端(console-50cd4c6af941:FireRed :8010 本机从未
+      部署导致交付阻断);
     - BGM = 关卡② 人工可选,默认不阻断;贴纸 = 资源 ID 未实机回填
       (fail-closed 降级),默认不阻断。
     """
     tts_backend = str(os.environ.get("TTS_BACKEND", "") or "").strip().lower()
+    voiceover_required = tts_backend in ("firered", "jianying")
     return {
         "subtitles_zh": True,
         "subtitles_en": True,
-        "voiceover_zh": tts_backend == "firered",
-        "voiceover_en": tts_backend == "firered",
+        "voiceover_zh": voiceover_required,
+        "voiceover_en": voiceover_required,
         "bgm": False,
         "transitions": True,
         "text_animation": True,

@@ -39,8 +39,13 @@ def _read_script_dict(state: WorkflowState) -> dict | None:
 
 def _production_tts_backend_violation() -> str | None:
     """生产环境 fail-closed 校验(阶段 2 任务 1,2026-11-09):``APP_ENV=production``
-    时 ``TTS_BACKEND`` 必须显式为 ``firered``,否则返回违规说明(调用方据此拒绝
-    运行,不让静音 Stub 冒充配音)。开发/测试环境(APP_ENV 非 production)不 gate。
+    时 ``TTS_BACKEND`` 必须显式为 ``firered`` 或 ``jianying``,否则返回违规说明
+    (调用方据此拒绝运行,不让静音 Stub 冒充配音)。开发/测试环境(APP_ENV
+    非 production)不 gate。
+
+    2026-11-14 放行 ``jianying``:剪映朗读音色 SAMI 云端
+    (``jy_common/jianying_tts.py``)—— FireRed :8010 本机从未部署,
+    console-50cd4c6af941 交付阻断后的默认后端;firered 保留可回滚。
     """
     import os
 
@@ -48,12 +53,13 @@ def _production_tts_backend_violation() -> str | None:
     if app_env != "production":
         return None
     backend = (os.environ.get("TTS_BACKEND") or "mock").strip().lower()
-    if backend == "firered":
+    if backend in ("firered", "jianying"):
         return None
     return (
         f"[storyline:generate_voiceover] 生产环境(APP_ENV=production)TTS_BACKEND="
         f"{backend or '未设置'}:不允许静音 Stub 冒充真实配音(fail-closed)。"
-        "请在 start_production.ps1 / .env 显式设置 TTS_BACKEND=firered"
+        "请在 start_production.ps1 / .env 显式设置 TTS_BACKEND=jianying"
+        "(剪映朗读音色,SAMI 云端)或 TTS_BACKEND=firered"
         "(需本地 FireRed TTS 服务 http://127.0.0.1:8010)"
     )
 
@@ -61,9 +67,9 @@ def _production_tts_backend_violation() -> str | None:
 def storyline_generate_voiceover_node(state: WorkflowState) -> dict:
     violation = _production_tts_backend_violation()
     if violation:
-        # fail-closed:生产 + 非 firered 后端 → 拒绝合成(不产假音频),经节点
-        # 异常走 run.failed 透出到监控;start_production.ps1 会缺省注入 firered,
-        # 触发本 gate 即为显式配置错误。
+        # fail-closed:生产 + 非真实后端(firered/jianying)→ 拒绝合成(不产
+        # 假音频),经节点异常走 run.failed 透出到监控;start_production.ps1
+        # 会缺省注入 jianying,触发本 gate 即为显式配置错误。
         raise RuntimeError(violation)
 
     outputs_root = _resolve_outputs_root(state)

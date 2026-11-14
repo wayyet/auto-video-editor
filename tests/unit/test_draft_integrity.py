@@ -256,6 +256,10 @@ def test_default_required_features_follow_tts_backend(monkeypatch) -> None:
     monkeypatch.setenv("TTS_BACKEND", "firered")
     assert default_required_features()["voiceover_zh"] is True
     assert default_required_features()["voiceover_en"] is True
+    # 2026-11-14:jianying(剪映朗读音色 SAMI)同为真实后端,配音默认必选
+    monkeypatch.setenv("TTS_BACKEND", "jianying")
+    assert default_required_features()["voiceover_zh"] is True
+    assert default_required_features()["voiceover_en"] is True
     monkeypatch.setenv("TTS_BACKEND", "stub")
     assert default_required_features()["voiceover_zh"] is False
     # 恒定项:BGM/贴纸默认可选;字幕/转场/动画/淡入淡出默认必选

@@ -226,10 +226,93 @@ def load_tts_providers(yaml_path: Path) -> dict[str, TTSProviderConfig]:
             description=desc_m.group(1) if desc_m else "",
             default_base_url=url_m.group(1) if url_m else "",
             env_var_overrides={},        # 简化:暂不解析(单测不需要)
-            params_schema={},            # 简化:暂不解析 schema(单测不需要)
+            params_schema=_parse_params_schema(body),
             env_key_prefix=prefix_m.group(1) if prefix_m else "",
         )
     return out
+
+
+def _parse_params_schema(body: str) -> dict[str, Any]:
+    """从 provider 块文本解析 ``params_schema``(键 → {type, enum, ...})。
+
+    形状严格(本仓库 ``tts_ref.yaml`` 手写):``params_schema:`` 缩进 4,
+    键缩进 6,``type``/``enum``/``description`` 缩进 8,枚举项是缩进 10 的
+    ``- "item"`` 列表,行内数组 ``enum: ["a", "b"]`` 也支持。解析不了返回
+    ``{}`` —— ``generate_voiceover._infer_tts_params`` 对空 schema 直接跳过
+    LLM 推断,与旧行为(loader 恒空)一致。
+
+    2026-11-14 起真实解析:jianying 块靠它让 LLM 从 user_request 推断剪映
+    朗读音色(此前 schema 恒空,音色推断从未生效)。
+    """
+    lines = body.splitlines()
+    start = None
+    for idx, line in enumerate(lines):
+        if re.match(r"^ {4}params_schema:\s*$", line):
+            start = idx + 1
+            break
+    if start is None:
+        return {}
+
+    schema: dict[str, Any] = {}
+    current_key: Optional[str] = None
+    in_enum = False
+    for line in lines[start:]:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent <= 4:
+            break  # params_schema 块结束(回到 provider 顶层键)
+        m = re.match(r"^ {6}(\w+):\s*$", line)
+        if m:
+            current_key = m.group(1)
+            schema[current_key] = {}
+            in_enum = False
+            continue
+        if current_key is None:
+            continue
+        m = re.match(r'^ {8}type:\s*"([^"]+)"', line)
+        if m:
+            schema[current_key]["type"] = m.group(1)
+            in_enum = False
+            continue
+        m = re.match(r'^ {8}enum:\s*\[(.+)\]\s*$', line)
+        if m:
+            schema[current_key]["enum"] = [
+                item.strip().strip('"')
+                for item in m.group(1).split(",")
+                if item.strip()
+            ]
+            in_enum = False
+            continue
+        m = re.match(r"^ {8}enum:\s*$", line)
+        if m:
+            schema[current_key]["enum"] = []
+            in_enum = True
+            continue
+        if in_enum:
+            m = re.match(r'^\s+-\s*"([^"]*)"', line)
+            if m:
+                schema[current_key]["enum"].append(m.group(1))
+                continue
+        m = re.match(r"^ {8}range:\s*\[([^]]*)\]", line)
+        if m:
+            values: list[Any] = []
+            for item in m.group(1).split(","):
+                item = item.strip().strip('"')
+                if not item:
+                    continue
+                try:
+                    values.append(float(item))
+                except ValueError:
+                    values.append(item)
+            schema[current_key]["range"] = values
+            continue
+        m = re.match(r'^ {8}description:\s*"([^"]*)"', line)
+        if m:
+            schema[current_key]["description"] = m.group(1)
+            continue
+    return schema
 
 
 def resolve_provider_credentials(

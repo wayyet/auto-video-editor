@@ -231,6 +231,22 @@ def test_unknown_backend_falls_back_to_mock(monkeypatch: pytest.MonkeyPatch) -> 
     assert isinstance(new_default, MockTTSClient)
 
 
+def test_jianying_backend_resolves_to_sami_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``TTS_BACKEND=jianying``/``sami`` → ``JianYingSamiClient``
+    (2026-11-14 剪映朗读音色后端;``get_active_backend`` 报 "jianying")。"""
+    import jy_common.tts_client as tts_mod
+    from jy_common.jianying_tts import JianYingSamiClient
+
+    monkeypatch.setenv("TTS_BACKEND", "jianying")
+    assert isinstance(tts_mod._resolve_default_client(), JianYingSamiClient)
+    monkeypatch.setenv("TTS_BACKEND", "sami")
+    assert isinstance(tts_mod._resolve_default_client(), JianYingSamiClient)
+
+    set_default_client(JianYingSamiClient(device_id="d", iid="i"))
+    assert get_active_backend() == "jianying"
+    set_default_client(MockTTSClient())
+
+
 def test_firered_endpoint_default(monkeypatch: pytest.MonkeyPatch) -> None:
     """默认 endpoint 是 8010 端口(Week 6+ 占位,待真实环境核实)。"""
     monkeypatch.delenv("FIRERED_TTS_ENDPOINT", raising=False)

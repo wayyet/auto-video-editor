@@ -343,7 +343,8 @@ foreach ($name in @(
     'APP_ENV',                   # 统一环境标识(B-T4);本脚本钉 production,resolver 据此拒绝测试库变量
     'AGENT_GATE_CKPT_BACKEND',   # agent_gate checkpoint 后端;本脚本钉 postgres(显式声明,防残留非法值)
     'CONSOLE_LLM_BACKEND',       # 创建台 LLM 后端门禁(web/console_service.py);未设时下方默认钉 mcode-cli
-    'TTS_BACKEND',               # 中文配音后端门禁(2026-11-09 阶段2:production + 非 firered 时 node_generate_voiceover fail-closed);未设时下方默认钉 firered
+    'TTS_BACKEND',               # 中文配音后端门禁(2026-11-09 阶段2:production + 非真实后端时 node_generate_voiceover fail-closed);2026-11-14 起默认钉 jianying(剪映朗读音色 SAMI),firered 可显式回滚
+    'STORYLINE_TTS_PROVIDER',    # storyline tts_ref.yaml 供应商名(必须与 yaml 块名一致,否则 generate_voiceover 把 provider 折叠成 stub → QA 误判 degraded);未设时下方默认钉 jianying
     'CONSOLE_ALLOW_STUB',        # stub 后端放行开关(仅开发/测试);备份/还原,生产不注入
     'STORYLINE_MODE',            # legacy:human 模式已删;仍备份+清除,防调用方残留值触发 config import 期 fail-fast
     'THREAD_ID',
@@ -372,10 +373,16 @@ $env:AGENT_GATE_CKPT_BACKEND = 'postgres'
 # 才放行,否则创建台照样 503。
 if (-not $env:CONSOLE_LLM_BACKEND) { $env:CONSOLE_LLM_BACKEND = 'mcode-cli' }
 # 中文配音后端门禁(2026-11-09 阶段2,效果缺失修复计划):生产下静音 Stub 不得
-# 冒充配音 —— node_generate_voiceover 在 APP_ENV=production 且 TTS_BACKEND≠firered
-# 时 fail-closed 拒绝合成。这里缺省钉 firered(需本地 FireRed TTS 服务 :8010);
-# 调用方显式设过则尊重其值(生产显式给非 firered 会被上面的门禁拒绝,属配置错误)。
-if (-not $env:TTS_BACKEND) { $env:TTS_BACKEND = 'firered' }
+# 冒充配音 —— node_generate_voiceover 在 APP_ENV=production 且 TTS_BACKEND
+# ∉ {firered, jianying} 时 fail-closed 拒绝合成。2026-11-14 起缺省钉 jianying
+# (剪映朗读音色,字节 SAMI 云端,无需本地服务;FireRed :8010 本机从未部署,
+# console-50cd4c6af941 交付阻断根因);firered 保留可显式回滚。调用方显式设过
+# 则尊重其值(生产显式给非真实后端会被门禁拒绝,属配置错误)。
+if (-not $env:TTS_BACKEND) { $env:TTS_BACKEND = 'jianying' }
+# storyline tts_ref.yaml 供应商名:必须与 yaml 里的 jianying 块名一致 ——
+# generate_voiceover 按 provider_name 取 params_schema 让 LLM 推断音色,
+# 取不到块名时 provider 折叠成 "stub",QA 会把配音误判 degraded。
+if (-not $env:STORYLINE_TTS_PROVIDER) { $env:STORYLINE_TTS_PROVIDER = 'jianying' }
 # STORYLINE_MODE 显式清除(human 模式已删;防调用方残留值让 config import 即报错)
 Remove-Item Env:STORYLINE_MODE -ErrorAction SilentlyContinue
 $env:THREAD_ID      = $ThreadId
@@ -395,7 +402,7 @@ if ($target.Kind -ne 'local-managed') {
     $env:AUTO_VIDEO_EDITOR_PREFLIGHT_SKIP_POSTGRES_START = '1'
     Write-Phase "  AUTO_VIDEO_EDITOR_PREFLIGHT_SKIP_POSTGRES_START=1(外部 Postgres 模式)"
 }
-Write-Phase ("注入环境变量(所有子进程启动之前;脚本结束时还原): POSTGRES_URI = {0}, APP_ENV = {1}, AGENT_GATE_CKPT_BACKEND = {2}, CONSOLE_LLM_BACKEND = {3}, TTS_BACKEND = {4}, THREAD_ID = {5}, PYTHONIOENCODING = {6}, PYTHONUTF8 = {7}(STORYLINE_MODE 已清除:human 模式已删)" -f $maskedUri, $env:APP_ENV, $env:AGENT_GATE_CKPT_BACKEND, $env:CONSOLE_LLM_BACKEND, $env:TTS_BACKEND, $ThreadId, $env:PYTHONIOENCODING, $env:PYTHONUTF8)
+Write-Phase ("注入环境变量(所有子进程启动之前;脚本结束时还原): POSTGRES_URI = {0}, APP_ENV = {1}, AGENT_GATE_CKPT_BACKEND = {2}, CONSOLE_LLM_BACKEND = {3}, TTS_BACKEND = {4}, STORYLINE_TTS_PROVIDER = {8}, THREAD_ID = {5}, PYTHONIOENCODING = {6}, PYTHONUTF8 = {7}(STORYLINE_MODE 已清除:human 模式已删)" -f $maskedUri, $env:APP_ENV, $env:AGENT_GATE_CKPT_BACKEND, $env:CONSOLE_LLM_BACKEND, $env:TTS_BACKEND, $ThreadId, $env:PYTHONIOENCODING, $env:PYTHONUTF8, $env:STORYLINE_TTS_PROVIDER)
 
 # ---------------------------------------------------------------
 # 顶部 banner

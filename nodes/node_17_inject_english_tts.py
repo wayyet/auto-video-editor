@@ -5,8 +5,9 @@ Week 5 stub 节点 ``node_17_inject_english_tts_stub`` 升级为真实 TTS 调�
 
 行为:
 1. 从 ``state["subtitle_segments_en"]`` 读英文字幕段,拼成一段文本
-2. 调 ``speech_synthesize({"text": text, "preferred_provider": "firered",
-   "retries": 3}, ctx)``(对照 9 工具迁移 §6.3 step 5)
+2. 调 ``speech_synthesize({"text": text, "preferred_provider": "jianying",
+   "retries": 3}, ctx)``(对照 9 工具迁移 §6.3 step 5;2026-11-14 起
+   provider 默认剪映 SAMI,英文音色默认英语女王,env TTS_VOICE_EN 覆盖)
 3. 成功 → ``en_audio_path`` = 音频路径
 4. 失败 → ``en_audio_path = None``、``error_log`` 追加一条,**不阻塞主链**
 
@@ -25,6 +26,8 @@ P3b(2026-11-08):成功路径把英文配音写进**英文分支草稿** —— m
 
 from __future__ import annotations
 
+import os
+
 from typing import Any
 
 from assembly_capabilities.run_context import RunContext
@@ -39,10 +42,16 @@ from video_edit_capabilities.speech_synthesize import speech_synthesize
 
 
 # TTS 调用固定参数 — 9 工具迁移 §6.3 step 5 规定
-_TTS_PREFERRED_PROVIDER = "firered"
+# (2026-11-14:provider 默认 firered → jianying —— FireRed :8010 本机从未
+# 部署,console-50cd4c6af941 交付阻断;剪映朗读音色 SAMI 为默认后端,
+# firered 保留可回滚。)
+_TTS_PREFERRED_PROVIDER = "jianying"
 _TTS_RETRIES = 3
 _TTS_DEFAULT_SPEED: float | None = None
-_TTS_DEFAULT_VOICE: str | None = None
+# 英文默认音色 = 音色表内唯一英文音色(env TTS_VOICE_EN 可覆盖;调用期读
+# env,便于测试/运维覆盖)。中文链路默认音色由 jianying_tts 决定。
+_TTS_DEFAULT_VOICE_ENV = "TTS_VOICE_EN"
+_TTS_DEFAULT_VOICE_FALLBACK = "英语女王"
 
 # P3b:英文配音在英文分支草稿里的固定 id(segment/track/material)
 _EN_DUB_MATERIAL_ID = "en-dub-1"
@@ -182,10 +191,14 @@ def node_17_inject_english_tts(state: WorkflowState) -> dict:
         }
 
     ctx = RunContext()
+    default_voice = (
+        os.environ.get(_TTS_DEFAULT_VOICE_ENV, "").strip()
+        or _TTS_DEFAULT_VOICE_FALLBACK
+    )
     result = speech_synthesize(
         {
             "text": text,
-            "voice": _TTS_DEFAULT_VOICE,
+            "voice": default_voice,
             "speed": _TTS_DEFAULT_SPEED,
             "preferred_provider": _TTS_PREFERRED_PROVIDER,
             "retries": _TTS_RETRIES,
