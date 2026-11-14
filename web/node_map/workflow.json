@@ -364,7 +364,7 @@
       "name": "Select BGM",
       "kind": "storyline_select_bgm",
       "pro": false,
-      "description": "Select appropriate background music (BGM) based on material content and user requirements. 由 generate_voiceover 单源边触发(2026-11-14 依赖约简:配音已等文案,文案来源属重复约束;2026-11-13 任务B 的配音消费保留 —— 真实聚合配音 artifact 各段 duration(voiceover_total_ms)作为配乐时长覆盖偏好);配音缺失按 0 容缺省,BGM 不因配音失败陪葬。",
+      "description": "Select appropriate background music (BGM) based on material content and user requirements. 由 generate_voiceover 单源边触发(2026-11-14 依赖约简:配音已等文案,文案来源属重复约束;2026-11-13 任务B 的配音消费保留 —— 真实聚合配音 artifact 各段 duration(voiceover_total_ms)作为配乐时长覆盖偏好);配音缺失按 0 容缺省,BGM 不因配音失败陪葬。2026-11-14 BGM 选曲改造:曲库来源改为本机剪映云音乐索引(harvest 自真实草稿素材,空库回退 YAML 占位库);LLM 候选白名单投影(禁 path/cache_path/request_id/raw_material);stub=素材不可用,与选择策略 method/selection_source 解耦。云音乐模式(selection 含 music_id)下 CanonicalTimeline.audio.bgm_ref=None —— mapper 不再生成 bgm-1 占位,真实音轨由 node_05 generate_draft 在原生写盘前自动铺入(JY_AUTO_BGM 开关,关卡② 仅有 BGM 缺失时挂起)。",
       "dependencies": [
         "storyline_generate_voiceover"
       ],
@@ -405,8 +405,8 @@
       "output_schema": [
         {
           "name": "bgm",
-          "type": "List[BGM]",
-          "description": "BGM selection (with voiceover_total_ms coverage-preference input echoed)"
+          "type": "Dict",
+          "description": "storyline_bgm_selection: bgm_ref/beats/duration_ms/tempo/default_volume/reason/method/selection_source/stub/voiceover_total_ms/asset_available + 云音乐元数据(music_id/music_name/category_id/category_name/asset_kind);云音乐模式(cache_path 有效)下 stub=False 且 canonical audio.bgm_ref=None"
         }
       ]
     },

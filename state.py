@@ -292,7 +292,9 @@ class WorkflowState(TypedDict, total=False):
     storyline_script_template_artifact: Annotated[Optional[str], _last_wins]  # script_template_recommendation
     storyline_script_artifact: Annotated[Optional[str], _last_wins]           # generate_script
     storyline_voiceover_artifact: Annotated[Optional[str], _last_wins]        # generate_voiceover
-    storyline_bgm_selection: Annotated[Optional[dict], _last_wins]            # select_bgm
+    storyline_bgm_selection: Annotated[Optional[dict], _last_wins]            # select_bgm: 本机曲库选择结果(bgm_ref/beats/method/stub/voiceover_total_ms
+    # + 云音乐元数据 music_id/music_name/cache_path/asset_available;云音乐模式下
+    # canonical audio.bgm_ref=None,真实音轨由 node_05 自动铺入,JY_AUTO_BGM 开关)
     storyline_transition_plan: Annotated[Optional[dict], _last_wins]          # recommend_transition
     storyline_text_style_plan: Annotated[Optional[dict], _last_wins]          # recommend_text
     storyline_timeline_plan: Annotated[Optional[str], _last_wins]             # plan_timeline_pro / join

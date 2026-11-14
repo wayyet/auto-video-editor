@@ -133,7 +133,12 @@ def apply_auto_bgm_track(
     except OSError:
         cache_ok = False
     if not cache_ok:
-        return _fail(f"缓存文件不可用({cache_path!r}),跳过自动铺轨(素材可能已被清理)")
+        # 状态日志纪律(修订 §阶段7 任务6):error_log 会透出到监控/创建台,
+        # 不写本机缓存绝对路径,只留文件名供定位。
+        return _fail(
+            f"缓存文件不可用({Path(cache_path).name if cache_path else '未配置'}),"
+            "跳过自动铺轨(素材可能已被清理)"
+        )
     music_duration_us = int(entry.get("duration_us") or raw_material.get("duration") or 0)
     if music_duration_us <= 0:
         return _fail(f"音乐时长非法({music_duration_us}µs),拒绝铺轨")
