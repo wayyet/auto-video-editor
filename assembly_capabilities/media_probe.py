@@ -142,7 +142,13 @@ def analyze_media(args: dict, ctx: RunContext) -> ToolResult:
     asset_id = str(args.get("asset_id") or "").strip()
     sidecar_stem = asset_id or input_path.stem
     probe_sidecar = ctx.work_dir / "analysis" / f"{sidecar_stem}_media.json"
-    probe = inspect_media({"input_path": str(input_path), "output_json": str(probe_sidecar)}, ctx)
+    # P2-2:调用方(discover)已跑过 inspect_media 时复用其结果,同一素材
+    # 不再重复 ffprobe(probe 数据含 summary.duration_seconds 即可)。
+    probe_data_arg = args.get("probe_data")
+    if isinstance(probe_data_arg, dict) and probe_data_arg.get("summary"):
+        probe = ToolResult(text="reused probe data (P2-2 ffprobe dedup)", data=probe_data_arg, artifacts=[])
+    else:
+        probe = inspect_media({"input_path": str(input_path), "output_json": str(probe_sidecar)}, ctx)
     if probe.text.startswith("[ERROR]"):
         return ToolResult(text=f"[ERROR] inspect failed during analyze_media: {probe.text}", data=probe.data)
     duration = safe_float((probe.data.get("summary") or {}).get("duration_seconds"))

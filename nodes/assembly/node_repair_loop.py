@@ -37,6 +37,7 @@ from assembly_capabilities.repair_strategies import (
     PREVIEW_CODES,
 )
 from assembly_capabilities.result import ToolResult
+from assembly_capabilities.timing import timed_assembly_node
 from assembly_capabilities.run_context import RunContext
 from assembly_capabilities.timeline_ops import timeline_diff
 
@@ -470,6 +471,7 @@ def _legacy_repair_path(state: WorkflowState, out_dir: Path, ctx: RunContext) ->
     }
 
 
+@timed_assembly_node("assembly_repair_loop")
 def assembly_repair_loop_node(state: WorkflowState) -> dict:
     outputs_root = _resolve_outputs_root(state)
     out_dir = outputs_root / "assembly"

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from assembly_capabilities.run_context import RunContext
+from assembly_capabilities.timing import timed_assembly_node
 from assembly_capabilities.visual_observe import build_candidate_observation
 
 from nodes.storyline._common import (
@@ -40,6 +41,7 @@ def _read_json_any(path: Path) -> tuple[Any, str | None]:
         return None, repr(e)
 
 
+@timed_assembly_node("assembly_visual_observe")
 def assembly_visual_observe_node(state: WorkflowState) -> dict:
     outputs_root = _resolve_outputs_root(state)
     out_dir = outputs_root / "assembly"

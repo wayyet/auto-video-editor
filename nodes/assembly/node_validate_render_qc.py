@@ -29,6 +29,7 @@ from assembly_capabilities.repair_strategies import has_structural_error
 from assembly_capabilities.qc_preview import qc_preview
 from assembly_capabilities.render_preview import render_preview
 from assembly_capabilities.result import ToolResult
+from assembly_capabilities.timing import timed_assembly_node
 from assembly_capabilities.run_context import RunContext
 from assembly_capabilities.timeline_ops import validate_timeline
 
@@ -313,6 +314,7 @@ def _legacy_qc_path(state: WorkflowState, out_dir: Path, ctx: RunContext) -> dic
     }
 
 
+@timed_assembly_node("assembly_validate_render_qc")
 def assembly_validate_render_qc_node(state: WorkflowState) -> dict:
     outputs_root = _resolve_outputs_root(state)
     out_dir = outputs_root / "assembly"

@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from assembly_capabilities.draft_patch import OPERATION_TYPES
+from assembly_capabilities.timing import timed_assembly_node
 from assembly_capabilities.influence_trace import (
     add_contribution,
     canonical_json_sha256,
@@ -34,6 +35,7 @@ from assembly_capabilities.repair_strategies import (
     STRUCTURAL_CODES,
     has_structural_error,
 )
+from assembly_capabilities.timing import summarize_timing
 from nodes.storyline._common import (
     _resolve_outputs_root,
     append_status_tag,
@@ -444,6 +446,7 @@ def _summarize_trace(trace: Any, final_status: str) -> str:
     return "\n".join(lines)
 
 
+@timed_assembly_node("assembly_write_report")
 def assembly_write_report_node(state: WorkflowState) -> dict:
     outputs_root = _resolve_outputs_root(state)
     out_dir = outputs_root / "assembly"
@@ -513,6 +516,9 @@ def assembly_write_report_node(state: WorkflowState) -> dict:
     sections.append("")
     sections.append("### 6.1 LLM 调用诊断 (P2-1)\n")
     sections.append(_summarize_llm_diagnostics(state.get("assembly_llm_diagnostics")))
+    sections.append("")
+    sections.append("### 6.2 节点计时 (node_timing.json,P2-2)\n")
+    sections.append(summarize_timing(out_dir / "node_timing.json"))
     sections.append("")
 
     sections.append("## 7. 最终计划提交 (P1-7)\n")

@@ -26,13 +26,18 @@ from __future__ import annotations
 
 import json
 import os
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
+
+import config
 
 from assembly_capabilities.influence_trace import canonical_json_sha256
 from assembly_capabilities.media_probe import analyze_media, compute_asset_id, inspect_media
 from assembly_capabilities.result import ToolResult
 from assembly_capabilities.run_context import RunContext
+from assembly_capabilities.timing import record_node_timing
 from storyline.mapper import file_uri_to_path
 
 from nodes.storyline._common import (
@@ -187,9 +192,15 @@ def _read_analysis_report(path: Path) -> dict[str, Any]:
 
 def _probe_source(
     target: dict[str, Any], ctx: RunContext, media_analysis_dir: Path
-) -> dict[str, Any]:
-    """对单个素材跑 inspect_media + analyze_media,产出 manifest source 条目。"""
+) -> tuple[dict[str, Any], dict[str, float]]:
+    """对单个素材跑 inspect_media + analyze_media,产出 manifest source 条目。
+
+    Returns:
+        ``(entry, stage_seconds)``。``stage_seconds`` = ``{"probe": s, "analyze": s}``
+        (P2-2 计时;失败路径的阶段按已耗时记录)。
+    """
     path = str(target["path"])
+    stage_seconds = {"probe": 0.0, "analyze": 0.0}
     entry: dict[str, Any] = {
         "asset_id": None,
         "source_path": path,
@@ -214,47 +225,59 @@ def _probe_source(
     if asset_id is None:
         entry["degraded_reason"] = "file_stat_failed(文件不存在或不可读)"
         entry["probe_text"] = "[ERROR] compute_asset_id failed: file not readable"
-        return entry
+        return entry, stage_seconds
     entry["asset_id"] = asset_id
 
     probe_sidecar = media_analysis_dir / f"{asset_id}_probe.json"
     analysis_out = media_analysis_dir / f"{asset_id}.json"
 
+    probe_t0 = time.perf_counter()
     try:
         probe: ToolResult = inspect_media({"input_path": path, "output_json": str(probe_sidecar)}, ctx)
     except Exception as exc:  # noqa: BLE001 — 工具异常按失败处理,不中断逐素材循环
         entry["degraded_reason"] = f"probe exception: {exc!r}"
-        return entry
+        stage_seconds["probe"] = time.perf_counter() - probe_t0
+        return entry, stage_seconds
+    stage_seconds["probe"] = time.perf_counter() - probe_t0
     entry["probe_text"] = probe.text
     probe_data = probe.data if isinstance(probe.data, dict) else {}
     entry["probe_summary"] = probe_data.get("summary") or {}
     entry["technical_risks"] = list(probe_data.get("technical_risks") or [])
     if probe.text.startswith("[ERROR]"):
         entry["degraded_reason"] = f"probe failed: {probe.text}"
-        return entry
+        return entry, stage_seconds
     if probe_data.get("duration_seconds") is None:
         entry["degraded_reason"] = "probe data missing duration_seconds"
-        return entry
+        return entry, stage_seconds
     entry["probe_status"] = "ok"
     entry["duration_seconds"] = probe_data.get("duration_seconds")
 
+    analyze_t0 = time.perf_counter()
     try:
         analysis: ToolResult = analyze_media(
-            {"input_path": path, "asset_id": asset_id, "output_json": str(analysis_out)},
+            {
+                "input_path": path,
+                "asset_id": asset_id,
+                "output_json": str(analysis_out),
+                # P2-2:复用本素材刚跑过的 probe 结果,同一素材不再二次 ffprobe
+                "probe_data": probe_data,
+            },
             ctx,
         )
     except Exception as exc:  # noqa: BLE001
         entry["analysis_status"] = "failed"
         entry["degraded_reason"] = f"analysis exception: {exc!r}"
         entry["analysis_text"] = repr(exc)
-        return entry
+        stage_seconds["analyze"] = time.perf_counter() - analyze_t0
+        return entry, stage_seconds
+    stage_seconds["analyze"] = time.perf_counter() - analyze_t0
     entry["analysis_text"] = analysis.text
     analysis_data = analysis.data if isinstance(analysis.data, dict) else {}
     entry["analysis_summary"] = analysis_data
     if analysis.text.startswith("[ERROR]"):
         entry["analysis_status"] = "failed"
         entry["degraded_reason"] = f"analysis failed: {analysis.text}"
-        return entry
+        return entry, stage_seconds
 
     # 完整候选明细来自落盘 report(F-02);报告读不到时退回 summary data
     report = _read_analysis_report(analysis_out)
@@ -264,7 +287,88 @@ def _probe_source(
     entry["scene_change_times"] = list(detail.get("scene_change_times") or [])
     entry["black_ranges"] = list(detail.get("black_ranges") or [])
     entry["silence_ranges"] = list(detail.get("silence_ranges") or [])
-    return entry
+    return entry, stage_seconds
+
+
+def _probe_targets(
+    targets: list[dict[str, Any]], ctx: RunContext, media_analysis_dir: Path
+) -> tuple[list[dict[str, Any]], dict[str, float]]:
+    """逐素材探测(P2-2:并发上限 + 单素材超时;顺序保持;失败按 degraded 记录)。
+
+    Returns:
+        ``(sources, stage_seconds)``。``stage_seconds`` = probe/analyze 两阶段
+        的总耗时(聚合全部素材)。
+    """
+    concurrency = max(1, int(getattr(config, "ASSEMBLY_PROBE_CONCURRENCY", 1) or 1))
+    timeout_s = max(1, int(getattr(config, "ASSEMBLY_PROBE_TIMEOUT_S", 300) or 300))
+
+    def _one(target: dict[str, Any]) -> tuple[dict[str, Any], dict[str, float]]:
+        try:
+            return _probe_source(target, ctx, media_analysis_dir)
+        except Exception as exc:  # noqa: BLE001 — 线程内异常折叠成 degraded 条目
+            entry: dict[str, Any] = {
+                "asset_id": None,
+                "source_path": str(target.get("path")),
+                "plan_media_id": target.get("plan_media_id"),
+                "plan_clip_ids": list(target.get("plan_clip_ids") or []),
+                "duration_seconds": None,
+                "probe_status": "failed",
+                "analysis_status": "skipped",
+                "degraded_reason": f"probe worker exception: {exc!r}",
+                "candidate_segments": [],
+                "scene_change_times": [],
+                "black_ranges": [],
+                "silence_ranges": [],
+                "technical_risks": [],
+                "probe_summary": {},
+                "analysis_summary": {},
+                "probe_text": "",
+                "analysis_text": "",
+            }
+            return entry, {"probe": 0.0, "analyze": 0.0}
+
+    stage_totals = {"probe": 0.0, "analyze": 0.0}
+    if concurrency > 1 and len(targets) > 1:
+        with ThreadPoolExecutor(max_workers=min(concurrency, len(targets))) as pool:
+            futures = [pool.submit(_one, t) for t in targets]
+            results: list[tuple[dict[str, Any], dict[str, float]]] = []
+            for fut in futures:
+                try:
+                    results.append(fut.result(timeout=timeout_s))
+                except Exception as exc:  # noqa: BLE001 — 超时/异常按 degraded 记录
+                    idx = len(results)
+                    results.append(
+                        (
+                            {
+                                "asset_id": None,
+                                "source_path": str(targets[idx].get("path")),
+                                "plan_media_id": targets[idx].get("plan_media_id"),
+                                "plan_clip_ids": list(targets[idx].get("plan_clip_ids") or []),
+                                "duration_seconds": None,
+                                "probe_status": "failed",
+                                "analysis_status": "skipped",
+                                "degraded_reason": f"probe timeout/exception after {timeout_s}s: {exc!r}",
+                                "candidate_segments": [],
+                                "scene_change_times": [],
+                                "black_ranges": [],
+                                "silence_ranges": [],
+                                "technical_risks": [],
+                                "probe_summary": {},
+                                "analysis_summary": {},
+                                "probe_text": "",
+                                "analysis_text": "",
+                            },
+                            {"probe": float(timeout_s), "analyze": 0.0},
+                        )
+                    )
+    else:
+        results = [_one(t) for t in targets]
+
+    for _, stages in results:
+        stage_totals["probe"] += stages.get("probe", 0.0)
+        stage_totals["analyze"] += stages.get("analyze", 0.0)
+    sources = [entry for entry, _ in results]
+    return sources, stage_totals
 
 
 def assembly_discover_and_probe_node(state: WorkflowState) -> dict:
@@ -287,10 +391,12 @@ def assembly_discover_and_probe_node(state: WorkflowState) -> dict:
     base_plan_sha256 = canonical_json_sha256(plan) if isinstance(plan, dict) else None
 
     ctx = RunContext(session_kind="pipeline")
+    node_started = time.perf_counter()
     sources: list[dict[str, Any]] = []
     try:
-        for target in targets:
-            sources.append(_probe_source(target, ctx, media_analysis_dir))
+        # P2-2:并发上限 + 单素材超时(probe 数据在 _probe_source 内复用,
+        # 同一素材不再二次 ffprobe);耗时记 node_timing.json
+        sources, stage_totals = _probe_targets(targets, ctx, media_analysis_dir)
     except Exception as e:  # noqa: BLE001 — 逐素材循环外的异常按整体失败处理
         return {
             "error_log": append_error(
@@ -299,6 +405,16 @@ def assembly_discover_and_probe_node(state: WorkflowState) -> dict:
             ),
             "status_log": append_status_tag(state, "assembly_discover_failed"),
         }
+    record_node_timing(
+        out_dir,
+        node_id="assembly_discover_and_probe",
+        total_seconds=time.perf_counter() - node_started,
+        stages={
+            "probe_seconds": stage_totals.get("probe", 0.0),
+            "analyze_seconds": stage_totals.get("analyze", 0.0),
+        },
+        extra={"source_count": len(sources), "concurrency": max(1, int(getattr(config, "ASSEMBLY_PROBE_CONCURRENCY", 1) or 1))},
+    )
 
     failed = [s for s in sources if s["probe_status"] != "ok" or s["analysis_status"] == "failed"]
     degraded = bool(failed)

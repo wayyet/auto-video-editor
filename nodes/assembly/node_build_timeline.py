@@ -37,6 +37,7 @@ from assembly_capabilities.influence_trace import (
     load_or_create_trace,
     save_trace,
 )
+from assembly_capabilities.timing import timed_assembly_node
 from assembly_capabilities.draft_patch import plan_sha256
 
 from nodes.storyline._common import (
@@ -81,6 +82,7 @@ def _append_influence_trace(
     return str(out_dir / "influence_trace.json")
 
 
+@timed_assembly_node("assembly_build_timeline")
 def assembly_build_timeline_node(state: WorkflowState) -> dict:
     outputs_root = _resolve_outputs_root(state)
     out_dir = outputs_root / "assembly"

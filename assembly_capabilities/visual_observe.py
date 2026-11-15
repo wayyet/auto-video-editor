@@ -43,9 +43,11 @@ import os
 import shutil
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as _dataclass_replace
 from pathlib import Path
 from typing import Any
+
+import config
 
 from .ffproc import run_proc
 from .fonts import find_cjk_font
@@ -53,6 +55,10 @@ from .result import ToolResult
 from .run_context import RunContext
 
 MAX_INLINE_IMAGES = 600
+
+
+# P2-2:观察工具版本 —— 采样/抽帧实现或缓存语义变更时 bump,旧缓存整体失效
+VISUAL_OBSERVE_TOOL_VERSION = "2-p2-2"
 
 
 @dataclass
@@ -272,6 +278,8 @@ def observation_signature(
         "video_size": stat.st_size,
         "video_mtime_ns": stat.st_mtime_ns,
         "sampling": defaults.__dict__,
+        # P2-2:工具版本参与签名 —— 采样/抽帧实现升级后旧缓存自动失效重抽
+        "tool_version": VISUAL_OBSERVE_TOOL_VERSION,
         "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
         "original_time_range": list(original_time_range) if original_time_range else None,
         "frames_dir": str(frames_dir.resolve()),
@@ -749,6 +757,16 @@ def build_candidate_observation(
         defaults: 采样参数,缺省 :class:`VideoSamplingDefaults`。
     """
     defaults = defaults or VideoSamplingDefaults()
+    # P2-2:单候选抽帧预算(候选窗口越长抽帧越多;预算防止大素材撑爆
+    # contact sheet 与帧缓存)。预算进入采样参数 → 缓存签名随预算变化自动失效。
+    frame_budget = int(getattr(config, "ASSEMBLY_MAX_FRAMES_PER_CANDIDATE", 0) or 0)
+    if frame_budget > 0:
+        candidate_defaults = _dataclass_replace(
+            defaults,
+            max_video_frames=min(defaults.max_video_frames, frame_budget),
+        )
+    else:
+        candidate_defaults = defaults
     out_dir.mkdir(parents=True, exist_ok=True)
     candidates_out: list[dict[str, Any]] = []
 
@@ -804,7 +822,7 @@ def build_candidate_observation(
             try:
                 result = build_video_observation(
                     ctx=ctx,
-                    defaults=defaults,
+                    defaults=candidate_defaults,
                     video_path=video,
                     output_json=output_json,
                     frames_dir=frames_dir,

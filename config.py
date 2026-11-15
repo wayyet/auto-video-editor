@@ -350,6 +350,23 @@ ASSEMBLY_REPAIR_MAX_WINDOWS: int = int(os.environ.get("ASSEMBLY_REPAIR_MAX_WINDO
 ASSEMBLY_REPAIR_WATCH_FPS: float = float(os.environ.get("ASSEMBLY_REPAIR_WATCH_FPS", "8"))
 
 # ---------------------------------------------------------------------------
+# 第六期 P2-2:性能与资源预算
+# ---------------------------------------------------------------------------
+# discover 逐素材探测并发上限(>1 时用线程池;每素材独立 sidecar,并发不互覆)。
+# ffprobe/ffmpeg 是子进程型 IO,线程池足够;上限防大素材清单打满 CPU。
+ASSEMBLY_PROBE_CONCURRENCY: int = int(os.environ.get("ASSEMBLY_PROBE_CONCURRENCY", "2"))
+
+# 单素材探测/分析整体超时秒数(线程池 future.result 超时 → 该素材按
+# degraded 处理,不静默丢失;超过总素材数 × 超时属于异常情况由节点级兜底)
+ASSEMBLY_PROBE_TIMEOUT_S: int = int(os.environ.get("ASSEMBLY_PROBE_TIMEOUT_S", "300"))
+
+# 单候选抽帧预算上限(候选窗口越长抽帧越多,预算防大素材把 contact sheet
+# 和缓存撑爆;0 = 不限制,回退 VideoSamplingDefaults.max_video_frames 全局上限)
+ASSEMBLY_MAX_FRAMES_PER_CANDIDATE: int = int(
+    os.environ.get("ASSEMBLY_MAX_FRAMES_PER_CANDIDATE", "120")
+)
+
+# ---------------------------------------------------------------------------
 # 9 个 MCP 工具迁移计划 阶段五(§6.5)—— 节点 5 素材宽高比归一化
 # ---------------------------------------------------------------------------
 # 混剪素材宽高比不一致时(横屏素材直接进竖屏草稿),先用
