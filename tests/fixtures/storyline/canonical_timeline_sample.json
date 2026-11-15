@@ -1,0 +1,101 @@
+{
+  "schema_version": "1.0",
+  "job_id": "fixture-job-001",
+  "created_at_ms": 1700000000000,
+  "source_media": [
+    {
+      "media_id": "media_0001",
+      "file_uri": "file:///C:/autovideo_fixture/media_a.mp4",
+      "duration_ms": 30000,
+      "media_type": "video",
+      "width": 1080,
+      "height": 1920,
+      "fps": 30.0
+    },
+    {
+      "media_id": "media_0002",
+      "file_uri": "file:///C:/autovideo_fixture/media_b.mp4",
+      "duration_ms": 25000,
+      "media_type": "video",
+      "width": 1080,
+      "height": 1920,
+      "fps": 30.0
+    }
+  ],
+  "clips": [
+    {
+      "clip_id": "clip_0001",
+      "source_media_id": "media_0001",
+      "source_in_ms": 0,
+      "source_out_ms": 4000,
+      "timeline_in_ms": 0,
+      "timeline_out_ms": 4000,
+      "transcript": "开场镜头",
+      "scene_id": "shot_001",
+      "voiceover_id": "voiceover_0001",
+      "transition_in": "cut",
+      "transition_out": "fade_out"
+    },
+    {
+      "clip_id": "clip_0002",
+      "source_media_id": "media_0002",
+      "source_in_ms": 1000,
+      "source_out_ms": 5000,
+      "timeline_in_ms": 4000,
+      "timeline_out_ms": 8000,
+      "transcript": "中段镜头",
+      "scene_id": "shot_002",
+      "voiceover_id": "voiceover_0001",
+      "transition_in": "fade_in"
+    },
+    {
+      "clip_id": "clip_0003",
+      "source_media_id": "media_0002",
+      "source_in_ms": 8000,
+      "source_out_ms": 12000,
+      "timeline_in_ms": 8000,
+      "timeline_out_ms": 12000,
+      "transcript": "收尾镜头",
+      "scene_id": "shot_003",
+      "voiceover_id": "voiceover_0002",
+      "transition_out": "fade_out",
+      "subtitle_style": {"font_size": 18}
+    }
+  ],
+  "audio": {
+    "bgm_ref": "bgm_0001",
+    "voiceover": null,
+    "voiceovers": [
+      {
+        "voiceover_id": "voiceover_0001",
+        "group_id": "group_0001",
+        "path": "C:/autovideo_fixture/vo_0001.wav",
+        "duration_ms": 8000,
+        "provider": "stub",
+        "stub": true,
+        "error": null
+      },
+      {
+        "voiceover_id": "voiceover_0002",
+        "group_id": "group_0002",
+        "path": "",
+        "duration_ms": 0,
+        "provider": "stub",
+        "stub": true,
+        "error": "tts_unavailable"
+      }
+    ]
+  },
+  "subtitles": {
+    "zh": "开场镜头\n中段镜头\n收尾镜头",
+    "en": "Opening shot\nMid shot\nClosing shot"
+  },
+  "options": {
+    "enable_ai_transition": false,
+    "enable_voiceover": true,
+    "max_duration_ms": 35000
+  },
+  "method": "tts_align",
+  "warnings": [],
+  "ai_transitions": []
+}
