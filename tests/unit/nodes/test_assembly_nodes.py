@@ -553,3 +553,134 @@ def test_write_report_handles_corrupt_artifacts_gracefully(base_state, tmp_path)
     out = assembly_write_report_node(base_state)
     assert "assembly_report_path" in out
     assert Path(out["assembly_report_path"]).is_file()
+
+
+# =============================================================================
+# assembly_write_report(P1-7:最终计划提交与影响链收尾)
+# =============================================================================
+def _p1_7_candidate_state(base_state, tmp_path, *, qc_issues=None, base_sha=None):
+    """构造带候选计划链路的 write_report 输入(共享 CanonicalTimeline fixture)。"""
+    from assembly_capabilities.influence_trace import canonical_json_sha256
+    from tests.support.draft_influence import load_canonical_sample
+
+    plan = load_canonical_sample()
+    cand_path = tmp_path / "candidate_plan.json"
+    cand_path.write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
+    cand_qc_path = tmp_path / "candidate_qc_report.json"
+    cand_qc_path.write_text(
+        json.dumps({"status": "pass", "issues": qc_issues or []}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    base_state["storyline_plan"] = plan
+    base_state["assembly_base_plan_sha256"] = base_sha or canonical_json_sha256(plan)
+    base_state["assembly_candidate_plan"] = plan
+    base_state["assembly_candidate_plan_path"] = str(cand_path)
+    base_state["assembly_candidate_plan_sha256"] = canonical_json_sha256(plan)
+    base_state["assembly_candidate_qc_report_path"] = str(cand_qc_path)
+    base_state["assembly_draft_patch"] = {
+        "schema_version": 1,
+        "operations": [{"operation_id": "op_0001", "operation": "trim"}],
+    }
+    base_state["assembly_qc_status"] = "pass"
+    return plan
+
+
+def test_write_report_submits_final_plan_and_completes_trace(
+    base_state, tmp_path
+):
+    """候选合法 → 提交 final plan 三件套 + trace 固化 final sha + 六节点贡献。"""
+    from assembly_capabilities.influence_trace import (
+        canonical_json_sha256,
+        validate_influence_trace,
+    )
+
+    plan = _p1_7_candidate_state(base_state, tmp_path)
+
+    out = assembly_write_report_node(base_state)
+    # 三件套提交
+    assert out.get("assembly_final_plan_path")
+    assert Path(out["assembly_final_plan_path"]).is_file()
+    assert out.get("assembly_final_plan_sha256") == canonical_json_sha256(plan)
+    assert out.get("assembly_final_plan") == plan
+    assert "assembly_final_plan_submitted" in out["status_log"]
+    # trace 收尾:final sha + 六节点贡献 + 契约校验通过
+    trace = json.loads(
+        Path(out["assembly_influence_trace_path"]).read_text(encoding="utf-8")
+    )
+    assert trace["final_plan_sha256"] == canonical_json_sha256(plan)
+    node_ids = {c["node_id"] for c in trace["node_contributions"]}
+    assert {
+        "assembly_discover_and_probe",
+        "assembly_visual_observe",
+        "assembly_build_timeline",
+        "assembly_validate_render_qc",
+        "assembly_repair_loop",
+        "assembly_write_report",
+    } <= node_ids
+    assert validate_influence_trace(trace) == []
+    # 报告新 section
+    report = Path(out["assembly_report_path"]).read_text(encoding="utf-8")
+    assert "## 6. 候选编辑计划与修复" in report
+    assert "## 7. 最终计划提交" in report
+    assert "已提交" in report
+    assert "## 8. 影响链" in report
+
+
+def test_write_report_blocks_on_structural_qc_issue(base_state, tmp_path):
+    """候选 QC 命中结构性 error → 不提交 final plan(fail-closed)。"""
+    _p1_7_candidate_state(
+        base_state,
+        tmp_path,
+        qc_issues=[
+            {"severity": "error", "code": "broken_reference", "message": "dangling material"}
+        ],
+    )
+
+    out = assembly_write_report_node(base_state)
+    assert "assembly_final_plan_path" not in out
+    assert "assembly_final_plan_sha256" not in out
+    assert "assembly_final_plan_blocked" in out["status_log"]
+    trace = json.loads(
+        Path(out["assembly_influence_trace_path"]).read_text(encoding="utf-8")
+    )
+    assert trace["final_plan_sha256"] is None
+    report = Path(out["assembly_report_path"]).read_text(encoding="utf-8")
+    assert "⛔" in report
+    assert "broken_reference" in report
+
+
+def test_write_report_blocks_on_base_plan_drift(base_state, tmp_path):
+    """storyline_plan 与 base sha 漂移 → 阻断(旧候选不套新计划)。"""
+    _p1_7_candidate_state(base_state, tmp_path, base_sha="1" * 64)
+
+    out = assembly_write_report_node(base_state)
+    assert "assembly_final_plan_path" not in out
+    assert "assembly_final_plan_blocked" in out["status_log"]
+    report = Path(out["assembly_report_path"]).read_text(encoding="utf-8")
+    assert "漂移" in report
+
+
+def test_write_report_not_available_without_candidate(base_state, tmp_path):
+    """无候选(build 未产出/QC 关姿态)→ not_available,不提交也不算阻断。"""
+    out = assembly_write_report_node(base_state)
+    assert "assembly_final_plan_path" not in out
+    assert "assembly_final_plan_submitted" not in out["status_log"]
+    assert "assembly_final_plan_blocked" not in out["status_log"]
+    report = Path(out["assembly_report_path"]).read_text(encoding="utf-8")
+    assert "无候选" in report
+
+
+def test_write_report_trace_records_repair_not_executed(base_state, tmp_path):
+    """QC 首轮通过(无修复轮次)→ repair 贡献以 executed=false 记录,六节点仍齐全。"""
+    _p1_7_candidate_state(base_state, tmp_path)
+
+    out = assembly_write_report_node(base_state)
+    trace = json.loads(
+        Path(out["assembly_influence_trace_path"]).read_text(encoding="utf-8")
+    )
+    repair = next(
+        c for c in trace["node_contributions"]
+        if c["node_id"] == "assembly_repair_loop"
+    )
+    assert repair["extra"]["executed"] is False
+    assert repair["consumed_by"] == ["assembly_write_report"]

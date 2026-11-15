@@ -45,6 +45,10 @@ from jy_common.native_fx import (
 from jy_common.template_library import TemplateLibrary, load_resource_libraries
 from nodes._draft_io import apply_and_write, find_video_track, load_draft, upsert_by_id
 from nodes._dual_draft import ZH, dual_draft_targets, missing_en_note
+from nodes.storyline._common import (
+    PLAN_SOURCE_FINAL_INVALID,
+    effective_canonical_plan,
+)
 from state import WorkflowState
 
 
@@ -72,7 +76,11 @@ def _boundary_semantics_plan(state: WorkflowState) -> list[str | None]:
     被两端重复创建(计划任务 2)。返回列表按边界对齐:无语义的边界占位
     ``None``,调用方对 None 回落 style_tag 现行逻辑。
     """
-    plan = state.get("storyline_plan")
+    # P1-7:优先消费 assembly 最终批准计划(视频轨被 patch 改写后按旧计划
+    # 提转场边界会错位);最终计划不可用时回落原始 storyline_plan。
+    plan, plan_source, _plan_notes = effective_canonical_plan(state)
+    if plan_source == PLAN_SOURCE_FINAL_INVALID:
+        plan = state.get("storyline_plan")
     source: list[Any] | None = None
     if isinstance(plan, dict) and plan.get("clips"):
         source = plan["clips"]

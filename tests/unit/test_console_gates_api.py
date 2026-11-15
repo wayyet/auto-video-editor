@@ -56,6 +56,60 @@ class TestBuildGateView:
         assert "issues" not in g
         assert g["instructions"].startswith("请在剪映客户端")
 
+    def test_gate1_assembly_artifacts_from_payload(self) -> None:
+        """P1-7:① payload 携带 assembly 报告/预览/QC → gate view 透出。"""
+        interrupts = [{
+            "id": "i-1", "checkpoint": "①", "legacy_id": "checkpoint1_reorder",
+            "step": 6, "instructions": "请在剪映客户端手动调整分镜顺序",
+            "payload": {
+                "checkpoint": "①", "legacy_id": "checkpoint1_reorder", "step": 6,
+                "draft_path": "X:/t/drafts/draft_content.json",
+                "assembly_report_path": "X:/t/outputs/j1/assembly/report.md",
+                "assembly_preview_path": "X:/t/outputs/j1/assembly/preview.mp4",
+                "assembly_qc_status": "pass_with_warnings",
+                "assembly_qc_warnings": ["黑帧警告 A", "轨道错位 B"],
+                "instructions": "请在剪映客户端手动调整分镜顺序",
+            },
+        }]
+        g = build_gate_views(interrupts, {})[0]
+        assert g["assembly_report_path"] == "X:/t/outputs/j1/assembly/report.md"
+        assert g["assembly_preview_path"] == "X:/t/outputs/j1/assembly/preview.mp4"
+        assert g["assembly_qc_status"] == "pass_with_warnings"
+        assert g["assembly_qc_warnings"] == ["黑帧警告 A", "轨道错位 B"]
+        assert g["assembly_artifact_dirs"] == [str(Path("X:/t/outputs/j1/assembly"))]
+
+    def test_gate_assembly_fields_fall_back_to_state(self) -> None:
+        """旧 checkpoint payload 缺 assembly 字段 → state 值兜底(缺 warnings → 空列表)。"""
+        interrupts = [{
+            "id": "i-1", "checkpoint": "①", "legacy_id": "checkpoint1_reorder",
+            "step": 6, "instructions": "请在剪映客户端手动调整分镜顺序",
+            "payload": {"checkpoint": "①", "step": 6, "draft_path": "X:/d/d.json",
+                        "instructions": "请在剪映客户端手动调整分镜顺序"},
+        }]
+        g = build_gate_views(interrupts, {
+            "assembly_report_path": "Y:/o/j2/assembly/report.md",
+            "assembly_preview_path": "Y:/o/j2/assembly/preview.mp4",
+            "assembly_qc_status": "pass",
+        })[0]
+        assert g["assembly_report_path"] == "Y:/o/j2/assembly/report.md"
+        assert g["assembly_preview_path"] == "Y:/o/j2/assembly/preview.mp4"
+        assert g["assembly_qc_status"] == "pass"
+        assert g["assembly_qc_warnings"] == []
+
+    def test_gate2_has_no_assembly_fields(self) -> None:
+        """② 无 assembly 数据 → 字段缺省 None(前端隐藏入口,不报错)。"""
+        interrupts = [{
+            "id": "i-2", "checkpoint": "②", "legacy_id": "checkpoint2_add_bgm",
+            "step": 12, "instructions": "请从剪映 VIP 音乐库选取 BGM 并拖入音轨",
+            "payload": {"checkpoint": "②", "draft_path": "X:/t/drafts/draft_content.json"},
+        }]
+        g = build_gate_views(interrupts, {})[0]
+        assert g["assembly_report_path"] is None
+        assert g["assembly_preview_path"] is None
+        assert g["assembly_qc_status"] is None
+        assert g["assembly_qc_warnings"] == []
+        assert g["assembly_artifact_dirs"] == []
+
     def test_gate2_hint_single_bgm(self) -> None:
         interrupts = [{
             "id": "i-2", "checkpoint": "②", "legacy_id": "checkpoint2_add_bgm",

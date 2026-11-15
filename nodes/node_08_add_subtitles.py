@@ -52,6 +52,10 @@ import config
 from assembly_capabilities.run_context import RunContext
 from nodes._draft_io import apply_and_write, load_draft
 from nodes._subtitle_texts import build_text_track, make_text_material
+from nodes.storyline._common import (
+    PLAN_SOURCE_FINAL_INVALID,
+    effective_canonical_plan,
+)
 from state import WorkflowState
 from video_edit_capabilities import subtitle_style as sty
 from video_edit_capabilities.subtitle_scout import subtitle_scout
@@ -231,7 +235,12 @@ def _group_spans_from_draft(
     """
     from storyline.mapper import file_uri_to_path
 
-    plan = state.get("storyline_plan")
+    # P1-7:优先消费 assembly 最终批准计划(assembly 改过 clips 后按旧计划
+    # 匹配会静默失配);最终计划不可用时回落原始 storyline_plan(辅助消费方
+    # 不 fail-closed,匹配失败走既有的顺序配对/跳过降级)。
+    plan, plan_source, _plan_notes = effective_canonical_plan(state)
+    if plan_source == PLAN_SOURCE_FINAL_INVALID:
+        plan = state.get("storyline_plan")
     if not isinstance(plan, dict):
         return None
     clips = [c for c in (plan.get("clips") or []) if isinstance(c, dict)]

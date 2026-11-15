@@ -362,6 +362,19 @@ class WorkflowState(TypedDict, total=False):
     # P1-6 修复历史(repair_history.json):逐轮前后 sha / issue→op 映射 /
     # patch 指纹(同指纹去重)。
     assembly_repair_history_path: Annotated[Optional[str], _last_wins]
+    # P1-7 影响链追踪(influence_trace.json):build_timeline 建档并写本节点
+    # contribution,write_report 补齐六节点贡献并固化 final_plan_sha256,
+    # generate_draft 消费最终计划后回写 mapped_draft_sha256。
+    # (P1-6 遗留隐性断点在此补齐:node_build_timeline 此前已返回该路径键,
+    # 但 state 未声明,键值不会进入被追踪的 state 通道。)
+    assembly_influence_trace_path: Annotated[Optional[str], _last_wins]
+    # P1-7 最终批准计划:write_report 对候选计划做模型硬门 + 双重 hash 一致
+    # 校验后正式提交(写 final_plan.json + state 三件套);结构性错误被阻断
+    # 或候选缺失时不提交 —— generate_draft 读不到 final plan 即回退原始
+    # storyline_plan(QC 关姿态)。正式草稿仍由 generate_draft 单一写入。
+    assembly_final_plan: Annotated[Optional[dict], _last_wins]
+    assembly_final_plan_path: Annotated[Optional[str], _last_wins]
+    assembly_final_plan_sha256: NotRequired[Optional[str]]
 
     # ===== 9 个 MCP 工具迁移计划 阶段五(§6.5)新增 =====
     # repair loop 的视觉证据汇总(可疑窗口 + 证据帧路径列表),None = 本轮

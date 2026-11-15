@@ -450,8 +450,9 @@ async def run_gates(request: Request, thread_id: str) -> dict:
 class OpenDraftDirBody(BaseModel):
     """POST /runs/{tid}/open-draft-dir 请求体:打开哪一份草稿目录。"""
 
-    #: zh=中文主草稿;en=英文分支草稿(尚未创建时 409)
-    draft: Literal["zh", "en"] = "zh"
+    #: zh=中文主草稿;en=英文分支草稿(尚未创建时 409);
+    #: assembly_report / assembly_preview=assembly QC 产物目录(P1-7)
+    draft: Literal["zh", "en", "assembly_report", "assembly_preview"] = "zh"
 
 
 def _allowed_open_roots() -> list[Path]:
@@ -470,7 +471,21 @@ def _allowed_open_roots() -> list[Path]:
 def _resolve_open_target_sync(thread_id: str, draft: str) -> Path:
     """从当前 Thread 的 checkpoint state 推导要打开的草稿目录(绝不信任前端传路径)。"""
     _gates, values = _fetch_gate_data_sync(thread_id)
-    if draft == "en":
+    if draft in ("assembly_report", "assembly_preview"):
+        # P1-7:assembly QC 产物目录(report.md / preview.mp4 同在
+        # outputs/<job>/assembly/ 下,取父目录);QC 关或旧任务缺路径 → 409
+        state_key = (
+            "assembly_report_path" if draft == "assembly_report" else "assembly_preview_path"
+        )
+        raw = values.get(state_key)
+        if not raw:
+            raise ConsoleLaunchError(
+                "该任务没有 assembly QC 产物(QC 通道关闭或尚未执行到 assembly)",
+                status_code=409,
+            )
+        p = Path(str(raw))
+        target = p.parent
+    elif draft == "en":
         raw = values.get("draft_dir_en_branch")
         if not raw:
             raise ConsoleLaunchError(

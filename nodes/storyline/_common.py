@@ -27,6 +27,7 @@ import json
 import math
 import urllib.parse
 from pathlib import Path
+from typing import Any
 
 from config import DEFAULT_TARGET_DURATION_MS
 from state import WorkflowState
@@ -67,6 +68,73 @@ def append_status_tag(state: WorkflowState, *tags: str) -> list[str]:
     out = list(state.get("status_log", []) or [])
     out.extend(t for t in tags if t)
     return out
+
+
+# ---------------------------------------------------------------------------
+# 第六期 P1-7:统一 canonical 计划取用口径(final plan → storyline_plan)
+# ---------------------------------------------------------------------------
+#: effective_canonical_plan 返回的 source 取值
+PLAN_SOURCE_FINAL = "assembly_final_plan"
+PLAN_SOURCE_FINAL_INVALID = "assembly_final_plan_invalid"
+PLAN_SOURCE_STORYLINE = "storyline_plan"
+
+
+def effective_canonical_plan(
+    state: WorkflowState,
+) -> tuple[dict[str, Any] | None, str, list[str]]:
+    """统一三处 storyline_plan 消费点(node_05/08/09)的取用口径(纯函数)。
+
+    P1-7 起 assembly 六节点会在草稿生成**之前**产出最终批准计划;凡消费
+    ``state["storyline_plan"]`` 的节点都必须优先读到它,否则字幕组区间
+    (node_08)与转场边界语义(node_09)会按旧计划静默失配。
+
+    返回 ``(plan, source, notes)``:
+
+    - ``assembly_final_plan``:final plan 落盘文件可读、内容为 dict、且
+      规范化 sha256 与 ``assembly_final_plan_sha256`` 一致(**文件是权威**,
+      优于 state 内联镜像 —— checkpoint 恢复后 state 可能只剩路径);
+    - ``assembly_final_plan_invalid``:路径已声明但文件缺失/损坏/非 dict/
+      sha 漂移。**plan 为 None** —— 主消费方(node_05)必须 fail-closed,
+      辅助消费方(node_08/09)应回落 storyline_plan 并记状态;
+    - ``storyline_plan``:未提交 final plan(QC 关 / 阻断 / 旧任务),
+      回落原始计划;
+    - ``""`` 且 plan None:两者皆缺(旧 stub 任务)。
+
+    notes 携带降级/漂移原因,调用方应并入 status_log/error_log,不得静默丢弃。
+    """
+    notes: list[str] = []
+    final_path = state.get("assembly_final_plan_path")
+    expected_sha = state.get("assembly_final_plan_sha256")
+
+    if final_path:
+        loaded: Any = None
+        try:
+            p = Path(str(final_path))
+            if p.is_file():
+                loaded = json.loads(p.read_text(encoding="utf-8"))
+            else:
+                notes.append(f"assembly_final_plan_path 文件不存在: {final_path}")
+        except Exception as exc:  # noqa: BLE001 — 损坏文件按无效处理,不崩
+            notes.append(f"assembly_final_plan_path 读取失败: {exc!r}")
+        if isinstance(loaded, dict):
+            from assembly_capabilities.influence_trace import canonical_json_sha256
+
+            actual_sha = canonical_json_sha256(loaded)
+            if expected_sha and actual_sha != str(expected_sha):
+                notes.append(
+                    "assembly_final_plan sha 漂移: "
+                    f"expected={expected_sha} actual={actual_sha}"
+                )
+                return None, PLAN_SOURCE_FINAL_INVALID, notes
+            return loaded, PLAN_SOURCE_FINAL, notes
+        if loaded is not None:
+            notes.append("assembly_final_plan_path 内容不是 dict")
+        return None, PLAN_SOURCE_FINAL_INVALID, notes
+
+    storyline_plan = state.get("storyline_plan")
+    if isinstance(storyline_plan, dict):
+        return storyline_plan, PLAN_SOURCE_STORYLINE, notes
+    return None, "", notes
 
 
 # ---------------------------------------------------------------------------

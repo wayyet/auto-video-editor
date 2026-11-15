@@ -224,7 +224,9 @@ def test_notification_only_sent_once_on_resume(seeded) -> None:
 
     with patch(
         "nodes.node_06_human_reorder._post_resume",
-        side_effect=lambda s: {
+        # P1-7 起节点以 resume_value 关键字透传人工恢复值(reject 判定用),
+        # 替身用 **kw 兼容新旧签名
+        side_effect=lambda s, **kw: {
             **s,
             "reorder_notified": True,
             "status_log": list(s.get("status_log") or []) + ["checkpoint1_resumed"],

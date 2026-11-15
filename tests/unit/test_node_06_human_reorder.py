@@ -84,6 +84,87 @@ def test_post_resume_idempotent_via_field() -> None:
 
 
 # ---------------------------------------------------------------------------
+# P1-7:挂起前 payload 带 assembly 报告/预览/QC;reject 显式拒绝
+# ---------------------------------------------------------------------------
+def test_interrupt_payload_carries_assembly_artifacts(tmp_path) -> None:
+    """P1-7:挂起前即可取得报告/预览路径与 QC 状态(不再只在 resume 后出现)。"""
+    import json
+
+    qc_path = tmp_path / "candidate_qc_report.json"
+    qc_path.write_text(
+        json.dumps(
+            {
+                "status": "pass_with_warnings",
+                "issues": [
+                    {"severity": "warning", "code": "preview_issue", "message": "黑帧警告 A"},
+                    {"severity": "error", "code": "track_desync", "message": "轨道错位 B"},
+                    {"severity": "warning", "message": "静音 C"},
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    state = _state(
+        assembly_report_path=str(tmp_path / "report.md"),
+        assembly_preview_path=str(tmp_path / "preview.mp4"),
+        assembly_qc_status="pass_with_warnings",
+        assembly_candidate_qc_report_path=str(qc_path),
+    )
+    payload = _build_interrupt_payload(state)
+    # 契约三键不动
+    assert payload["checkpoint"] == "①"
+    assert payload["legacy_id"] == "checkpoint1_reorder"
+    assert payload["step"] == 6
+    # P1-7 新增字段
+    assert payload["assembly_report_path"] == str(tmp_path / "report.md")
+    assert payload["assembly_preview_path"] == str(tmp_path / "preview.mp4")
+    assert payload["assembly_qc_status"] == "pass_with_warnings"
+    assert payload["assembly_qc_warnings"] == ["黑帧警告 A", "轨道错位 B", "静音 C"]
+    # instructions 提及 reject 选项
+    assert "reject" in payload["instructions"]
+
+
+def test_interrupt_payload_assembly_fields_optional() -> None:
+    """旧任务/QC 关:assembly 字段缺省 → payload 带空值,不崩。"""
+    payload = _build_interrupt_payload(_state())
+    assert payload["assembly_report_path"] is None
+    assert payload["assembly_preview_path"] is None
+    assert payload["assembly_qc_status"] is None
+    assert payload["assembly_qc_warnings"] == []
+
+
+def test_post_resume_reject_terminates_when_escalated() -> None:
+    """QC 降级(escalated)时恢复值 reject → fail-closed 终止。"""
+    import pytest
+
+    state = _state(assembly_qc_status="escalated")
+    with pytest.raises(RuntimeError, match="reject"):
+        _post_resume(state, resume_value="reject", notifier=lambda s, c: None)
+
+
+def test_post_resume_reject_ignored_when_not_escalated() -> None:
+    """非降级状态 reject 无效(照常继续),避免误伤正常任务。"""
+    state = _state(assembly_qc_status="pass")
+    result = _post_resume(state, resume_value="reject", notifier=lambda s, c: None)
+    assert "checkpoint1_resumed" in result["status_log"]
+
+
+def test_post_resume_reject_none_and_other_values_safe() -> None:
+    """None / 空串 / 其他恢复值(ok)不触发误终止;reject 匹配大小写不敏感。"""
+    state = _state(assembly_qc_status="escalated")
+    ok = _post_resume(state, resume_value=None, notifier=lambda s, c: None)
+    assert "checkpoint1_resumed" in ok["status_log"]
+    ok2 = _post_resume(state, resume_value="ok", notifier=lambda s, c: None)
+    assert "checkpoint1_resumed" in ok2["status_log"]
+    # 大小写/空白变体视为显式 reject(escalated 下终止)
+    import pytest
+
+    with pytest.raises(RuntimeError, match="reject"):
+        _post_resume(state, resume_value="Reject ", notifier=lambda s, c: None)
+
+
+# ---------------------------------------------------------------------------
 # 端到端 interrupt() 行为 — 由集成测试覆盖(test_interrupt_resume.py)
 # ---------------------------------------------------------------------------
 # 单元测试只覆盖纯函数部分;LangGraph 真实 interrupt() 触发场景需要

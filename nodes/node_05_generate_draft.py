@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any, Optional
 
@@ -23,6 +24,12 @@ from config import (
     JIANYING_VERSION,
     WORKFLOW_ENV,
     storyline_outputs_root,
+)
+from assembly_capabilities.influence_trace import (
+    add_contribution,
+    canonical_json_sha256,
+    load_or_create_trace,
+    save_trace,
 )
 from assembly_capabilities.run_context import RunContext
 from draft_ops.atomic_writer import safe_write_draft
@@ -44,7 +51,12 @@ from storyline.output_isolation import (
 )
 from video_edit_capabilities.media_operation import video_basic_operation
 from video_edit_capabilities.render import probe_display_size, probe_video_dimensions
-from nodes.storyline._common import resolve_video_input_paths
+from nodes.storyline._common import (
+    PLAN_SOURCE_FINAL,
+    PLAN_SOURCE_FINAL_INVALID,
+    effective_canonical_plan,
+    resolve_video_input_paths,
+)
 
 
 def generate_initial_jianying_draft(
@@ -81,8 +93,38 @@ def generate_initial_jianying_draft(
     # 2. 策略选择
     strategy = resolve_strategy(jianying_version=JIANYING_VERSION)
 
-    # 3. 优先 storyline_plan(真实 MCP);fallback shot_plan(Mock)
-    storyline_plan = state.get("storyline_plan")
+    # 3. P1-7 计划选择:assembly_final_plan(经 QC 的最终批准计划)优先,
+    #    回落 storyline_plan(join 产出)→ shot_plan(旧 Mock 兜底)。
+    #    文件是权威(路径 + sha 双重校验),state 内联 dict 仅为监控镜像。
+    storyline_plan_raw = state.get("storyline_plan")
+    plan, plan_source, plan_notes = effective_canonical_plan(state)
+    if plan_source == PLAN_SOURCE_FINAL_INVALID:
+        # fail-closed(计划文档用例 E):最终计划已提交却文件损坏/sha 漂移/被删,
+        # 绝不能静默回退旧计划生成一份"审计链断裂"的草稿 —— 终止运行,
+        # 经 node.failed 把原因透出到监控(与空 clips fail-closed 纪律一致)。
+        raise ContractInvalid(
+            "[node_05] assembly_final_plan 不可用(已提交但损坏/sha 漂移/缺失): "
+            + "; ".join(plan_notes)
+        )
+    if plan_source == PLAN_SOURCE_FINAL:
+        # 基线漂移守卫:final plan 建立在 discover 记录的 base sha 上;
+        # patch 若被套到另一个 storyline_plan 上属于旧补丁新计划,拒绝应用。
+        base_sha = state.get("assembly_base_plan_sha256")
+        if base_sha and isinstance(storyline_plan_raw, dict):
+            actual_base = canonical_json_sha256(storyline_plan_raw)
+            if actual_base != str(base_sha):
+                raise ContractInvalid(
+                    "[node_05] storyline_plan 基线漂移:final plan 绑定的 "
+                    f"base sha={base_sha},当前 storyline_plan sha={actual_base};"
+                    "拒绝套用旧候选生成草稿"
+                )
+        storyline_plan = plan
+        plan_from_final = True
+    else:
+        storyline_plan = storyline_plan_raw
+        plan_from_final = False
+    for _note in plan_notes:
+        errors.append(f"[node_05] {_note}")
     shot_plan = state.get("shot_plan")
     video_path = state.get("video_input_path") or ""
     job_id = state.get("session_id")
@@ -244,6 +286,10 @@ def generate_initial_jianying_draft(
     log_tags = list(state.get("status_log", []) or [])
     log_tags.extend(normalize_notes)
     log_tags.extend(auto_bgm_notes)
+    # P1-7:草稿计划来源可观测(final plan 被明确消费 / 回退原始计划)
+    log_tags.append(
+        "draft_from_assembly_final_plan" if plan_from_final else "draft_from_storyline_plan"
+    )
     if isinstance(write_result, dict) and write_result.get("jianying_running"):
         log_tags.append("[node_05] 剪映进程在跑,写入仍继续(告警不阻断)")
     draft_file = draft_dir / "draft_content.json"
@@ -307,6 +353,12 @@ def generate_initial_jianying_draft(
                 "draft.publish_failed", detail={"reason": publish_error[:200]}
             )
 
+    # 4b. P1-7:消费最终计划后回写影响链(mapped_draft_sha256 + consumer
+    # contribution;审计性,任何失败不阻断)
+    _record_final_plan_consumption(
+        state, plan_source=plan_source, draft_file=draft_file, errors=errors
+    )
+
     # 5. 回填 manifest.draft_path(Phase 2 幂等键)
     if job_id:
         paths = OutputJobPaths.for_job(job_id=str(job_id), root=storyline_outputs_root())
@@ -319,6 +371,18 @@ def generate_initial_jianying_draft(
                 "CANVAS_WIDTH": CANVAS_WIDTH,
                 "CANVAS_HEIGHT": CANVAS_HEIGHT,
                 "JIANYING_VERSION": JIANYING_VERSION,
+                # P1-7:消费最终计划时把 final sha 记进幂等键快照,使
+                # "原 plan 草稿"与"final plan 草稿"可审计区分(QC 关时缺省,
+                # 键语义不变)
+                **(
+                    {
+                        "ASSEMBLY_FINAL_PLAN_SHA256": str(
+                            state.get("assembly_final_plan_sha256") or ""
+                        )
+                    }
+                    if plan_from_final
+                    else {}
+                ),
             },
             storyline_session_id=state.get("storyline_session_id"),
             storyline_artifact_ids=[
@@ -374,6 +438,49 @@ def _emit_monitor_event(event: str, *, detail: dict | None = None) -> None:
             )
     except Exception:  # noqa: BLE001 — 观测通道失败不阻断工作流
         pass
+
+
+def _record_final_plan_consumption(
+    state: WorkflowState,
+    *,
+    plan_source: str,
+    draft_file: Path,
+    errors: list[str],
+) -> None:
+    """P1-7:消费最终计划生成正式草稿后,回写影响链(审计性,绝不阻断)。
+
+    - ``mapped_draft_sha256`` = 最终 draft_content.json 的字节 sha256
+      (发布成功后为发布副本路径,与 state.draft_path 同源);
+    - generate_draft 以 consumer 身份追加 contribution(幂等,resume 重跑不重复);
+    - trace 缺失/base sha 缺失只记 error_log,不影响草稿。
+    """
+    if plan_source != PLAN_SOURCE_FINAL:
+        return
+    trace_path = state.get("assembly_influence_trace_path")
+    base_sha = state.get("assembly_base_plan_sha256")
+    if not trace_path or not base_sha:
+        errors.append("[node_05] assembly 影响链缺失,influence trace 未回写")
+        return
+    try:
+        trace = load_or_create_trace(str(trace_path), str(base_sha))
+        digest = hashlib.sha256(Path(draft_file).read_bytes()).hexdigest()
+        trace["mapped_draft_sha256"] = digest
+        existing = {
+            (c.get("node_id"), c.get("artifact"))
+            for c in trace.get("node_contributions") or []
+            if isinstance(c, dict)
+        }
+        if ("generate_draft", "draft_content.json") not in existing:
+            add_contribution(
+                trace,
+                node_id="generate_draft",
+                artifact="draft_content.json",
+                consumed_by=["node_06_human_reorder"],
+                extra={"plan_source": plan_source},
+            )
+        save_trace(trace_path, trace)
+    except Exception as exc:  # noqa: BLE001 — 审计回写绝不阻断草稿生成
+        errors.append(f"[node_05] influence trace 回写失败(不阻断): {exc!r}")
 
 
 # ---------------------------------------------------------------------------

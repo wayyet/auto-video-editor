@@ -1034,9 +1034,11 @@
       for (const g of gates) {
         const card = document.createElement("fieldset");
         card.style.cssText = "margin:6px 0;padding:8px;border:1px solid var(--st-wait);border-radius:6px";
-        // 2026-11-15 关卡③下线:剩余①/②均操作中文主草稿;QC preview/evidence/
-        // issues 展示已随 16a qc 链一并移除(恢复面板不再有这些数据源)。
+        // 2026-11-15 关卡③下线:剩余①/②均操作中文主草稿。
+        // P1-7:恢复面板重新提供 assembly QC 报告/预览入口(挂起即可打开,
+        // 路径来自 interrupt payload,旧任务缺字段自动隐藏,经受控端点打开)。
         const draftKind = "zh";
+        const qcWarns = Array.isArray(g.assembly_qc_warnings) ? g.assembly_qc_warnings : [];
         card.innerHTML =
           `<legend><label style="cursor:pointer">` +
           `<input type="radio" name="gateRadio" value="${esc(g.checkpoint || "")}" ${single ? "checked" : ""} /> ` +
@@ -1044,10 +1046,25 @@
           `<span class="hint">${esc(g.node || "")}</span></legend>` +
           (g.instructions ? `<div>${esc(g.instructions)}</div>` : "") +
           `<div class="hint" style="margin-top:4px">${esc(g.action_hint || "")}</div>` +
+          (g.assembly_qc_status
+            ? `<div class="hint" style="margin-top:4px">Assembly QC: <strong>${esc(g.assembly_qc_status)}</strong>` +
+              (qcWarns.length ? `;关键问题:${esc(qcWarns.join(" | "))}` : "") +
+              `</div>`
+            : "") +
           (g.draft_paths || []).map((p) => pathLine("草稿文件", p)).join("") +
           (g.draft_dirs || []).map((p) => pathLine("草稿目录", p)).join("") +
           ((g.draft_dirs || []).length
             ? `<button class="btn" type="button" data-draft="${draftKind}" data-open-dir style="margin-top:6px">打开草稿目录</button>`
+            : "") +
+          ((g.assembly_report_path || g.assembly_preview_path)
+            ? `<div style="margin-top:6px">` +
+              (g.assembly_report_path
+                ? `<button class="btn" type="button" data-open-assembly="assembly_report" style="margin-right:6px">打开 QC 报告目录</button>`
+                : "") +
+              (g.assembly_preview_path
+                ? `<button class="btn" type="button" data-open-assembly="assembly_preview">打开预览目录</button>`
+                : "") +
+              `</div>`
             : "");
         frag.appendChild(card);
       }
@@ -1070,13 +1087,16 @@
       });
     }
     gateCards.addEventListener("click", async (ev) => {
-      const btn = ev.target.closest("[data-open-dir]");
+      // P1-7:同时处理"打开草稿目录"与"打开 assembly 报告/预览目录"两类按钮,
+      // 目标种类一律由按钮 data 属性声明,路径由服务端从 checkpoint state 取。
+      const btn = ev.target.closest("[data-open-dir],[data-open-assembly]");
       if (!btn) return;
       const tid = liveThreadId;
       if (!tid) return;
+      const kind = btn.dataset.openAssembly || btn.dataset.draft || "zh";
       btn.disabled = true;
       try {
-        const data = await postJson(CONSOLE_API_PATHS.openDraftDir(tid), { draft: btn.dataset.draft || "zh" });
+        const data = await postJson(CONSOLE_API_PATHS.openDraftDir(tid), { draft: kind });
         resumeNote.textContent = `已在系统文件管理器打开: ${data.opened || ""}`;
       } catch (e) {
         resumeErr.textContent = e && e.message ? e.message : "打开草稿目录失败";

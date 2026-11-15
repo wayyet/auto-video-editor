@@ -100,6 +100,38 @@ def build_gate_view(item: dict[str, Any], state_values: dict[str, Any]) -> dict[
         "draft_paths": draft_paths,
         "draft_dirs": sorted({_dir_of(p) for p in draft_paths if _dir_of(p)}),
     }
+
+    # P1-7(2026-11-15):assembly 报告/预览/QC 状态 —— 关卡① 挂起时即可见。
+    # payload 优先(① 的 extra_payload 携带),旧 checkpoint 缺字段回落 state
+    # 值;① 之外关卡(②)payload 无这些键 → 走 state 兜底(通常也缺 → None,
+    # UI 按缺省隐藏入口)。恢复旧的"QC 报告可从恢复面板打开"能力。
+    assembly_report_path = _as_path_str(payload.get("assembly_report_path")) or _as_path_str(
+        state_values.get("assembly_report_path")
+    )
+    assembly_preview_path = _as_path_str(payload.get("assembly_preview_path")) or _as_path_str(
+        state_values.get("assembly_preview_path")
+    )
+    assembly_qc_status = _as_path_str(payload.get("assembly_qc_status")) or _as_path_str(
+        state_values.get("assembly_qc_status")
+    )
+    gate["assembly_report_path"] = assembly_report_path
+    gate["assembly_preview_path"] = assembly_preview_path
+    gate["assembly_qc_status"] = assembly_qc_status
+    warnings = payload.get("assembly_qc_warnings")
+    gate["assembly_qc_warnings"] = [
+        str(w) for w in warnings if isinstance(w, (str, int, float)) and str(w).strip()
+    ] if isinstance(warnings, list) else []
+    # assembly 产物目录(受控 open 端点用;report.md/preview.mp4 都是文件,
+    # 恒取父目录 —— 与 _dir_of 的 .json 特判无关)
+    artifact_dirs: list[str] = []
+    for p in (assembly_report_path, assembly_preview_path):
+        if not p:
+            continue
+        try:
+            artifact_dirs.append(str(Path(p).parent))
+        except OSError:  # pragma: no cover — 非法路径直接忽略
+            continue
+    gate["assembly_artifact_dirs"] = sorted(set(artifact_dirs))
     return gate
 
 
