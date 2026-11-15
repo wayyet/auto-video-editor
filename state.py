@@ -322,7 +322,7 @@ class WorkflowState(TypedDict, total=False):
     # ``assembly_qc_retry_count`` 由 ``assembly_repair_loop`` 与
     # ``assembly_validate_render_qc`` 各自在自己节点的早退/正常路径上整体覆盖
     # 写入(不会在同一 superstep 内并发写两次),故仍无需 reducer。
-    assembly_media_artifact: Annotated[Optional[str], _last_wins]            # inspect_media/analyze_media 汇总结果
+    assembly_media_artifact: Annotated[Optional[str], _last_wins]            # 素材 manifest media.json(P1-2 起 dict manifest;旧版为摘要 list)
     assembly_transcript_artifact: Annotated[Optional[str], _last_wins]       # DEPRECATED(2026-11-08 B1):不再读写,仅旧 checkpoint 兼容
     assembly_ingest_artifact: Annotated[Optional[str], _last_wins]           # video_ingest 结果(contact sheet)
     assembly_timeline_path: Annotated[Optional[str], _last_wins]             # 组装出的 timeline.json(plan §第七节 7.3)
@@ -332,6 +332,12 @@ class WorkflowState(TypedDict, total=False):
     assembly_report_path: Annotated[Optional[str], _last_wins]               # 最终 report.md
     assembly_qc_status: Annotated[Optional[str], _last_wins]                 # "pass" | "pass_with_warnings" | "escalated"
     assembly_qc_retry_count: NotRequired[int]                                # 修复循环重试计数
+
+    # ===== 第六期 P1(assembly 前移为草稿内容生产链)新增 =====
+    # 原始 storyline_plan 的规范化 JSON sha256(canonical_json_sha256 统一口径),
+    # discover 节点写入;DraftPatch 的 base_plan_sha256 绑定它(P1-4),基线漂移
+    # 时拒绝应用旧 patch。plan 缺失(stub 模式)时为 None。
+    assembly_base_plan_sha256: NotRequired[Optional[str]]
 
     # ===== 9 个 MCP 工具迁移计划 阶段五(§6.5)新增 =====
     # repair loop 的视觉证据汇总(可疑窗口 + 证据帧路径列表),None = 本轮

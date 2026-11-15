@@ -38,8 +38,35 @@ def _safe_read_json(path: str | Path | None) -> Any:
         return None
 
 
-def _summarize_media(media_reports: list[dict[str, Any]]) -> str:
-    lines: list[str] = [f"- 素材数量:{len(media_reports)}"]
+def _summarize_media(media_data: Any) -> str:
+    """素材清单摘要(2026-11-15 P1-2 起 media.json 为 manifest dict,兼容旧 list)。"""
+    if isinstance(media_data, dict):
+        # manifest 形状:sources[] 带探测/分析状态与候选明细
+        sources = [s for s in media_data.get("sources") or [] if isinstance(s, dict)]
+        lines: list[str] = [
+            f"- 素材数量:{len(sources)}"
+            f"(manifest v{media_data.get('schema_version', '?')},"
+            f" base_plan_sha256={media_data.get('base_plan_sha256') or 'n/a'})"
+        ]
+        for i, src in enumerate(sources[:5], start=1):
+            lines.append(
+                f"  - [{i}] `{src.get('source_path', '<unknown>')}`"
+                f" — asset_id={src.get('asset_id')},"
+                f" probe={src.get('probe_status')}, analysis={src.get('analysis_status')},"
+                f" duration={src.get('duration_seconds')}s,"
+                f" candidates={len(src.get('candidate_segments') or [])}"
+                f"{', degraded: ' + str(src.get('degraded_reason')) if src.get('degraded_reason') else ''}"
+            )
+        if len(sources) > 5:
+            lines.append(f"  - ...(其余 {len(sources) - 5} 条省略)")
+        if media_data.get("degraded"):
+            lines.append("- ⚠️ 存在探测/分析失败的素材(见 degraded_reason),相关候选不可用")
+        return "\n".join(lines)
+    if not isinstance(media_data, list):
+        return "- (无素材清单)"
+
+    media_reports = media_data
+    lines = [f"- 素材数量:{len(media_reports)}"]
     for i, rep in enumerate(media_reports[:5], start=1):
         source = rep.get("source", "<unknown>")
         analysis = rep.get("analysis") or {}
@@ -138,11 +165,8 @@ def assembly_write_report_node(state: WorkflowState) -> dict:
     sections.append(f"- timeline.json:`{timeline_path or '(未生成)'}`")
     sections.append(f"- preview.mp4:`{preview_path or '(未生成)'}`\n")
 
-    sections.append("## 2. 素材清单 (media.json)\n")
-    if isinstance(media_data, list):
-        sections.append(_summarize_media(media_data))
-    else:
-        sections.append("- (无素材清单)")
+    sections.append("## 2. 素材清单 (media.json manifest)\n")
+    sections.append(_summarize_media(media_data))
     sections.append("")
 
     sections.append("## 3. timeline 校验 (timeline_validation.json)\n")

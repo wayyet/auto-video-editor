@@ -51,9 +51,10 @@ def assembly_build_timeline_node(state: WorkflowState) -> dict:
             "status_log": append_status_tag(state, "assembly_build_timeline_failed"),
         }
 
-    # 节点层先做轻量校验:media_artifact 必须是合法 JSON list(plan §7.3 + §11)。
-    # 下游 ``build_timeline_from_paths`` 内部会再读一次,这里提前 fail-fast,
-    # 把"损坏的产物"显式记到 error_log,而不是静默走 fallback。
+    # 节点层先做轻量校验:media_artifact 必须是合法 JSON(2026-11-15 P1-2 起
+    # 为 manifest dict,兼容旧 list 产物)。下游 ``build_timeline_from_paths``
+    # 内部会再读一次,这里提前 fail-fast,把"损坏的产物"显式记到 error_log,
+    # 而不是静默走 fallback。
     try:
         raw_media = Path(str(media_artifact)).read_text(encoding="utf-8")
         parsed = json.loads(raw_media)
@@ -65,11 +66,11 @@ def assembly_build_timeline_node(state: WorkflowState) -> dict:
             ),
             "status_log": append_status_tag(state, "assembly_build_timeline_failed"),
         }
-    if not isinstance(parsed, list):
+    if not isinstance(parsed, (list, dict)):
         return {
             "error_log": append_error(
                 state, node_kind="assembly_build_timeline", error_code="CONTRACT_INVALID",
-                message=f"media.json must be a JSON list, got {type(parsed).__name__}",
+                message=f"media.json must be a JSON list or manifest dict, got {type(parsed).__name__}",
             ),
             "status_log": append_status_tag(state, "assembly_build_timeline_failed"),
         }

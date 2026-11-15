@@ -46,9 +46,13 @@ def test_discover_handles_single_file(mock_assembly_capabilities, base_state, tm
     p = Path(out["assembly_media_artifact"])
     assert p.is_file()
     payload = json.loads(p.read_text(encoding="utf-8"))
-    assert isinstance(payload, list)
-    assert len(payload) == 1
-    assert payload[0]["source"] == base_state["video_input_path"]
+    # P1-2:media.json 为 manifest dict,sources[] 携带稳定 asset_id
+    assert isinstance(payload, dict)
+    assert payload["schema_version"] == 1
+    assert len(payload["sources"]) == 1
+    assert payload["sources"][0]["source_path"] == base_state["video_input_path"]
+    assert payload["sources"][0]["asset_id"]
+    assert payload["sources"][0]["probe_status"] == "ok"
 
 
 def test_discover_handles_directory(mock_assembly_capabilities, base_state, tmp_path):
@@ -61,7 +65,7 @@ def test_discover_handles_directory(mock_assembly_capabilities, base_state, tmp_
     out = assembly_discover_and_probe_node(base_state)
     assert "assembly_media_artifact" in out
     payload = json.loads(Path(out["assembly_media_artifact"]).read_text(encoding="utf-8"))
-    assert len(payload) == 2
+    assert len(payload["sources"]) == 2
 
 
 def test_discover_handles_directory_no_videos(mock_assembly_capabilities, base_state, tmp_path):

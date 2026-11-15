@@ -107,6 +107,49 @@ SELECTION_JSON_SCHEMA: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 # 输入解析 helpers
 # ---------------------------------------------------------------------------
+def manifest_to_media_reports(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    """把 P1-2 素材 manifest(media.json,dict)还原成旧 media_reports list 形状。
+
+    P1-2 起 ``assembly_media_artifact`` 指向 manifest dict
+    (``{schema_version, base_plan_sha256, sources[], ...}``);旧消费方
+    (:func:`build_timeline_from_media` / report 摘要)仍吃 list 形状 ——
+    本 adapter 是唯一的形状归一点,候选明细 ``candidate_segments`` 原样透传。
+
+    兼容:已经是 list 的输入原样返回;非 dict/list 返回 []。
+    """
+    if isinstance(manifest, list):
+        return manifest
+    if not isinstance(manifest, dict):
+        return []
+    reports: list[dict[str, Any]] = []
+    for src in manifest.get("sources") or []:
+        if not isinstance(src, dict):
+            continue
+        probe_summary = src.get("probe_summary") if isinstance(src.get("probe_summary"), dict) else {}
+        analysis_summary = src.get("analysis_summary") if isinstance(src.get("analysis_summary"), dict) else {}
+        analysis = dict(analysis_summary)
+        # 候选明细等正式契约字段从 source 顶层透传(manifest 是唯一事实源)
+        for key in ("candidate_segments", "scene_change_times", "black_ranges", "silence_ranges"):
+            analysis[key] = src.get(key) if src.get(key) is not None else analysis.get(key) or []
+        reports.append(
+            {
+                "source": str(src.get("source_path") or ""),
+                "asset_id": src.get("asset_id"),
+                "probe_status": src.get("probe_status"),
+                "analysis_status": src.get("analysis_status"),
+                "probe": {
+                    "duration_seconds": src.get("duration_seconds"),
+                    "summary": probe_summary,
+                    "technical_risks": src.get("technical_risks") or [],
+                },
+                "analysis": analysis,
+                "probe_text": str(src.get("probe_text") or ""),
+                "analysis_text": str(src.get("analysis_text") or ""),
+            }
+        )
+    return reports
+
+
 def _collect_candidate_segments(media_reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """从 ``media.json`` 收集所有 candidate_segments,统一加 source + media_index。
 
@@ -639,10 +682,11 @@ def build_timeline_from_paths(
             return None
 
     media_data = _safe_read(media_artifact)
-    if not isinstance(media_data, list):
-        media_data = []
+    # P1-2:media.json 升级为 manifest dict —— 统一经 manifest_to_media_reports
+    # 归一成旧 list 形状;list 输入原样透传(兼容旧产物与非主图调用方)。
+    media_reports = manifest_to_media_reports(media_data)
     return build_timeline_from_media(
-        media_reports=media_data,
+        media_reports=media_reports,
         transcript_data=_safe_read(transcript_artifact),
         ingest_data=_safe_read(ingest_artifact),
         lang=lang,
@@ -653,6 +697,7 @@ def build_timeline_from_paths(
 __all__ = [
     "build_timeline_from_media",
     "build_timeline_from_paths",
+    "manifest_to_media_reports",
     "MAX_LLM_CANDIDATES",
     "SELECTION_JSON_SCHEMA",
 ]

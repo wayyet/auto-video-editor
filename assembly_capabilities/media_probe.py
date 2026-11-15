@@ -19,8 +19,10 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import os
 import shutil
 import time
 from pathlib import Path
@@ -40,6 +42,26 @@ def run_json(cmd: list[str], timeout: int = 60) -> dict:
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or f"command failed: {cmd}")
     return json.loads(proc.stdout)
+
+
+def compute_asset_id(path: Path) -> str | None:
+    """素材稳定身份:sha256(规范化路径 | size | mtime_ns) 前 16 位 hex。
+
+    第六期 P1-2(设计文档 §2.3-A):同一素材在 storyline plan / media manifest /
+    timeline patch 中必须能稳定关联;同名文件在不同目录不得冲突(路径纳入
+    身份),内容变化(mtime/size)则身份变化(缓存自动失效)。
+
+    Returns:
+        16 位 hex 字符串;文件不存在 / stat 失败时返回 None(调用方按
+        probe_status=failed 处理,不得静默丢失素材)。
+    """
+    try:
+        normalized = os.path.normcase(os.path.normpath(str(path)))
+        stat = Path(path).stat()
+        identity = f"{normalized}|{stat.st_size}|{stat.st_mtime_ns}"
+    except OSError:
+        return None
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +136,12 @@ def analyze_media(args: dict, ctx: RunContext) -> ToolResult:
     if isinstance(scene_threshold, ToolResult):
         return scene_threshold
     started = time.time()
-    probe_sidecar = ctx.work_dir / "analysis" / f"{input_path.stem}_media.json"
+    # 2026-11-15 第六期 P1-2(F-11):probe sidecar 按 asset_id 命名 —— 两个不同
+    # 目录的同名 stem 不再互相覆盖;未传 asset_id 时回退旧行为(stem),兼容
+    # 非主图调用方。
+    asset_id = str(args.get("asset_id") or "").strip()
+    sidecar_stem = asset_id or input_path.stem
+    probe_sidecar = ctx.work_dir / "analysis" / f"{sidecar_stem}_media.json"
     probe = inspect_media({"input_path": str(input_path), "output_json": str(probe_sidecar)}, ctx)
     if probe.text.startswith("[ERROR]"):
         return ToolResult(text=f"[ERROR] inspect failed during analyze_media: {probe.text}", data=probe.data)
