@@ -185,6 +185,8 @@ class WorkflowState(TypedDict, total=False):
 
     # 2026-11-12 noop 治理阶段5批1:checkpoint3_triggered(关卡③ 触发审计位)
     # 已移除 —— 全仓无读取方,关卡③ 触发事实由 status_log / interrupt payload 留痕。
+    # 2026-11-15 第六期:关卡③ 整体删除,下批 layout/preview/evidence 四键随
+    # 节点与 qc 链一并移除(见下)。
 
     # 2026-11-12 noop 治理阶段5批4:en_dub_audio_path(Week 4 兼容双写,
     # 与 en_audio_path 恒等值)已移除 —— en_audio_path 为唯一路径字段。
@@ -237,19 +239,11 @@ class WorkflowState(TypedDict, total=False):
     # build_graph() 启动时生成(uuid),各节点需要时读(Week 5 计划 §4.1)。
     heartbeat_id: NotRequired[Optional[str]]
 
-    # ===== Week 5 新增:Layout 检测结果(node_16a 写)=====
-    # layout 异常列表(每条 {"index","text","width_px","max_width_px","reason"})
-    layout_issues: NotRequired[list[dict]]
-    # layout_issues 非空 → 关卡③ 触发
-    layout_issues_detected: NotRequired[bool]
-
-    # ===== 9 工具迁移 §6.4 step 2 新增:关卡③ 预览 MP4 路径 =====
-    # node_16a 走完 subtitle_build → subtitle_render → subtitle_qc 后,
-    # subtitle_render 的产物 MP4 路径写到 state;关卡③ interrupt payload
-    # 可附 ``preview_path`` 给人工直接打开预览。
-    preview_video_path: NotRequired[Optional[str]]
-    # 关卡③ payload 可附 subtitle_qc 输出的证据帧路径列表(供人工核验)。
-    subtitle_qc_evidence_frames: NotRequired[list[str]]
+    # ===== 2026-11-15 第六期:Layout 检测四键已随关卡③整体删除 =====
+    # 曾有 layout_issues / layout_issues_detected(node_16a 写,route_after_translate
+    # 与 checkpoint3 读)、preview_video_path / subtitle_qc_evidence_frames
+    # (16a qc 链写,关卡恢复面板读)—— 唯一消费方关卡③ 删除后全链下线,
+    # 四键一并移除;旧 checkpoint 残留值加载不受影响(TypedDict 容忍多余键)。
 
     # ===== Phase 1 新增:FireRed-OpenStoryline 集成字段(plan §7.2)=====
     # 全部 NotRequired,旧 checkpoint resume 兼容

@@ -1,201 +1,49 @@
-"""node_16a_translate_and_check — 步骤 16a:翻译 + layout 检测(Week 5 新增)。
+"""node_16a_translate_and_check — 步骤 16a:英文字幕翻译(第六期改版)。
 
-对齐第 5 周计划 §2.1 / §4.2:
-- 只做"翻译 + 写 marker + 写 subtitle_segments_en 到 state + 检测 layout +
-  写 SRT(正常路径)”。**不**含 ``interrupt()`` —— 这是设计关键:翻译 API
-  调用独立成节点后,LangGraph 中间件重放时由 ``_marker_exists`` 守住,自然幂等
+历史:Week 5 曾在本节点内做"布局检测"(subtitle_build → subtitle_render →
+subtitle_qc qc 链 + ``validate_layout`` 兜底),产出 ``layout_issues`` /
+``layout_issues_detected`` / 预览视频 / 证据帧,供关卡③
+(``node_checkpoint3_layout_review``)人工复核;2026-11-15 关卡③整体删除,
+布局自动检测随之下线(能力层 ``subtitle_build/render/qc`` 保留,另有消费方;
+产品行为变化:英文字幕超宽/重叠等问题不再自动检测,见执行记录)。
+本节点回归单一职责:**翻译 + 写 marker + 写英文字幕到英文分支草稿 + 写 SRT**。
+
+- 翻译源 = node_08 产出的中文旁白字幕段(``subtitle_segments_zh``,时间取自
+  当前草稿);旧线程 checkpoint 残留的 ``asr_segments_zh`` 按兼容语义兜底
+  (B1 移除后新流程不再产出)。
+- ``_marker_exists`` 守住翻译 API 的重放幂等:resume 重放时不再重复调用
   (附件"关键发现①/③")。
-- ``layout_issues`` / ``layout_issues_detected`` 写到 state,后续
-  ``node_checkpoint3_layout_review`` 据此决定是否触发关卡③。
-  2026-11-14 触发语义收紧:``layout_issues_detected`` 仅在存在 **error** 级
-  issue 时为真(缺 severity 视为 error,兼容旧 ``validate_layout`` 形态);
-  warning 级(reading speed / 时长)记录进 ``layout_issues`` 但不挂起人工,
-  以 ``node_16a_layout_warnings_only`` 状态标记。qc 链预设同步改为英文校准的
-  ``broadcast_en``(原误用中文预设 ``shortform_zh`` 的预算量英文文本)。
-- SRT 写入:正常路径下(无 layout 异常)在 16a 内一次性写完,与 Week 4 原
-  ``node_16_translate_subtitles`` 行为对齐;关卡③ 触发路径下 SRT 由
-  ``node_checkpoint3_layout_review`` resume 后重写。
+- 无源字幕是英文分支的**常态输入**(B1 ASR 移除后),正常 skip 而非错误。
 
-9 工具迁移 §6.4 step 2 改造:把第 79-84 行 ``validate_layout(...)`` 替换为优先
-走 ``subtitle_build → subtitle_render → subtitle_qc`` 链(qc 链);qc 链
-任一步失败 → 降级为旧 ``validate_layout``(对照 §6.4 step 2 关键契约)。
-``layout_issues`` / ``layout_issues_detected`` 字段名与结构**完全不变**,关卡③
-``node_checkpoint3_layout_review`` 现有逻辑零改动。
-
-依赖:共享纯函数来自 ``node_16_translate_subtitles``(Week 5 拆分后保留)。
+依赖:共享纯函数来自 ``node_16_translate_subtitles``。
 """
 
 from __future__ import annotations
 
-import json
-import shutil
 from pathlib import Path
-from typing import Any
 
-from assembly_capabilities.run_context import RunContext
 from jy_common.translate_client import translate_segments
 from nodes.node_16_translate_subtitles import (
     _marker_exists,
     _read_segments_from_draft,
     _save_marker,
     _write_marker,
-    validate_layout,
     write_srt_from_segments,
 )
 from state import WorkflowState
-from video_edit_capabilities.subtitle_build import subtitle_build, subtitle_qc, subtitle_render
-from nodes.storyline._common import resolve_video_input_paths
-
-
-# 9 工具迁移 §6.4 step 2:qc 链中间产物落盘根目录(对照 RunContext.work_dir)
-_QC_CHAIN_WORK_ROOT = ".video_agent/layout_qc"
-
-
-def _segments_en_to_transcript_records(
-    segments_en: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """``subtitle_segments_en`` → ``load_timed_segments`` 接受的 JSON 记录列表。
-
-    字段映射(对照 ``assembly_capabilities/transcript.py`` ``load_timed_segments`` /
-    ``collect_segments`` 期望的 key 集合):``start`` / ``end``(秒)+ ``text``。
-    """
-    records: list[dict[str, Any]] = []
-    for seg in segments_en:
-        start_ms = seg.get("start_ms")
-        end_ms = seg.get("end_ms")
-        text_en = str(seg.get("text_en") or "").strip()
-        if start_ms is None or end_ms is None or not text_en:
-            continue
-        try:
-            start_s = float(start_ms) / 1000.0
-            end_s = float(end_ms) / 1000.0
-        except (TypeError, ValueError):
-            continue
-        if end_s <= start_s:
-            continue
-        records.append({"text": text_en, "start": start_s, "end": end_s})
-    return records
-
-
-def _check_layout_via_subtitle_qc(
-    segments_en: list[dict[str, Any]],
-    video_path: str,
-    draft_dir: Path,
-) -> tuple[list[dict[str, Any]] | None, str | None, list[str] | None]:
-    """跑 ``subtitle_build → subtitle_render → subtitle_qc`` 链,返回 issues / preview / evidence。
-
-    任一步失败 → 返回 ``(None, None, None)``,调用方降级为旧 ``validate_layout``。
-
-    Returns:
-        ``(issues, preview_path, evidence_frames)`` 三元组。``issues`` 为 ``[]``
-        表示 qc 通过;``preview_path`` 为烧录字幕 MP4 路径(供关卡③ payload 附
-        ``preview_path`` 给人工直接打开);``evidence_frames`` 为 qc 证据帧路径
-        列表(``None`` 表示 qc 未生成或步骤失败)。
-    """
-    if not video_path:
-        return None, None, None
-    video_p = Path(video_path)
-    if not video_p.is_file():
-        return None, None, None
-
-    transcript_records = _segments_en_to_transcript_records(segments_en)
-    if not transcript_records:
-        return None, None, None
-
-    ctx = RunContext()
-    work_root = ctx.resolve(_QC_CHAIN_WORK_ROOT)
-    work_root.mkdir(parents=True, exist_ok=True)
-    transcript_path = work_root / "transcript.json"
-    transcript_path.write_text(
-        json.dumps(transcript_records, ensure_ascii=False),
-        encoding="utf-8",
-    )
-
-    try:
-        # 1. subtitle_build
-        # 英文分支 QC 用英文校准预设 broadcast_en(对照 subtitle_style.py:英文
-        # 每字符阅读速度 ~14 vs 中文 ~9,预算/字符帽/行数一体设计)。预览仅供
-        # QC 证据,草稿排版仍由草稿本体决定。
-        build_out = subtitle_build(
-            {
-                "transcript_path": str(transcript_path),
-                "video_path": str(video_p),
-                "preset": "broadcast_en",
-            },
-            ctx,
-        )
-        if build_out.text.startswith("[ERROR]"):
-            return None, None, None
-        subtitles_path = build_out.artifacts[0] if build_out.artifacts else None
-        if not subtitles_path or not Path(subtitles_path).is_file():
-            return None, None, None
-
-        # 2. subtitle_render(mode=burn → 出预览 MP4)
-        render_out = subtitle_render(
-            {
-                "video_path": str(video_p),
-                "subtitles_path": str(subtitles_path),
-                "mode": "burn",
-                "output_path": str(work_root / "preview.mp4"),
-            },
-            ctx,
-        )
-        if render_out.text.startswith("[ERROR]"):
-            return None, None, None
-        burned = render_out.data.get("outputs", {}).get("burned") if isinstance(render_out.data, dict) else None
-        if not burned:
-            return None, None, None
-
-        # 3. subtitle_qc(拿 issues + evidence frames)
-        qc_out = subtitle_qc(
-            {
-                "subtitles_path": str(subtitles_path),
-                "video_path": str(burned),
-            },
-            ctx,
-        )
-        if qc_out.text.startswith("[ERROR]"):
-            # qc 步骤失败 → 整链降级为 validate_layout(对照 9 工具迁移 §6.4 step 2)
-            return None, None, None
-        qc_data = qc_out.data if isinstance(qc_out.data, dict) else {}
-        issues = qc_data.get("issues") or []
-        evidence_frames_meta = qc_data.get("evidence_frames") or []
-        evidence_paths: list[str] = []
-        for meta in evidence_frames_meta:
-            if isinstance(meta, dict):
-                p = meta.get("path") or meta.get("image_path")
-                if p:
-                    evidence_paths.append(str(p))
-            elif isinstance(meta, str):
-                evidence_paths.append(meta)
-        # 也合并 ToolResult.image_paths(对照 subtitle_qc 实现)
-        if isinstance(qc_out.image_paths, list):
-            for p in qc_out.image_paths:
-                if p and p not in evidence_paths:
-                    evidence_paths.append(str(p))
-
-        return list(issues), str(burned), evidence_paths
-    finally:
-        # 清理中间 transcript(产物 subtitles.json / preview.mp4 留作关卡③ payload)
-        try:
-            transcript_path.unlink(missing_ok=True)
-        except Exception:
-            pass
 
 
 def node_16a_translate_and_check(state: WorkflowState) -> dict:
-    """LangGraph 节点(Week 5 新增):翻译 + 写 marker + layout 校验。
+    """LangGraph 节点:翻译英文字幕 + 写 marker + 写英文分支草稿 + 写 SRT。
 
     Args:
-        state: 需含 ``asr_segments_zh`` / ``draft_dir_en_branch``。
+        state: 需含 ``subtitle_segments_zh``(兼容 ``asr_segments_zh``)/
+            ``draft_dir_en_branch``。
 
     Returns:
         dict,只含变更字段 — 避免 fan-in 时与其他分支并发写同一字段:
         - ``subtitle_segments_en``: 英文字幕段
-        - ``layout_issues``: layout 异常列表(可能为空)
-        - ``layout_issues_detected``: bool,关卡③ 触发条件
-        - ``preview_video_path``: 关卡③ 预览 MP4 路径(qc 链成功时)
-        - ``subtitle_qc_evidence_frames``: 关卡③ 证据帧路径列表(qc 链成功时)
+        - ``subtitle_srt_path``: 英文 SRT 路径
         - ``status_log``: 仅 delta(由 reducer ``_append_unique`` 合并)
     """
     # 阶段 2(2026-11-09 效果缺失修复):翻译源 = node_08 产出的中文旁白字幕段
@@ -206,8 +54,7 @@ def node_16a_translate_and_check(state: WorkflowState) -> dict:
     )
     if not segments_zh:
         # B1 ASR 移除(2026-11-08)后"无源字幕"是英文分支的**常态输入**:
-        # 正常跳过而非错误(不写 error_log,不污染排障日志);
-        # layout_issues_detected 不设置 → route_after_translate 照常放行 node_17。
+        # 正常跳过而非错误(不写 error_log,不污染排障日志)。
         return {
             "status_log": ["skipped_no_source_subtitles"],
         }
@@ -220,10 +67,6 @@ def node_16a_translate_and_check(state: WorkflowState) -> dict:
         }
 
     draft_dir_p = Path(draft_dir)
-    # 多视频:逐个源视频跑布局 QC(单视频时只跑一次,行为与改动前一致)
-    source_paths = resolve_video_input_paths(state)
-    if not source_paths:
-        source_paths = [str(state.get("video_input_path") or "")]
 
     # ----- 翻译(已有 marker 则跳过)-----
     if _marker_exists(draft_dir_p, expected_count=len(segments_zh)):
@@ -241,64 +84,11 @@ def node_16a_translate_and_check(state: WorkflowState) -> dict:
         _save_marker(draft_dir_p, translated)
         segments_en = translated
 
-    # ----- layout 校验:9 工具迁移 §6.4 step 2 优先 qc 链,失败兜底旧 validate_layout -----
-    issues: list[dict[str, Any]]
-    preview_path: str | None = None
-    evidence_frames: list[str] | None = None
-
-    qc_issues: list[dict[str, Any]] | None = None
-    qc_preview: str | None = None
-    qc_evidence: list[str] | None = None
-    merged_issues: list[dict[str, Any]] = []
-    qc_ran = False
-    for src_path in source_paths:
-        issues_i, preview_i, evidence_i = _check_layout_via_subtitle_qc(
-            list(segments_en), src_path, draft_dir_p
-        )
-        if issues_i is None:
-            continue
-        qc_ran = True
-        merged_issues.extend(issues_i)
-        if qc_preview is None and preview_i:
-            qc_preview = preview_i
-        if qc_evidence is None and evidence_i:
-            qc_evidence = evidence_i
-    if qc_ran:
-        qc_issues = merged_issues
-    if qc_issues is None:
-        # qc 链失败或未跑 → 降级为旧 validate_layout(保留原 Week 5 行为)
-        issues = validate_layout(
-            segments=segments_en,
-            font_path=None,
-            font_size=48,
-            max_width_px=1500,
-        )
-    else:
-        issues = qc_issues
-        preview_path = qc_preview
-        evidence_frames = qc_evidence or None
-
-    # ----- 正常路径下写 SRT(关卡③ 触发时由 c3 resume 后重写)-----
+    # ----- 写 SRT -----
     srt_path = write_srt_from_segments(draft_dir_p, segments_en)
 
-    # 关卡③ 只对 error 级排版硬伤(超宽/重叠/无文本等)挂起人工复核;warning
-    # (reading speed / 时长偏差)记录但放行 —— 人工按"字号/换行/位置"无法处置
-    # timing 类 warning。缺 severity 视为 error(validate_layout 旧形态均为硬伤)。
-    errors = [
-        i for i in issues
-        if str(i.get("severity") or "error") == "error"
-    ]
-    out: dict[str, Any] = {
+    return {
         "subtitle_segments_en": list(segments_en),
         "subtitle_srt_path": srt_path,
-        "layout_issues": issues,
-        "layout_issues_detected": bool(errors),
         "status_log": ["node_16a_translate_done"],
     }
-    if issues and not errors:
-        out["status_log"].append("node_16a_layout_warnings_only")
-    if preview_path is not None:
-        out["preview_video_path"] = preview_path
-    if evidence_frames is not None:
-        out["subtitle_qc_evidence_frames"] = evidence_frames
-    return out

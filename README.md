@@ -523,7 +523,9 @@ result = await resume_all_pending(
 ### 4.6 双分支拓扑 — 节点 16 拆分 + 2026-10 调序
 
 Week 5 把 `node_16_translate_subtitles`(翻译 + interrupt + 写 SRT 三合一)拆成两个独立节点;
-2026-10 调序后英文线又补了 `node_08b` / `node_10b`,关卡③ 的挂载点后移到 `node_10b` 之后:
+2026-10 调序后英文线又补了 `node_08b` / `node_10b`,关卡③ 的挂载点后移到 `node_10b` 之后
+(历史:2026-11-15 第六期已把关卡③ `node_checkpoint3_layout_review` 整体删除,
+条件边改 `node_10b` 直连 `node_17`,布局自动检测一并下线——下图已是删除后的拓扑):
 
 ```
 bridge_snapshot2
@@ -532,22 +534,18 @@ bridge_snapshot2
   └─→ [英文线] fork_draft_for_english_branch                                    │
                → node_16a_translate_and_check                                     │
                → node_08b_add_subtitles_en    (英文字幕写入英文分支草稿)          │
-               → node_10b_inject_text_fx_en   (英文花字,先于人工校对)             │
-               → 🔁 条件边(route_after_translate)                                 │
-                    ├─→ node_checkpoint3_layout_review ⏸ interrupt("③")(条件触发)│
-                    │      └─→ node_17_inject_english_tts ──────────────────────┤
-                    └─→ node_17_inject_english_tts ─────────────────────────────┤
+               → node_10b_inject_text_fx_en   (英文花字)                           │
+               → node_17_inject_english_tts ──────────────────────────────────────┤
                                                                                 ▼
      ⇒ node_09_inject_fx(汇合屏障:15 与 17 都完成才触发,只触发一次)
      → node_11_inject_sticker → node_12_human_add_bgm ⏸ interrupt("②")
      → node_13_adjust_volume → join_before_delivery(交付前 QA 闸门)→ END
 ```
 
-- **`node_16a_translate_and_check`**:翻译 + 写 marker + 写 `state["subtitle_segments_en"]` + 写 `layout_issues` / `layout_issues_detected` + **不调 interrupt**(Week 5 计划 §2.1 "关键发现①")。完全幂等,resume 重放由 `_marker_exists` 守住。
-- **`node_08b_add_subtitles_en`**:把英文字幕写进英文分支草稿。此前英文草稿里没有任何文本素材,关卡③ 无物可校对、resume 后 SRT 会被重写成空文件。整表替换 `materials.texts`,天然幂等。
-- **`node_10b_inject_text_fx_en`**:英文花字。**排在关卡③ 之前**,人工校对时在剪映里看到的就是带花字的最终效果。
-- **`node_checkpoint3_layout_review`**:只读 `layout_issues`,做 `interrupt({"checkpoint": "③", ...})`,resume 后重写 SRT(Week 5 修订:不写 `subtitle_segments_en`,避免与 16a 在同一 superstep 触发 LastValue 并发写)。
-- **`route_after_translate`**:挂载点是 **`node_10b_inject_text_fx_en` 之后**(2026-10 从 08b 后移过来),根据 `state["layout_issues_detected"]` 二选一走向 ③ 或 17。
+- **`node_16a_translate_and_check`**:翻译 + 写 marker + 写 `state["subtitle_segments_en"]` + 写 SRT,**不调 interrupt**(Week 5 计划 §2.1 "关键发现①")。完全幂等,resume 重放由 `_marker_exists` 守住。历史:曾在此做布局检测(产出 `layout_issues` 等供关卡③人工复核),2026-11-15 随关卡③删除一并下线,本节点回归纯翻译职责。
+- **`node_08b_add_subtitles_en`**:把英文字幕写进英文分支草稿。此前英文草稿里没有任何文本素材,整表替换 `materials.texts`,天然幂等。
+- **`node_10b_inject_text_fx_en`**:英文花字。2026-11-15 关卡③删除后普通直连 `node_17_inject_english_tts`(15/17 列表 fan-in 汇入 `node_09` 不变)。
+- **(历史,2026-11-15 删除)`node_checkpoint3_layout_review` 与 `route_after_translate`**:曾按 `state["layout_issues_detected"]` 条件触发③人工复核并在 resume 后重写 SRT;随第六期改造整体移除,四个 state 键(`layout_issues` / `layout_issues_detected` / `preview_video_path` / `subtitle_qc_evidence_frames`)与恢复面板的 issues/预览/证据帧展示一并下线。产品行为变化:英文字幕布局不再自动检测。
 - **`node_17_inject_english_tts_stub`**:Week 5 升级为在 `draft_dir_en_branch` 下写 `en_dub.wav` 空 wav 占位(>5KB),产出 `en_audio_path` 字段,让阶段五 `acceptance_check.py` "英文配音音轨非空" 断言通过。真实 FireRedTTS2 留 Week 6+。
 
 **尾链 09 / 11 / 12 / 13 同时作用于中英两份草稿**:这四个节点被推迟到 `node_17` 之后,此时两份草稿
@@ -559,15 +557,16 @@ bridge_snapshot2
 - **英文草稿缺失 / 目录不存在 / 文件不存在时一律降级只处理中文草稿**并写 `error_log`,不抛异常 —— 与尾链既有的"模板库缺失降级""无音轨降级"同一档。
 - ⚠️ 已知边界(R2):`node_17` 目前只合成音频文件、不写草稿,所以英文草稿没有主音轨 `audio_main`。13 对英文草稿只能调到关卡② 镜像过去的 BGM 轨;英文主音轨音量要等 node_17 落地写草稿后才生效。
 
-### 4.7 关卡 payload 字段统一 — "①" / "②" / "③"
+### 4.7 关卡 payload 字段统一 — "①" / "②"
 
-Week 5 把三个关卡的 interrupt payload `checkpoint` 字段统一为 Unicode 圆圈数字:
+Week 5 把各关卡的 interrupt payload `checkpoint` 字段统一为 Unicode 圆圈数字:
 
 | 关卡 | 节点 | `checkpoint` 字段值 | `legacy_id`(兼容旧调用) |
 |---|---|---|---|
 | ① | `node_06_human_reorder` | `"①"` | `"checkpoint1_reorder"` |
 | ② | `node_12_human_add_bgm` | `"②"` | `"checkpoint2_add_bgm"` |
-| ③ | `node_checkpoint3_layout_review` | `"③"` | `"checkpoint3_layout_review"` |
+
+> 历史:关卡③(`node_checkpoint3_layout_review`,legacy_id `"checkpoint3_layout_review"`)已随 2026-11-15 第六期整体删除;存量挂③任务不可恢复(创建台恢复入口对③明确 409),请取消/删除后新建任务。
 
 `resume_all_pending` 据此自动匹配多个挂起。Week 3 单测 `test_interrupt_resume.py` 已更新以匹配新字段。
 
@@ -578,8 +577,7 @@ Week 5 把三个关卡的 interrupt payload `checkpoint` 字段统一为 Unicode
 en_audio_path:        NotRequired[Optional[str]]  # 节点 17 写,验收脚本读
 final_video_path:     NotRequired[Optional[str]]  # 占位,Week 5 暂不实写
 heartbeat_id:         NotRequired[Optional[str]]  # build_graph() 启动时生成
-layout_issues:        NotRequired[list[dict]]     # node_16a 写
-layout_issues_detected: NotRequired[bool]         # node_16a 写
+# 历史:layout_issues / layout_issues_detected 已随 2026-11-15 关卡③删除
 ```
 
 **团队约定**(Week 5 计划 §5.4):任何给 State 加字段的 PR,必须新增一条"旧 checkpoint 能否恢复"测试(`tests/integration/test_state_field_compatability.py` 模板)。任何 `state["key"]` 直接索引(无 `.get` 兜底)在节点函数中:code review 直接打回(由 `test_nodes_use_state_get_not_subscript` 静态扫描守护)。

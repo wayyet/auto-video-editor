@@ -13,7 +13,6 @@ from __future__ import annotations
 import contextlib
 import json
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from jy_common.native_text import text_display_text
@@ -93,7 +92,7 @@ def _seed(
     return state
 
 
-def _drive(state: dict, *, force_layout_issue: bool = False, human_edit: str | None = None):
+def _drive(state: dict):
     """整图跑到 END,遇到 interrupt 就批量 resume。
 
     Returns:
@@ -104,9 +103,9 @@ def _drive(state: dict, *, force_layout_issue: bool = False, human_edit: str | N
     config = {"configurable": {"thread_id": "reorder"}}
     steps: list[tuple[int, str]] = []
     stops: list[list[str]] = []
-    issues = [{"index": 0, "reason": "text_too_wide", "width_px": 9999, "max_width_px": 1500}]
-    ctx = (patch("nodes.node_16a_translate_and_check.validate_layout", return_value=issues)
-           if force_layout_issue else contextlib.nullcontext())
+    # 2026-11-15 关卡③删除:原 force_layout_issue/human_edit 参数随 ③ 路径
+    # 测试一并移除(曾用 patch validate_layout 注入 issues 触发关卡③)。
+    ctx = contextlib.nullcontext()
     with ctx:
         inp: object = state
         for _ in range(14):
@@ -121,12 +120,6 @@ def _drive(state: dict, *, force_layout_issue: bool = False, human_edit: str | N
             pend = list(snap.interrupts)
             labels = [str((i.value or {}).get("checkpoint")) if isinstance(i.value, dict) else "?" for i in pend]
             stops.append(labels)
-            if human_edit and "③" in labels:
-                en_dir = Path(snap.values["draft_dir_en_branch"])
-                f = en_dir / "draft_content.json"
-                d = json.loads(f.read_text(encoding="utf-8"))
-                d["materials"]["texts"][0]["content"] = human_edit  # 模拟人工在剪映里校对
-                f.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
             if "②" in labels:
                 # 20261114 阶段6:关卡② 恢复时重读磁盘草稿,仍无 BGM 会再次挂起
                 # (修订 §2.11)—— 模拟操作员先补轨再继续。
@@ -212,7 +205,7 @@ def test_english_branch_skips_cleanly_without_source_subtitles(tmp_path, monkeyp
     en = json.loads((Path(final["draft_dir_en_branch"]) / "draft_content.json").read_text(encoding="utf-8"))
     assert not (en.get("materials", {}).get("texts") or [])
     assert not [t for t in en.get("tracks", []) if t.get("type") == "text" and "Subtitles_en" == t.get("track_name")]
-    # 关卡③不触发(layout_issues_detected 未设置),正常路径 ① → ②
+    # 正常路径 ① → ②(2026-11-15 关卡③已删除,英文线 10b 直连 17)
     assert stops == [["①"], ["②"]]
 
 
@@ -255,22 +248,11 @@ def test_english_draft_gets_subtitles_and_text_fx(tmp_path, monkeypatch):
     assert not [t for t in zh.get("tracks", []) if t.get("track_name") == "Subtitles_en"]
 
 
-def test_checkpoint3_path_no_parallel_conflict_and_human_edit_survives(tmp_path, monkeypatch):
-    steps, stops, final = _drive(
-        _seed(tmp_path, monkeypatch, asr_segments_zh=[
-            {"index": 0, "start_ms": 0, "end_ms": 2_000, "text_zh": "你好"},
-            {"index": 1, "start_ms": 2_000, "end_ms": 4_000, "text_zh": "世界"},
-        ]),
-        force_layout_issue=True, human_edit="HUMAN FIXED LINE")
-    s = lambda n: _first_step(steps, n)  # noqa: E731
-    # ③ 与 ② 永不同时挂起:先 ③(英文线),尾链走到 BGM 时才 ②。
-    assert stops == [["①"], ["③"], ["②"]]
-    # K3=B:花字(10b)先于人工校对(③)—— 人工在剪映里看到的就是带花字的最终效果
-    assert s("node_10b_inject_text_fx_en") < s("node_checkpoint3_layout_review") < s("node_17_inject_english_tts") < s("node_09_inject_fx")
-    # 人工校对的内容保住了,SRT 不再被重写成空文件
-    srt = Path(final["draft_dir_en_branch"]) / "subtitle_en.srt"
-    assert srt.stat().st_size > 0
-    assert "HUMAN FIXED LINE" in srt.read_text(encoding="utf-8")
+# ---------------------------------------------------------------------------
+# (2026-11-15 第六期)原 test_checkpoint3_path_no_parallel_conflict_and_human_edit_
+# survives(③ 与 ② 不同时挂起 + 人工校对内容存活)已随关卡③节点整体删除;
+# "图中不再存在③"由 test_workflow_graph_schema.py 明确验证。
+# ---------------------------------------------------------------------------
 
 
 def test_tail_chain_applies_to_both_drafts(tmp_path, monkeypatch):

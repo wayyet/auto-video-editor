@@ -76,10 +76,12 @@ WORKFLOW_ID = "auto_video_editor_main"
 #: [RTR,TXT] 两源、GAT [GC,RTR] 缩 RTR 单源边(拓扑变更)→ bump 7。
 #: 2026-11-14 依赖约简阶段5(第5期计划 §9):web_topic 条件路由改并行 fan-out
 #: (GC 双出边 + [STR,WT]→GS 双源屏障,条件路由删除;拓扑变更)→ bump 8。
-SCHEMA_VERSION = 8
+#: 2026-11-15 第六期:关卡③节点(node_checkpoint3_layout_review)整体删除,
+#: 10b 条件边改 10b→17 普通直连(拓扑变更)→ bump 9。
+SCHEMA_VERSION = 9
 
-#: 关卡编号全集(阶段3 删除关卡⓪后剩 ①②③)
-CHECKPOINT_MARKS = ("①", "②", "③")
+#: 关卡编号全集(阶段3 删除关卡⓪后剩 ①②③;2026-11-15 关卡③删除 → ①②)
+CHECKPOINT_MARKS = ("①", "②")
 
 QC_FLAG = "ASSEMBLY_QC_GATE_ENABLED"
 
@@ -191,15 +193,9 @@ _NODE_META: dict[str, dict[str, Any]] = {
         "description": "封面英文化;与 node_17 列表 fan-in 汇合后才触发尾链",
     },
     "node_16a_translate_and_check": {
-        "name": "翻译与布局检测",
+        "name": "翻译英文字幕",
         "group": "subtitles_covers",
-        "description": "翻译字幕并做布局检测;命中问题才触发关卡③",
-    },
-    "node_checkpoint3_layout_review": {
-        "name": "布局人工复核③",
-        "group": "subtitles_covers",
-        "description": "interrupt:关卡③,仅布局检测命中时触发;未命中走旁路",
-        "checkpoint": "③",
+        "description": "翻译英文字幕并写入英文分支草稿与 SRT(2026-11-15 起不再做布局检测)",
     },
     "node_17_inject_english_tts": {
         "name": "注入英文 TTS",
@@ -367,8 +363,6 @@ _EDGE_LABELS: dict[tuple[str, str], str] = {
     ("node_07_speed_fit", "bridge_snapshot2"): "时长达标",
     ("node_07_speed_fit", "node_07_speed_fit"): "未达标且可重试",
     ("node_07_speed_fit", "escalate_guardrail_failure"): "重试超限",
-    ("node_10b_inject_text_fx_en", "node_checkpoint3_layout_review"): "布局检测命中",
-    ("node_10b_inject_text_fx_en", "node_17_inject_english_tts"): "布局无问题",
     ("node_15_localize_covers_en", "node_09_inject_fx"): "列表 fan-in(与 17 汇合)",
     ("node_17_inject_english_tts", "node_09_inject_fx"): "列表 fan-in(与 15 汇合)",
     # ---- auto 链条件边 ----

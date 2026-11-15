@@ -20,13 +20,13 @@
   run_with_events``,因此 resume 同样产出 ``run.resumed`` / ``node.resumed`` /
   终态事件,监控页与 SSE 无差别消费(§4.2 任务 2/5)。
 - **恢复前校验**:先 ``graph.aget_state(config)`` 读取挂起信息,校验指定
-  checkpoint(关卡标识 ``①/②/③`` 或 legacy_id)确实属于该 thread,不匹配即
+  checkpoint(关卡标识 ``①/②`` 或 legacy_id)确实属于该 thread,不匹配即
   fail-closed(退出码 5),绝不盲目注入 ``Command(resume=...)``(§4.2 任务 4)。
 - **入口不混用**(§3.5 结论):本脚本只恢复**直接 CLI** 启动的运行;
   ``agent_gate run_start / drive`` 启动的运行仍由 ``agent_gate resume`` 恢复
   (worker 状态机 + mailbox)。两条路径共享 PostgreSQL checkpoint 与事件表,
   但不共享控制状态,跨入口恢复不受支持。
-- resume value 传给 ``interrupt()`` 的值:关卡 ①/②/③ 均按布尔语义消费
+- resume value 传给 ``interrupt()`` 的值:关卡 ①/② 均按布尔语义消费
   (节点 docstring:``Command(resume=True)``);默认 ``true``。
 
 退出码
@@ -84,7 +84,7 @@ def _parse_args() -> argparse.Namespace:
         "--checkpoint",
         default=None,
         help=(
-            "要恢复的关卡标识:interrupt payload 的 checkpoint(①/②/③)或 "
+            "要恢复的关卡标识:interrupt payload 的 checkpoint(①/②)或 "
             "legacy_id(如 checkpoint2_add_bgm)。唯一挂起时可省略;多重挂起时必填"
         ),
     )
@@ -198,7 +198,7 @@ def match_interrupt(
 ) -> Optional[dict[str, Any]]:
     """按 ``--checkpoint`` 选出要恢复的挂起关卡;选不出返回 ``None``。
 
-    匹配顺序:payload ``checkpoint``(①/②/③)→ ``legacy_id`` → interrupt ``id``。
+    匹配顺序:payload ``checkpoint``(①/②)→ ``legacy_id`` → interrupt ``id``。
     ``checkpoint`` 为空时:恰好一个挂起 → 该关卡;0 个或多个 → ``None``(歧义,
     必须显式指定)。纯函数,便于单测。
     """

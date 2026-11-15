@@ -86,7 +86,7 @@ REQUIRED_FEATURE_FORM_FIELDS: tuple[tuple[str, str], ...] = (
 class ResumeBody(BaseModel):
     """POST /runs/{tid}/resume 请求体(阶段 5)。"""
 
-    #: 关卡标识(①/②/③ 或 interrupt id);省略时仅当恰好一个挂起关卡可自动匹配
+    #: 关卡标识(①/② 或 interrupt id);省略时仅当恰好一个挂起关卡可自动匹配
     checkpoint: Optional[str] = None
     #: 放行值(JSON 语义,默认 true;交 resume_workflow.py --value)
     value: Any = True
@@ -474,7 +474,8 @@ def _resolve_open_target_sync(thread_id: str, draft: str) -> Path:
         raw = values.get("draft_dir_en_branch")
         if not raw:
             raise ConsoleLaunchError(
-                "该任务尚未创建英文分支草稿(关卡③之前的流程位置)", status_code=409
+                "该任务尚未创建英文分支草稿(英文分支尚未执行到草稿生成步骤)",
+                status_code=409,
             )
         target = Path(str(raw))
     else:
@@ -538,6 +539,19 @@ def resume_run(request: Request, thread_id: str, body: ResumeBody) -> JSONRespon
     """
     _verify_same_origin(request)
     _enforce_csrf(request)
+    # 2026-11-15 第六期:关卡③ 已随节点整体删除 —— 存量任务若挂起在已删除的
+    # 关卡上,恢复必然撞 LangGraph 内部错误;在此明确 409 作废提示。
+    # 取数失败(PG 抖动等)不拦:放行到 resume_run 的既有 pg_check/503 语义。
+    try:
+        _pending_gates = _fetch_gate_data_sync(thread_id)[0]
+    except Exception:  # noqa: BLE001 — 守卫只做增强,不替代恢复主链的 fail-closed
+        _pending_gates = []
+    if any(g.get("checkpoint") == "③" for g in _pending_gates):
+        raise _launch_error(ConsoleLaunchError(
+            "关卡③(布局人工复核)已随 2026-11-15 改造下线,该任务挂起在已删除的"
+            "关卡上无法恢复;请取消/删除该任务后新建任务",
+            status_code=409,
+        ))
     try:
         console_service.resume_run(
             thread_id, checkpoint=body.checkpoint, value=body.value

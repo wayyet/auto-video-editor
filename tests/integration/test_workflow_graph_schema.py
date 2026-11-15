@@ -9,7 +9,7 @@
     ``get_graph()`` 画图伪边的行为偏差(模块 docstring 详述);
 (b) QC 开关两态下 ``reachable`` / 边数量正确;START 直连
     ``storyline_load_media``(auto-only 单流水线入口);interrupt 关卡
-    ①/②/③ 节点可达;human 模式 5 节点与 clean_cache 不再出现在 schema 中;
+    ①/② 节点可达;human 模式 5 节点与 clean_cache 不再出现在 schema 中;
 (c) 每个节点都有元数据(中文名 / 分组 / 描述非空,checkpoint 取值合法)。
 
 关于 ``get_graph()`` 的画图伪边(langgraph 1.2.9 实测,``pregel/_draw.py``):
@@ -49,7 +49,8 @@ ASSEMBLY_NODES = {
 
 #: 阶段3 删除的 human 模式 5 节点 + 运维节点 + B1 移除的 storyline ASR 旁支 2 节点
 #: 与 assembly ASR 复合节点(改名 assembly_visual_observe)+ 2026-11-10 移除的
-#: 检索素材节点 storyline_search_media(不得再出现在编译图与 schema 中)
+#: 检索素材节点 storyline_search_media + 2026-11-15 第六期移除的关卡③节点
+#: (不得再出现在编译图与 schema 中)
 REMOVED_NODES = {
     "clean_cache",
     "launch_openstoryline",
@@ -61,13 +62,13 @@ REMOVED_NODES = {
     "storyline_speech_rough_cut",
     "assembly_asr_and_visual_observe",
     "storyline_search_media",
+    "node_checkpoint3_layout_review",
 }
 
-#: interrupt 关卡节点 → 关卡编号(阶段3 后仅 ①②③)
+#: interrupt 关卡节点 → 关卡编号(2026-11-15 关卡③删除后仅 ①②)
 CHECKPOINT_NODES = {
     "node_06_human_reorder": "①",
     "node_12_human_add_bgm": "②",
-    "node_checkpoint3_layout_review": "③",
 }
 
 
@@ -301,8 +302,26 @@ def test_assembly_visual_observe_chain_wiring(monkeypatch):
     assert leftovers == []
 
 
+def test_checkpoint3_node_removed_and_10b_17_direct(monkeypatch):
+    """2026-11-15 第六期:关卡③ 节点整体删除 —— 不在编译图与 schema 中,
+    10b→17 为普通直连边(原条件边已不存在),SCHEMA_VERSION bump 9,
+    关卡集只剩 ①②;15/17 列表 fan-in 汇入 09 保持不变。"""
+    schema = _make_schema(monkeypatch, qc=True)
+    by_id = {n["id"]: n for n in schema["nodes"]}
+    assert "node_checkpoint3_layout_review" not in by_id
+
+    pairs = _edge_pairs(schema)
+    assert ("node_10b_inject_text_fx_en", "node_17_inject_english_tts") in pairs
+    assert not any("node_checkpoint3_layout_review" in p for p in pairs)
+    assert ("node_15_localize_covers_en", "node_09_inject_fx") in pairs
+    assert ("node_17_inject_english_tts", "node_09_inject_fx") in pairs
+
+    assert SCHEMA_VERSION == 9
+    assert CHECKPOINT_MARKS == ("①", "②")
+
+
 def test_interrupt_checkpoints_reachable(monkeypatch):
-    """关卡 ①②③ 三个人工 interrupt 节点都在图中、可达、编号正确。"""
+    """关卡 ①② 两个人工 interrupt 节点都在图中、可达、编号正确。"""
     schema = _make_schema(monkeypatch, qc=True)
     by_id = {n["id"]: n for n in schema["nodes"]}
     for nid, mark in CHECKPOINT_NODES.items():
@@ -311,9 +330,9 @@ def test_interrupt_checkpoints_reachable(monkeypatch):
         assert by_id[nid]["reachable"] is True, nid
         assert mark in CHECKPOINT_MARKS
 
-    # 关卡③经条件边触发(布局检测命中),①②是主链必经
+    # 2026-11-15 关卡③删除:10b 普通直连 17(原条件边已不存在)
     kinds = {(e["from"], e["to"]): e["kind"] for e in schema["edges"]}
-    assert kinds[("node_10b_inject_text_fx_en", "node_checkpoint3_layout_review")] == "conditional"
+    assert kinds[("node_10b_inject_text_fx_en", "node_17_inject_english_tts")] == "normal"
 
 
 # ===========================================================================
@@ -331,11 +350,11 @@ def test_every_node_has_metadata(monkeypatch, qc):
         assert isinstance(n["modes"], list), n["id"]
         assert isinstance(n["reachable"], bool) and isinstance(n["enabled"], bool), n["id"]
 
-    # 关卡编号映射正确(阶段3:⓪ 已随 checkpoint0_storyline_plan 删除)
+    # 关卡编号映射正确(阶段3:⓪ 已随 checkpoint0_storyline_plan 删除;
+    # 2026-11-15:③ 已随 node_checkpoint3_layout_review 删除)
     by_id = {n["id"]: n for n in schema["nodes"]}
     assert by_id["node_06_human_reorder"]["checkpoint"] == "①"
     assert by_id["node_12_human_add_bgm"]["checkpoint"] == "②"
-    assert by_id["node_checkpoint3_layout_review"]["checkpoint"] == "③"
 
 
 def test_start_end_reachable_and_terminal_kind(monkeypatch):

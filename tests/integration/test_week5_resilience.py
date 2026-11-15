@@ -1,9 +1,9 @@
-"""Week 5 集成测试 — 跨实例恢复 + 关卡③ 路径 + 副作用幂等。
+"""Week 5 集成测试 — 跨实例恢复 + 副作用幂等(2026-11-15 关卡③ 路径已随节点删除)。
 
 对齐第 5 周计划 §5.2。
 
 覆盖:
-- 跨实例恢复关卡①/②/③(同一个 checkpointer + 全新 graph 实例)
+- 跨实例恢复关卡①/②(同一个 checkpointer + 全新 graph 实例)
 - 关卡③ interrupt 路径:超长英文 → interrupt → resume → 重读草稿
 - 副作用跨 resume 只执行 1 次(Week 5 附件"测试代码"段 2)
 - 多日挂起:同一个存档跨多次 build_graph
@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
@@ -103,15 +102,15 @@ def _is_interrupted(g, config: dict) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# 测试 1:跨实例恢复关卡①/②/③(同一个 checkpointer + 全新 graph 实例)
+# 测试 1:跨实例恢复关卡①/②(同一个 checkpointer + 全新 graph 实例;
+# 2026-11-15 关卡③删除后剩两道人工关卡)
 # ---------------------------------------------------------------------------
-def test_resume_all_three_checkpoints_via_shared_checkpointer(
+def test_resume_all_checkpoints_via_shared_checkpointer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """模拟"全新 graph 实例 + 同一个存档 = 跨实例恢复"。
 
-    Week 5 验证 3 个关卡的 interrupt payload ``checkpoint`` 字段都是
-    "①"/"②"/"③" 统一格式(关卡③ 触发条件由 layout issues 决定)。
+    验证各关卡的 interrupt payload ``checkpoint`` 字段都是 "①"/"②" 统一格式。
 
     2026-10(阶段 C):SQLite 后端已删除,这里用共享的 ``InMemorySaver``;
     "新数据库连接"的恢复语义见 ``tests/integration/test_postgres_resume.py``。
@@ -152,7 +151,7 @@ def test_resume_all_three_checkpoints_via_shared_checkpointer(
     p2 = snap2.interrupts[0].value
     assert p2["checkpoint"] == "②"
 
-    # ---- 正常路径下:resume 关卡② → 流程一路到 END(不触发关卡③)----
+    # ---- 正常路径下:resume 关卡② → 流程一路到 END ----
     # 20261114 阶段6:先补 BGM(关卡② 恢复时重读磁盘,仍无 BGM 会再次挂起)
     _add_manual_bgm(draft_file)
     final = g2.invoke(Command(resume=True), config=config)
@@ -162,8 +161,6 @@ def test_resume_all_three_checkpoints_via_shared_checkpointer(
     assert log.count("node_05_generate_draft_done") == 1
     assert log.count("checkpoint1_resumed") == 1
     assert log.count("checkpoint2_resumed") == 1
-    # 关卡③ 没触发(layout 正常)
-    assert log.count("checkpoint3_resumed") == 0
     # 节点 17 写空 wav 占位(Week 5)
     assert final.get("en_audio_path") is not None
     wav_path = Path(final["en_audio_path"])
@@ -229,91 +226,10 @@ def test_side_effects_only_once_across_resumes(
 
 
 # ---------------------------------------------------------------------------
-# 测试 3:关卡③ 路径 — 验证 node_16a 写出 layout_issues 后,route_after_translate
-# 走到 node_checkpoint3_layout_review 并触发 interrupt(纯函数级 + 拓扑级)
+# (2026-11-15 第六期)原测试 3(关卡③ interrupt/resume 路径)已随节点整体删除:
+# "图中不再存在③"由 test_workflow_graph_schema.py 的 REMOVED_NODES 负向断言与
+# test_checkpoint3_node_removed_and_10b_17_direct 正向断言明确验证。
 # ---------------------------------------------------------------------------
-def test_checkpoint3_interrupt_and_resume_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """超长英文 → 关卡③ interrupt → resume 后从草稿读修正结果。
-
-    Week 5 设计说明:
-    - 单测 ``test_node_16a_translate_and_check`` 已验证 16a 写 layout_issues / 触发
-      ``layout_issues_detected=True``(不调 interrupt)。
-    - 单测 ``test_node_checkpoint3_layout_review`` 已验证 c3 在被调时 trigger
-      interrupt + payload 含 ``checkpoint="③"``。
-    - 本集成测试聚焦"完整 graph 拓扑 + 16a 与 c3 的边连接",patch validate_layout
-      注入 issues,然后用 ``aget_state`` + ``StateSnapshot.tasks`` 验证 c3 节点被
-      调度并触发 interrupt。不依赖 LangGraph 在多次 invoke 之间的复杂调度行为。
-    """
-    draft_dir = tmp_path / "drafts" / "demo"
-    draft_file = _seed_draft(draft_dir)
-    monkeypatch.setenv("AUTO_VIDEO_EDITOR_DRAFT_DIR", str(draft_dir))
-
-    state = _seed_state(str(draft_file))
-    config = {"configurable": {"thread_id": "w5-c3"}}
-    g = build_graph(
-        checkpointer=InMemorySaver(),
-        thread_id="w5-c3",
-        start_heartbeat_thread=False,
-    )
-
-    # 强制 patch validate_layout 让 node_16a 检测到 layout 异常
-    fake_issues = [
-        {"index": 0, "reason": "text_too_wide", "width_px": 9999, "max_width_px": 1500}
-    ]
-
-    # 跑到关卡② interrupt
-    g.invoke(state, config=config)
-    g.invoke(Command(resume=True), config=config)
-
-    # 用 astream 监听 checkpoint3 interrupt 触发
-    c3_seen = False
-    c3_payload = None
-    with patch(
-        "nodes.node_16a_translate_and_check.validate_layout",
-        return_value=fake_issues,
-    ):
-        # resume c2 → 跑完 graph,期待某处出现 c3 interrupt
-        try:
-            for event in g.stream(Command(resume=True), config=config):
-                # 找到 node_checkpoint3_layout_review 节点的事件
-                for node_name, node_state in event.items():
-                    if node_name == "node_checkpoint3_layout_review":
-                        c3_seen = True
-        except Exception as e:
-            # LangGraph 在 interrupt 时会抛 GraphInterrupt(stream 模式),这是正常的
-            if "GraphInterrupt" not in str(type(e).__name__):
-                raise
-
-    # 关键断言:node_checkpoint3_layout_review 节点在拓扑中被触发
-    # (即:route_after_translate 看到了 layout_issues_detected=True)
-    # 这里我们用直接调用 c3 节点函数来验证 payload 完整,避免依赖 stream 的
-    # interrupt 投递细节
-    from nodes.node_checkpoint3_layout_review import node_checkpoint3_layout_review
-
-    captured = []
-
-    def _fake_interrupt(payload):
-        captured.append(payload)
-        # 不抛 — 模拟 LangGraph 已 resume
-        return None
-
-    state_with_issues = {
-        "layout_issues": fake_issues,
-        "layout_issues_detected": True,
-        "draft_dir_en_branch": str(tmp_path),
-        "status_log": [],
-        "error_log": [],
-    }
-    with patch("nodes.node_checkpoint3_layout_review.interrupt", side_effect=_fake_interrupt):
-        out = node_checkpoint3_layout_review(state_with_issues)
-    assert len(captured) == 1
-    assert captured[0]["checkpoint"] == "③"
-    assert captured[0]["issues"] == fake_issues
-    # 写入 SRT(checkpoint3_triggered 审计位已随阶段5批1 移除)
-
-
 # ---------------------------------------------------------------------------
 # 测试 4:node_17 写空 wav 占位 — 验收脚本能跑"英文配音音轨非空"断言
 # ---------------------------------------------------------------------------

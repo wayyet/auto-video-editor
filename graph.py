@@ -25,11 +25,8 @@
     └─→ [英文线] fork_draft_for_english_branch                  │
                    → node_16a_translate_and_check  (无源字幕时正常 skip)
                    → node_08b_add_subtitles_en     (英文字幕写入英文分支草稿)
-                   → node_10b_inject_text_fx_en    (英文花字/字幕动画,先于人工校对)
-                   → 🔁 条件边(route_after_translate):          │
-                       ├─→ node_checkpoint3_layout_review ⏸ interrupt("③")(条件触发)
-                       │         └─→ node_17_inject_english_tts │
-                       └─→ node_17_inject_english_tts ───────────┤
+                   → node_10b_inject_text_fx_en    (英文花字/字幕动画)
+                   → node_17_inject_english_tts ───────────┤
                                                                 ▼
     ⇒ node_09_inject_fx              (汇合屏障:node_15 与 node_17 都完成才触发)
     → node_09b_inject_opening_hook   (开场钩子:前 3 秒免费开场特效 + 大字标题,第四期阶段 3)
@@ -52,14 +49,15 @@
   探测 / 打开预览(旧 Web 生命周期由删除前的 start_production.ps1 管)。
 - ``clean_cache`` 节点删除(R-10):唯一触发入口 ``POST /api/system/clean-cache``
   已随旧聊天运行时(阶段2)删除,缓存清理能力如需保留另做独立 CLI 设计。
-- 保留:关卡①②③(interrupt + resume,``agent_gate resume`` / 直接 CLI
+- 保留:关卡①②(interrupt + resume,``agent_gate resume`` / 直接 CLI
   ``scripts/resume_workflow.py`` 放行)、assembly QC 六节点、speed-fit
   guardrail、中英双语线、列表 fan-in 汇合、交付前 QA。
+  (历史注:当时为关卡①②③;关卡③已于 2026-11-15 整体删除,见文末。)
 
 2026-10 调序(保留,见《auto-video-editor节点调序与全量工作流设计执行计划》):
 - 英文线补 ``node_08b_add_subtitles_en`` / ``node_10b_inject_text_fx_en``;
 - ``node_09/11/12/13`` 全部推迟到 ``node_17`` 之后(列表型 fan-in 保证先后);
-- K3=B:``node_10b`` 在关卡③ **之前**;K2=B:尾链四节点内部同时处理中英草稿;
+- K3=B(历史:关卡③已于 2026-11-15 删除,``node_10b`` 现普通直连 17);K2=B:尾链四节点内部同时处理中英草稿;
 - ``node_08 → fork`` 显式依赖:16a 读 node_08 的 asr_segments_zh
   (2026-11-08 B1 ASR 移除后恒为空 → 16a 正常 skip);
 - ②与③ 永不同时挂起(②在尾链,③在英文线)。
@@ -84,12 +82,23 @@
 - ⚠️ qa 重试路由靠 ``status_log[-1] == "storyline_qa_retry"`` 判断:重试回路内的
   节点**不得产生每轮都不同的状态标签**。
 
-Week 5 关键改动(保留):
-- ``node_16_translate_subtitles`` 拆为 ``node_16a_translate_and_check`` +
-  ``node_checkpoint3_layout_review``;条件边 ``route_after_translate`` 据
-  ``layout_issues_detected`` 二选一走向。
+Week 5 关键改动(历史记录):
+- ``node_16_translate_subtitles`` 曾拆为 ``node_16a_translate_and_check`` +
+  ``node_checkpoint3_layout_review``,条件边 ``route_after_translate`` 据
+  ``layout_issues_detected`` 二选一走向(历史)。
 - 关卡①/②/③ payload ``checkpoint`` 字段统一为 ``"①"/"②"/"③"``(旧值保留在
   ``legacy_id`` 字段,``agent_gate resume`` / ``scripts/resume_workflow.py`` 按它匹配)。
+
+2026-11-15 关卡③整体删除(第六期,执行记录见 docs/第六期开发):
+- ``node_checkpoint3_layout_review`` 节点、``route_after_translate`` 条件边、
+  16a 布局检测 qc 链(subtitle_build/render/qc 编排)与 ``layout_issues`` /
+  ``layout_issues_detected`` / ``preview_video_path`` /
+  ``subtitle_qc_evidence_frames`` 四个 state 键一并删除;
+  ``node_10b_inject_text_fx_en`` 改普通直连 ``node_17_inject_english_tts``
+  (node_15/node_17 列表 fan-in 汇入 node_09 的语义不变)。
+- 产品行为变化:英文字幕布局自动检测随本次决策移除(能力层
+  ``subtitle_build/render/qc`` 保留,另有消费方);人工关卡剩 ①/②;
+  SCHEMA_VERSION 8→9(拓扑变更,前端布局缓存失效)。
 
 汇合:node_15 与 node_17 通过 ``add_edge([...], "node_09_inject_fx")`` 单次调用汇入,
 LangGraph fan-in 自动等齐两条分支后才触发尾链首节点;``join_before_delivery`` 只做交付前 QA。
@@ -132,7 +141,6 @@ from nodes.node_13_adjust_volume import adjust_volume
 from nodes.node_14_make_covers import node_14_make_covers
 from nodes.node_15_localize_covers_en import node_15_localize_covers_en
 from nodes.node_16a_translate_and_check import node_16a_translate_and_check
-from nodes.node_checkpoint3_layout_review import node_checkpoint3_layout_review
 from nodes.node_17_inject_english_tts import node_17_inject_english_tts
 from nodes.node_18_export_video import export_final_video
 from nodes.node_delivery_qa_repair import delivery_qa_failed, delivery_qa_repair
@@ -221,20 +229,12 @@ def _route_after_storyline_join(state: WorkflowState) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Week 5 条件边:步骤 10b 之后是否触发关卡③
+# (2026-11-15 第六期)``route_after_translate`` 条件路由已随关卡③整体删除:
+# 曾挂在 node_10b_inject_text_fx_en 之后,按 ``layout_issues_detected`` 二选一
+# 走向 ``node_checkpoint3_layout_review``(③,interrupt)/ ``node_17_inject_english_tts``
+# (旁路)。关卡③节点、16a 布局检测 qc 链一并删除后,10b 改普通直连 node_17
+# (node_15/node_17 列表 fan-in 汇入 node_09 的语义不变,见下方英文线接线处)。
 # ---------------------------------------------------------------------------
-def route_after_translate(state: WorkflowState) -> str:
-    """node_10b_inject_text_fx_en 之后的条件路由(K3=B:花字先于人工校对)。
-
-    - ``layout_issues_detected`` 为真 → 关卡③(``node_checkpoint3_layout_review``)
-    - 否则 → ``node_17_inject_english_tts``
-
-    挂载点 2026-10 从 08b 后移到 10b 后:花字(描边/入场动画)先落地,人工在关卡③
-    打开剪映看到的就是带花字的最终效果,而不是"改完还要再等一步才有花字"。
-    """
-    if state.get("layout_issues_detected"):
-        return "node_checkpoint3_layout_review"
-    return "node_17_inject_english_tts"
 
 
 # ---------------------------------------------------------------------------
@@ -518,7 +518,6 @@ def _build_state_graph():
     g.add_node("node_15_localize_covers_en", node_15_localize_covers_en)
     g.add_node("node_16a_translate_and_check", node_16a_translate_and_check)
     g.add_node("node_08b_add_subtitles_en", add_subtitles_en)
-    g.add_node("node_checkpoint3_layout_review", node_checkpoint3_layout_review)
     g.add_node("node_17_inject_english_tts", node_17_inject_english_tts)
     g.add_node("join_before_delivery", join_before_delivery)
     # 2026-11-07 阶段 6:可选最终 MP4 导出(交付 QA 与导出分离;开关关闭时
@@ -620,7 +619,8 @@ def _build_state_graph():
     )
     g.add_edge("escalate_guardrail_failure", END)
 
-    # ---- 2026-10 调序:中文线 08 → 10 → 14 → 15;英文线 fork → 16a → 08b → 10b → [③] → 17;
+    # ---- 2026-10 调序:中文线 08 → 10 → 14 → 15;英文线 fork → 16a → 08b → 10b → 17
+    #      (2026-11-15 关卡③删除前为 10b → [③] → 17);
     #      两线汇合后才跑尾链 09 → 11 → 12(②) → 13 → join_before_delivery(QA)→ END ----
     # 中文线
     g.add_edge("node_08_add_subtitles", "node_10_inject_text_fx")
@@ -631,17 +631,10 @@ def _build_state_graph():
     g.add_edge("node_08_add_subtitles", "fork_draft_for_english_branch")
     g.add_edge("fork_draft_for_english_branch", "node_16a_translate_and_check")
     g.add_edge("node_16a_translate_and_check", "node_08b_add_subtitles_en")
-    # K3=B:花字(10b)先于人工校对(③)。人工在剪映里看到的就是带花字的最终效果。
+    # K3=B 历史:花字(10b)曾先于人工校对(③)——2026-11-15 关卡③整体删除后
+    # 10b 普通直连 17(历史注释见 route_after_translate 删除处)。
     g.add_edge("node_08b_add_subtitles_en", "node_10b_inject_text_fx_en")
-    g.add_conditional_edges(
-        "node_10b_inject_text_fx_en",
-        route_after_translate,
-        {
-            "node_checkpoint3_layout_review": "node_checkpoint3_layout_review",
-            "node_17_inject_english_tts": "node_17_inject_english_tts",
-        },
-    )
-    g.add_edge("node_checkpoint3_layout_review", "node_17_inject_english_tts")
+    g.add_edge("node_10b_inject_text_fx_en", "node_17_inject_english_tts")
 
     # 汇合 + 尾链起点:列表语法 → 中文线(15)与英文线(17)都到才触发 node_09,只触发一次
     g.add_edge(

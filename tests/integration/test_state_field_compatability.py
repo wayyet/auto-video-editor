@@ -1,8 +1,8 @@
 """State schema 兼容性测试(Week 5 新增,对照第 5 周计划 §5.2 + §3.3)。
 
 目的:Week 5 加了 ``en_audio_path`` / ``final_video_path`` / ``heartbeat_id``
-/ ``layout_issues`` / ``layout_issues_detected`` 字段;旧 checkpoint(Week 4
-存下来的)没有这些字段。验证:
+字段(历史:``layout_issues`` / ``layout_issues_detected`` 已随 2026-11-15
+关卡③删除一并移除);旧 checkpoint(Week 4 存下来的)没有这些字段。验证:
 
 1. 旧 checkpoint load → 节点用 ``.get(key, default)`` 不抛 KeyError
 2. 旧 state 通过图完整跑通(关键节点不会因字段缺失崩溃)
@@ -89,8 +89,8 @@ def _legacy_week4_state(draft_path: str) -> dict:
 
     Week 4 字段:session_id / draft_path / asr_segments_zh / status_log /
     error_log / shot_plan / draft_encryption_status / draft_version_strategy。
-    Week 5 新字段(en_audio_path / final_video_path / heartbeat_id /
-    layout_issues / layout_issues_detected)都缺失。
+    Week 5 新字段(en_audio_path / final_video_path / heartbeat_id)都缺失
+    (历史:layout_issues / layout_issues_detected 已随关卡③删除)。
     """
     return {
         "session_id": "legacy-w4",
@@ -159,10 +159,9 @@ def test_legacy_state_schema_resume_through_full_graph(
     # Week 5 字段在 final state 中应有值(由节点写入)
     assert final.get("en_audio_path") is not None
     assert Path(final["en_audio_path"]).exists()
-    # layout_issues_detected 应有值
-    assert "layout_issues_detected" in final
     # final_video_path Week 5 暂不实写,但字段可在 state 字典中存在(None)
     # heartbeat_id 同上
+    # (2026-11-15:layout_issues_detected 不再有值 —— 该键已随关卡③删除)
 
 
 # ---------------------------------------------------------------------------
@@ -175,8 +174,8 @@ def test_nodes_use_state_get_not_subscript() -> None:
     节点函数中:code review 直接打回"。
 
     范围:仅扫描 Week 5 新增字段(en_audio_path / final_video_path /
-    heartbeat_id / layout_issues / layout_issues_detected)。已有字段如
-    draft_path 不在扫描范围(Week 1-4 既有字段,旧 checkpoint 一定有它们)。
+    heartbeat_id;历史 layout_issues / layout_issues_detected 已随关卡③删除)。
+    已有字段如 draft_path 不在扫描范围(Week 1-4 既有字段,旧 checkpoint 一定有它们)。
 
     实现策略:
     - 跳过 docstring / 注释 / `{**state, ...}` spread
@@ -188,8 +187,6 @@ def test_nodes_use_state_get_not_subscript() -> None:
         "en_audio_path",
         "final_video_path",
         "heartbeat_id",
-        "layout_issues",
-        "layout_issues_detected",
     }
     nodes_dir = Path(__file__).resolve().parent.parent.parent / "nodes"
     found_issues: list[str] = []
@@ -243,8 +240,7 @@ def test_workflow_state_new_fields_are_not_required() -> None:
     from state import WorkflowState
 
     hints = get_type_hints(WorkflowState)
-    new_fields = ["en_audio_path", "final_video_path", "heartbeat_id",
-                  "layout_issues", "layout_issues_detected"]
+    new_fields = ["en_audio_path", "final_video_path", "heartbeat_id"]
     for f in new_fields:
         assert f in hints, f"Week 5 字段 {f} 应在 WorkflowState 中定义"
 

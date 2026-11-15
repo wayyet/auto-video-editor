@@ -9,7 +9,8 @@ isYangs/jianying-editor-skill,MIT;TextSegment.export_material):
 - **写出侧**(node_08/08b):material 带原生必填键 + 私有键(target_timerange/
   style/track_name/text_en)—— 下游 SRT/导出/标记者继续吃私有键;人工在剪映
   保存后私有键被丢,读取侧走原生兜底(text 轨道段 + content JSON);
-- **读取侧**(node_16/checkpoint3/draft_exporter/draft_integrity):一律经
+- **读取侧**(node_16/draft_exporter/draft_integrity;历史 checkpoint3 已随
+  2026-11-15 关卡③删除):一律经
   :func:`text_display_text` 取显示文本,计时优先私有键、缺则落轨道段。
 
 单位口径(见 node_08 ``_JIANYING_DEFAULT_STYLE`` 注释):size 5.0 / border.width

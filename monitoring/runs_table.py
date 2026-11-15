@@ -10,11 +10,12 @@
 表结构(建表 DDL 已迁到 ``db/migrations.py``,这里是唯一事实来源):
     thread_id          TEXT PRIMARY KEY
     video_name         TEXT NOT NULL       -- 从 state.session_id / draft_path 解析
-    current_checkpoint TEXT                -- '①' / '②' / '③' / NULL
+    current_checkpoint TEXT                -- '①' / '②' / NULL(2026-11-15 关卡③删除;
+                                           --   历史 '③' 行仅存量数据,不再产生)
     status             TEXT NOT NULL       -- 'running' / 'suspended' / 'completed' / 'failed'
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 
-调用约定:由各关卡节点(node_06 / node_12 / node_checkpoint3_layout_review)
+调用约定:由各关卡节点(node_06 / node_12)
 + graph 边界节点调用 ``upsert_run`` / ``mark_resumed`` 维护。
 ``build_graph()`` 不主动写,避免与 interrupt 重放语义冲突。
 
@@ -130,7 +131,8 @@ def upsert_run(
     Args:
         thread_id: LangGraph thread_id。
         video_name: 视频名(从 state.session_id 或 draft_path 解析)。
-        current_checkpoint: '①' / '②' / '③' / None(运行中)。
+        current_checkpoint: '①' / '②' / None(运行中;2026-11-15 关卡③删除,
+            历史 '③' 行仅存量数据)。
         status: 'running' / 'suspended' / 'completed' / 'failed'。
 
     Returns:

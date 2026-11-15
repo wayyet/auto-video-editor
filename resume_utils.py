@@ -1,8 +1,9 @@
 """resume_all_pending — 统一 resume 入口(Week 5 新增)。
 
 对齐第 5 周计划 §2 / §4.5:
-- 单/多 interrupt 并发都能处理(附件"关键发现②":关卡②③ 可同时挂起)。
-- 按 ``i.value["checkpoint"]`` 字段("①"/"②"/"③")自动匹配传入的
+- 单/多 interrupt 并发都能处理(附件"关键发现②";2026-11-15 关卡③删除后
+  当前有效关卡为 ①/②,本模块的通用匹配不依赖关卡数量)。
+- 按 ``i.value["checkpoint"]`` 字段("①"/"②" 为当前有效关卡)自动匹配传入的
   ``values_by_checkpoint`` 字典。
 - 单 interrupt + ``fallback_key`` 命中 → 直接 ``Command(resume=value)``
   (v1 兼容,不强制按 id 传)。

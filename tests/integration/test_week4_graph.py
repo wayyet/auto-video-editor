@@ -1,9 +1,10 @@
-"""Week 4 集成测试 — 双分支汇合图 + 关卡③ interrupt(对照计划 §9.2)。
+"""Week 4 集成测试 — 双分支汇合图 + 人工关卡 interrupt(对照计划 §9.2;
+2026-11-15 关卡③已随第六期改造整体删除,原③路径用例同步移除)。
 
 5 个场景:
 1. 并发实测 — node_14_15 与 fork→16→17 在不同超步推进
-2. 关卡③ 触发路径 — 超长英文 → interrupt → resume → 重读草稿
-3. 关卡③ 正常路径 — 不触发 interrupt
+2. (历史)关卡③ 触发路径 — 已随 2026-11-15 关卡③删除移除
+3. 英文正常路径 — ①② 两关走完到 END
 4. 中文分支先完成,英文分支挂起 → 中文节点不重跑
 5. 重放安全性 — 反复 resume,翻译客户端仅被调 1 次
 """
@@ -105,10 +106,11 @@ def _is_interrupted(g, config: dict) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# 场景 3(基础,先跑):关卡③ 正常路径 — 不触发 interrupt
+# 场景 3(基础,先跑):英文字幕正常路径 — ①② 两关走完到 END
+# (2026-11-15 关卡③删除前,本场景验证"正常路径不触发③";改名保语义)
 # ---------------------------------------------------------------------------
-def test_week4_checkpoint3_normal_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """正常长度翻译 → 不触发关卡③,流程一路到 END。"""
+def test_week4_english_subtitle_path_reaches_checkpoint2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """正常长度翻译 → 英文线 10b 直连 17,流程 ①→② 一路到 END。"""
     draft_dir = tmp_path / "drafts" / "demo"
     draft_file = _seed_draft(draft_dir)
     monkeypatch.setenv("AUTO_VIDEO_EDITOR_DRAFT_DIR", str(draft_dir))
@@ -131,8 +133,8 @@ def test_week4_checkpoint3_normal_path(tmp_path: Path, monkeypatch: pytest.Monke
     assert _is_interrupted(g, config), "节点 12 应挂起"
 
     # resume 关卡② → 尾链 09 → 11 → 13 → join(QA)→ END
-    # (2026-10 调序后:① 之后走 08 →〔中文线 10→14→15 ‖ 英文线 fork→16a→08b→10b→(③)→17〕
-    #  两条线汇合后才进尾链 09→11→12(②)→13→join;正常路径 ③ 不触发,关卡② 仍是第 2 次也是最后一次挂起)
+    # (2026-10 调序后:① 之后走 08 →〔中文线 10→14→15 ‖ 英文线 fork→16a→08b→10b→17〕
+    #  两条线汇合后才进尾链 09→11→12(②)→13→join;2026-11-15 关卡③删除,关卡② 是第 2 次也是最后一次挂起)
     # 20261114 阶段6:关卡② 恢复时重读磁盘草稿,仍无 BGM 会再次挂起 —— 先补轨再过门。
     _add_manual_bgm(draft_file)
     final = g.invoke(
@@ -161,7 +163,7 @@ def test_week4_zh_branch_no_rerun_after_en_resume(
 ) -> None:
     """两分支并发;中文分支完成后,英文分支 resume 不应触发中文节点重跑。
 
-    简化策略:不触发关卡③ interrupt,直接走完。验证 status_log 中中文节点
+    简化策略:只在两道人工关卡处恢复,直接走完。验证 status_log 中中文节点
     各只出现 1 次(无重跑)。
     """
     draft_dir = tmp_path / "drafts" / "demo"
@@ -358,8 +360,7 @@ def test_week4_join_called_only_once(
 
 
 # ---------------------------------------------------------------------------
-# 场景 2:关卡③ interrupt payload 校验 — 由 ``test_node_16_translate_subtitles.py``
-# 覆盖(纯函数更易断言)。完整 interrupt/resume 流程已由 ``test_interrupt_resume.py``
-# (关卡①/②)+ ``test_node_16_translate_subtitles.py``(节点 16 单测)覆盖。
-# 这里不再重复,跳过以避免 LangGraph 1.2.9 sync invoke 不抛 GraphInterrupt 的限制。
+# (历史)场景 2:关卡③ interrupt payload 校验 — 曾由 ``test_node_16_translate_subtitles.py``
+# 覆盖(纯函数更易断言)。2026-11-15 关卡③整体删除,该 payload 与单测一并移除。
+# 完整 interrupt/resume 流程由 ``test_interrupt_resume.py``(关卡①/②)覆盖。
 # ---------------------------------------------------------------------------

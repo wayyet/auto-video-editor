@@ -1,7 +1,9 @@
 """阶段 2(人工关卡与剪映草稿导入)单测:关卡展示载荷 + gates/open-draft-dir API。
 
-- ``web.human_gate_payload.build_gate_view``:①/②/③ 三种 payload 形态 + 未知兜底;
+- ``web.human_gate_payload.build_gate_view``:①/② 两种 payload 形态 + 未知兜底
+  (2026-11-15 关卡③删除:历史挂③展示退 _FALLBACK_META、恢复入口 409 拒绝);
 - ``GET  /api/console/runs/{tid}/gates``:载荷下发 / checkpoint 不可达 503;
+- ``POST /api/console/runs/{tid}/resume``:挂起关卡含已下线的③ → 409 作废提示;
 - ``POST /api/console/runs/{tid}/open-draft-dir``:路径只取自 state、白名单根校验、
   zh/en 分支、目录缺失 404、越界 400。
 
@@ -50,7 +52,8 @@ class TestBuildGateView:
         assert "分镜顺序" in g["title"]
         assert g["draft_paths"] == ["X:/t/drafts/draft_content.json"]
         assert g["draft_dirs"] == [str(Path("X:/t/drafts"))]
-        assert not g["issues"]
+        # 2026-11-15 关卡③删除:issues 展示字段不再输出
+        assert "issues" not in g
         assert g["instructions"].startswith("请在剪映客户端")
 
     def test_gate2_hint_single_bgm(self) -> None:
@@ -63,7 +66,10 @@ class TestBuildGateView:
         assert g["node"] == "node_12_human_add_bgm"
         assert "一次" in g["action_hint"] and "镜像" in g["action_hint"]
 
-    def test_gate3_issues_and_preview_from_state(self) -> None:
+    def test_retired_gate3_payload_falls_back(self) -> None:
+        """2026-11-15 关卡③下线:历史③ payload 的展示层退 _FALLBACK_META
+        (通用兜底,QC issues/preview/evidence 字段不再输出)。恢复入口层
+        另有 409 拒绝(见 TestGatesEndpoint.test_resume_retired_gate3_rejected_409)。"""
         interrupts = [{
             "id": "i-3", "checkpoint": "③", "legacy_id": "checkpoint3_layout_review",
             "step": 16, "instructions": None,
@@ -78,13 +84,16 @@ class TestBuildGateView:
             "subtitle_qc_evidence_frames": ["X:/t/f1.jpg", "X:/t/f2.jpg"],
         }
         g = build_gate_views(interrupts, values)[0]
-        assert g["node"] == "node_checkpoint3_layout_review"
-        # ③ 没有 instructions 键 → reason 兜底
+        # GATE_META 无③ → 兜底元数据
+        assert g["node"] == ""
+        assert g["title"] == "人工关卡"
+        # payload 缺 instructions → reason 兜底(通用兜底保留)
         assert g["instructions"] == "英文字幕排版异常"
-        assert g["issues"] == [{"index": 0, "text": "HELLO", "width": 2000, "reason": "超宽"}]
         assert g["draft_dirs"] == [str(Path("X:/t/en_branch"))]
-        assert g["preview_video_path"] == "X:/t/preview.mp4"
-        assert g["evidence_frames"] == ["X:/t/f1.jpg", "X:/t/f2.jpg"]
+        # QC 展示字段已彻底下线
+        assert "issues" not in g
+        assert "preview_video_path" not in g
+        assert "evidence_frames" not in g
 
     def test_unknown_checkpoint_falls_back(self) -> None:
         interrupts = [{"id": "i-x", "checkpoint": "⑨", "legacy_id": None, "step": 99,
@@ -126,9 +135,20 @@ class TestGatesEndpoint:
     def test_gates_checkpoint_unreachable_503(self, monkeypatch):
         def boom(tid):
             raise RuntimeError("PG down")
-        monkeypatch.setattr(api_console, "_fetch_gate_views_sync", boom)
+        monkeypatch.setattr(api_console, "_fetch_gate_data_sync", boom)
         resp = client.get(f"/api/console/runs/{TID}/gates")
         assert resp.status_code == 503
+
+    def test_resume_retired_gate3_rejected_409(self, monkeypatch):
+        """2026-11-15 关卡③下线:存量挂③任务请求恢复 → 409 作废提示,
+        不进服务层(避免撞 LangGraph 内部错误)。"""
+        sample = [{"checkpoint": "③", "node": "", "title": "人工关卡",
+                   "draft_paths": [], "draft_dirs": [], "instructions": "",
+                   "action_hint": ""}]
+        monkeypatch.setattr(api_console, "_fetch_gate_data_sync", lambda tid: (sample, {}))
+        resp = client.post(f"/api/console/runs/{TID}/resume", json={})
+        assert resp.status_code == 409
+        assert "关卡③" in resp.text
 
 
 # ---------------------------------------------------------------------------

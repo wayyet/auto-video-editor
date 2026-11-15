@@ -5,10 +5,10 @@
 
 数据来源:
 - interrupt payload(``scripts.resume_workflow.describe_interrupts`` 的归一形态):
-  ①/② 带 ``draft_path`` / ``instructions``;③ 带 ``issues`` / ``draft_dir`` /
-  ``reason``(**没有** instructions 键,历史契约如此,UI 兜底用 reason);
-- checkpoint state values:``draft_dir_en_branch`` / ``preview_video_path`` /
-  ``subtitle_qc_evidence_frames`` 等不进 payload 的展示字段。
+  ①/② 带 ``draft_path`` / ``instructions``;
+- checkpoint state values:``draft_path`` / ``draft_dir_en_branch`` 等不进
+  payload 的展示字段。(2026-11-15 第六期:关卡③删除,preview/evidence/issues
+  三类 QC 展示字段随 16a qc 链一并下线,本模块不再输出。)
 
 ⚠️ 契约纪律:payload 字段名不能改(nodes/_checkpoint.py 的取值匹配依赖
 ``checkpoint`` / ``legacy_id``);本模块只**读**payload,不回写。
@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 #: 每道关卡的展示元数据(标题 / 节点 / 专属操作提示)。
-#: checkpoint 键与 interrupt payload 逐字一致(①/②/③)。
+#: checkpoint 键与 interrupt payload 逐字一致(①/②)。
 GATE_META: dict[str, dict[str, str]] = {
     "①": {
         "title": "① 分镜顺序调整",
@@ -36,14 +36,6 @@ GATE_META: dict[str, dict[str, str]] = {
         "action_hint": (
             "只需在中文主草稿添加一次 BGM;确认恢复后工作流会自动把音轨镜像到"
             "英文分支草稿(人工不必在两份草稿里重复添加)。"
-        ),
-    },
-    "③": {
-        "title": "③ 英文字幕布局复核",
-        "node": "node_checkpoint3_layout_review",
-        "action_hint": (
-            "按 issues 修正英文字幕的字号/换行/位置(打开英文分支草稿),保存并"
-            "关闭剪映后确认恢复;恢复后工作流会以人工修改后的草稿重建英文 SRT。"
         ),
     },
 }
@@ -76,7 +68,7 @@ def build_gate_view(item: dict[str, Any], state_values: dict[str, Any]) -> dict[
     Args:
         item: ``describe_interrupts`` 形态 {id, checkpoint, legacy_id, step,
             instructions, payload}。
-        state_values: checkpoint state values(供 ③ 的 issues 之外字段兜底)。
+        state_values: checkpoint state values(供 payload 缺路径字段时兜底)。
     """
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
     cp = str(item.get("checkpoint") or "")
@@ -87,14 +79,12 @@ def build_gate_view(item: dict[str, Any], state_values: dict[str, Any]) -> dict[
         draft_paths.append(str(payload["draft_path"]))
     if _as_path_str(payload.get("draft_dir")):
         draft_paths.append(str(payload["draft_dir"]))
-    # state 兜底(③ 的 draft_dir 与 payload 缺 draft_path 的旧 checkpoint)
+    # state 兜底(payload 缺 draft_path 的旧 checkpoint)
     if not draft_paths:
         for key in ("draft_path", "draft_dir_en_branch"):
             v = _as_path_str(state_values.get(key))
             if v:
                 draft_paths.append(v)
-
-    issues = payload.get("issues") if isinstance(payload.get("issues"), list) else []
 
     gate: dict[str, Any] = {
         "checkpoint": cp or None,
@@ -103,17 +93,12 @@ def build_gate_view(item: dict[str, Any], state_values: dict[str, Any]) -> dict[
         "interrupt_id": item.get("id"),
         "node": meta.get("node") or "",
         "title": meta.get("title") or _FALLBACK_META["title"],
-        # ③ 没有 instructions 键 → 用 payload.reason 兜底
+        # payload 缺 instructions 键 → 用 payload.reason 兜底(历史 ③ 契约,
+        # 保留为通用兜底;未知 checkpoint 由 _FALLBACK_META 接住)
         "instructions": item.get("instructions") or payload.get("reason") or "",
         "action_hint": meta.get("action_hint") or _FALLBACK_META["action_hint"],
         "draft_paths": draft_paths,
         "draft_dirs": sorted({_dir_of(p) for p in draft_paths if _dir_of(p)}),
-        "issues": issues,
-        "preview_video_path": _as_path_str(state_values.get("preview_video_path")),
-        "evidence_frames": [
-            str(f) for f in (state_values.get("subtitle_qc_evidence_frames") or [])
-            if str(f or "").strip()
-        ],
     }
     return gate
 

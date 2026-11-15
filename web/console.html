@@ -238,7 +238,7 @@
         <div id="resumeText"></div>
         <div id="gateCards" style="margin-top:8px"></div>
         <div class="params" style="margin-top:8px">
-          <label id="checkpointField">关卡(留空=唯一挂起时自动匹配)<input id="resumeCheckpoint" spellcheck="false" placeholder="① / ② / ③" /></label>
+          <label id="checkpointField">关卡(留空=唯一挂起时自动匹配)<input id="resumeCheckpoint" spellcheck="false" placeholder="① / ②" /></label>
           <label>放行值(JSON,默认 true)<input id="resumeValue" spellcheck="false" value="true" /></label>
           <button class="btn primary" id="btnResume">确认恢复</button>
         </div>
@@ -1034,16 +1034,9 @@
       for (const g of gates) {
         const card = document.createElement("fieldset");
         card.style.cssText = "margin:6px 0;padding:8px;border:1px solid var(--st-wait);border-radius:6px";
-        const issuesHtml = (g.issues || []).map((it, i) => {
-          if (it && typeof it === "object") {
-            const keys = ["index", "text", "width", "reason", "issue"];
-            const parts = keys.filter((k) => it[k] !== undefined && it[k] !== null && it[k] !== "")
-              .map((k) => `${k}=${typeof it[k] === "object" ? JSON.stringify(it[k]) : it[k]}`);
-            return `<li>#${i} ${esc(parts.join("  ") || JSON.stringify(it))}</li>`;
-          }
-          return `<li>#${i} ${esc(it)}</li>`;
-        }).join("");
-        const draftKind = g.checkpoint === "③" ? "en" : "zh";
+        // 2026-11-15 关卡③下线:剩余①/②均操作中文主草稿;QC preview/evidence/
+        // issues 展示已随 16a qc 链一并移除(恢复面板不再有这些数据源)。
+        const draftKind = "zh";
         card.innerHTML =
           `<legend><label style="cursor:pointer">` +
           `<input type="radio" name="gateRadio" value="${esc(g.checkpoint || "")}" ${single ? "checked" : ""} /> ` +
@@ -1055,14 +1048,6 @@
           (g.draft_dirs || []).map((p) => pathLine("草稿目录", p)).join("") +
           ((g.draft_dirs || []).length
             ? `<button class="btn" type="button" data-draft="${draftKind}" data-open-dir style="margin-top:6px">打开草稿目录</button>`
-            : "") +
-          ((g.issues || []).length
-            ? `<div style="margin-top:6px"><span class="hint">布局异常(issues ×${g.issues.length}):</span><ul style="margin:4px 0">${issuesHtml}</ul></div>`
-            : "") +
-          pathLine("预览视频", g.preview_video_path) +
-          ((g.evidence_frames || []).length
-            ? `<div style="margin-top:4px"><span class="hint">证据帧 ×${g.evidence_frames.length}:</span>` +
-              g.evidence_frames.map((f) => pathLine("帧", f)).join("") + `</div>`
             : "");
         frag.appendChild(card);
       }

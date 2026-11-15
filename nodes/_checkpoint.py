@@ -11,7 +11,8 @@
 
 ⚠️ **payload 字段不能改** — ``resume_utils.py::resume_all_pending`` 用
 ``i.value["checkpoint"]`` 做自动匹配(``values_by_checkpoint`` 表的键是
-"①"/"②"/"③"),``legacy_id`` 是 Week 5 之前的旧名(向后兼容人工脚本),
+"①"/"②";2026-11-15 关卡③删除后当前有效关卡仅两道),``legacy_id`` 是
+Week 5 之前的旧名(向后兼容人工脚本),
 ``step`` 是关卡在流程里的序号。任何一个字段改名/改值,多关卡自动恢复会
 **静默失配**:不报错,只是永远匹配不上,人只能看着图挂死。
 
@@ -21,9 +22,9 @@
 匿名闭包,LangGraph 追踪里看不到节点真名。所以本模块只收敛**纯函数**,
 ``interrupt()`` 仍在各节点模块里调用 —— 测试打桩路径与图可读性都不受影响。
 
-``node_checkpoint3_layout_review`` **有意不纳入**:它 resume 后多一步 SRT 重写,
-返回值是 delta 字典(不是 ``{**state}`` 全量),结构已偏离样板,硬套工厂会降低
-可读性。
+``node_checkpoint3_layout_review`` **有意不纳入**(历史:2026-11-15 关卡③整体
+删除前,它 resume 后多一步 SRT 重写,返回值是 delta 字典而非 ``{**state}``
+全量,结构已偏离样板,硬套工厂会降低可读性)。
 """
 from __future__ import annotations
 

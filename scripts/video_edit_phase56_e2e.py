@@ -374,14 +374,13 @@ def case_node08_style(video_input: Path) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Case 6:关卡③ 预览路径 + 节点 17 TTS 回退
+# Case 6:节点 17 TTS 回退(2026-11-15 关卡③删除:原 qc 链预览/证据帧检查一并移除)
 # ---------------------------------------------------------------------------
-def case_checkpoint3_and_tts(video_input: Path) -> dict[str, Any]:
-    """qc 链出 preview_path(关卡③ payload 要挂它)+ node_17 TTS 真实调用/回退。"""
-    from nodes.node_16a_translate_and_check import _check_layout_via_subtitle_qc
+def case_english_tts() -> dict[str, Any]:
+    """node_17 TTS 真实调用/优雅回退(不依赖布局 qc 链)。"""
     from nodes.node_17_inject_english_tts import node_17_inject_english_tts
 
-    out = _out_dir("checkpoint3_tts")
+    out = _out_dir("english_tts")
     checks: list[dict[str, Any]] = []
     segments_en = [
         # node_16a 认的是 SubtitleSegment 契约:start_ms / end_ms / text_en
@@ -390,20 +389,6 @@ def case_checkpoint3_and_tts(video_input: Path) -> dict[str, Any]:
         {"index": 1, "start_ms": 5500, "end_ms": 9000,
          "text_en": "The second line continues the sentence."},
     ]
-
-    issues, preview, evidence = _check_layout_via_subtitle_qc(segments_en, str(video_input), out)
-    if issues is None:
-        # qc 链任一步失败 → 降级 validate_layout,联调如实记"未走 qc 链"
-        checks.append(_check("qc 链产出 issues(失败=降级 validate_layout)", False,
-                             "qc 链返回 None,已按设计降级"))
-    else:
-        checks.append(_check("qc 链产出 issues(失败=降级 validate_layout)", True,
-                             f"{len(issues)} 条 issue"))
-        checks.append(_check("关卡③ 预览 MP4 存在(人工可直接打开)",
-                             bool(preview) and Path(str(preview)).is_file(),
-                             f"preview_video_path={preview}"))
-        checks.append(_check("qc 证据帧返回", isinstance(evidence, list),
-                             f"evidence_frames={len(evidence or [])}"))
 
     # 节点 17:TTS 真调(本机无 FireRedTTS2 → 应优雅回退 None,不阻塞主链)
     tts_state = {"subtitle_segments_en": segments_en, "error_log": [], "status_log": []}
@@ -419,7 +404,7 @@ def case_checkpoint3_and_tts(video_input: Path) -> dict[str, Any]:
         checks.append(_check("TTS 失败优雅回退(有 error_log,主链不阻塞)", bool(errs),
                              f"error_log 尾条={errs[-1] if errs else None}"))
 
-    return _case("checkpoint3_and_tts", checks, out_dir=str(out))
+    return _case("english_tts", checks, out_dir=str(out))
 
 
 # ---------------------------------------------------------------------------
@@ -431,7 +416,7 @@ CASES = {
     "source_normalize": lambda v, t: case_source_normalize(v),
     "subtitle_chain": lambda v, t: case_subtitle_chain(v),
     "node08_style": lambda v, t: case_node08_style(v),
-    "checkpoint3_and_tts": lambda v, t: case_checkpoint3_and_tts(v),
+    "english_tts": lambda v, t: case_english_tts(),
 }
 
 

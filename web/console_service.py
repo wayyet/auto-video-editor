@@ -714,7 +714,7 @@ def resume_run(
 
     Args:
         thread_id: 目标任务(事件库派生状态必须 waiting_human,否则 409)。
-        checkpoint: 关卡标识(①/②/③ 或 interrupt id);省略时仅当
+        checkpoint: 关卡标识(①/② 或 interrupt id);省略时仅当
             "恰好一个挂起关卡"可自动匹配(否则子进程退出码 5,日志可查)。
         value: 放行值(JSON 语义;经 json.dumps 后交 --value)。
         draft_guard: 门禁函数(缺省 :func:`_resume_draft_guard`;单测注入)。
