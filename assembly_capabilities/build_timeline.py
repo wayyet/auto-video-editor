@@ -38,6 +38,14 @@ from storyline_capabilities.vlm_client import (
 )
 from storyline_capabilities.prompts import render_prompt
 
+from .draft_patch import add_operation
+
+
+# 选段模板根(2026-11-15 P1-3 根治:模板在本模块 prompts/ 下,而非全局
+# prompts/tasks —— 此前 render_prompt("assembly_build_timeline") 一直解析到
+# 空串,选段 prompt 静默为空,模型只能靠 media 图瞎选)
+_PROMPTS_ROOT = Path(__file__).resolve().parent / "prompts"
+
 
 # ---------------------------------------------------------------------------
 # 常量(plan §7.3 关键约束)
@@ -135,6 +143,8 @@ def manifest_to_media_reports(manifest: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "source": str(src.get("source_path") or ""),
                 "asset_id": src.get("asset_id"),
+                "plan_media_id": src.get("plan_media_id"),
+                "plan_clip_ids": list(src.get("plan_clip_ids") or []),
                 "probe_status": src.get("probe_status"),
                 "analysis_status": src.get("analysis_status"),
                 "probe": {
@@ -169,6 +179,7 @@ def _collect_candidate_segments(media_reports: list[dict[str, Any]]) -> list[dic
         if not isinstance(rep, dict):
             continue
         source = str(rep.get("source") or "")
+        asset_id = rep.get("asset_id")
         analysis = rep.get("analysis") or {}
         if not isinstance(analysis, dict):
             analysis = {}
@@ -194,6 +205,7 @@ def _collect_candidate_segments(media_reports: list[dict[str, Any]]) -> list[dic
             if not isinstance(seg, dict):
                 continue
             try:
+                index = int(seg.get("index", len(out)))
                 start = float(seg.get("start", 0.0) or 0.0)
                 end_raw = seg.get("end")
                 duration_raw = seg.get("duration")
@@ -207,15 +219,24 @@ def _collect_candidate_segments(media_reports: list[dict[str, Any]]) -> list[dic
                     end = start + FALLBACK_MIN_DURATION
             except (TypeError, ValueError):
                 continue
-            out.append({
-                "index": int(seg.get("index", len(out))),
+            entry = {
+                "index": index,
+                # P1-4:LLM 选段索引用全候选空间唯一序号 —— 旧实现 media 局部
+                # index 跨素材塌缩(dict 后者覆盖前者),模型说"选 #0"会命中
+                # 末位素材的同号候选(存量缺陷,多素材选段从不确定)。
+                "selection_index": len(out),
                 "start": start,
                 "end": end,
                 "duration": end - start,
                 "source": str(seg.get("source") or "scene_boundary"),
                 "media_index": media_idx,
                 "media_source": source,
-            })
+            }
+            # P1-3:与 visual_observation.json 的关联键(manifest 有 asset_id 时)
+            if asset_id:
+                entry["asset_id"] = str(asset_id)
+                entry["candidate_id"] = f"{asset_id}_c{max(index, 0):03d}"
+            out.append(entry)
     return out
 
 
@@ -254,6 +275,67 @@ def _format_sheet_paths(ingest_data: Any) -> list[str]:
     return out
 
 
+def attach_visual_evidence(
+    candidates: list[dict[str, Any]],
+    observation_data: Any,
+) -> list[dict[str, Any]]:
+    """把候选级视觉观察(P1-3 ``visual_observation.json``)挂到候选条目上。
+
+    关联键 = ``candidate_id``(manifest 有 asset_id 时由
+    ``_collect_candidate_segments`` 生成,与观察产物的 ``candidate_id`` 同一
+    生成规则);观察缺失 / 候选无观察条目 → ``evidence=None``(选段侧据此
+    标注"确定性兜底,无视觉证据")。
+
+    黑帧旗标(``black_suspect``)随 evidence 透传,供确定性 fallback 降权排序。
+    """
+    by_id: dict[str, dict[str, Any]] = {}
+    if isinstance(observation_data, dict):
+        for entry in observation_data.get("candidates") or []:
+            if isinstance(entry, dict) and entry.get("candidate_id"):
+                by_id[str(entry["candidate_id"])] = entry
+    if not by_id:
+        return candidates
+    for cand in candidates:
+        cid = str(cand.get("candidate_id") or "")
+        obs = by_id.get(cid)
+        if obs is None:
+            continue
+        cand["evidence"] = {
+            "candidate_id": cid,
+            "status": str(obs.get("status") or "unknown"),
+            "observed_flags": list(obs.get("observed_flags") or []),
+            "sheet_paths": list(obs.get("sheet_paths") or []),
+            "frame_paths": list(obs.get("frame_paths") or []),
+        }
+    return candidates
+
+
+def _has_black_flag(candidate: dict[str, Any]) -> bool:
+    evidence = candidate.get("evidence") or {}
+    return any(
+        isinstance(f, dict) and f.get("kind") == "black_suspect"
+        for f in evidence.get("observed_flags") or []
+    )
+
+
+def _candidate_sheet_for_prompt(candidate: dict[str, Any]) -> str:
+    """候选的视觉证据行(拼贴图 + 首帧),无证据时给明确占位。"""
+    evidence = candidate.get("evidence") or {}
+    if not evidence:
+        return "evidence=none(no candidate-level observation; deterministic fallback only)"
+    if evidence.get("status") != "ok":
+        return f"evidence=degraded({evidence.get('status')}; detail in visual_observation.json)"
+    sheets = evidence.get("sheet_paths") or []
+    frames = evidence.get("frame_paths") or []
+    parts = [f"sheet={sheets[0]}"] if sheets else ["sheet=none"]
+    if frames:
+        parts.append(f"first_frame={frames[0]}")
+    flags = [f.get("kind") for f in evidence.get("observed_flags") or [] if isinstance(f, dict)]
+    if flags:
+        parts.append(f"flags={','.join(flags)}")
+    return " ".join(parts)
+
+
 # ---------------------------------------------------------------------------
 # LLM 选段调用
 # ---------------------------------------------------------------------------
@@ -270,9 +352,11 @@ def _build_user_prompt(
     prompt 中明确写出"按 video-edit-assembly 第 3-5 阶段规则"与 JSON 输出契约。
     """
     candidate_lines = "\n".join(
-        f"- [#{c['index']}] media={c.get('media_source', '?')} "
+        f"- [#{c['selection_index']}] id={c.get('candidate_id', '?')} "
+        f"media={c.get('media_source', '?')} "
         f"start={c['start']:.3f}s end={c['end']:.3f}s dur={c['duration']:.3f}s "
-        f"hint={c.get('source', 'scene_boundary')}"
+        f"hint={c.get('source', 'scene_boundary')} "
+        f"{_candidate_sheet_for_prompt(c)}"
         for c in candidates
     )
     sheet_lines = "\n".join(f"- {p}" for p in sheet_paths) or "(no contact sheet images)"
@@ -280,6 +364,7 @@ def _build_user_prompt(
         "assembly_build_timeline",
         "user",
         lang=lang,
+        prompts_root=_PROMPTS_ROOT,
         candidate_count=len(candidates),
         candidate_lines=candidate_lines,
         transcript_text=transcript_text,
@@ -296,16 +381,24 @@ def _call_llm_for_selection(
     client: Optional[LLMClient],
 ) -> dict[str, Any]:
     """调 LLM 拿选段 JSON。失败返回 ``{}``,调用方走 fallback。"""
-    sys_p = render_prompt("assembly_build_timeline", "system", lang=lang)
+    sys_p = render_prompt("assembly_build_timeline", "system", lang=lang, prompts_root=_PROMPTS_ROOT)
     user_p = _build_user_prompt(
         candidates=candidates,
         transcript_text=transcript_text,
         sheet_paths=sheet_paths,
         lang=lang,
     )
-    # media 参数:把 contact sheet 路径喂给 VLM。
+    # media 参数:把候选级 contact sheet 路径喂给 VLM(P1-3:每候选一张,
+    # 与 candidate_lines 的 id 对应;不再是无映射的全片前 8 张)。
+    candidate_sheets: list[str] = []
+    for c in candidates:
+        evidence = c.get("evidence") or {}
+        for sheet in evidence.get("sheet_paths") or []:
+            if sheet and sheet not in candidate_sheets:
+                candidate_sheets.append(str(sheet))
+                break
     media_payload: Optional[list[dict[str, Any]]] = (
-        [{"path": p} for p in sheet_paths[:8]] if sheet_paths else None
+        [{"path": p} for p in candidate_sheets[:8]] if candidate_sheets else None
     )
     try:
         result = chat_json(
@@ -346,7 +439,9 @@ def _normalize_selection(
     if not candidates:
         return [], {}, False
     raw_segments = raw.get("selected_segments") or []
-    by_index: dict[int, dict[str, Any]] = {int(c["index"]): c for c in candidates}
+    # P1-4:按全候选空间唯一序号 selection_index 还原(旧实现用 media 局部
+    # index,多素材时 dict 塌缩导致选段命中错素材)
+    by_index: dict[int, dict[str, Any]] = {int(c["selection_index"]): c for c in candidates}
     chosen: list[dict[str, Any]] = []
     used_indices: set[int] = set()
     for raw_seg in raw_segments:
@@ -363,6 +458,12 @@ def _normalize_selection(
             str(raw_seg.get("reason") or "").strip()
             or f"LLM-selected segment #{idx}"
         )
+        # P1-3:选段依据与证据引用(证据随 evidence 一起从 attach 步透传)
+        base["selection_basis"] = "llm_selection"
+        evidence = base.get("evidence") or {}
+        base["evidence_refs"] = [str(base.get("candidate_id") or f"index:{idx}")] + [
+            str(p) for p in (evidence.get("frame_paths") or [])[:2]
+        ]
         try:
             base["order"] = int(raw_seg.get("order", len(chosen)))
         except (TypeError, ValueError):
@@ -386,18 +487,51 @@ def _normalize_selection(
 
 
 def _fallback_chosen(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """LLM 失败时的占位选段算法:按场景边界顺序取前 N 段(阶段二原行为)。"""
+    """LLM 失败时的占位选段算法(P1-3:视觉证据可解释排序)。
+
+    排序规则:无 black_suspect 旗标的候选优先,旗标命中者降权到尾部;
+    同旗标内保持原始候选顺序。整段占位(placeholder_full)仍优先保留
+    (阶段二兼容行为)。每个入选候选带 ``selection_basis`` 标注,选段依据
+    可追溯到视觉证据或"无证据的确定性兜底"。
+    """
+    ranked = sorted(
+        enumerate(candidates),
+        key=lambda pair: (0 if pair[1].get("source") == "placeholder_full" else 1,
+                          1 if _has_black_flag(pair[1]) else 0,
+                          pair[0]),
+    )
     out: list[dict[str, Any]] = []
-    for c in candidates:
+    for original_pos, c in ranked:
+        evidence = c.get("evidence") or {}
+        evidence_refs = [str(c.get("candidate_id") or f"index:{c.get('index', original_pos)}")] + [
+            str(p) for p in (evidence.get("frame_paths") or [])[:2]
+        ]
         if c.get("source") == "placeholder_full":
-            # 整段占位优先保留
-            out.append(dict(c, reason=f"placeholder full-segment fallback (start={c['start']:.3f}s)", order=len(out)))
+            reason = f"placeholder full-segment fallback (start={c['start']:.3f}s)"
+            out.append(dict(c, reason=reason, order=len(out), selection_basis="deterministic_fallback",
+                            evidence_refs=evidence_refs))
         elif len(out) < 6:
-            out.append(dict(c, reason=f"placeholder scene-boundary fallback (start={c['start']:.3f}s, dur={c['duration']:.3f}s)", order=len(out)))
+            flag_note = ", black-flag demoted in ranking" if _has_black_flag(c) else ""
+            reason = (
+                f"placeholder scene-boundary fallback (start={c['start']:.3f}s, "
+                f"dur={c['duration']:.3f}s{flag_note})"
+            )
+            out.append(dict(c, reason=reason, order=len(out), selection_basis="deterministic_fallback",
+                            evidence_refs=evidence_refs))
+        else:
+            break
     if not out and candidates:
-        # 实在没场景边界就硬取第一个
         c = candidates[0]
-        out.append(dict(c, reason="placeholder forced first-segment fallback", order=0))
+        evidence = c.get("evidence") or {}
+        out.append(dict(
+            c,
+            reason="placeholder forced first-segment fallback",
+            order=0,
+            selection_basis="deterministic_fallback",
+            evidence_refs=[str(c.get("candidate_id") or "index:0")] + [
+                str(p) for p in (evidence.get("frame_paths") or [])[:2]
+            ],
+        ))
     return out
 
 
@@ -437,6 +571,13 @@ def _build_clips(
             "reason": str(seg.get("reason") or f"segment #{i}"),
             "candidate_index": int(seg.get("index", -1)),
         }
+        # P1-3:选段依据 + 证据引用透传到 clip(report/QC 可追溯)
+        if seg.get("candidate_id"):
+            clip["candidate_id"] = str(seg["candidate_id"])
+        if seg.get("selection_basis"):
+            clip["selection_basis"] = str(seg["selection_basis"])
+        if seg.get("evidence_refs"):
+            clip["evidence_refs"] = list(seg["evidence_refs"])
         beat = str(seg.get("beat") or "").strip()
         if beat:
             clip["beat"] = beat
@@ -525,6 +666,7 @@ def build_timeline_from_media(
     media_reports: list[dict[str, Any]],
     transcript_data: Any = None,
     ingest_data: Any = None,
+    observation_data: Any = None,
     lang: str = "zh",
     client: Optional[LLMClient] = None,
     fallback_to_placeholder: bool = True,
@@ -532,11 +674,14 @@ def build_timeline_from_media(
     """阶段三主入口:从 media + transcript + ingest 选段 + 组装 timeline。
 
     Args:
-        media_reports: ``assembly_discover_and_probe`` 写出的 ``media.json``。
+        media_reports: ``assembly_discover_and_probe`` 写出的 ``media.json``
+            (P1-2 起 manifest dict,经 ``manifest_to_media_reports`` 归一)。
         transcript_data: 可选的转写文本上下文(B1 ASR 移除后主图不再提供;
             保留通用可选接口给评估脚本等非主图调用方,允许 None)。
-        ingest_data: ``assembly_visual_observe`` 写出的 ``video_ingest.json``
-            (允许 None,表示无截图)。
+        ingest_data: 旧整段观察产物(允许 None;P1-3 起主图改传
+            ``observation_data``,本参数保留给非主图调用方)。
+        observation_data: P1-3 候选级视觉观察(``visual_observation.json``,
+            允许 None = 无候选级证据,选段标注确定性兜底)。
         lang: prompt 语言(目前只接 ``"zh"``)。
         client: LLM client。None 时用 ``vlm_client.get_default_client()``(默认 Stub)。
         fallback_to_placeholder: LLM 选段为空时是否回退到确定性占位算法。
@@ -544,7 +689,8 @@ def build_timeline_from_media(
     Returns:
         ``timeline.json`` 的完整 dict,符合 ``schemas/timeline.schema.json`` 关键契约。
         关键字段:``project`` / ``assets[]`` / ``sequence`` / ``tracks[].clips[]``,
-        每个 clip 必有 ``source`` / ``start`` / ``end`` / ``reason``。
+        每个 clip 必有 ``source`` / ``start`` / ``end`` / ``reason``;
+        P1-3 起 clip 另带 ``selection_basis`` / ``evidence_refs``。
     """
     started = time.perf_counter()
     if client is None:
@@ -556,8 +702,17 @@ def build_timeline_from_media(
     if len(candidates) > MAX_LLM_CANDIDATES:
         candidates = candidates[:MAX_LLM_CANDIDATES]
         truncated = True
+    # P1-3:候选级视觉证据关联(F-04 — 观察数据必须进入选段决策)
+    candidates = attach_visual_evidence(candidates, observation_data)
+    # prompt 的 sheet 清单 = 候选自己的拼贴图(不再是全片无映射清单)
+    candidate_sheets: list[str] = []
+    for c in candidates:
+        for sheet in (c.get("evidence") or {}).get("sheet_paths") or []:
+            if sheet and sheet not in candidate_sheets:
+                candidate_sheets.append(str(sheet))
+                break
+    sheet_paths = candidate_sheets or _format_sheet_paths(ingest_data)
     transcript_text = _format_transcript_for_prompt(transcript_data)
-    sheet_paths = _format_sheet_paths(ingest_data)
 
     llm_used = False
     fallback_used = False
@@ -647,6 +802,16 @@ def build_timeline_from_media(
             "transcript_chars": len(transcript_text) if transcript_data is not None else 0,
             "sheet_count": len(sheet_paths),
             "llm_used": llm_used,
+            # P1-3:视觉证据消费统计(F-04 死产物检查的数据面)
+            "candidates_with_evidence": sum(
+                1 for c in chosen if c.get("evidence") and c["evidence"].get("status") == "ok"
+            ),
+            "candidates_without_evidence": sum(1 for c in chosen if not c.get("evidence")),
+            "black_flagged_selected": sum(1 for c in chosen if _has_black_flag(c)),
+            "visual_evidence_used": bool(
+                observation_data and isinstance(observation_data, dict)
+                and observation_data.get("candidate_count")
+            ),
         },
     }
 
@@ -663,6 +828,7 @@ def build_timeline_from_paths(
     media_artifact: str | Path,
     transcript_artifact: str | Path | None = None,
     ingest_artifact: str | Path | None = None,
+    observation_artifact: str | Path | None = None,
     lang: str = "zh",
     client: Optional[LLMClient] = None,
 ) -> dict[str, Any]:
@@ -689,14 +855,386 @@ def build_timeline_from_paths(
         media_reports=media_reports,
         transcript_data=_safe_read(transcript_artifact),
         ingest_data=_safe_read(ingest_artifact),
+        observation_data=_safe_read(observation_artifact),
         lang=lang,
         client=client,
     )
 
 
+# ---------------------------------------------------------------------------
+# P1-4(第六期):基于原始 plan 的候选编辑计划(DraftPatch)
+# ---------------------------------------------------------------------------
+def _black_ranges_by_source(media_reports: list[dict[str, Any]]) -> dict[str, list[dict]]:
+    out: dict[str, list[dict]] = {}
+    for rep in media_reports or []:
+        if not isinstance(rep, dict):
+            continue
+        source = str(rep.get("source") or "")
+        analysis = rep.get("analysis") or {}
+        if isinstance(analysis, dict):
+            out[source] = [r for r in analysis.get("black_ranges") or [] if isinstance(r, dict)]
+    return out
+
+
+def _largest_clean_subrange(
+    in_s: float, out_s: float, black_ranges: list[dict], *, min_len: float = 0.5
+) -> tuple[float, float] | None:
+    """[in_s, out_s] 剔除黑帧重叠后的最大连续干净子区间(秒);过短返回 None。"""
+    blacks = []
+    for r in black_ranges:
+        try:
+            bs = max(in_s, float(r.get("start") or 0.0))
+            be = min(out_s, float(r.get("end") or 0.0))
+        except (TypeError, ValueError):
+            continue
+        if be > bs:
+            blacks.append((bs, be))
+    blacks.sort()
+    clean: list[tuple[float, float]] = []
+    cursor = in_s
+    for bs, be in blacks:
+        if be <= cursor:
+            continue
+        if bs > cursor:
+            clean.append((cursor, bs))
+        cursor = max(cursor, be)
+    if cursor < out_s:
+        clean.append((cursor, out_s))
+    if not clean:
+        return None
+    best = max(clean, key=lambda seg: seg[1] - seg[0])
+    return best if (best[1] - best[0]) >= min_len else None
+
+
+def _plan_media_path_map(base_plan: dict[str, Any]) -> dict[str, str]:
+    """plan source_media media_id → 本机路径。"""
+    from storyline.mapper import file_uri_to_path
+
+    out: dict[str, str] = {}
+    for m in base_plan.get("source_media") or []:
+        if not isinstance(m, dict):
+            continue
+        try:
+            out[str(m.get("media_id"))] = file_uri_to_path(str(m.get("file_uri") or ""))
+        except ValueError:
+            continue
+    return out
+
+
+def _overlap_seconds(in_ms: int, out_ms: int, black_ranges: list[dict]) -> float:
+    overlap = 0.0
+    in_s, out_s = in_ms / 1000.0, out_ms / 1000.0
+    for r in black_ranges:
+        try:
+            bs, be = float(r.get("start") or 0.0), float(r.get("end") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        lo, hi = max(in_s, bs), min(out_s, be)
+        if hi > lo:
+            overlap += hi - lo
+    return overlap
+
+
+def _add_deterministic_evidence_ops(
+    base_plan: dict[str, Any],
+    patch: dict[str, Any],
+    media_reports: list[dict[str, Any]],
+) -> int:
+    """逐 clip 对照 manifest 黑帧区间产出 trim/remove ops(确定性,证据驱动)。
+
+    策略(P1-4 保守档):
+    - 黑帧覆盖率 >= 80% 或无 >=0.5s 干净子区间 → remove op(证据 = 命中的黑帧区间);
+    - 覆盖 >= 0.3s 且存在干净子区间 → trim op(裁到最大干净子区间,速度恒 1.0)。
+    返回追加的 op 数。
+    """
+    blacks = _black_ranges_by_source(media_reports)
+    path_by_media = _plan_media_path_map(base_plan)
+    added = 0
+    for clip in base_plan.get("clips") or []:
+        if not isinstance(clip, dict):
+            continue
+        ranges = blacks.get(path_by_media.get(str(clip.get("source_media_id"))) or "") or []
+        if not ranges:
+            continue
+        in_ms, out_ms = int(clip["source_in_ms"]), int(clip["source_out_ms"])
+        span_s = (out_ms - in_ms) / 1000.0
+        if span_s <= 0:
+            continue
+        overlap_s = _overlap_seconds(in_ms, out_ms, ranges)
+        if overlap_s <= 0:
+            continue
+        evidence = [f"black:{r.get('start')}-{r.get('end')}" for r in ranges]
+        clean = _largest_clean_subrange(in_ms / 1000.0, out_ms / 1000.0, ranges)
+        coverage = overlap_s / span_s
+        if clean is None or coverage >= 0.8:
+            add_operation(
+                patch, operation="remove", target_clip_id=str(clip.get("clip_id")),
+                reason=(
+                    f"黑帧覆盖率 {coverage:.0%}(>=80%)或无可用干净子区间,移除坏片段"
+                ),
+                evidence_refs=evidence,
+                confidence=0.95,
+            )
+            added += 1
+        elif overlap_s >= 0.3:
+            new_in = int(round(clean[0] * 1000))
+            new_out = int(round(clean[1] * 1000))
+            if (new_out - new_in) < (out_ms - in_ms):
+                add_operation(
+                    patch, operation="trim", target_clip_id=str(clip.get("clip_id")),
+                    source_in_ms=new_in, source_out_ms=new_out,
+                    reason=f"剔除源区间内黑帧(原 {in_ms}-{out_ms}ms,黑帧 {overlap_s:.2f}s)",
+                    evidence_refs=evidence,
+                    confidence=0.9,
+                )
+                added += 1
+    return added
+
+
+def _add_llm_select_ops(
+    base_plan: dict[str, Any],
+    patch: dict[str, Any],
+    chosen: list[dict[str, Any]],
+    media_reports: list[dict[str, Any]],
+) -> int:
+    """LLM 选中的候选 → select ops(候选来自 plan 已有 source_media,不虚构素材)。
+
+    映射:候选 asset_id → manifest 的 plan_media_id;与既有 clip 源区间重叠
+    >= 30% 的候选视为"该 clip 的画面证据已入编"(不打 op);否则追加新 clip
+    (按 LLM 给出的 order 顺序)。返回追加的 op 数。
+    """
+    media_id_by_source: dict[str, str] = {}
+    for rep in media_reports or []:
+        if isinstance(rep, dict) and rep.get("plan_media_id"):
+            media_id_by_source[str(rep.get("source") or "")] = str(rep["plan_media_id"])
+
+    clips_by_media: dict[str, list[dict]] = {}
+    for clip in base_plan.get("clips") or []:
+        if isinstance(clip, dict):
+            clips_by_media.setdefault(str(clip.get("source_media_id")), []).append(clip)
+
+    added = 0
+    for seg in chosen:
+        media_id = media_id_by_source.get(str(seg.get("media_source") or ""))
+        if not media_id:
+            continue
+        start_ms = int(round(float(seg["start"]) * 1000))
+        end_ms = int(round(float(seg["end"]) * 1000))
+        span = max(1, end_ms - start_ms)
+        matched = False
+        for clip in clips_by_media.get(media_id, []):
+            c_in, c_out = int(clip["source_in_ms"]), int(clip["source_out_ms"])
+            lo, hi = max(start_ms, c_in), min(end_ms, c_out)
+            if hi > lo and (hi - lo) / span >= 0.3:
+                matched = True
+                break
+        if matched:
+            continue
+        evidence = [str(seg.get("candidate_id") or f"index:{seg.get('index')}")] + [
+            str(p) for p in (seg.get("evidence") or {}).get("frame_paths", [])[:2]
+        ] if seg.get("evidence") else [str(seg.get("candidate_id") or f"index:{seg.get('index')}")]
+        add_operation(
+            patch, operation="select", target_clip_id=f"clip_sel_{added + 1:04d}",
+            source_media_id=media_id, source_in_ms=start_ms, source_out_ms=end_ms,
+            reason=str(seg.get("reason") or "LLM 选中且未入编的候选片段"),
+            evidence_refs=evidence,
+            extra={"beat": seg.get("beat"), "editorial_order": seg.get("order")},
+        )
+        added += 1
+    return added
+
+
+def build_candidate_plan_from_media(
+    *,
+    base_plan: dict[str, Any],
+    base_plan_sha256: str,
+    media_reports: list[dict[str, Any]],
+    observation_data: Any = None,
+    lang: str = "zh",
+    client: Optional[LLMClient] = None,
+) -> dict[str, Any]:
+    """P1-4 主入口:在原始 storyline_plan 上生成候选编辑计划(DraftPatch)。
+
+    设计纪律(设计文档 §3.3):
+    - 基线不可变(apply_patch 只动深拷贝);候选补丁有证据可追溯;
+    - LLM 失败 / 空选段 → 只保留确定性证据 ops;连确定性 ops 都没有时
+      候选 = 基线 + ``no_safe_candidate`` 标记(**不再整段首尾相接**);
+    - ``CanonicalTimeline.model_validate`` 为硬门;候选非法且基线也非法时
+      ``validation=failed``,由节点层显式落 error(不静默放行)。
+
+    Returns:
+        dict: ``candidate_plan``(已剥内部标记)/ ``patch`` / ``patch_report`` /
+        ``diffs`` / ``validation`` / 统计字段。
+    """
+    from storyline.contract import CanonicalTimeline
+
+    from .draft_patch import (
+        add_operation,
+        apply_patch,
+        diff_plans,
+        new_patch,
+        plan_sha256,
+        strip_internal_marks,
+    )
+
+    started = time.perf_counter()
+    if client is None:
+        client = get_default_client()
+
+    candidates = _collect_candidate_segments(media_reports)
+    if len(candidates) > MAX_LLM_CANDIDATES:
+        candidates = candidates[:MAX_LLM_CANDIDATES]
+    candidates = attach_visual_evidence(candidates, observation_data)
+    transcript_text = _format_transcript_for_prompt(None)
+
+    llm_used = False
+    chosen: list[dict[str, Any]] = []
+    if candidates:
+        raw_selection = _call_llm_for_selection(
+            candidates=candidates,
+            transcript_text=transcript_text,
+            sheet_paths=[],  # P1-3:拼贴图经 candidate evidence 注入 media 与 prompt
+            lang=lang,
+            client=client,
+        )
+        llm_used = bool(raw_selection) and isinstance(raw_selection.get("selected_segments"), list)
+        chosen, _extras, _ok = _normalize_selection(raw_selection, candidates)
+
+    patch = new_patch(base_plan_sha256, created_by="assembly_build_timeline")
+    det_ops = _add_deterministic_evidence_ops(base_plan, patch, media_reports)
+    llm_ops = _add_llm_select_ops(base_plan, patch, chosen, media_reports)
+
+    candidate, patch_report = apply_patch(base_plan, patch, expect_base_sha256=base_plan_sha256)
+    diffs = diff_plans(base_plan, candidate)
+    cleaned = strip_internal_marks(candidate)
+
+    validation_failed: str | None = None
+    try:
+        CanonicalTimeline.model_validate(cleaned)
+    except Exception as exc:  # noqa: BLE001 — ValidationError / ValueError
+        validation_failed = repr(exc)
+
+    no_safe_candidate = not patch_report["applied_operations"] and not chosen
+    return {
+        "candidate_plan": cleaned,
+        "candidate_plan_sha256": plan_sha256(cleaned),
+        "patch": patch,
+        "patch_report": patch_report,
+        "diffs": diffs,
+        "validation": {"pass": validation_failed is None, "error": validation_failed},
+        "no_safe_candidate": no_safe_candidate,
+        "llm_used": llm_used,
+        "deterministic_ops": det_ops,
+        "llm_ops": llm_ops,
+        "elapsed_seconds": round(time.perf_counter() - started, 4),
+    }
+
+
+def candidate_projection_timeline(
+    candidate_plan: dict[str, Any],
+    media_reports: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """候选 CanonicalTimeline → assembly timeline 投影(validate/render/QC 工具链沿用)。
+
+    投影只承载视频轨(source/timeline 秒),供 ``validate_timeline`` /
+    ``render_preview`` / ``qc_preview`` 继续工作;真正要生成剪映草稿时
+    P1-5 会用与正式链相同的 mapper 映射(QC 临时草稿),两者互不替代。
+    """
+    reports_by_source: dict[str, dict[str, Any]] = {}
+    for rep in media_reports or []:
+        if isinstance(rep, dict) and rep.get("source"):
+            reports_by_source[str(rep["source"])] = rep
+
+    assets: list[dict[str, Any]] = []
+    media_asset: dict[str, str] = {}
+    path_by_media = _plan_media_path_map(candidate_plan)
+    for i, m in enumerate(candidate_plan.get("source_media") or [], start=1):
+        if not isinstance(m, dict):
+            continue
+        path = path_by_media.get(str(m.get("media_id"))) or str(m.get("file_uri") or "")
+        rep = reports_by_source.get(path) or {}
+        asset_id = str(rep.get("asset_id") or f"a{i}")
+        media_asset[str(m.get("media_id"))] = asset_id
+        duration = (rep.get("probe") or {}).get("duration_seconds")
+        if duration is None:
+            duration = (m.get("duration_ms") or 0) / 1000.0
+        assets.append({
+            "id": asset_id,
+            "path": path,
+            "source": path,
+            "type": "video",
+            "duration": duration,
+            "width": 16,
+            "height": 16,
+            "fps": DEFAULT_FPS,
+        })
+
+    clips: list[dict[str, Any]] = []
+    for i, clip in enumerate(candidate_plan.get("clips") or [], start=1):
+        if not isinstance(clip, dict):
+            continue
+        start_s = int(clip["source_in_ms"]) / 1000.0
+        end_s = int(clip["source_out_ms"]) / 1000.0
+        t_in = int(clip["timeline_in_ms"]) / 1000.0
+        t_out = int(clip["timeline_out_ms"]) / 1000.0
+        clips.append({
+            "track_type": "video",
+            "id": str(clip.get("clip_id") or f"clip_{i:04d}"),
+            "asset_id": media_asset.get(str(clip.get("source_media_id")), "a1"),
+            "source": path_by_media.get(str(clip.get("source_media_id")), ""),
+            "start": start_s,
+            "end": end_s,
+            "duration": end_s - start_s,
+            "timeline_start": t_in,
+            "timeline_end": t_out,
+            "speed": 1.0,
+            "volume": 1.0,
+            "opacity": 1.0,
+            "enabled": True,
+            "reason": str(clip.get("_patch_reason") or f"baseline clip {clip.get('clip_id')}"),
+        })
+
+    total = clips[-1]["timeline_end"] if clips else 0.0
+    return {
+        "version": "assembly-candidate-projection-1",
+        "task": "candidate plan projection (auto-video-editor P1-4)",
+        "project": {
+            "name": "assembly-candidate",
+            "selected_segments_count": len(clips),
+            "elapsed_seconds": 0.0,
+        },
+        "sequence": {
+            "fps": DEFAULT_FPS,
+            "duration": total,
+            "canvas": {"width": DEFAULT_CANVAS_WIDTH, "height": DEFAULT_CANVAS_HEIGHT, "fps": DEFAULT_FPS},
+            "output_canvas": {"width": DEFAULT_CANVAS_WIDTH, "height": DEFAULT_CANVAS_HEIGHT, "fps": DEFAULT_FPS},
+        },
+        "assets": assets,
+        "tracks": [
+            {
+                "id": "t_video_main",
+                "name": "video_main",
+                "type": "video",
+                "track_type": "video",
+                "enabled": True,
+                "visible": True,
+                "order": 0,
+                "clips": clips,
+            }
+        ],
+        "markers": [],
+        "metadata": {
+            "candidate_projection": True,
+            "clip_count": len(clips),
+        },
+    }
+
+
 __all__ = [
     "build_timeline_from_media",
     "build_timeline_from_paths",
+    "build_candidate_plan_from_media",
+    "candidate_projection_timeline",
     "manifest_to_media_reports",
     "MAX_LLM_CANDIDATES",
     "SELECTION_JSON_SCHEMA",

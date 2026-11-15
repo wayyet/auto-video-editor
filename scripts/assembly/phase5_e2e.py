@@ -9,9 +9,10 @@ assembly_repair_loop → assembly_write_report``,记录每节点耗时与产物�
 最后验证:
 
 1. 产物完整性:``outputs/<job_id>/assembly/`` 下 7 个文件全部生成
-   (media.json / video_ingest.json / timeline.json /
+   (media.json / visual_observation.json / timeline.json /
    timeline_validation.json / preview.mp4 / preview_qc_report.json /
-   report.md;B1 ASR 移除后不再产出 transcript.json)
+   report.md;B1 ASR 移除后不再产出 transcript.json,
+   2026-11-15 P1-3 起 video_ingest.json 由 visual_observation.json 取代)
 2. preview.mp4 真实可播放(``ffprobe`` 读得到 stream)
 3. report.md 内容可读(中文 Markdown 渲染,包含全部 section)
 4. 关卡① ``node_06_human_reorder`` 的通知文案正确带上 ``assembly_report_path``
@@ -216,7 +217,7 @@ def _drive_happy_path(
 # ---------------------------------------------------------------------------
 _EXPECTED_FILES = (
     "media.json",
-    "video_ingest.json",
+    "visual_observation.json",
     "timeline.json",
     "timeline_validation.json",
     "preview.mp4",

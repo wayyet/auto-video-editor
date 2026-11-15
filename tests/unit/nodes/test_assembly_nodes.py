@@ -80,29 +80,79 @@ def test_discover_handles_directory_no_videos(mock_assembly_capabilities, base_s
 # =============================================================================
 # assembly_visual_observe(B1 ASR 移除后为纯视觉观察节点)
 # =============================================================================
-def test_visual_observe_requires_video_input_path(base_state):
-    base_state.pop("video_input_path")
-    out = assembly_visual_observe_node(base_state)
-    assert any("CONTRACT_INVALID" in e and "video_input_path" in e for e in out["error_log"])
-
-
 def test_visual_observe_requires_media_artifact(mock_assembly_capabilities, base_state):
-    # media_artifact 缺失
+    # media_artifact 缺失(P1-3 起观察以 manifest 为唯一输入,不再依赖 video_input_path)
+    base_state.pop("video_input_path", None)
     out = assembly_visual_observe_node(base_state)
     assert any("missing assembly_media_artifact" in e for e in out["error_log"])
 
 
-def test_visual_observe_happy_path(mock_assembly_capabilities, base_state, tmp_path):
-    # 直接构造 media_artifact 路径(假装 discover 已跑过)
+def test_visual_observe_happy_path(mock_assembly_capabilities, base_state, tmp_path, monkeypatch):
+    # 直接构造 media_artifact(P1-2 manifest 形状)+ stub 候选级观察
+    from assembly_capabilities import visual_observe as vo_mod
+    from nodes.assembly import node_visual_observe as node_mod
+
+    artifact = tmp_path / "media.json"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "schema_version": 1,
+        "job_id": "test-job",
+        "base_plan_sha256": None,
+        "sources": [
+            {
+                "asset_id": "abc123",
+                "source_path": str(base_state["video_input_path"]),
+                "duration_seconds": 10.0,
+                "probe_status": "ok",
+                "analysis_status": "ok",
+                "candidate_segments": [
+                    {"index": 0, "start": 0.0, "end": 5.0, "duration": 5.0, "source": "scene_boundary"}
+                ],
+                "black_ranges": [{"start": 1.0, "end": 2.0, "duration": 1.0}],
+                "silence_ranges": [],
+            }
+        ],
+        "degraded": False,
+    }
+    artifact.write_text(json.dumps(manifest), encoding="utf-8")
+    base_state["assembly_media_artifact"] = str(artifact)
+
+    observation = {
+        "schema_version": 1,
+        "job_id": "test-job",
+        "candidates": [
+            {"candidate_id": "abc123_c000", "status": "ok", "observed_flags": [], "sheet_paths": [], "frame_paths": []}
+        ],
+        "candidate_count": 1,
+        "degraded": False,
+    }
+
+    def fake_build_candidate_observation(manifest_arg, ctx, out_dir, **kw):
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_file = out_dir / "visual_observation.json"
+        out_file.write_text(json.dumps(observation), encoding="utf-8")
+        return observation
+
+    monkeypatch.setattr(vo_mod, "build_candidate_observation", fake_build_candidate_observation)
+    monkeypatch.setattr(node_mod, "build_candidate_observation", fake_build_candidate_observation)
+
+    out = assembly_visual_observe_node(base_state)
+    assert "assembly_observation_artifact" in out
+    assert "assembly_ingest_artifact" in out  # 兼容旧 checkpoint 读
+    assert "assembly_visual_observe_done" in out["status_log"]
+    assert Path(out["assembly_observation_artifact"]).is_file()
+
+
+def test_visual_observe_rejects_legacy_list_manifest(mock_assembly_capabilities, base_state, tmp_path):
+    """P1-3 起 manifest 必须是 dict;旧 list 产物显式报错(重跑 discover)。"""
     artifact = tmp_path / "media.json"
     artifact.parent.mkdir(parents=True, exist_ok=True)
     artifact.write_text(json.dumps(make_media_reports(str(base_state["video_input_path"]), [])), encoding="utf-8")
     base_state["assembly_media_artifact"] = str(artifact)
 
     out = assembly_visual_observe_node(base_state)
-    assert "assembly_ingest_artifact" in out
-    assert "assembly_visual_observe_done" in out["status_log"]
-    assert Path(out["assembly_ingest_artifact"]).is_file()
+    assert any("not a P1-2 manifest" in e for e in out["error_log"])
+    assert "assembly_visual_observe_failed" in out["status_log"]
     # B1 ASR 移除:不再产出 transcript 产物,也不再有 ASR 专属 status tag
     assert "assembly_transcript_artifact" not in out
     assert not any("assembly_asr_observe" in tag for tag in out["status_log"])

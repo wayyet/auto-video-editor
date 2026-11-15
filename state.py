@@ -338,6 +338,30 @@ class WorkflowState(TypedDict, total=False):
     # discover 节点写入;DraftPatch 的 base_plan_sha256 绑定它(P1-4),基线漂移
     # 时拒绝应用旧 patch。plan 缺失(stub 模式)时为 None。
     assembly_base_plan_sha256: NotRequired[Optional[str]]
+    # P1-3 候选级视觉观察产物(visual_observation.json):candidate_id →
+    # frames/sheets/observed_flags;build_timeline 选段的第一证据源。
+    # assembly_ingest_artifact 保留同路径指向,旧 checkpoint 兼容读。
+    assembly_observation_artifact: Annotated[Optional[str], _last_wins]
+    # P1-4 候选编辑计划(CanonicalTimeline dict,已剥内部标记,过模型硬门):
+    # build_timeline 产出;P1-7 由 generate_draft 消费(本次范围外,先落 state
+    # 与磁盘 artifact 供 QC/repair 链使用)。基线 storyline_plan 永不被覆盖。
+    assembly_candidate_plan: Annotated[Optional[dict], _last_wins]
+    assembly_candidate_plan_path: Annotated[Optional[str], _last_wins]
+    assembly_candidate_plan_sha256: NotRequired[Optional[str]]
+    # P1-4 DraftPatch(operations + base_plan_sha256 绑定);QC/repair 链对
+    # 同一候选计划迭代时经 apply_patch 重放。
+    assembly_draft_patch: Annotated[Optional[dict], _last_wins]
+    # P1-5 候选 QC:临时草稿隔离目录(outputs/<job>/assembly/qc_draft/,与剪映
+    # 草稿库完全隔离)+ 结构化 QC 报告(issues 带 clip_id/segment_id/code 定位)。
+    assembly_candidate_draft_dir: Annotated[Optional[str], _last_wins]
+    assembly_candidate_qc_report_path: Annotated[Optional[str], _last_wins]
+    # P1-6:结构性 error 标记(fail-closed 判据)—— validate 节点按
+    # repair_strategies.STRUCTURAL_CODES 计算;达重试上限且该标记为 True 时
+    # 路由 assembly_failed → END,不把坏候选交给 generate_draft。
+    assembly_structural_error: NotRequired[bool]
+    # P1-6 修复历史(repair_history.json):逐轮前后 sha / issue→op 映射 /
+    # patch 指纹(同指纹去重)。
+    assembly_repair_history_path: Annotated[Optional[str], _last_wins]
 
     # ===== 9 个 MCP 工具迁移计划 阶段五(§6.5)新增 =====
     # repair loop 的视觉证据汇总(可疑窗口 + 证据帧路径列表),None = 本轮

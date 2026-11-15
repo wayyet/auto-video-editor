@@ -134,11 +134,33 @@ def patched_assembly_tools(monkeypatch: pytest.MonkeyPatch, base_state: dict) ->
     ]
 
     ingest_data = {
-        "tool": "video_ingest",
-        "video_path": base_state["video_input_path"],
-        "media": {"sampled_frames": 4, "duration": 10.0},
-        "sheet_paths": [],
-        "frame_paths": [],
+        "schema_version": 1,
+        "tool": "assembly_visual_observe.candidate_observation",
+        "job_id": "assembly-qc-int",
+        "base_plan_sha256": None,
+        "candidates": [
+            {
+                "candidate_id": "stub_c000",
+                "asset_id": "stub",
+                "source_path": base_state["video_input_path"],
+                "index": 0,
+                "start": 0.0,
+                "end": 10.0,
+                "duration": 10.0,
+                "observed_flags": [],
+                "status": "ok",
+                "detail": None,
+                "frame_paths": [],
+                "frame_timestamps": [],
+                "sheet_paths": [],
+                "cache_reused": False,
+                "cache_signature": None,
+            }
+        ],
+        "candidate_count": 1,
+        "ok_count": 1,
+        "degraded": False,
+        "notes": [],
     }
     timeline_data = {
         "version": "stub-1",
@@ -237,7 +259,14 @@ def patched_assembly_tools(monkeypatch: pytest.MonkeyPatch, base_state: dict) ->
         }),
     )
     monkeypatch.setattr(media_probe, "analyze_media", _make_stub_writer(media_data[0]["analysis"]))
-    monkeypatch.setattr(visual_observe, "video_ingest", _make_stub_writer(ingest_data))
+
+    def _fake_candidate_observation(manifest, ctx, out_dir, **_kw):
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_file = out_dir / "visual_observation.json"
+        out_file.write_text(json.dumps(ingest_data), encoding="utf-8")
+        return ingest_data
+
+    monkeypatch.setattr(visual_observe, "build_candidate_observation", _fake_candidate_observation)
     monkeypatch.setattr(
         timeline_ops, "validate_timeline", _make_stub_writer(validation_data)
     )
@@ -278,7 +307,7 @@ def patched_assembly_tools(monkeypatch: pytest.MonkeyPatch, base_state: dict) ->
     )
     monkeypatch.setattr(node_discover_and_probe, "inspect_media", media_probe.inspect_media)
     monkeypatch.setattr(node_discover_and_probe, "analyze_media", media_probe.analyze_media)
-    monkeypatch.setattr(node_visual_observe, "video_ingest", visual_observe.video_ingest)
+    monkeypatch.setattr(node_visual_observe, "build_candidate_observation", visual_observe.build_candidate_observation)
     monkeypatch.setattr(node_validate_render_qc, "validate_timeline", timeline_ops.validate_timeline)
     monkeypatch.setattr(node_validate_render_qc, "render_preview", _fake_render)
     monkeypatch.setattr(node_validate_render_qc, "qc_preview", qc_preview_mod.qc_preview)
@@ -392,7 +421,7 @@ def test_assembly_chain_end_to_end_produces_all_artifacts(
     assembly_dir = Path(base_state["storyline_outputs_root"]) / "assembly"
     expected_files = [
         "media.json",
-        "video_ingest.json",
+        "visual_observation.json",
         "timeline.json",
         "timeline_validation.json",
         "preview.mp4",

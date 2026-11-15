@@ -84,6 +84,35 @@ def add_contribution(
     return contribution
 
 
+def load_or_create_trace(path, base_plan_sha256: str) -> dict[str, Any]:
+    """读 ``influence_trace.json``;缺失/损坏/契约不过 → 建新 trace(重建不静默带病续写)。"""
+    import json
+    from pathlib import Path as _Path
+
+    p = _Path(path)
+    if p.is_file():
+        try:
+            existing = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing = None
+        if isinstance(existing, dict) and not validate_influence_trace(existing):
+            return existing
+    return new_influence_trace(base_plan_sha256)
+
+
+def save_trace(path, trace: dict[str, Any]) -> None:
+    """trace 落盘(原子性不做要求——trace 是审计产物,坏行由下次 load 兜底重建)。"""
+    import json
+    from pathlib import Path as _Path
+
+    p = _Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+
+
 def validate_influence_trace(trace: Any) -> list[str]:
     """契约校验,返回 issue 文本列表;空列表 = 通过。"""
     issues: list[str] = []
@@ -153,5 +182,7 @@ __all__ = [
     "is_sha256_hex",
     "new_influence_trace",
     "add_contribution",
+    "load_or_create_trace",
+    "save_trace",
     "validate_influence_trace",
 ]

@@ -85,6 +85,7 @@ def fake_analyze_media(args, ctx):
 
 
 def fake_video_ingest_success(args, ctx):
+    """P1-3 起仅保留给非主图调用方(visual_observe.video_ingest 直调场景)。"""
     output_json = args.get("output_json")
     sheet_path = Path(args["video_path"]).with_suffix(".sheet.jpg")
     payload = {
@@ -110,6 +111,33 @@ def fake_video_ingest_success(args, ctx):
         artifacts=[output_json, str(sheet_path)] if output_json else [str(sheet_path)],
         image_paths=[str(sheet_path)],
     )
+
+
+def fake_build_candidate_observation(manifest, ctx, out_dir, **_kw):
+    """P1-3 候选级观察 stub(节点主入口;写 visual_observation.json)。"""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir / "visual_observation.json"
+    candidates = []
+    for src in (manifest or {}).get("sources") or []:
+        for cand in (src.get("candidate_segments") or []) if isinstance(src, dict) else []:
+            candidates.append({
+                "candidate_id": f"{src.get('asset_id')}_c{int(cand.get('index', 0)):03d}",
+                "status": "ok",
+                "observed_flags": [],
+                "sheet_paths": [],
+                "frame_paths": [],
+            })
+    payload = {
+        "schema_version": 1,
+        "tool": "assembly_visual_observe.candidate_observation",
+        "job_id": (manifest or {}).get("job_id") if isinstance(manifest, dict) else None,
+        "candidates": candidates,
+        "candidate_count": len(candidates),
+        "degraded": False,
+    }
+    out_file.write_text(json.dumps(payload), encoding="utf-8")
+    return payload
 
 
 def fake_validate_timeline(args, ctx):
@@ -240,7 +268,7 @@ def mock_assembly_capabilities(monkeypatch):
     # 源模块属性(保险)
     monkeypatch.setattr(media_probe, "inspect_media", fake_inspect_media)
     monkeypatch.setattr(media_probe, "analyze_media", fake_analyze_media)
-    monkeypatch.setattr(visual_observe, "video_ingest", fake_video_ingest_success)
+    monkeypatch.setattr(visual_observe, "build_candidate_observation", fake_build_candidate_observation)
     monkeypatch.setattr(timeline_ops, "validate_timeline", fake_validate_timeline)
     monkeypatch.setattr(render_preview, "render_preview", fake_render_preview_success)
     monkeypatch.setattr(qc_preview, "qc_preview", fake_qc_preview_pass)
@@ -248,7 +276,7 @@ def mock_assembly_capabilities(monkeypatch):
     # 消费端模块属性(关键:节点模块顶部已 import 过这些名字)
     monkeypatch.setattr(node_discover_and_probe, "inspect_media", fake_inspect_media)
     monkeypatch.setattr(node_discover_and_probe, "analyze_media", fake_analyze_media)
-    monkeypatch.setattr(node_visual_observe, "video_ingest", fake_video_ingest_success)
+    monkeypatch.setattr(node_visual_observe, "build_candidate_observation", fake_build_candidate_observation)
     monkeypatch.setattr(node_validate_render_qc, "validate_timeline", fake_validate_timeline)
     monkeypatch.setattr(node_validate_render_qc, "render_preview", fake_render_preview_success)
     monkeypatch.setattr(node_validate_render_qc, "qc_preview", fake_qc_preview_pass)

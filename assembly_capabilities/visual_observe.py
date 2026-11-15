@@ -699,6 +699,166 @@ def build_contact_sheets(frames: list[SampledFrame], out_dir: Path, defaults: Vi
     return paths
 
 
+# ---------------------------------------------------------------------------
+# P1-3(第六期):候选级视觉观察
+# ---------------------------------------------------------------------------
+OBSERVATION_SCHEMA_VERSION = 1
+
+
+def _candidate_flags(start: float, end: float, black_ranges: list) -> list[dict[str, Any]]:
+    """候选区间与 manifest 黑帧区间的重叠 → black_suspect 旗标(确定性,无需看图)。"""
+    flags: list[dict[str, Any]] = []
+    for rng in black_ranges:
+        if not isinstance(rng, dict):
+            continue
+        try:
+            r_start = float(rng.get("start") or 0.0)
+            r_end = float(rng.get("end") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if r_end > start and r_start < end:
+            flags.append({"kind": "black_suspect", "range": {"start": r_start, "end": r_end}})
+    return flags
+
+
+def build_candidate_observation(
+    manifest: dict[str, Any],
+    ctx: RunContext,
+    out_dir: Path,
+    *,
+    defaults: VideoSamplingDefaults | None = None,
+) -> dict[str, Any]:
+    """对 manifest 的每个候选片段建立视觉观察(P1-3,设计文档 §3.2)。
+
+    与整段抽帧的差异:每个 candidate 一次独立观察(``original_time_range`` =
+    候选区间),帧/拼贴图与 candidate_id 一一关联 —— 选段节点拿到的不再是
+    "无映射关系的全片前几张拼贴图"。
+
+    缓存:复用 :func:`build_video_observation` 的签名机制
+    (源文件 size/mtime + 采样参数 + 时间区间 + frames_dir),签名变化自动
+    重抽;命中与未命中产出同一契约。
+
+    任何候选抽帧失败 → 该候选 ``status="degraded"`` 并留 detail,不中断其他
+    候选;画面不可判读(区间过短/源缺失)→ ``status="unknown"``。最终
+    ``visual_observation.json`` 落 ``out_dir`` 并返回完整 dict。
+
+    Args:
+        manifest: P1-2 素材 manifest(``sources[].candidate_segments`` 必需)。
+        ctx: RunContext(cwd 决定缓存根)。
+        out_dir: 产物目录(``outputs/<job>/assembly``)。
+        defaults: 采样参数,缺省 :class:`VideoSamplingDefaults`。
+    """
+    defaults = defaults or VideoSamplingDefaults()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    candidates_out: list[dict[str, Any]] = []
+
+    for src in manifest.get("sources") or []:
+        if not isinstance(src, dict) or src.get("analysis_status") != "ok":
+            continue  # 探测失败的素材没有可信候选(manifest 已留痕,此处跳过)
+        asset_id = str(src.get("asset_id") or "unknown")
+        source_path = str(src.get("source_path") or "")
+        black_ranges = list(src.get("black_ranges") or [])
+        for cand in src.get("candidate_segments") or []:
+            if not isinstance(cand, dict):
+                continue
+            try:
+                index = int(cand.get("index", len(candidates_out)))
+                start = float(cand.get("start", 0.0) or 0.0)
+                end_raw = cand.get("end")
+                if end_raw is None:
+                    dur_raw = cand.get("duration")
+                    end = start + float(dur_raw) if dur_raw is not None else start
+                else:
+                    end = float(end_raw)
+            except (TypeError, ValueError):
+                continue
+            candidate_id = f"{asset_id}_c{max(index, 0):03d}"
+            entry: dict[str, Any] = {
+                "candidate_id": candidate_id,
+                "asset_id": asset_id,
+                "source_path": source_path,
+                "index": index,
+                "start": round(start, 3),
+                "end": round(end, 3),
+                "duration": round(end - start, 3),
+                "observed_flags": _candidate_flags(start, end, black_ranges),
+                "status": "unknown",
+                "detail": None,
+                "frame_paths": [],
+                "frame_timestamps": [],
+                "sheet_paths": [],
+                "cache_reused": False,
+                "cache_signature": None,
+            }
+            candidates_out.append(entry)
+            if end - start <= 0.1:
+                entry["detail"] = "range too short to sample(<=0.1s)"
+                continue
+            video = Path(source_path)
+            if not video.is_file():
+                entry["detail"] = f"source file missing: {source_path}"
+                continue
+
+            output_json = out_dir / f"observation_{candidate_id}.json"
+            frames_dir = out_dir / "observation_frames" / f"candidate_{candidate_id}"
+            try:
+                result = build_video_observation(
+                    ctx=ctx,
+                    defaults=defaults,
+                    video_path=video,
+                    output_json=output_json,
+                    frames_dir=frames_dir,
+                    label="candidate_ingest",
+                    prompt=default_full_prompt(),
+                    original_time_range=(start, end),
+                )
+            except Exception as exc:  # noqa: BLE001 — 单候选失败不中断其他候选
+                entry["status"] = "degraded"
+                entry["detail"] = f"observation exception: {exc!r}"
+                continue
+            if result.text.startswith("[ERROR]"):
+                entry["status"] = "degraded"
+                entry["detail"] = result.text
+                continue
+            payload = {}
+            try:
+                loaded = json.loads(output_json.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    payload = loaded
+            except (OSError, json.JSONDecodeError):
+                payload = {}
+            media = payload.get("media") if isinstance(payload.get("media"), dict) else {}
+            entry.update(
+                status="ok",
+                frame_paths=[str(p) for p in payload.get("frame_paths") or []],
+                frame_timestamps=[float(t) for t in (media.get("raw_frame_timestamps_sec") or [])],
+                sheet_paths=[str(p) for p in payload.get("sheet_paths") or []],
+                cache_reused=bool(result.data.get("reused")),
+                cache_signature=payload.get("cache_signature"),
+            )
+
+    observation: dict[str, Any] = {
+        "schema_version": OBSERVATION_SCHEMA_VERSION,
+        "tool": "assembly_visual_observe.candidate_observation",
+        "job_id": str(manifest.get("job_id") or "unknown"),
+        "base_plan_sha256": manifest.get("base_plan_sha256"),
+        "candidates": candidates_out,
+        "candidate_count": len(candidates_out),
+        "ok_count": sum(1 for c in candidates_out if c["status"] == "ok"),
+        "degraded": any(c["status"] != "ok" for c in candidates_out),
+        "notes": [
+            "per-candidate visual evidence keyed by candidate_id (asset_id + candidate index)",
+            "black_suspect flags are deterministic overlaps with manifest black_ranges; "
+            "final judgement is up to the selection model / deterministic fallback",
+        ],
+    }
+    (out_dir / "visual_observation.json").write_text(
+        json.dumps(observation, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    return observation
+
+
 def video_frames_dir_id(video_path: Path) -> str:
     digest = hashlib.sha256(str(video_path.resolve()).encode("utf-8")).hexdigest()[:8]
     return f"{video_path.stem}_{digest}"
