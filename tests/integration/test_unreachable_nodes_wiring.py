@@ -164,11 +164,25 @@ NEIGHBORS: dict[str, tuple[set[str], set[str]]] = {
     _GAT: ({_RTR}, {_PTAT}),
     # plan_timeline_pro + generate_ai_transition 之后、qa_gate 之前
     _PTAT: ({_PTP, _GAT}, {_QA}),
+    # 2026-11-15 第六期 P1-1(assembly 前移,设计文档 §2.1):六节点入口改挂
+    # storyline_join 成功条件路由,出口 assembly_write_report 交棒 generate_draft
+    # (旧接线 generate_draft→assembly_* / write_report→node_06 已删除)。
+    # 本表在 _compiled()(QC 开)下断言;QC 关闭两态由
+    # test_assembly_chain_moved_before_generate_draft 钉死。
+    "assembly_discover_and_probe": ({"storyline_join"}, {"assembly_visual_observe"}),
+    "assembly_visual_observe": ({"assembly_discover_and_probe"}, {"assembly_build_timeline"}),
+    "assembly_build_timeline": ({"assembly_visual_observe"}, {"assembly_validate_render_qc"}),
+    "assembly_validate_render_qc": (
+        {"assembly_build_timeline", "assembly_repair_loop"},
+        {"assembly_repair_loop", "assembly_write_report"},
+    ),
+    "assembly_repair_loop": ({"assembly_validate_render_qc"}, {"assembly_validate_render_qc"}),
+    "assembly_write_report": ({"assembly_validate_render_qc"}, {"generate_draft"}),
 }
 
 
-def _compiled(monkeypatch: pytest.MonkeyPatch, *, ai: bool = True):
-    monkeypatch.setattr(config, "ASSEMBLY_QC_GATE_ENABLED", True)
+def _compiled(monkeypatch: pytest.MonkeyPatch, *, ai: bool = True, qc: bool = True):
+    monkeypatch.setattr(config, "ASSEMBLY_QC_GATE_ENABLED", qc)
     # AI 转场开关在**建图时**读取
     monkeypatch.setattr(config, "STORYLINE_ENABLE_AI_TRANSITION", ai)
     monkeypatch.setattr("storyline_capabilities.ai_transition_client.ENABLE_AI_TRANSITION", ai)
@@ -311,6 +325,37 @@ def test_ai_pair_is_beside_plan_timeline_pro(monkeypatch: pytest.MonkeyPatch) ->
     assert ins[_QA] == {_PTAT}
     assert (_PTP, _QA) not in edges
     assert (_QA, _GAT) not in edges and (_QA, _PTAT) not in edges  # 不再挂在 qa 之后
+
+
+def test_assembly_chain_moved_before_generate_draft(monkeypatch: pytest.MonkeyPatch) -> None:
+    """2026-11-15 第六期 P1-1(assembly 前移):QC 两态接线双断言。
+
+    QC 开(= _compiled 默认):storyline_join 条件路由多一个
+    assembly_discover_and_probe 目标;assembly_write_report → generate_draft;
+    旧边 generate_draft→assembly_* / write_report→node_06 不存在;
+    storyline_join 的 END 出边保留(无 plan 不进 assembly)。
+    QC 关:storyline_join 只剩 generate_draft/END 两个条件目标,assembly 零边。
+    """
+    _, compiled_on = _compiled(monkeypatch)
+    edges_on = _edge_set(compiled_on)
+    ins_on, outs_on = _neighbors(edges_on)
+    assert ins_on["assembly_discover_and_probe"] == {"storyline_join"}
+    assert outs_on["storyline_join"] == {
+        "assembly_discover_and_probe",
+        "generate_draft",
+    }
+    assert outs_on["assembly_write_report"] == {"generate_draft"}
+    assert ("generate_draft", "assembly_discover_and_probe") not in edges_on
+    assert ("assembly_write_report", "node_06_human_reorder") not in edges_on
+    # generate_draft → node_06 两态都在(前移后 generate_draft 仍直连关卡①)
+    assert ("generate_draft", "node_06_human_reorder") in edges_on
+
+    _, compiled_off = _compiled(monkeypatch, qc=False)
+    edges_off = _edge_set(compiled_off)
+    _, outs_off = _neighbors(edges_off)
+    assert outs_off["storyline_join"] == {"generate_draft"}
+    touched = {e for e in edges_off if "assembly_" in e[0] or "assembly_" in e[1]}
+    assert touched == set(), f"QC 关闭时不得有 assembly 边:{touched}"
 
 
 def test_ai_flag_off_graph_has_no_ai_nodes_wired_and_barriers_as_before(

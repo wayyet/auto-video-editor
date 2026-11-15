@@ -203,17 +203,31 @@ from storyline_capabilities.ai_transition_client import is_ai_transition_enabled
 
 
 # ---------------------------------------------------------------------------
-# storyline_join 之后的条件路由(auto-only;Week 5 起 generator 的兜底语义保留)
+# storyline_join 之后的条件路由(auto-only;Week 5 起 generator 的兜底语义保留;
+# 2026-11-15 第六期 P1-1:assembly 六节点前移到 storyline_join 与 generate_draft
+# 之间 —— QC 开启时成功流量先进 assembly 链做候选计划 QC,由
+# assembly_write_report 交棒 generate_draft)
 # ---------------------------------------------------------------------------
 def _route_after_storyline_join(state: WorkflowState) -> str:
     """storyline_join 之后的条件路由。
 
-    - 有 ``storyline_plan``(join_storyline 已反序列化到 state)→ ``generate_draft``
-    - 否则 → ``END``(空 plan 与 qa_gate 失败强制 continue 的语义一致)
+    - 有 ``storyline_plan``(join_storyline 已反序列化到 state):
+      - ``ASSEMBLY_QC_GATE_ENABLED=True`` → ``assembly_discover_and_probe``
+        (assembly 六节点先完成候选编辑计划的 QC/修复,再交棒 generate_draft)
+      - ``False`` → ``generate_draft``(应急直连,QC 关闭姿态)
+    - 否则 → ``END``(空 plan 与 qa_gate 失败强制 continue 的语义一致;
+      没有可生成的有效计划时不进入 assembly)
     - ``shot_plan`` 是 node_05 generate_draft 的旧 checkpoint / 测试兜底输入,
       保留读取兼容(human 路径删除后正常运行不再产生该键)。
+
+    运行时读 ``config.ASSEMBLY_QC_GATE_ENABLED``(属性访问,单测
+    monkeypatch 生效;与 _build_state_graph 内接线块的读法一致)。
     """
     if state.get("storyline_plan") or state.get("shot_plan"):
+        import config as _config
+
+        if _config.ASSEMBLY_QC_GATE_ENABLED:
+            return "assembly_discover_and_probe"
         return "generate_draft"
     return "__end__"
 
@@ -571,21 +585,21 @@ def _build_state_graph():
     g.add_edge(START, "storyline_load_media")
 
     # ---- 阶段 7 拓扑收尾 + Phase 5 assembly QC 通道边(plan §八 / ADR-3)----
-    # 默认 ``ASSEMBLY_QC_GATE_ENABLED=True``:``generate_draft`` 改为
-    # 接 ``assembly_discover_and_probe``,``assembly_write_report`` 接回
-    # ``node_06_human_reorder``。
-    # ``ASSEMBLY_QC_GATE_ENABLED=False``(应急关闭):保留原 ``generate_draft
-    # → node_06_human_reorder``,add_node 已注册但完全无连接 — 等价于
-    # 改动前状态(plan §11 验收项"应急关闭生效")。
+    # 2026-11-15 第六期 P1-1(assembly 前移,设计文档 §2.1):六节点的入口改挂
+    # ``storyline_join`` 成功条件路由(见 ``_route_after_storyline_join``),
+    # 出口 ``assembly_write_report`` 交棒 ``generate_draft`` —— assembly 在草稿
+    # 生成**之前**完成候选编辑计划的 QC/修复;``generate_draft`` 仍是唯一正式
+    # 草稿写入者,生成后直连 ``node_06_human_reorder``(两态均保留)。
+    # ``ASSEMBLY_QC_GATE_ENABLED=False``(应急关闭):``storyline_join`` 条件路由
+    # 直接 → ``generate_draft``,add_node 注册的 6 个 assembly 节点不接边,
+    # 不参与执行(plan §11 验收项"应急关闭生效")。
     #
     # 运行时读 ``config.ASSEMBLY_QC_GATE_ENABLED``,不走模块顶层 import 的本地
     # 绑定(单测用 ``monkeypatch.setattr(config, "ASSEMBLY_QC_GATE_ENABLED", ...)``
     # 才能生效)。
     import config as _config
     if _config.ASSEMBLY_QC_GATE_ENABLED:
-        # 重新指向:generate_draft 不再直连 node_06_human_reorder,
-        # 先接 assembly 链首;6 节点按 plan §八 接边 + 条件路由。
-        g.add_edge("generate_draft", "assembly_discover_and_probe")
+        # 6 节点按设计文档 §2.1 接边 + 条件路由;入口边不再挂 generate_draft。
         g.add_edge("assembly_discover_and_probe", "assembly_visual_observe")
         g.add_edge("assembly_visual_observe", "assembly_build_timeline")
         g.add_edge("assembly_build_timeline", "assembly_validate_render_qc")
@@ -598,10 +612,11 @@ def _build_state_graph():
             },
         )
         g.add_edge("assembly_repair_loop", "assembly_validate_render_qc")
-        g.add_edge("assembly_write_report", "node_06_human_reorder")
-    else:
-        # 应急关闭:原状,add_node 注册的 6 个 assembly 节点不接边,不参与执行。
-        g.add_edge("generate_draft", "node_06_human_reorder")
+        g.add_edge("assembly_write_report", "generate_draft")
+
+    # generate_draft → node_06_human_reorder 两态均直连
+    # (QC 开:由 assembly_write_report 交棒进来;QC 关:storyline_join 直连进来)
+    g.add_edge("generate_draft", "node_06_human_reorder")
 
     g.add_edge("node_06_human_reorder", "node_07_speed_fit")
 
@@ -819,12 +834,24 @@ def _build_state_graph():
         },
     )
 
-    # join → generate_draft(条件边)
-    g.add_conditional_edges(
-        "storyline_join",
-        _route_after_storyline_join,
-        {"generate_draft": "generate_draft", END: END},
-    )
+    # join → assembly 前置通道(QC 开)/ generate_draft(QC 关)条件边
+    # (2026-11-15 第六期 P1-1:QC 开时成功流量先进 assembly 链;END 语义保留)
+    if _config.ASSEMBLY_QC_GATE_ENABLED:
+        g.add_conditional_edges(
+            "storyline_join",
+            _route_after_storyline_join,
+            {
+                "assembly_discover_and_probe": "assembly_discover_and_probe",
+                "generate_draft": "generate_draft",
+                END: END,
+            },
+        )
+    else:
+        g.add_conditional_edges(
+            "storyline_join",
+            _route_after_storyline_join,
+            {"generate_draft": "generate_draft", END: END},
+        )
 
     # 兼容默认 graph 入边(notebook / 旧脚本可能直接 invoke 但不在测试范围)
     return g

@@ -212,6 +212,7 @@ def test_qc_off_makes_assembly_nodes_unreachable(monkeypatch):
     assert touched == set(), f"QC 关闭时不得有任何 assembly 边:{touched}"
     # 应急直连边存在
     assert ("generate_draft", "node_06_human_reorder") in pairs
+    assert ("storyline_join", "generate_draft") in pairs
 
     on = _make_schema(monkeypatch, qc=True)
     by_id_on = {n["id"]: n for n in on["nodes"]}
@@ -219,7 +220,13 @@ def test_qc_off_makes_assembly_nodes_unreachable(monkeypatch):
         assert by_id_on[nid]["reachable"] is True, nid
         assert by_id_on[nid]["enabled"] is True, nid
     pairs_on = _edge_pairs(on)
-    assert ("generate_draft", "assembly_discover_and_probe") in pairs_on
+    # 2026-11-15 P1-1 前移:入口挂 storyline_join 条件路由,出口交棒 generate_draft
+    assert ("storyline_join", "assembly_discover_and_probe") in pairs_on
+    assert ("assembly_write_report", "generate_draft") in pairs_on
+    assert ("generate_draft", "node_06_human_reorder") in pairs_on
+    # 旧接线(草稿生成后 QC 旁路)必须消失
+    assert ("generate_draft", "assembly_discover_and_probe") not in pairs_on
+    assert ("assembly_write_report", "node_06_human_reorder") not in pairs_on
 
 
 def test_start_wires_directly_to_storyline_load_media(monkeypatch):
@@ -302,6 +309,36 @@ def test_assembly_visual_observe_chain_wiring(monkeypatch):
     assert leftovers == []
 
 
+def test_assembly_chain_moved_before_generate_draft(monkeypatch):
+    """2026-11-15 第六期 P1-1(assembly 前移,设计文档 §2.1):
+
+    QC 开启:storyline_join 条件路由 → assembly_discover_and_probe,
+    assembly_write_report → generate_draft → node_06_human_reorder;
+    旧边 ``generate_draft → assembly_*`` 与
+    ``assembly_write_report → node_06_human_reorder`` 不复存在。
+    QC 关闭:storyline_join 直连 generate_draft(应急路径),assembly 不接边。
+    """
+    on = _make_schema(monkeypatch, qc=True)
+    pairs_on = _edge_pairs(on)
+    kinds_on = {(e["from"], e["to"]): e["kind"] for e in on["edges"]}
+    assert ("storyline_join", "assembly_discover_and_probe") in pairs_on
+    assert kinds_on[("storyline_join", "assembly_discover_and_probe")] == "conditional"
+    assert ("assembly_write_report", "generate_draft") in pairs_on
+    assert ("generate_draft", "node_06_human_reorder") in pairs_on
+    # 旧边残留检查(P1-1 验收项)
+    assert ("generate_draft", "assembly_discover_and_probe") not in pairs_on
+    assert ("assembly_write_report", "node_06_human_reorder") not in pairs_on
+    # storyline_join 的 END 路由语义保留
+    assert ("storyline_join", "END") in pairs_on
+
+    off = _make_schema(monkeypatch, qc=False)
+    pairs_off = _edge_pairs(off)
+    assert ("generate_draft", "node_06_human_reorder") in pairs_off
+    assert ("storyline_join", "generate_draft") in pairs_off
+    touched = {p for p in pairs_off if "assembly_" in p[0] or "assembly_" in p[1]}
+    assert touched == set(), f"QC 关闭时不得有 assembly 边:{touched}"
+
+
 def test_checkpoint3_node_removed_and_10b_17_direct(monkeypatch):
     """2026-11-15 第六期:关卡③ 节点整体删除 —— 不在编译图与 schema 中,
     10b→17 为普通直连边(原条件边已不存在),SCHEMA_VERSION bump 9,
@@ -316,7 +353,7 @@ def test_checkpoint3_node_removed_and_10b_17_direct(monkeypatch):
     assert ("node_15_localize_covers_en", "node_09_inject_fx") in pairs
     assert ("node_17_inject_english_tts", "node_09_inject_fx") in pairs
 
-    assert SCHEMA_VERSION == 9
+    assert SCHEMA_VERSION == 10
     assert CHECKPOINT_MARKS == ("①", "②")
 
 

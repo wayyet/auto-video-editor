@@ -85,9 +85,11 @@ _STORYLINE_BARRIERS_BASE: set[tuple[frozenset[str], str]] = {
 }
 
 #: 条件路由出口(2026-11-14 阶段5 起 STR 不再有条件路由,剩 QA/JOIN 两种,
-#: 其余 storyline 节点不得有条件路由)
+#: 其余 storyline 节点不得有条件路由;
+#: 2026-11-15 第六期 P1-1:assembly 前移后 JOIN 成功路由多一个 assembly 目标
+#: —— QC 开启时的默认档,_deterministic_flags fixture 固定 QC=True)
 _QA_CONDITIONAL_EXITS = {_GC, _JOIN}
-_JOIN_CONDITIONAL_EXITS = {"generate_draft", "__end__"}
+_JOIN_CONDITIONAL_EXITS = {"generate_draft", "__end__", "assembly_discover_and_probe"}
 
 
 def _build():

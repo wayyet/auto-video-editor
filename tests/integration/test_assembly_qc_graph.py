@@ -1,20 +1,22 @@
-"""阶段四集成测试 — Phase 5 assembly QC 通道(plan §十 阶段四 / ADR-3)。
+"""阶段四集成测试 — Phase 5 assembly QC 通道(plan §十 阶段四 / ADR-3;
+2026-11-15 第六期 P1-1:六节点前移到 storyline_join 与 generate_draft 之间)。
 
 测试矩阵:
 1. 默认 ``ASSEMBLY_QC_GATE_ENABLED=True`` 时,图能成功 compile
 2. ``ASSEMBLY_QC_GATE_ENABLED=False`` 时,图仍能 compile,且
-   ``generate_draft → node_06_human_reorder`` 直接相连(无 assembly 节点)
+   ``storyline_join → generate_draft → node_06_human_reorder`` 直连(无 assembly 节点)
 3. ``ASSEMBLY_QC_GATE_ENABLED=False`` 时,图拓扑上**没有**从
    ``assembly_validate_render_qc`` 到 ``assembly_write_report`` 的边
 4. ``ASSEMBLY_QC_GATE_ENABLED=True`` 时,图拓扑上有完整的 6 节点链路
+   (入口=storyline_join 条件路由;出口=write_report→generate_draft)
 5. 节点 ``route_after_assembly_qc`` 在 ``assembly_qc_status == "pass"`` 时
    走 ``assembly_write_report``(已在单元测试覆盖,这里仅 spot-check)
-6. **核心集成**:从 ``generate_draft`` 端到端 invoke 到 ``node_06_human_reorder``
-   中断之前,验证 ``outputs/<job>/assembly/`` 下 7 个产物文件全部生成
+6. **核心集成**:从 START 整图 invoke 到 ``node_06_human_reorder`` 中断之前,
+   验证 ``outputs/<job>/assembly/`` 下 7 个产物文件全部生成
    (mock 掉 ``assembly_capabilities.*`` 工具,避免依赖 ffmpeg;
    B1 ASR 移除后不再产出 transcript.json)
 
-参考:plan §八 graph.py 接线改动 + §十一 验收标准。
+参考:设计文档 §2.1 拓扑 + plan §八 graph.py 接线改动 + §十一 验收标准。
 """
 from __future__ import annotations
 
@@ -333,21 +335,28 @@ def test_qc_gate_false_skips_assembly_chain(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 # ---------------------------------------------------------------------------
-# 测试 4:True 时 6 节点链路完整
+# 测试 4:True 时 6 节点链路完整(2026-11-15 P1-1 前移后:入口=storyline_join,
+# 出口=write_report→generate_draft)
 # ---------------------------------------------------------------------------
 def test_qc_gate_true_wires_full_assembly_chain(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config, "ASSEMBLY_QC_GATE_ENABLED", True)
-    g = _build_state_graph()
-    # generate_draft → assembly_discover_and_probe
-    assert "assembly_discover_and_probe" in _edges_from(g, "generate_draft")
+    compiled = _build_state_graph().compile(checkpointer=InMemorySaver())
+    pairs = {(e.source, e.target) for e in compiled.get_graph().edges}
+    # storyline_join 条件路由 → assembly_discover_and_probe(前移后入口)
+    assert ("storyline_join", "assembly_discover_and_probe") in pairs
     # 6 节点串联 + 条件路由 + repair_loop 回到 validate
-    assert "assembly_visual_observe" in _edges_from(g, "assembly_discover_and_probe")
-    assert "assembly_build_timeline" in _edges_from(g, "assembly_visual_observe")
-    assert "assembly_validate_render_qc" in _edges_from(g, "assembly_build_timeline")
-    # assembly_write_report → node_06_human_reorder(回到主流程)
-    assert "node_06_human_reorder" in _edges_from(g, "assembly_write_report")
+    assert ("assembly_discover_and_probe", "assembly_visual_observe") in pairs
+    assert ("assembly_visual_observe", "assembly_build_timeline") in pairs
+    assert ("assembly_build_timeline", "assembly_validate_render_qc") in pairs
+    # assembly_write_report → generate_draft(前移后出口:交棒草稿生成)
+    assert ("assembly_write_report", "generate_draft") in pairs
     # repair_loop → assembly_validate_render_qc(回到 7.4 重新走一遍)
-    assert "assembly_validate_render_qc" in _edges_from(g, "assembly_repair_loop")
+    assert ("assembly_validate_render_qc", "assembly_repair_loop") in pairs
+    # 旧接线(草稿生成后 QC 旁路)不复存在
+    assert ("generate_draft", "assembly_discover_and_probe") not in pairs
+    assert ("assembly_write_report", "node_06_human_reorder") not in pairs
+    # generate_draft → node_06(两态均直连)
+    assert ("generate_draft", "node_06_human_reorder") in pairs
     # 验证条件路由存在:assembly_validate_render_qc 有两条 outgoing(targets)
     # (assembly_repair_loop / assembly_write_report)。
     from graph import route_after_assembly_qc

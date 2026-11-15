@@ -78,7 +78,10 @@ WORKFLOW_ID = "auto_video_editor_main"
 #: (GC 双出边 + [STR,WT]→GS 双源屏障,条件路由删除;拓扑变更)→ bump 8。
 #: 2026-11-15 第六期:关卡③节点(node_checkpoint3_layout_review)整体删除,
 #: 10b 条件边改 10b→17 普通直连(拓扑变更)→ bump 9。
-SCHEMA_VERSION = 9
+#: 2026-11-15 第六期 P1-1(assembly 前移,设计文档 §2.1):六节点入口从
+#: generate_draft 之后改挂 storyline_join 成功条件路由、出口
+#: assembly_write_report 改接 generate_draft(拓扑变更)→ bump 10。
+SCHEMA_VERSION = 10
 
 #: 关卡编号全集(阶段3 删除关卡⓪后剩 ①②③;2026-11-15 关卡③删除 → ①②)
 CHECKPOINT_MARKS = ("①", "②")
@@ -106,38 +109,39 @@ _NODE_META: dict[str, dict[str, Any]] = {
     "generate_draft": {
         "name": "生成剪映草稿",
         "group": "draft",
-        "description": "生成初始剪映草稿;storyline 链与主图链在此衔接",
+        "description": "消费 storyline 计划生成初始剪映草稿(QC 开时接收 assembly_write_report 交棒);唯一正式草稿写入者",
     },
-    # ---- assembly QC 通道(ASSEMBLY_QC_GATE_ENABLED 控制) ----
+    # ---- assembly QC 前置通道(ASSEMBLY_QC_GATE_ENABLED 控制;
+    #      2026-11-15 P1-1 前移到 storyline_join 与 generate_draft 之间) ----
     "assembly_discover_and_probe": {
         "name": "素材发现与探测",
         "group": "assembly_qc",
-        "description": "扫描源视频与渲染产物,做 ffprobe 探测",
+        "description": "从 storyline 计划发现源素材,探测候选片段并产出素材 manifest",
     },
     "assembly_visual_observe": {
         "name": "视觉观察",
         "group": "assembly_qc",
-        "description": "对草稿素材做关键帧抽帧与 contact sheet 观察",
+        "description": "对候选片段抽帧建立视觉证据,供时间线选段消费",
     },
     "assembly_build_timeline": {
         "name": "装配时间线",
         "group": "assembly_qc",
-        "description": "根据观察结果装配时间线草案",
+        "description": "基于原始计划与视觉证据生成候选编辑计划(DraftPatch)",
     },
     "assembly_validate_render_qc": {
         "name": "渲染与质量检查",
         "group": "assembly_qc",
-        "description": "检查时间线、渲染产物及质量指标;条件边决定修复回路或写报告",
+        "description": "把候选计划映射为临时草稿并验证结构与预览;条件边决定修复回路或写报告",
     },
     "assembly_repair_loop": {
         "name": "QC 修复回路",
         "group": "assembly_qc",
-        "description": "按 QC 结论执行修复动作,复检走回 assembly_validate_render_qc",
+        "description": "按 QC 结论对候选计划执行真实修复,复检走回 assembly_validate_render_qc",
     },
     "assembly_write_report": {
         "name": "写 QC 报告",
         "group": "assembly_qc",
-        "description": "达标/达重试上限后写质检报告,交回关卡①",
+        "description": "汇总报告与预览,交棒 generate_draft 生成正式剪映草稿",
     },
     # ---- 人工关卡与护栏 ----
     "node_06_human_reorder": {
@@ -355,11 +359,13 @@ def node_display_names() -> dict[str, str]:
 # 条件边标签注册表:(from, to) -> 标签(归一化后的 id;START/END 用大写)
 # ---------------------------------------------------------------------------
 _EDGE_LABELS: dict[tuple[str, str], str] = {
-    ("generate_draft", "assembly_discover_and_probe"): "QC 通道启用时",
+    ("storyline_join", "assembly_discover_and_probe"): "QC 前置通道启用时",
+    ("storyline_join", "generate_draft"): "有规划产物(QC 关直连)",
     ("assembly_validate_render_qc", "assembly_repair_loop"): "未达标且仍可重试",
-    ("assembly_validate_render_qc", "assembly_write_report"): "通过/达上限/软降级",
+    ("assembly_validate_render_qc", "assembly_write_report"): "通过/达上限",
     ("assembly_repair_loop", "assembly_validate_render_qc"): "修复后复检",
-    ("generate_draft", "node_06_human_reorder"): "QC 通道关闭时",
+    ("assembly_write_report", "generate_draft"): "QC 完成,交棒草稿生成",
+    ("generate_draft", "node_06_human_reorder"): "初始草稿就绪,进入关卡①",
     ("node_07_speed_fit", "bridge_snapshot2"): "时长达标",
     ("node_07_speed_fit", "node_07_speed_fit"): "未达标且可重试",
     ("node_07_speed_fit", "escalate_guardrail_failure"): "重试超限",
@@ -386,7 +392,6 @@ _EDGE_LABELS: dict[tuple[str, str], str] = {
     ("storyline_plan_timeline_ai_transition", "storyline_qa_gate"): "最终时间线单源(AI 开)",
     ("storyline_qa_gate", "storyline_group_clips"): "QA 未过,重试",
     ("storyline_qa_gate", "storyline_join"): "QA 通过/失败/空 plan(边治理阶段5 直连)",
-    ("storyline_join", "generate_draft"): "有规划产物",
     ("storyline_join", "END"): "无规划产物",
     ("join_before_delivery", "export_final_video"): "QA gate 通过",
     ("join_before_delivery", "delivery_qa_repair"): "required 缺失,定向修复",
