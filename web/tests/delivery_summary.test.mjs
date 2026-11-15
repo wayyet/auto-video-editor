@@ -120,3 +120,62 @@ test("deliveryEffectsRow 与 shaNote 子构造器", () => {
     ` [SHA zh:${"ab".repeat(6)}… / en:${"cd".repeat(6)}…]`,
   );
 });
+
+
+// P2-4:assembly.qc 事件 → Assembly QC 行
+test("reduceDeliveryCard:assembly.qc pass → ok 行,note 带候选/patch/修复摘要", () => {
+  const state = cardState();
+  const next = reduceDeliveryCard(state, {
+    event: "assembly.qc",
+    qc_status: "pass",
+    final_status: "submitted",
+    candidate_clip_count: 3,
+    patch_ops: 1,
+    repair_rounds: 1,
+    retry_count: 1,
+    warning_count: 0,
+  });
+  assert.ok(next);
+  const row = next.assembly_qc;
+  assert.equal(row.state, "ok");
+  assert.match(row.note, /候选 3 clips/);
+  assert.match(row.note, /patch 1 ops/);
+  assert.match(row.note, /修复 1 轮/);
+  assert.match(row.note, /final:submitted/);
+});
+
+test("reduceDeliveryCard:assembly.qc 结构性错误 blocked → fail 行", () => {
+  const next = reduceDeliveryCard(cardState(), {
+    event: "assembly.qc",
+    qc_status: "escalated",
+    final_status: "blocked",
+  });
+  assert.equal(next.assembly_qc.state, "fail");
+});
+
+test("reduceDeliveryCard:assembly.qc 警告降级 → warn 行 + 警告计数", () => {
+  const next = reduceDeliveryCard(cardState(), {
+    event: "assembly.qc",
+    qc_status: "pass_with_warnings",
+    final_status: "submitted",
+    warning_count: 2,
+  });
+  assert.equal(next.assembly_qc.state, "warn");
+  assert.match(next.assembly_qc.note, /警告 2/);
+});
+
+test("reduceDeliveryCard:assembly.qc 无候选 → skip 行", () => {
+  const next = reduceDeliveryCard(cardState(), {
+    event: "assembly.qc",
+    qc_status: "unknown",
+    final_status: "not_available",
+  });
+  assert.equal(next.assembly_qc.state, "skip");
+});
+
+test("reduceDeliveryCard:assembly.qc 归并不改入参(纯函数)", () => {
+  const state = cardState();
+  const snapshot = JSON.stringify(state);
+  reduceDeliveryCard(state, { event: "assembly.qc", qc_status: "pass" });
+  assert.equal(JSON.stringify(state), snapshot);
+});

@@ -884,9 +884,10 @@
     // (2026-11-12 边治理阶段5:storyline_render_video 节点整体删除,
     // 原"故事线预览"行及其 preview.* 事件消费随之移除。)
     // ------------------------------------------------------------------
-    const DELIVERY_ROWS = ["artifacts", "draft_generated", "draft_published", "effects", "delivery_qa", "final_export"];
+    const DELIVERY_ROWS = ["artifacts", "assembly_qc", "draft_generated", "draft_published", "effects", "delivery_qa", "final_export"];
     const DELIVERY_LABELS = {
       artifacts: "分析产物",
+      assembly_qc: "Assembly QC",
       draft_generated: "草稿生成",
       draft_published: "草稿发布",
       effects: "效果落盘",

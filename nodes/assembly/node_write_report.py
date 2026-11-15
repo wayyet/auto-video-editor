@@ -469,6 +469,73 @@ def _summarize_trace(trace: Any, final_status: str) -> str:
 
 
 @timed_assembly_node("assembly_write_report")
+def _emit_assembly_qc_summary(state: WorkflowState) -> None:
+    """P2-4:经 LangGraph custom stream 上报 assembly QC 摘要事件。
+
+    创建台交付卡(delivery_summary.mjs reduceDeliveryCard)按
+    ``summary.event == "assembly.qc"`` 归并出 Assembly QC 行。观测通道,
+    任何失败吞掉即可(图运行时外无 stream writer)。
+    """
+    try:
+        candidate = state.get("assembly_candidate_plan")
+        patch = state.get("assembly_draft_patch")
+        history = _safe_read_json(state.get("assembly_repair_history_path"))
+        rounds = history if isinstance(history, list) else (
+            history.get("rounds") if isinstance(history, dict) else None
+        )
+        cand_qc = _safe_read_json(state.get("assembly_candidate_qc_report_path"))
+        warning_count = sum(
+            1
+            for i in ((cand_qc or {}).get("issues") or [])
+            if isinstance(i, dict) and i.get("severity") == "warning"
+        )
+        detail = {
+            "event": "assembly.qc",
+            "qc_status": state.get("assembly_qc_status"),
+            "final_status": state.get("assembly_final_status")
+            or (
+                "submitted"
+                if state.get("assembly_final_plan_path")
+                else "not_available"
+            ),
+            "candidate_clip_count": len(candidate.get("clips") or [])
+            if isinstance(candidate, dict)
+            else None,
+            "patch_ops": len(patch.get("operations") or [])
+            if isinstance(patch, dict)
+            else None,
+            "repair_rounds": len(rounds) if isinstance(rounds, list) else 0,
+            "retry_count": int(state.get("assembly_qc_retry_count") or 0),
+            "warning_count": warning_count,
+        }
+        _emit_progress(detail)
+    except Exception:  # noqa: BLE001 — 观测通道失败不阻断
+        pass
+
+
+def _emit_progress(detail: dict[str, Any]) -> None:
+    """经 LangGraph custom stream 上报(同 node_05._emit_monitor_event 口径)。
+
+    detail 整体透传 —— runner 归一为 node.progress 的 payload.summary,
+    交付卡按 ``summary.event`` 判定,**event 键必须保留**。
+    """
+    try:
+        from langgraph.config import get_stream_writer
+
+        writer = get_stream_writer()
+        if callable(writer):
+            writer(
+                {
+                    "monitor_event": "progress",
+                    "node_id": "assembly_write_report",
+                    "detail": detail,
+                }
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+@timed_assembly_node("assembly_write_report")
 def assembly_write_report_node(state: WorkflowState) -> dict:
     outputs_root = _resolve_outputs_root(state)
     out_dir = outputs_root / "assembly"
@@ -585,4 +652,6 @@ def assembly_write_report_node(state: WorkflowState) -> dict:
         out["assembly_final_plan"] = submitted["final_plan"]
         out["assembly_final_plan_path"] = submitted["final_plan_path"]
         out["assembly_final_plan_sha256"] = submitted["final_plan_sha256"]
+    # P2-4:交付卡 Assembly QC 行摘要(观测通道,失败静默)
+    _emit_assembly_qc_summary(state)
     return out

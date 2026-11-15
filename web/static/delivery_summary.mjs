@@ -71,7 +71,26 @@ export function reduceDeliveryCard(delivery, summary) {
   if (!summary || typeof summary !== "object" || !summary.event) return null;
   const next = { ...delivery };
   const ev = String(summary.event);
-  if (ev === "draft.generated") {
+  if (ev === "assembly.qc") {
+    // P2-4:assembly QC 行(候选/patch/修复/QC 状态一口摘要)
+    const st = String(summary.qc_status || "");
+    const finalStatus = String(summary.final_status || "");
+    let state = "skip";
+    if (finalStatus === "blocked") state = "fail";
+    else if (st === "pass") state = "ok";
+    else if (st === "pass_with_warnings" || st === "escalated") state = "warn";
+    else if (finalStatus === "submitted") state = "ok";
+    const parts = [];
+    if (summary.candidate_clip_count != null) parts.push(`候选 ${summary.candidate_clip_count} clips`);
+    if (summary.patch_ops != null) parts.push(`patch ${summary.patch_ops} ops`);
+    if (summary.repair_rounds != null) parts.push(`修复 ${summary.repair_rounds} 轮`);
+    if (summary.warning_count != null && summary.warning_count > 0) parts.push(`警告 ${summary.warning_count}`);
+    next.assembly_qc = {
+      state,
+      note: parts.join(" / ") + (summary.final_status ? ` / final:${summary.final_status}` : ""),
+      issues: [],
+    };
+  } else if (ev === "draft.generated") {
     next.draft_generated = { state: "ok", note: summary.draft_dir || "", issues: [] };
   } else if (ev === "draft.published") {
     next.draft_published = { state: "ok", note: summary.target || "", issues: [] };
