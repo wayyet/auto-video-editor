@@ -1,31 +1,21 @@
-"""节点 5/6:``assembly_repair_loop``(plan §7.5 + 9 工具迁移计划 §6.5)。
+"""节点 5/6:``assembly_repair_loop``(第六期 P1-6 真实修复版)。
 
-对应工具:``timeline_diff``(``apply=True``)。按 ``qc_preview`` /
-``validate_timeline`` 返回的问题列表构造 ``patch``,调 ``timeline_diff``
-写回 ``timeline.json``,然后回到节点 4 重新走一遍 validate/render/qc。
+两条路径:
+- **候选修复路径**(P1-6,state 有 ``assembly_candidate_plan``):读候选 QC
+  报告的 typed issues → :func:`repair_strategies.build_repair_patch` 产出
+  有类型、有目标、可回滚的 DraftPatch(trim 避开坏窗 / restore 撤销回基线
+  clip / remove 坏片段 / invalid_range 夹回合法区间)→ ``apply_patch`` 应用
+  → ``CanonicalTimeline.model_validate`` 硬门 → 写回
+  ``candidate_plan.json`` + ``repair_history.json``(前后 sha / issue→op
+  映射 / patch 指纹)。**同一 patch 指纹不重放**(repair_noop),修复后无
+  有效变化也标 repair_noop,绝不虚报修复成功。
+- **旧路径兜底**(无候选,单元测试 / 无基线流):P1-6 之前的最小 marker
+  patch 行为(timeline_diff + metadata.repair_marker)。
 
-本节点负责:
-1. 构造一个**最小可用 patch**(从 ``preview_qc_report.json`` 的 issues
-   抽取"blocking + video 轨";目前只构造 ``update_clips`` 减少
-   受影响 clip 的 duration 作为兜底;后续替换为基于 issue 类型的精细
-   patch 构造)。
-2. 调用 ``timeline_diff`` 写回 ``timeline.json``(``apply=True``)。
-3. 增加 ``assembly_qc_retry_count``,供 ``route_after_assembly_qc`` 判断
-   是否到 ``ASSEMBLY_QC_MAX_RETRY``。
-4. **阶段五(§6.5)视觉证据复核**:QC 说"某处黑了/静音了/卡帧了"只给
-   时间戳,人要看图才知道是不是真问题。这里在写 patch 之前先用
-   ``video_watch_segment`` 对可疑时间段高 fps 重采样,再用
-   ``video_read_frames`` 局部放大抽原分辨率帧,把证据帧落盘。
+**阶段五(§6.5)视觉证据复核旁路保留**:QC escalate 时先对可疑窗口高 fps
+重采样 + 局部放大落证据帧;旁路失败只写 error_log,不阻断主修复链。
 
-设计纪律:
-- 此节点**不**直接进入 ``assembly_write_report`` —— 它的唯一出口是回到
-  ``assembly_validate_render_qc`` 重新跑校验,让 graph 的条件边 + 路由
-  函数来统一裁决"重试 or 收尾"。
-- **视觉复核是旁路,不是主路**:任何一步失败(ffmpeg 缺失 / 预览文件不在 /
-  QC 报告没时间戳 / PIL 缺失)都只写 ``error_log``,绝不影响
-  ``timeline_diff`` 与重试计数(计划 §5.4 环境级失败降级兜底纪律)。
-- 开关 ``ASSEMBLY_REPAIR_VISUAL_EVIDENCE=False`` → 完全退回阶段五之前的
-  纯 ``timeline_diff`` 行为。
+重试计数 ``assembly_qc_retry_count`` 仍由本节点整体覆盖写 +1。
 """
 from __future__ import annotations
 
@@ -33,7 +23,19 @@ import json
 from pathlib import Path
 from typing import Any
 
+from assembly_capabilities.draft_patch import (
+    PatchError,
+    apply_patch,
+    plan_sha256,
+    strip_internal_marks,
+)
+from assembly_capabilities.influence_trace import canonical_json_sha256
 from assembly_capabilities.qc_preview import parse_filter_ranges
+from assembly_capabilities.repair_strategies import (
+    build_repair_patch,
+    patch_fingerprint,
+    PREVIEW_CODES,
+)
 from assembly_capabilities.result import ToolResult
 from assembly_capabilities.run_context import RunContext
 from assembly_capabilities.timeline_ops import timeline_diff
@@ -55,47 +57,92 @@ from video_edit_capabilities.visual_evidence import (
 import config
 
 
-def _build_repair_patch(qc_report_path: str | None, validation_report_path: str | None) -> dict[str, Any]:
-    """构造最小可用 ``update_clips`` patch。
-
-    阶段三扩展:按 issue 类型构造精细 patch(替换素材 / 删除卡帧 clip /
-    调整时长等)。目前仅做"打补丁占位",确保 ``timeline_diff`` 链路畅通。
-    """
-    # 即使没 issue 也返回一个非空 patch(空 patch + apply=true 会被原版拒绝)
-    # 用 ``set_timeline_fields`` 设一个 metadata 标记,确认 repair 链路真跑了
-    return {
-        "set_timeline_fields": {
-            "metadata": {
-                "repair_marker": True,
-                "qc_report": qc_report_path,
-                "validation_report": validation_report_path,
-            },
-        },
-    }
+def _read_json(path: str | Path | None) -> Any:
+    if not path:
+        return None
+    p = Path(str(path))
+    if not p.is_file():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 # ---------------------------------------------------------------------------
-# 阶段五(§6.5):从 QC 报告抽"可疑时间段"
+# 预览 QC 可疑窗口 → 带 range 的 typed issues(复用 parse_filter_ranges)
 # ---------------------------------------------------------------------------
-# QC 的三类扫描日志落在报告顶层的 ``*_log_tail`` 字段里(各保留末 2000 字符):
-#   blackdetect     → "black_start:2.5 black_end:4.5 black_duration:2"
-#   silencedetect   → "silence_start: 3 | silence_duration: 1.2"
-#   freezedetect    → "lavfi.freezedetect.freeze_start: 5"
-# 三种 marker 前缀正好对应 :func:`parse_filter_ranges` 的 ``kind`` 参数
-# (black / silence / freeze),直接复用,不再自己写正则。
 _SUSPECT_SOURCES = (
-    ("blackdetect_log_tail", "black"),
+    ("blackdetect_log_tail", "black_frame"),
     ("silencedetect_log_tail", "silence"),
-    ("freezedetect_log_tail", "freeze"),
+    ("freezedetect_log_tail", "freeze_frame"),
 )
 
 
-def _merge_windows(windows: list[dict[str, Any]], *, gap: float = 0.5) -> list[dict[str, Any]]:
-    """把重叠 / 间隔小于 ``gap`` 的窗口并成一个,并保留 ``kinds`` 溯源。
+def _collect_preview_issue_windows(
+    qc_report: dict[str, Any],
+    *,
+    max_windows: int,
+    pad: float = 0.5,
+    clip_duration: float | None = None,
+) -> list[dict[str, Any]]:
+    """从 preview_qc_report.json 抽可疑窗口(秒)→ 转候选时间轴 ms 的 issues。
 
-    例如 ``black 2.0-4.0`` 与 ``freeze 3.8-6.0`` 会被并成 ``2.0-6.0 [black,freeze]``,
-    对同一段画面只做一次重采样,不浪费 ffmpeg 调用。
+    与旧版 :func:`_collect_suspicious_windows` 同一套合并/截断/预算逻辑,
+    只是把产物从"视觉复核窗口"换成"带 range 的 typed issue"。
     """
+    raw: list[dict[str, Any]] = []
+    for field, code in _SUSPECT_SOURCES:
+        log = qc_report.get(field)
+        if not isinstance(log, str) or not log.strip():
+            continue
+        kind = code.split("_")[0]  # parse_filter_ranges 的 kind: black/silence/freeze
+        for rng in parse_filter_ranges(log, kind):
+            start, end = rng.get("start"), rng.get("end")
+            if start is None or end is None:
+                continue
+            raw.append({"start": float(start) - pad, "end": float(end) + pad, "code": code})
+
+    if not raw:
+        return []
+    ordered = sorted(raw, key=lambda w: (w["start"], w["end"]))
+    merged: list[dict[str, Any]] = [dict(ordered[0])]
+    for item in ordered[1:]:
+        last = merged[-1]
+        if item["start"] <= last["end"] + 0.5 and item.get("code") == last.get("code"):
+            last["end"] = max(last["end"], item["end"])
+        else:
+            merged.append(dict(item))
+
+    max_segment = float(MAX_SEGMENT_SECONDS)
+    picked: list[dict[str, Any]] = []
+    for w in merged:
+        start_s = max(0.0, w["start"])
+        end_s = min(w["end"], start_s + max_segment)
+        if clip_duration:
+            end_s = min(end_s, max(start_s + 0.2, clip_duration))
+        if end_s <= start_s:
+            continue
+        picked.append(w | {"start": round(start_s, 3), "end": round(end_s, 3)})
+        if len(picked) >= max(1, min(max_windows, MAX_SEGMENTS)):
+            break
+    return [
+        {
+            "severity": "error",
+            "code": w["code"],
+            "check": "候选预览 QC",
+            "message": f"preview {w['code']} window {w['start']}-{w['end']}s(外扩 0.5s)",
+            "range": [int(w["start"] * 1000), int(w["end"] * 1000)],
+        }
+        for w in picked
+    ]
+
+
+# ---------------------------------------------------------------------------
+# 阶段五视觉证据旁路(原样保留)
+# ---------------------------------------------------------------------------
+def _merge_windows(windows: list[dict[str, Any]], *, gap: float = 0.5) -> list[dict[str, Any]]:
+    """把重叠 / 间隔小于 ``gap`` 的窗口并成一个,并保留 ``kinds`` 溯源。"""
     if not windows:
         return []
     ordered = sorted(windows, key=lambda w: (w["start"], w["end"]))
@@ -121,26 +168,13 @@ def _collect_suspicious_windows(
     pad: float = 0.5,
     clip_duration: float | None = None,
 ) -> list[dict[str, Any]]:
-    """从 ``preview_qc_report.json`` 抽出最多 ``max_windows`` 个可疑时间段。
-
-    约束(对齐 ``video_watch_segment`` 的入参校验,越界会被工具直接拒):
-    - 单段 ≤ ``MAX_SEGMENT_SECONDS``
-    - 段数 ≤ ``MAX_SEGMENTS``
-    - 复核总时长 ≤ ``MAX_TOTAL_SECONDS``
-
-    Args:
-        qc_report: ``qc_preview`` 写出的报告 dict。
-        max_windows: 最多取几个窗口(config ``ASSEMBLY_REPAIR_MAX_WINDOWS``)。
-        pad: 每个窗口两侧各外扩多少秒 —— QC 只报"黑帧起点",外扩才能同时
-            拍到黑帧前后的正常画面,人一眼能看出"从哪一帧开始坏的"。
-        clip_duration: 已知素材总时长时用它裁掉越界窗口(预览片可能比日志长)。
-
-    Returns:
-        ``[{"start": float, "end": float, "duration": float, "kinds": [...]}]``;
-        没有时间戳类 issue 时返回 ``[]``(调用方据此跳过复核)。
-    """
+    """从 ``preview_qc_report.json`` 抽出最多 ``max_windows`` 个可疑时间段(视觉复核用)。"""
     raw: list[dict[str, Any]] = []
-    for field, kind in _SUSPECT_SOURCES:
+    for field, kind in (
+        ("blackdetect_log_tail", "black"),
+        ("silencedetect_log_tail", "silence"),
+        ("freezedetect_log_tail", "freeze"),
+    ):
         log = qc_report.get(field)
         if not isinstance(log, str) or not log.strip():
             continue
@@ -162,7 +196,6 @@ def _collect_suspicious_windows(
         ]
         merged = [w for w in merged if w["end"] > w["start"]]
 
-    # 长窗口先截到工具上限,再按"总时长预算"贪心取前 N 段
     max_segment = float(MAX_SEGMENT_SECONDS)
     capped: list[dict[str, Any]] = []
     for w in merged:
@@ -186,7 +219,6 @@ def _collect_suspicious_windows(
 
 
 def _probe_duration(video_path: Path) -> float | None:
-    """取预览片时长(秒);探测失败返回 None(不阻断)。"""
     try:
         from video_edit_capabilities.timeline import media_duration_seconds
 
@@ -201,18 +233,7 @@ def _run_visual_evidence(
     ctx: RunContext,
     out_dir: Path,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """对每个可疑窗口做"高 fps 重采样 + 局部放大",返回 (逐窗结果, 错误列表)。
-
-    两级复核,对应计划 §6.5 的"高 fps 重采样 + 局部放大":
-
-    1. ``video_watch_segment`` —— 整段按 ``ASSEMBLY_REPAIR_WATCH_FPS`` 连续采样,
-       回答"这一段到底卡在哪一帧 / 是不是整段都黑"。
-    2. ``video_read_frames`` —— 每个窗口取中点帧、2x 放大、中心区域,
-       回答"那几秒里画面上到底有什么"。
-
-    两级都用 ``ToolResult`` 而非异常表达失败:工具本身返回 ``[ERROR] ...`` 文本,
-    这里收集起来写进 evidence json,不往 pipeline 抛。
-    """
+    """对每个可疑窗口做"高 fps 重采样 + 局部放大",返回 (逐窗结果, 错误列表)。"""
     segments = [{"start": w["start"], "end": w["end"]} for w in windows]
     midpoints = [round((w["start"] + w["end"]) / 2.0, 3) for w in windows]
 
@@ -221,8 +242,6 @@ def _run_visual_evidence(
             "video_path": str(preview_path),
             "segments": segments,
             "fps": float(config.ASSEMBLY_REPAIR_WATCH_FPS),
-            # 修复循环最多跑 ASSEMBLY_QC_MAX_RETRY 轮,窗口通常一模一样。
-            # 不 force 会被 ledger 判定为"上次已看过",第二轮起拿不到新帧。
             "force": True,
             "save_frames_dir": str(out_dir / "repair_frames"),
         },
@@ -265,14 +284,148 @@ def _run_visual_evidence(
     return results, errors
 
 
-def assembly_repair_loop_node(state: WorkflowState) -> dict:
-    outputs_root = _resolve_outputs_root(state)
-    out_dir = outputs_root / "assembly"
+# ---------------------------------------------------------------------------
+# P1-6 候选修复主路径
+# ---------------------------------------------------------------------------
+def _candidate_repair_path(state: WorkflowState, out_dir: Path, ctx: RunContext) -> dict:
+    from storyline.contract import CanonicalTimeline
 
+    candidate = state.get("assembly_candidate_plan") or {}
+    candidate_sha = (
+        str(state.get("assembly_candidate_plan_sha256"))
+        if state.get("assembly_candidate_plan_sha256")
+        else plan_sha256(candidate)
+    )
+    baseline_plan = state.get("storyline_plan") or {}
+
+    # 1. typed issues:候选 QC 报告(主)+ preview 可疑窗口(带 range 补充)
+    issues: list[dict[str, Any]] = []
+    qc_report = _read_json(state.get("assembly_candidate_qc_report_path")) or {}
+    for issue in qc_report.get("issues") or []:
+        if isinstance(issue, dict):
+            issues.append(dict(issue))
+    preview_report = _read_json(state.get("assembly_qc_report_path")) or {}
+    preview_path = state.get("assembly_preview_path")
+    windows = _collect_preview_issue_windows(
+        preview_report,
+        max_windows=int(config.ASSEMBLY_REPAIR_MAX_WINDOWS),
+        clip_duration=_probe_duration(Path(preview_path)) if preview_path else None,
+    )
+    issues.extend(windows)
+
+    # 2. 策略 → patch
+    patch, manual, notes = build_repair_patch(
+        candidate, issues, baseline_plan=baseline_plan if isinstance(baseline_plan, dict) else {}
+    )
+    fingerprint = patch_fingerprint(patch)
+    has_ops = bool(patch.get("operations"))
+
+    history_path = out_dir / "repair_history.json"
+    history = _read_json(history_path) or []
+    if not isinstance(history, list):
+        history = []
+
+    retry_count = int(state.get("assembly_qc_retry_count") or 0) + 1
+    tags = ["assembly_repair_loop_done"]
+    noop_reason: str | None = None
+
+    # 3. 同 patch 指纹去重(同 issue 不能无限重放同一修复)
+    if has_ops and any(h.get("patch_fingerprint") == fingerprint for h in history):
+        noop_reason = "duplicate patch fingerprint(同 issue 已重放过同一修复,不再重放)"
+        tags.append("assembly_repair_noop")
+
+    repaired_clean: dict[str, Any] | None = None
+    repair_report: dict[str, Any] | None = None
+    if has_ops and noop_reason is None:
+        try:
+            repaired, repair_report = apply_patch(candidate, patch, expect_base_sha256=candidate_sha)
+        except PatchError as exc:
+            return {
+                "assembly_qc_retry_count": retry_count,
+                "error_log": append_error(
+                    state, node_kind="assembly_repair_loop",
+                    error_code="CONTRACT_INVALID",
+                    message=f"repair patch rejected: {exc}",
+                ),
+                "status_log": append_status_tag(state, "assembly_repair_loop_failed"),
+            }
+        repaired_clean = strip_internal_marks(repaired)
+        try:
+            CanonicalTimeline.model_validate(repaired_clean)
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "assembly_qc_retry_count": retry_count,
+                "error_log": append_error(
+                    state, node_kind="assembly_repair_loop",
+                    error_code="CONTRACT_INVALID",
+                    message=f"repaired candidate invalid, discarded: {exc!r}(候选保持不变,复检继续)",
+                ),
+                "status_log": append_status_tag(state, "assembly_repair_loop_failed"),
+            }
+    elif not has_ops:
+        noop_reason = "no repairable issues(全部 manual / 无 error)"
+
+    # 4. 落盘:修复后的候选 + patch + 历史(含 issue→op 映射与前后 sha)
+    before_sha = candidate_sha
+    after_sha = plan_sha256(repaired_clean) if repaired_clean is not None else before_sha
+    if repaired_clean is not None and after_sha != before_sha:
+        candidate_path = out_dir / "candidate_plan.json"
+        candidate_path.write_text(
+            json.dumps(repaired_clean, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+    else:
+        candidate_path = out_dir / "candidate_plan.json"
+    if has_ops:
+        (out_dir / "repair_patch.json").write_text(
+            json.dumps(patch, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+    history.append({
+        "round": retry_count,
+        "before_plan_sha256": before_sha,
+        "after_plan_sha256": after_sha,
+        "patch_fingerprint": fingerprint,
+        "applied_operations": (repair_report or {}).get("applied_operations") or [],
+        "skipped_operations": (repair_report or {}).get("skipped_operations") or [],
+        "manual_issues": [str(i.get("code") or i.get("message") or "?") for i in manual],
+        "strategy_notes": notes,
+        "noop_reason": noop_reason,
+        "issue_codes": [str(i.get("code") or "?") for i in issues],
+    })
+    history_path.write_text(
+        json.dumps(history, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+
+    if noop_reason:
+        tags.append("assembly_repair_noop")
+    if manual:
+        tags.append("assembly_repair_manual_pending")
+    delta: dict[str, Any] = {
+        "assembly_qc_retry_count": retry_count,
+        "assembly_repair_evidence_path": None,
+        "assembly_repair_history_path": str(history_path),
+        "error_log": [],
+        "status_log": append_status_tag(state, *tags),
+    }
+    if repaired_clean is not None and after_sha != before_sha:
+        # 修复真实改变了候选 → 下一轮 validate 对新候选复检
+        delta["assembly_candidate_plan"] = repaired_clean
+        delta["assembly_candidate_plan_sha256"] = after_sha
+        delta["assembly_candidate_plan_path"] = str(candidate_path)
+        delta["assembly_draft_patch"] = patch
+    else:
+        # noop:候选保持不变,显式回传原 sha(状态自明,复检对象不变)
+        delta["assembly_candidate_plan_sha256"] = before_sha
+    return delta
+
+
+def _legacy_repair_path(state: WorkflowState, out_dir: Path, ctx: RunContext) -> dict:
+    """旧路径:P1-6 之前的最小 marker patch(无候选基线时的兜底)。"""
     timeline_path = state.get("assembly_timeline_path")
     if not timeline_path:
-        # P0 修复:早退也必须消耗一次重试预算,否则 validate → repair → validate
-        # 会形成死循环(retry 永远不增,自旋到 LangGraph 递归上限)。
+        # P0 修复:早退也必须消耗一次重试预算,否则死循环自旋。
         return {
             "assembly_qc_retry_count": int(state.get("assembly_qc_retry_count") or 0) + 1,
             "error_log": append_error(
@@ -281,27 +434,56 @@ def assembly_repair_loop_node(state: WorkflowState) -> dict:
             ),
             "status_log": append_status_tag(state, "assembly_repair_loop_failed"),
         }
+    patch = {
+        "set_timeline_fields": {
+            "metadata": {
+                "repair_marker": True,
+                "qc_report": state.get("assembly_qc_report_path"),
+                "validation_report": state.get("assembly_timeline_validation_path"),
+            },
+        },
+    }
+    diff_out = out_dir / "timeline_diff.json"
+    diff_result: ToolResult = timeline_diff(
+        {
+            "timeline_path": str(timeline_path),
+            "instructions": "assembly_repair_loop legacy marker patch (no candidate plan)",
+            "patch": patch,
+            "apply": True,
+            "output_json": str(diff_out),
+        },
+        ctx,
+    )
+    retry_count = int(state.get("assembly_qc_retry_count") or 0) + 1
+    err_log_patch: list[str] = []
+    if diff_result.text.startswith("[ERROR]"):
+        err_log_patch = append_error(
+            state, node_kind="assembly_repair_loop",
+            error_code="TOOL_EXECUTION_FAILED",
+            message=diff_result.text,
+        )
+    return {
+        "assembly_qc_retry_count": retry_count,
+        "assembly_repair_evidence_path": None,
+        "error_log": err_log_patch,
+        "status_log": append_status_tag(state, "assembly_repair_loop_done"),
+    }
+
+
+def assembly_repair_loop_node(state: WorkflowState) -> dict:
+    outputs_root = _resolve_outputs_root(state)
+    out_dir = outputs_root / "assembly"
 
     ctx = RunContext(session_kind="pipeline")
-    patch = _build_repair_patch(
-        qc_report_path=state.get("assembly_qc_report_path"),
-        validation_report_path=state.get("assembly_timeline_validation_path"),
-    )
-
     err_log_patch: list[str] = []
     evidence_path: str | None = None
 
-    # ---- 阶段五:视觉证据复核(旁路,失败不阻断 patch 链路) ----
+    # ---- 阶段五:视觉证据复核(旁路,失败不阻断主修复链) ----
     if config.ASSEMBLY_REPAIR_VISUAL_EVIDENCE:
         preview_path = state.get("assembly_preview_path")
         qc_report_path = state.get("assembly_qc_report_path")
         try:
-            qc_report: dict[str, Any] = {}
-            if qc_report_path and Path(qc_report_path).is_file():
-                loaded = json.loads(Path(qc_report_path).read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    qc_report = loaded
-
+            qc_report: dict[str, Any] = _read_json(qc_report_path) or {}
             windows = _collect_suspicious_windows(
                 qc_report,
                 max_windows=int(config.ASSEMBLY_REPAIR_MAX_WINDOWS),
@@ -346,35 +528,23 @@ def assembly_repair_loop_node(state: WorkflowState) -> dict:
         except Exception as exc:  # 视觉复核任何异常都不许打断主链
             err_log_patch.append(f"[assembly_repair_loop] 视觉复核异常(已忽略): {exc!r}")
 
-    diff_out = out_dir / "timeline_diff.json"
-    diff_result: ToolResult = timeline_diff(
-        {
-            "timeline_path": str(timeline_path),
-            "instructions": "assembly_repair_loop placeholder: add metadata marker; stage 3 will add typed patches",
-            "patch": patch,
-            "apply": True,
-            "output_json": str(diff_out),
-        },
-        ctx,
-    )
+    # ---- 主修复链 ----
+    if state.get("assembly_candidate_plan"):
+        delta = _candidate_repair_path(state, out_dir, ctx)
+    else:
+        delta = _legacy_repair_path(state, out_dir, ctx)
 
-    # 重试计数 +1(整体覆盖写,同一 superstep 内不会与别的节点并发写,无需 reducer)
-    retry_count = int(state.get("assembly_qc_retry_count") or 0) + 1
-
-    if diff_result.text.startswith("[ERROR]"):
-        err_log_patch = append_error(
-            state, node_kind="assembly_repair_loop",
-            error_code="TOOL_EXECUTION_FAILED",
-            message=diff_result.text,
-        )
-
-    tags = ["assembly_repair_loop_done"]
+    # 合并视觉证据产物(旁路写 error_log 不覆盖主链的 error_log)
     if evidence_path:
+        delta["assembly_repair_evidence_path"] = evidence_path
+        if "assembly_repair_visual_evidence_done" not in delta.get("status_log", []):
+            pass  # tags 由子路径决定,视觉证据 tag 追加在 status_log reducer 外
+    if err_log_patch:
+        merged = list(delta.get("error_log") or [])
+        merged.extend(err_log_patch)
+        delta["error_log"] = merged
+    if evidence_path:
+        tags = list(delta.get("status_log") or [])
         tags.append("assembly_repair_visual_evidence_done")
-
-    return {
-        "assembly_qc_retry_count": retry_count,
-        "assembly_repair_evidence_path": evidence_path,
-        "error_log": err_log_patch,
-        "status_log": append_status_tag(state, *tags),
-    }
+        delta["status_log"] = tags
+    return delta

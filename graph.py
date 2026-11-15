@@ -609,6 +609,9 @@ def _build_state_graph():
             {
                 "assembly_repair_loop": "assembly_repair_loop",
                 "assembly_write_report": "assembly_write_report",
+                # P1-6 fail-closed(设计文档 §4.4):结构性 error 达重试上限
+                # → 终止,不把坏候选交给 generate_draft / 关卡①
+                "assembly_failed": END,
             },
         )
         g.add_edge("assembly_repair_loop", "assembly_validate_render_qc")
