@@ -416,6 +416,28 @@ def _finalize_influence_trace(
         )
         if final_sha:
             trace["final_plan_sha256"] = final_sha
+        # P2-3:四级 plan hash 链(原始 → 候选 → 修复轮 → 最终),审计与回滚
+        # 对账的唯一口径;repair 轮 hash 已在 repair_history.json,这里聚合留痕。
+        hash_chain: dict[str, Any] = {
+            "base_plan_sha256": str(base_sha) if base_sha else None,
+            "candidate_plan_sha256": state.get("assembly_candidate_plan_sha256"),
+            "final_plan_sha256": trace.get("final_plan_sha256"),
+            "repair_rounds": [],
+        }
+        history = _safe_read_json(state.get("assembly_repair_history_path"))
+        rounds = history if isinstance(history, list) else (history.get("rounds") if isinstance(history, dict) else None)
+        if isinstance(rounds, list):
+            hash_chain["repair_rounds"] = [
+                {
+                    "round": r.get("round"),
+                    "before": r.get("before_plan_sha256"),
+                    "after": r.get("after_plan_sha256"),
+                    "fingerprint": r.get("patch_fingerprint"),
+                }
+                for r in rounds
+                if isinstance(r, dict)
+            ]
+        trace["hash_chain"] = hash_chain
         save_trace(trace_path, trace)
         return trace, str(trace_path), notes
     except Exception as exc:  # noqa: BLE001 — trace 是审计产物,失败不阻断提交
