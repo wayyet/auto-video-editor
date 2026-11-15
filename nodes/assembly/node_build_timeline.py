@@ -179,6 +179,9 @@ def assembly_build_timeline_node(state: WorkflowState) -> dict:
             encoding="utf-8",
         )
         projection = candidate_projection_timeline(result["candidate_plan"], media_reports)
+        # P2-1:LLM 调用诊断进 timeline metadata(与 state/report 三处同源)
+        if isinstance(projection.get("metadata"), dict) and result.get("llm_diagnostics"):
+            projection["metadata"]["llm_diagnostics"] = result["llm_diagnostics"]
         timeline_path = out_dir / "timeline.json"
         timeline_path.write_text(
             json.dumps(projection, ensure_ascii=False, indent=2, default=str),
@@ -200,6 +203,10 @@ def assembly_build_timeline_node(state: WorkflowState) -> dict:
             tags.append("assembly_build_timeline_no_safe_candidate")
         if result["patch_report"]["skipped_operations"]:
             tags.append("assembly_build_timeline_ops_skipped")
+        # P2-1:请求状态进 status_log(stub / 失败形态一眼可见,不再只有 llm_used)
+        diagnostics = result.get("llm_diagnostics") or {}
+        if diagnostics.get("request_status"):
+            tags.append(f"assembly_llm_request_status:{diagnostics['request_status']}")
 
         return {
             "assembly_candidate_plan": result["candidate_plan"],
@@ -209,6 +216,7 @@ def assembly_build_timeline_node(state: WorkflowState) -> dict:
             "assembly_base_plan_sha256": base_sha,
             "assembly_timeline_path": str(timeline_path),
             "assembly_influence_trace_path": trace_path,
+            "assembly_llm_diagnostics": diagnostics or None,
             "status_log": append_status_tag(state, *tags),
         }
 

@@ -33,7 +33,8 @@ from typing import Any, Iterable, Optional
 
 from storyline_capabilities.vlm_client import (
     LLMClient,
-    chat_json,
+    StubLLMClient,
+    chat_json_with_trace,
     get_default_client,
 )
 from storyline_capabilities.prompts import render_prompt
@@ -379,8 +380,14 @@ def _call_llm_for_selection(
     sheet_paths: list[str],
     lang: str,
     client: Optional[LLMClient],
-) -> dict[str, Any]:
-    """调 LLM 拿选段 JSON。失败返回 ``{}``,调用方走 fallback。"""
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """调 LLM 拿选段 JSON(P2-1 带留痕)。
+
+    Returns:
+        ``(raw_selection, call_trace)``。``raw_selection`` 失败时为 ``{}``
+        (调用方走 fallback);``call_trace`` = ``chat_json_with_trace`` 的
+        ``{ok, error, raw_head, parsed}``,供 ``llm_diagnostics`` 分类。
+    """
     sys_p = render_prompt("assembly_build_timeline", "system", lang=lang, prompts_root=_PROMPTS_ROOT)
     user_p = _build_user_prompt(
         candidates=candidates,
@@ -401,16 +408,18 @@ def _call_llm_for_selection(
         [{"path": p} for p in candidate_sheets[:8]] if candidate_sheets else None
     )
     try:
-        result = chat_json(
+        # P2-1:带留痕调用 —— 区分「调用异常 / 解析失败 / 空响应 / schema 不匹配」,
+        # 诊断信息随 llm_diagnostics 透出,不再让 llm_used 单字段掩盖失败形态。
+        result, call_trace = chat_json_with_trace(
             system_prompt=sys_p,
             user_prompt=user_p,
             media=media_payload,
             schema=SELECTION_JSON_SCHEMA,
             client=client,
         )
-    except Exception:  # noqa: BLE001
-        return {}
-    return result if isinstance(result, dict) else {}
+    except Exception as exc:  # noqa: BLE001 — with_trace 自身异常(防御)
+        return {}, {"ok": False, "error": repr(exc), "raw_head": "", "parsed": False}
+    return (result if isinstance(result, dict) else {}), call_trace
 
 
 # ---------------------------------------------------------------------------
@@ -419,15 +428,17 @@ def _call_llm_for_selection(
 def _normalize_selection(
     raw: dict[str, Any],
     candidates: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], dict[str, Any], bool]:
+) -> tuple[list[dict[str, Any]], dict[str, Any], bool, dict[str, int]]:
     """把 LLM 输出还原成"已选 + 已排序"的候选片段。
 
     Returns:
-        (chosen, extras, llm_succeeded):
+        (chosen, extras, llm_succeeded, selection_stats):
         - chosen: 还原后的候选片段 list(已按 order 排序)
         - extras: editorial_structure / canvas / selected_strategy 等元数据
         - llm_succeeded: True 表示 LLM 给出过合法 selected_segments,
           False 表示 LLM 输出空/不合法,主函数应走 fallback。
+        - selection_stats: P2-1 候选索引统计
+          ``{returned, invalid, duplicate, adopted}``(llm_diagnostics 消费)。
 
     关键纪律:
     1. ``selected_segments[].index`` 必须能在 ``candidates`` 里找到,
@@ -437,8 +448,9 @@ def _normalize_selection(
        缺失则用占位默认值。
     """
     if not candidates:
-        return [], {}, False
+        return [], {}, False, {"returned": 0, "invalid": 0, "duplicate": 0, "adopted": 0}
     raw_segments = raw.get("selected_segments") or []
+    stats: dict[str, int] = {"returned": 0, "invalid": 0, "duplicate": 0, "adopted": 0}
     # P1-4:按全候选空间唯一序号 selection_index 还原(旧实现用 media 局部
     # index,多素材时 dict 塌缩导致选段命中错素材)
     by_index: dict[int, dict[str, Any]] = {int(c["selection_index"]): c for c in candidates}
@@ -447,11 +459,17 @@ def _normalize_selection(
     for raw_seg in raw_segments:
         if not isinstance(raw_seg, dict):
             continue
+        stats["returned"] += 1
         try:
             idx = int(raw_seg.get("index"))
         except (TypeError, ValueError):
+            stats["invalid"] += 1
             continue
         if idx not in by_index or idx in used_indices:
+            if idx in used_indices:
+                stats["duplicate"] += 1
+            else:
+                stats["invalid"] += 1
             continue
         base = dict(by_index[idx])
         base["reason"] = (
@@ -483,7 +501,108 @@ def _normalize_selection(
     }
     # llm_succeeded=True 仅当 LLM 返回了至少一条 selected_segments
     # (允许 extras 部分缺失,但 selected_segments 必须非空)
-    return chosen, extras, bool(chosen)
+    stats["adopted"] = len(chosen)
+    return chosen, extras, bool(chosen), stats
+
+
+# ---------------------------------------------------------------------------
+# P2-1:LLM 调用诊断(请求状态与选段采纳状态分离,stub 不冒充真实成功)
+# ---------------------------------------------------------------------------
+#: request_status 全集(llm_diagnostics.request_status)
+LLM_REQUEST_STATUSES = (
+    "not_attempted",      # 无候选,未发起请求
+    "ok",                 # 调用成功 + 解析成功 + selected_segments 合法非空
+    "empty_response",     # 调用成功但模型返回空选段(合法的"无候选可用"判断)
+    "parse_error",        # 调用成功但返回内容解析不出 dict
+    "schema_mismatch",    # 解析成功但 selected_segments 缺失/非 list
+    "exception",          # client.chat 抛异常
+    "timeout",            # exception 的子类:错误信息含 timeout
+)
+
+
+def _llm_client_type(client: Optional[LLMClient]) -> str:
+    """客户端类型三分类:stub(默认假客户端)/ real(真实后端)/ none(未注入)。"""
+    if client is None:
+        return "none"
+    if isinstance(client, StubLLMClient):
+        return "stub"
+    return "real"
+
+
+def build_llm_diagnostics(
+    *,
+    client: Optional[LLMClient],
+    call_trace: dict[str, Any],
+    raw_selection: dict[str, Any],
+    selection_stats: dict[str, int],
+    chosen_count: int,
+    fallback_used: bool,
+    attempted: bool,
+    elapsed_seconds: float = 0.0,
+) -> dict[str, Any]:
+    """组装 P2-1 LLM 诊断 dict(纯函数;llm_used 不再是"是否真请求"的唯一信号)。
+
+    字段语义(计划文档 P2-1):
+    - ``llm_attempted``:是否真的发起过模型请求(candidates 非空才尝试);
+    - ``llm_client_type``:stub / real / none —— stub 永远显式标注,不冒充真实成功;
+    - ``request_status``:ok / empty_response / parse_error / schema_mismatch /
+      exception / timeout / not_attempted(全集见 :data:`LLM_REQUEST_STATUSES`);
+    - ``selection_stats``:模型返回的候选索引统计(returned/invalid/duplicate/adopted)。
+    """
+    ok = bool(call_trace.get("ok"))
+    parsed = bool(call_trace.get("parsed"))
+    error = str(call_trace.get("error") or "")
+    segs = (
+        raw_selection.get("selected_segments")
+        if isinstance(raw_selection, dict)
+        else None
+    )
+    if not attempted:
+        status = "not_attempted"
+    elif not ok:
+        lowered = error.lower()
+        status = (
+            "timeout"
+            if ("timeout" in lowered or "timed out" in lowered)
+            else "exception"
+        )
+    elif not parsed:
+        status = "parse_error"
+    elif not isinstance(segs, list):
+        status = "schema_mismatch"
+    elif not segs:
+        status = "empty_response"
+    else:
+        status = "ok"
+
+    if status in ("exception", "timeout"):
+        failure_reason = error
+    elif status == "parse_error":
+        failure_reason = str(call_trace.get("raw_head") or "")[:400] or "模型返回无法解析为 JSON"
+    elif status == "schema_mismatch":
+        failure_reason = "解析成功但 selected_segments 缺失或非 list"
+    elif status == "empty_response":
+        failure_reason = "模型返回空选段(走确定性兜底/不打补丁)"
+    elif status == "not_attempted":
+        failure_reason = "无候选片段,未发起请求"
+    else:
+        failure_reason = ""
+
+    zeros = {"returned": 0, "invalid": 0, "duplicate": 0, "adopted": 0}
+    merged_stats = dict(zeros)
+    merged_stats.update({k: int(v) for k, v in (selection_stats or {}).items() if k in zeros})
+    return {
+        "llm_attempted": bool(attempted),
+        "llm_client_type": _llm_client_type(client),
+        "model_name": type(client).__name__ if client is not None else "",
+        "request_status": status,
+        "response_valid": status == "ok",
+        "selection_applied": chosen_count > 0,
+        "fallback_used": bool(fallback_used),
+        "failure_reason": failure_reason,
+        "elapsed_seconds": round(float(elapsed_seconds or 0.0), 4),
+        "selection_stats": merged_stats,
+    }
 
 
 def _fallback_chosen(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -719,17 +838,38 @@ def build_timeline_from_media(
     raw_selection: dict[str, Any] = {}
     chosen: list[dict[str, Any]] = []
     extras: dict[str, Any] = {}
+    llm_diagnostics: dict[str, Any] = build_llm_diagnostics(
+        client=client,
+        call_trace={},
+        raw_selection={},
+        selection_stats={},
+        chosen_count=0,
+        fallback_used=False,
+        attempted=False,
+    )
     if candidates:
-        raw_selection = _call_llm_for_selection(
+        llm_started = time.perf_counter()
+        raw_selection, call_trace = _call_llm_for_selection(
             candidates=candidates,
             transcript_text=transcript_text,
             sheet_paths=sheet_paths,
             lang=lang,
             client=client,
         )
+        llm_elapsed = time.perf_counter() - llm_started
         # llm_used = 调用 LLM 成功且拿到非空 raw_selection(有 selected_segments 字段)
         llm_used = bool(raw_selection) and isinstance(raw_selection.get("selected_segments"), list)
-        chosen, extras, llm_succeeded = _normalize_selection(raw_selection, candidates)
+        chosen, extras, llm_succeeded, sel_stats = _normalize_selection(raw_selection, candidates)
+        llm_diagnostics = build_llm_diagnostics(
+            client=client,
+            call_trace=call_trace,
+            raw_selection=raw_selection,
+            selection_stats=sel_stats,
+            chosen_count=len(chosen),
+            fallback_used=False,
+            attempted=True,
+            elapsed_seconds=llm_elapsed,
+        )
         if not chosen and fallback_to_placeholder:
             chosen = _fallback_chosen(candidates)
             fallback_used = True
@@ -742,6 +882,8 @@ def build_timeline_from_media(
                     "selected_strategy": str(raw_selection.get("selected_strategy") or "") or "(LLM returned no segments; used fallback)",
                     "canvas": raw_selection.get("canvas") if isinstance(raw_selection.get("canvas"), dict) else {},
                 }
+        # P2-1:fallback 判定在选段还原之后,诊断里的 fallback_used 回写终值
+        llm_diagnostics["fallback_used"] = bool(fallback_used)
 
     assets, index_to_id = _build_assets(media_reports)
     clips = _build_clips(chosen, media_index_to_asset_id=index_to_id)
@@ -758,6 +900,7 @@ def build_timeline_from_media(
         "truncated_for_llm": truncated,
         "llm_used": llm_used,
         "fallback_used": fallback_used,
+        "llm_diagnostics": llm_diagnostics,
         "elapsed_seconds": round(time.perf_counter() - started, 4),
     }
 
@@ -1089,16 +1232,37 @@ def build_candidate_plan_from_media(
 
     llm_used = False
     chosen: list[dict[str, Any]] = []
+    llm_diagnostics: dict[str, Any] = build_llm_diagnostics(
+        client=client,
+        call_trace={},
+        raw_selection={},
+        selection_stats={},
+        chosen_count=0,
+        fallback_used=False,
+        attempted=False,
+    )
     if candidates:
-        raw_selection = _call_llm_for_selection(
+        llm_started = time.perf_counter()
+        raw_selection, call_trace = _call_llm_for_selection(
             candidates=candidates,
             transcript_text=transcript_text,
             sheet_paths=[],  # P1-3:拼贴图经 candidate evidence 注入 media 与 prompt
             lang=lang,
             client=client,
         )
+        llm_elapsed = time.perf_counter() - llm_started
         llm_used = bool(raw_selection) and isinstance(raw_selection.get("selected_segments"), list)
-        chosen, _extras, _ok = _normalize_selection(raw_selection, candidates)
+        chosen, _extras, _ok, sel_stats = _normalize_selection(raw_selection, candidates)
+        llm_diagnostics = build_llm_diagnostics(
+            client=client,
+            call_trace=call_trace,
+            raw_selection=raw_selection,
+            selection_stats=sel_stats,
+            chosen_count=len(chosen),
+            fallback_used=False,
+            attempted=True,
+            elapsed_seconds=llm_elapsed,
+        )
 
     patch = new_patch(base_plan_sha256, created_by="assembly_build_timeline")
     det_ops = _add_deterministic_evidence_ops(base_plan, patch, media_reports)
@@ -1124,6 +1288,7 @@ def build_candidate_plan_from_media(
         "validation": {"pass": validation_failed is None, "error": validation_failed},
         "no_safe_candidate": no_safe_candidate,
         "llm_used": llm_used,
+        "llm_diagnostics": llm_diagnostics,
         "deterministic_ops": det_ops,
         "llm_ops": llm_ops,
         "elapsed_seconds": round(time.perf_counter() - started, 4),

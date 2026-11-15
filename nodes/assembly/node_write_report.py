@@ -201,6 +201,28 @@ def _summarize_candidate_and_repair(
     return "\n".join(lines)
 
 
+def _summarize_llm_diagnostics(diag: Any) -> str:
+    """P2-1 LLM 调用诊断摘要(stub 显式标注,请求状态与采纳状态分离)。"""
+    if not isinstance(diag, dict):
+        return "- LLM 调用诊断:(未产出)"
+    stats = diag.get("selection_stats") or {}
+    lines = [
+        f"- 客户端:`{diag.get('llm_client_type') or '?'}`"
+        f"(model={diag.get('model_name') or 'n/a'})",
+        f"- 是否发起请求:{'是' if diag.get('llm_attempted') else '否'}"
+        f",请求状态:`{diag.get('request_status') or '?'}`"
+        f",响应有效:{'是' if diag.get('response_valid') else '否'}",
+        f"- 选段采纳:{'是' if diag.get('selection_applied') else '否'}"
+        f",兜底:{'是' if diag.get('fallback_used') else '否'}"
+        f",索引统计:returned={stats.get('returned', 0)} invalid={stats.get('invalid', 0)}"
+        f" duplicate={stats.get('duplicate', 0)} adopted={stats.get('adopted', 0)}",
+        f"- 耗时:{diag.get('elapsed_seconds', 0)}s",
+    ]
+    if diag.get("failure_reason"):
+        lines.append(f"- 失败原因:{diag.get('failure_reason')}")
+    return "\n".join(lines)
+
+
 def _add_contribution_once(trace: dict[str, Any], **kwargs: Any) -> None:
     """幂等追加 contribution(resume/重跑时 (node_id, artifact) 不重复)。"""
     existing = {
@@ -488,6 +510,9 @@ def assembly_write_report_node(state: WorkflowState) -> dict:
     sections.append(
         _summarize_candidate_and_repair(candidate_path, patch, repair_history)
     )
+    sections.append("")
+    sections.append("### 6.1 LLM 调用诊断 (P2-1)\n")
+    sections.append(_summarize_llm_diagnostics(state.get("assembly_llm_diagnostics")))
     sections.append("")
 
     sections.append("## 7. 最终计划提交 (P1-7)\n")

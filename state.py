@@ -375,6 +375,11 @@ class WorkflowState(TypedDict, total=False):
     assembly_final_plan: Annotated[Optional[dict], _last_wins]
     assembly_final_plan_path: Annotated[Optional[str], _last_wins]
     assembly_final_plan_sha256: NotRequired[Optional[str]]
+    # P2-1 LLM 调用诊断(build_timeline 产出):llm_attempted / llm_client_type
+    # (stub|real|none)/ request_status(ok|empty_response|parse_error|
+    # schema_mismatch|exception|timeout|not_attempted)/ selection_stats 等 ——
+    # 请求状态与选段采纳状态分离,stub 不冒充真实成功;report.md 渲染。
+    assembly_llm_diagnostics: NotRequired[Optional[dict]]
 
     # ===== 9 个 MCP 工具迁移计划 阶段五(§6.5)新增 =====
     # repair loop 的视觉证据汇总(可疑窗口 + 证据帧路径列表),None = 本轮
