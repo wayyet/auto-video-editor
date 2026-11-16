@@ -326,6 +326,18 @@ async def _main_async(args: argparse.Namespace) -> int:
     if rc != 0:
         return rc
 
+    # 2026-11-17 核验报告 P0:生产模式禁止静默使用 stub。start_production.ps1
+    # 必须显式传 --llm-backend(已默认注入 mcode-cli);未传时此处 fail-closed。
+    # 创建台 UI 路径始终显式传后端(console_service.start_run),不受影响;
+    # 显式 --llm-backend stub 仍允许(开发/冒烟,由 CONSOLE_ALLOW_STUB 门控)。
+    if getattr(args, "production", False) and not getattr(args, "llm_backend", None):
+        print(
+            "[llm] --production 且未指定 --llm-backend:生产模式禁止静默使用 "
+            "stub 假答案,已拒绝执行。请显式传 --llm-backend <stub|claude-cli|mcode-cli>。",
+            file=sys.stderr,
+        )
+        return 2
+
     rc = _maybe_preflight(args)
     if rc != 0:
         return rc

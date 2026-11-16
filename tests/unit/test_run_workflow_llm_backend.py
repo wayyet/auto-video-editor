@@ -162,3 +162,43 @@ class TestMainAsyncOrdering:
         args = argparse.Namespace(production=False, llm_backend=None)
         assert asyncio.run(rw._main_async(args)) == 0
         assert calls == [("llm", None), "invoke"]  # 传 None = 旧行为,不注入
+
+
+class TestProductionBackendGate:
+    """2026-11-17 核验报告 P0:生产模式禁止静默使用 stub。"""
+
+    def test_production_without_backend_rejected(self, monkeypatch):
+        """--production 且未显式传 --llm-backend → 退出码 2,不做任何环境准备。"""
+        calls: list = []
+        monkeypatch.setattr(
+            rw, "_maybe_preflight", lambda args: calls.append("preflight") or 0
+        )
+        monkeypatch.setattr(
+            rw, "_apply_llm_backend", lambda b: calls.append(("llm", b))
+        )
+
+        async def fake_invoke(args):
+            calls.append("invoke")
+            return 0
+
+        monkeypatch.setattr(rw, "_invoke_async", fake_invoke)
+        args = argparse.Namespace(production=True, llm_backend=None)
+        assert asyncio.run(rw._main_async(args)) == 2
+        assert calls == []  # 预检/注入/执行均不发生
+
+    def test_production_with_explicit_stub_allowed(self, monkeypatch):
+        """显式 --llm-backend stub 在生产下仍允许(开发/冒烟,创建台层 CONSOLE_ALLOW_STUB 门控)。"""
+        calls: list = []
+        monkeypatch.setattr(rw, "_maybe_preflight", lambda args: 0)
+        monkeypatch.setattr(
+            rw, "_apply_llm_backend", lambda b: calls.append(("llm", b))
+        )
+
+        async def fake_invoke(args):
+            calls.append("invoke")
+            return 0
+
+        monkeypatch.setattr(rw, "_invoke_async", fake_invoke)
+        args = argparse.Namespace(production=True, llm_backend="stub")
+        assert asyncio.run(rw._main_async(args)) == 0
+        assert calls == [("llm", "stub"), "invoke"]

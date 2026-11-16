@@ -838,12 +838,23 @@ set PYTHONUNBUFFERED=1
     # (run_with_events 先落 run.interrupted 事件,恢复经 agent_gate resume 或
     # scripts\resume_workflow.py --checkpoint ① --value true 放行)。
     # 顺序写日志(单写者)+ 实时输出 + 保留全部行用于诊断。
+    #
+    # 2026-11-17 核验报告 P0:工作流 LLM 后端必须显式传递。run_workflow.py
+    # 不读 CONSOLE_LLM_BACKEND(那是创建台 web 层的配置),不传 --llm-backend
+    # 会静默使用 stub 假答案(且 --production 下已被 run_workflow fail-closed
+    # 拒绝)。这里优先取显式参数,为空时回落 CONSOLE_LLM_BACKEND(上方已钉
+    # mcode-cli 兜底)。
+    $WorkflowLlmBackend = $env:CONSOLE_LLM_BACKEND
+    if ([string]::IsNullOrWhiteSpace($WorkflowLlmBackend)) { $WorkflowLlmBackend = 'mcode-cli' }
+    Write-Phase ("    工作流 LLM 后端: {0}" -f $WorkflowLlmBackend) 'Cyan'
+
     $pyOutput = @()
     & $VenvPy $RunScript `
         --production `
         --skip-preflight `
         --thread-id $ThreadId `
         --initial-state-json $StateJson `
+        --llm-backend $WorkflowLlmBackend `
         2>&1 | ForEach-Object {
         $t = "$_"
         $pyOutput += $t
