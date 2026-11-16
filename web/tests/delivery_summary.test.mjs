@@ -164,6 +164,21 @@ test("reduceDeliveryCard:assembly.qc 警告降级 → warn 行 + 警告计数", 
   assert.match(next.assembly_qc.note, /警告 2/);
 });
 
+test("reduceDeliveryCard:assembly.qc 错误数单列(与警告分开)", () => {
+  // P2(20261117):后端把 error_count 与 warning_count 分开上报,交付卡
+  // 不混淆错误数量与根因数量(同根因传导失败已在后端去重)
+  const next = reduceDeliveryCard(cardState(), {
+    event: "assembly.qc",
+    qc_status: "escalated",
+    final_status: "submitted",
+    error_count: 2,
+    warning_count: 6,
+  });
+  assert.equal(next.assembly_qc.state, "warn");
+  assert.match(next.assembly_qc.note, /错误 2/);
+  assert.match(next.assembly_qc.note, /警告 6/);
+});
+
 test("reduceDeliveryCard:assembly.qc 无候选 → skip 行", () => {
   const next = reduceDeliveryCard(cardState(), {
     event: "assembly.qc",

@@ -497,6 +497,13 @@ def _emit_assembly_qc_summary(
             for i in ((cand_qc or {}).get("issues") or [])
             if isinstance(i, dict) and i.get("severity") == "warning"
         )
+        # P2(20261117):错误数单独上报(交付卡区分错误与警告;经 P2 去重后
+        # 错误数 ≈ 根因数,不再把渲染传导失败重复计入)。
+        error_count = sum(
+            1
+            for i in ((cand_qc or {}).get("issues") or [])
+            if isinstance(i, dict) and i.get("severity") == "error"
+        )
         detail = {
             "event": "assembly.qc",
             "qc_status": state.get("assembly_qc_status"),
@@ -518,6 +525,7 @@ def _emit_assembly_qc_summary(
             "repair_rounds": len(rounds) if isinstance(rounds, list) else 0,
             "retry_count": int(state.get("assembly_qc_retry_count") or 0),
             "warning_count": warning_count,
+            "error_count": error_count,
         }
         _emit_progress(detail)
     except Exception:  # noqa: BLE001 — 观测通道失败不阻断
@@ -599,6 +607,11 @@ def assembly_write_report_node(state: WorkflowState) -> dict:
 
     sections.append("## 3. timeline 校验 (timeline_validation.json)\n")
     sections.append(_summarize_validation(validation_data))
+    # P2(20261117):明确校验对象是候选**预览投影**,与正式草稿解耦 ——
+    # timeline.json 只是投影(validate/render/QC 工具链沿用),正式剪映草稿
+    # 的结构由候选草稿 QC(validate_candidate_draft)单独把关。
+    sections.append("> 口径:本节校验对象是候选预览投影 `timeline.json`,")
+    sections.append("> **不是正式剪映草稿**;正式草稿结构由候选草稿 QC 单独把关。")
     sections.append("")
 
     sections.append("## 4. timeline 内容\n")
@@ -606,6 +619,10 @@ def assembly_write_report_node(state: WorkflowState) -> dict:
     sections.append("")
 
     sections.append("## 5. 质检报告 (preview_qc_report.json)\n")
+    # P2(20261117):预览 QC 依赖渲染成功;渲染被校验失败阻断时本节恒空,
+    # 不代表"没有质量问题"。
+    sections.append("> 预览 QC 仅在 `preview.mp4` 渲染成功后执行;")
+    sections.append("> 渲染被 §3 校验失败阻断时本节为空,不代表\"没有质量问题\"。")
     sections.append(_summarize_qc(qc_data))
     sections.append("")
 

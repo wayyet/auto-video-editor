@@ -177,11 +177,22 @@ def _candidate_qc_path(state: WorkflowState, out_dir: Path, ctx: RunContext) -> 
         )
         if render_result.text.startswith("[ERROR]"):
             render_ok = False
+            # P2(20261117):「渲染前校验失败」是 validate_timeline 同一根因的
+            # 传导结果(本节点先 validate_timeline 再 render_preview,渲染器
+            # 内部还会再校验一次),降级为 warning 记录,不把同一根因重复计为
+            # 独立 error;其余渲染失败(真渲染故障)仍记 error。
+            derived_from_validation = (
+                "timeline validation failed before render" in render_result.text
+            )
             issues.append({
-                "severity": "error",
+                "severity": "warning" if derived_from_validation else "error",
                 "code": "preview_issue",
                 "check": "候选预览渲染",
-                "message": render_result.text,
+                "message": (
+                    "预览渲染已跳过:timeline 校验未通过(同根因传导,不计独立缺陷)"
+                    if derived_from_validation
+                    else render_result.text
+                ),
             })
         else:
             qc_result: ToolResult = qc_preview(

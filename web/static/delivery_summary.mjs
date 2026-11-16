@@ -84,6 +84,8 @@ export function reduceDeliveryCard(delivery, summary) {
     if (summary.candidate_clip_count != null) parts.push(`候选 ${summary.candidate_clip_count} clips`);
     if (summary.patch_ops != null) parts.push(`patch ${summary.patch_ops} ops`);
     if (summary.repair_rounds != null) parts.push(`修复 ${summary.repair_rounds} 轮`);
+    // P2(20261117):错误数单列(经后端同根因去重后,错误数≈根因数),与警告分开
+    if (summary.error_count != null && summary.error_count > 0) parts.push(`错误 ${summary.error_count}`);
     if (summary.warning_count != null && summary.warning_count > 0) parts.push(`警告 ${summary.warning_count}`);
     next.assembly_qc = {
       state,
