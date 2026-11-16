@@ -56,9 +56,20 @@ def storyline_recommend_transition_node(state: WorkflowState) -> dict:
             ),
         }
 
+    # 2026-11-17 核验报告 §6.3:推荐诊断(调用异常/解析失败/ID 异常/枚举回退)
+    # 全部落 error_log,不再静默降级;method 另记一条状态便于回放排查。
+    method = str(result.get("method") or "unknown")
     return {
         "storyline_transition_plan": result,
-        "status_log": append_status_tag(
-            state, "storyline_recommend_transition_done"
-        ),
+        "error_log": [
+            *list(state.get("error_log", []) or []),
+            *(
+                f"[storyline:recommend_transition] {w}"
+                for w in (result.get("warnings") or [])
+            ),
+        ],
+        "status_log": [
+            *append_status_tag(state, "storyline_recommend_transition_done"),
+            f"storyline_recommend_transition_method_{method}",
+        ],
     }

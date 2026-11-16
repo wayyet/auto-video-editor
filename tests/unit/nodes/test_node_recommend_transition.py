@@ -102,38 +102,74 @@ def test_capability_with_bgm_selection_maps_llm_items_to_groups(
 ) -> None:
     """node→capability→plan 全真实链路:带 bgm_selection 时按 LLM 结果逐组映射。
 
-    注:``generate_ai_transition`` 模板当前只有 ``{{user_request}}`` 占位符,
-    能力层传入的 ``groups``/``bgm`` 是模板预留参数(未渲染进 prompt)——
-    本用例只锁"带 bgm_selection 不崩 + items 逐组映射 + method=llm"。
+    20261117 更新:能力层改用 ``chat_json_with_trace``(诊断可回放);本用例
+    patch trace 接口 + 默认 client(非 stub)以锁 method=llm 主路径。
     """
     _groups_state(base_state, tmp_path, n_groups=2)
     base_state["storyline_bgm_selection"] = {"bgm_ref": "bgm_0007", "beats": []}
 
-    def fake_chat_json(*, system_prompt, user_prompt, schema=None, client=None, **_kw):
-        return {
-            "items": [
-                {"group_id": "group_0001", "transition_in": "fade", "transition_out": "cut"}
-            ],
-            "default": "wipe",
-        }
+    def fake_chat_json_with_trace(
+        *, system_prompt, user_prompt, schema=None, client=None, **_kw
+    ):
+        return (
+            {
+                "items": [
+                    {
+                        "group_id": "group_0001",
+                        "transition_in": "fade",
+                        "transition_out": "cut",
+                    }
+                ],
+                "default": "fade",
+            },
+            {"ok": True, "error": "", "raw_head": "", "parsed": True},
+        )
 
     monkeypatch.setattr(
-        "storyline_capabilities.recommend_transition.chat_json", fake_chat_json
+        "storyline_capabilities.recommend_transition.chat_json_with_trace",
+        fake_chat_json_with_trace,
+    )
+    monkeypatch.setattr(
+        "storyline_capabilities.recommend_transition.get_default_client",
+        lambda: object(),  # 非 Stub → method=llm
     )
     delta = storyline_recommend_transition_node(base_state)
 
     plan = delta["storyline_transition_plan"]
     assert plan["method"] == "llm"
-    assert plan["default"] == "wipe"
+    assert plan["default"] == "fade"
     assert len(plan["items"]) == 2
     assert plan["items"][0] == {
         "group_id": "group_0001",
         "transition_in": "fade",
         "transition_out": "cut",
     }
-    # LLM 未给第 2 组时按默认补齐
+    # LLM 未给第 2 组时按 default 补齐
     assert plan["items"][1] == {
         "group_id": "group_0002",
-        "transition_in": "fade_in",
-        "transition_out": "fade_out",
+        "transition_in": "fade",
+        "transition_out": "fade",
     }
+    assert "storyline_recommend_transition_method_llm" in delta["status_log"]
+
+
+def test_node_surfaces_capability_warnings_to_error_log(
+    base_state, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """能力层 warnings(解析失败/枚举回退等)必须落 error_log,不再静默降级。"""
+    _groups_state(base_state, tmp_path, n_groups=1)
+
+    def fake_recommend_transition(**_kw):
+        return {
+            "items": [{"group_id": "group_0001", "transition_in": "fade", "transition_out": "fade"}],
+            "default": "fade",
+            "method": "fallback",
+            "warnings": ["LLM 返回未解析出非空 JSON,按降级处理", "default='xyz' 不在受控词表,回退 'fade'"],
+        }
+
+    monkeypatch.setattr(nrt, "recommend_transition", fake_recommend_transition)
+    delta = storyline_recommend_transition_node(base_state)
+
+    prefixed = [e for e in delta["error_log"] if e.startswith("[storyline:recommend_transition] ")]
+    assert len(prefixed) == 2
+    assert "storyline_recommend_transition_method_fallback" in delta["status_log"]

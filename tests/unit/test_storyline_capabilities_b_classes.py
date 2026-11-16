@@ -335,15 +335,188 @@ def test_generate_script_with_three_groups(tmp_path: Path) -> None:
 def test_recommend_transition_no_input() -> None:
     res = recommend_transition(groups=[])
     assert res["items"] == []
-    assert res["default"] == "fade_in"
+    assert res["default"] == "fade"
+    assert res["method"] == "no_input"
+    assert res["warnings"] == []
 
 
 def test_recommend_transition_with_groups(tmp_path: Path) -> None:
+    """懒加载 StubLLMClient:按 schema 返回 {"items": [], "default": ""}。
+
+    20261117 契约:method 如实标 stub(不再让 truthy dict 伪装 llm);
+    缺失组按校验过的 default(fade)补齐,warnings 记录降级原因。
+    """
     groups = [{"group_id": "g1"}, {"group_id": "g2"}]
     res = recommend_transition(groups=groups)
     assert len(res["items"]) == 2
     for it in res["items"]:
-        assert it.get("transition_in") in {"fade_in", "fade", "fade_out", "cut"}
+        assert it.get("transition_in") == "fade"
+        assert it.get("transition_out") == "fade"
+    assert res["method"] == "stub"
+    assert res["warnings"]
+
+
+def _patch_transition_trace(
+    monkeypatch: pytest.MonkeyPatch,
+    obj: dict,
+    *,
+    ok: bool = True,
+    parsed: bool = True,
+    error: str = "",
+) -> None:
+    """替换 chat_json_with_trace,返回受控 (obj, trace)。"""
+
+    def fake_trace(*, system_prompt, user_prompt, schema=None, client=None, **_kw):
+        return obj, {"ok": ok, "error": error, "raw_head": "", "parsed": parsed}
+
+    monkeypatch.setattr(
+        "storyline_capabilities.recommend_transition.chat_json_with_trace",
+        fake_trace,
+    )
+
+
+def test_recommend_transition_aligns_by_group_id_not_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """乱序 + 漏组 + 未知组:按 group_id 对齐,缺失按 default 补齐,输出保持输入顺序。"""
+    obj = {
+        "items": [
+            {"group_id": "g2", "transition_in": "cut", "transition_out": "whip"},
+            {"group_id": "ghost", "transition_in": "fade", "transition_out": "fade"},
+            {"group_id": "g1", "transition_in": "zoom", "transition_out": "slide"},
+        ],
+        "default": "fade",
+    }
+    _patch_transition_trace(monkeypatch, obj, ok=True, parsed=True)
+    res = recommend_transition(
+        groups=[{"group_id": "g1"}, {"group_id": "g2"}, {"group_id": "g3"}],
+        client=object(),
+    )
+    assert res["method"] == "llm"
+    assert res["items"][0] == {
+        "group_id": "g1",
+        "transition_in": "zoom",
+        "transition_out": "slide",
+    }
+    assert res["items"][1] == {
+        "group_id": "g2",
+        "transition_in": "cut",
+        "transition_out": "whip",
+    }
+    # g3 未给 → 按 default 补齐
+    assert res["items"][2] == {
+        "group_id": "g3",
+        "transition_in": "fade",
+        "transition_out": "fade",
+    }
+    assert any("未知 group_id='ghost'" in w for w in res["warnings"])
+    assert any("缺少推荐" in w for w in res["warnings"])
+
+
+def test_recommend_transition_invalid_enum_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """非法枚举值回退 default;非法 default 再回退 fade;全部可诊断。"""
+    obj = {
+        "items": [
+            {"group_id": "g1", "transition_in": "旋转跳跃", "transition_out": ""},
+        ],
+        "default": "spin-around",
+    }
+    _patch_transition_trace(monkeypatch, obj, ok=True, parsed=True)
+    res = recommend_transition(groups=[{"group_id": "g1"}], client=object())
+    assert res["default"] == "fade"
+    assert res["items"][0]["transition_in"] == "fade"
+    assert res["items"][0]["transition_out"] == "fade"
+    assert any("不在受控词表" in w for w in res["warnings"])
+
+
+def test_recommend_transition_duplicate_and_empty_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """输出重复 ID 保留首条;空 ID 条目忽略并记录。"""
+    obj = {
+        "items": [
+            {"group_id": "g1", "transition_in": "cut", "transition_out": "fade"},
+            {"group_id": "g1", "transition_in": "zoom", "transition_out": "zoom"},
+            {"group_id": "", "transition_in": "whip", "transition_out": "whip"},
+        ],
+        "default": "fade",
+    }
+    _patch_transition_trace(monkeypatch, obj, ok=True, parsed=True)
+    res = recommend_transition(groups=[{"group_id": "g1"}], client=object())
+    assert res["items"][0] == {
+        "group_id": "g1",
+        "transition_in": "cut",
+        "transition_out": "fade",
+    }
+    assert any("重复 group_id='g1'" in w for w in res["warnings"])
+    assert any("空 group_id" in w for w in res["warnings"])
+
+
+def test_recommend_transition_llm_failure_marks_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """真实 client 调用异常 → method=fallback,全组 fade 补齐,原因落 warnings。"""
+    _patch_transition_trace(
+        monkeypatch, {}, ok=False, parsed=False, error="RuntimeError('boom')"
+    )
+    res = recommend_transition(
+        groups=[{"group_id": "g1"}, {"group_id": "g2"}], client=object()
+    )
+    assert res["method"] == "fallback"
+    assert res["default"] == "fade"
+    assert all(it["transition_in"] == "fade" for it in res["items"])
+    assert any("LLM 调用异常" in w for w in res["warnings"])
+
+
+def test_recommend_transition_garbage_text_marks_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """真实 client 返回散文(解析不出 JSON)→ method=fallback(旧 bug 的直接回归)。"""
+    _patch_transition_trace(monkeypatch, {}, ok=True, parsed=False)
+    res = recommend_transition(groups=[{"group_id": "g1"}], client=object())
+    assert res["method"] == "fallback"
+    assert any("未解析出非空 JSON" in w for w in res["warnings"])
+
+
+def test_recommend_transition_prompts_render_all_variables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """专用提示词 zh/en 都存在且真正渲染 groups/bgm/user_request(核验报告 §6.3)。"""
+    seen: dict[str, str] = {}
+
+    def fake_trace(*, system_prompt, user_prompt, schema=None, client=None, **_kw):
+        seen["system"] = system_prompt
+        seen["user"] = user_prompt
+        return {"items": [], "default": "fade"}, {
+            "ok": True,
+            "error": "",
+            "raw_head": "",
+            "parsed": True,
+        }
+
+    monkeypatch.setattr(
+        "storyline_capabilities.recommend_transition.chat_json_with_trace",
+        fake_trace,
+    )
+    for lang in ("zh", "en"):
+        seen.clear()
+        res = recommend_transition(
+            groups=[{"group_id": "g1", "theme": "城市漫游"}],
+            bgm_selection={"bgm_ref": "bgm_0007"},
+            lang=lang,
+            user_request="节奏快点",
+            client=object(),
+        )
+        assert res["method"] == "llm"
+        assert "g1" in seen["user"]
+        assert "城市漫游" in seen["user"]
+        assert "bgm_0007" in seen["user"]
+        assert "节奏快点" in seen["user"]
+        # 受控词表进入 system prompt
+        assert "cut" in seen["system"]
+        assert "creative" in seen["system"]
 
 
 def test_recommend_text_returns_default_style() -> None:
