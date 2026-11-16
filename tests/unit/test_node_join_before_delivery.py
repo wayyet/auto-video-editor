@@ -324,6 +324,58 @@ def test_join_missing_transition_skipped_when_not_required(tmp_path: Path) -> No
     assert out["join_qa_report"]["gate_failed"] is False
 
 
+def _rewrite_multi_segment(dir_path: Path, *, transition_boundaries: set[int]) -> None:
+    """把草稿改成 3 视频段,transition-1 只挂指定边界的后一段(模拟 node_09 产出)。
+
+    其余 refs(贴纸/特效)三段都挂,避免孤儿;双文件同步重写保持镜像一致。
+    """
+    for name in ("draft_content.json", "draft_info.json"):
+        draft = json.loads((dir_path / name).read_text(encoding="utf-8"))
+        video_track = next(t for t in draft["tracks"] if t.get("type") == "video")
+        first = video_track["segments"][0]
+        span = int(first["target_timerange"]["duration"])
+        video_track["segments"] = []
+        for i in range(3):
+            video_track["segments"].append(
+                {
+                    **first,
+                    "id": f"segment-{i + 1}",
+                    "target_timerange": {"start": i * span, "duration": span},
+                    "extra_material_refs": ["sticker-t1", "vfx-default"],
+                }
+            )
+        for boundary in transition_boundaries:
+            video_track["segments"][boundary + 1]["extra_material_refs"].append("transition-1")
+        (dir_path / name).write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
+
+
+def test_join_mixed_cut_with_required_transitions_passes(tmp_path: Path) -> None:
+    """§8.4:多镜头部分硬切 + 至少一个真实转场 + required=true → transitions passed。"""
+    state = _state_with_drafts(tmp_path)  # 默认 required transitions=True
+    for p in _draft_files(state):
+        _rewrite_multi_segment(p.parent, transition_boundaries={1})
+    out = join_before_delivery(state)
+    report = out["join_qa_report"]
+    cats = report["categories"]
+    assert cats["transitions"]["status"] == "passed"
+    assert report["gate_failed"] is False
+    assert report["passed"] is True
+    assert "delivery_qa_ok" in out["status_log"]
+
+
+def test_join_all_cut_fallback_outcome_passes_gate(tmp_path: Path) -> None:
+    """§8.4:全 cut 计划经 node_09 边界 0 保底后的产物(仅边界 0 一个转场)
+    + required=true → transitions passed,交付 QA 不会对同一计划无限 repair。"""
+    state = _state_with_drafts(tmp_path)
+    for p in _draft_files(state):
+        _rewrite_multi_segment(p.parent, transition_boundaries={0})
+    out = join_before_delivery(state)
+    report = out["join_qa_report"]
+    cats = report["categories"]
+    assert cats["transitions"]["status"] == "passed"
+    assert report["gate_failed"] is False
+
+
 def test_join_unbound_sticker_still_reported_when_not_required(tmp_path: Path) -> None:
     """§7.5 组合:stickers=false 但有贴纸未挂载 → 结构错误仍报(gate 不阻断)。
 
