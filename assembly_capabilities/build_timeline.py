@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -1342,6 +1343,18 @@ def candidate_projection_timeline(
         end_s = int(clip["source_out_ms"]) / 1000.0
         t_in = int(clip["timeline_in_ms"]) / 1000.0
         t_out = int(clip["timeline_out_ms"]) / 1000.0
+        # speed = 源跨度 / 目标槽位跨度(与 storyline/mapper.canonical_to_draft
+        # 同一推导规则;20261117 修复:此前恒 1.0,与 start/end=源区间、
+        # timeline_* =目标槽位三者自相矛盾,导致 validate_timeline 把素材原长
+        # 当渲染时长 → 同轨假重叠 + sequence.duration 越界 → QC 恒 escalated、
+        # preview.mp4 恒不生成)。渲染时长 = 源跨度 / speed = 槽位跨度。
+        slot_s = t_out - t_in
+        src_s = end_s - start_s
+        speed: float = 1.0
+        if slot_s > 0 and src_s > 0:
+            derived = src_s / slot_s
+            if math.isfinite(derived) and derived > 0:
+                speed = 1.0 if abs(derived - 1.0) < 1e-6 else derived
         clips.append({
             "track_type": "video",
             "id": str(clip.get("clip_id") or f"clip_{i:04d}"),
@@ -1352,14 +1365,16 @@ def candidate_projection_timeline(
             "duration": end_s - start_s,
             "timeline_start": t_in,
             "timeline_end": t_out,
-            "speed": 1.0,
+            "speed": speed,
             "volume": 1.0,
             "opacity": 1.0,
             "enabled": True,
             "reason": str(clip.get("_patch_reason") or f"baseline clip {clip.get('clip_id')}"),
         })
 
-    total = clips[-1]["timeline_end"] if clips else 0.0
+    # sequence.duration 覆盖所有 clip 的最大目标结束时间(不假设 clips 按
+    # timeline_end 排序;CanonicalTimeline 只保证 timeline_in 单调非降)。
+    total = max((c["timeline_end"] for c in clips), default=0.0)
     return {
         "version": "assembly-candidate-projection-1",
         "task": "candidate plan projection (auto-video-editor P1-4)",

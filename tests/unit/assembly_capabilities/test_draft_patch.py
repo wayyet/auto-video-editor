@@ -130,6 +130,36 @@ def test_trim_changes_source_range_and_relays_timeline(base_plan: dict) -> None:
     assert "assetA_c000" in trim_diff["evidence_refs"]
 
 
+def test_trim_preserves_implied_speed_for_compressed_clip(base_plan: dict) -> None:
+    """P0 修复(20261117):trim 保留 trim 前隐含速度,压缩片段不再膨胀。
+
+    clip_0001 改为压缩片段:源 0-15442ms 压进时间轴 0-1351ms(speed≈11.43)。
+    trim 保尾 [12442,15442](新源跨度 3000ms)→ 新时间轴跨度 =
+    round(3000 × 1351/15442) = 262ms,而不是 1:1 的 3000ms(那会把时间轴
+    拉长 ≈11 倍,破坏总时长与配音对齐)。
+    """
+    plan = copy.deepcopy(base_plan)
+    plan["clips"][0]["source_in_ms"] = 0
+    plan["clips"][0]["source_out_ms"] = 15442
+    plan["clips"][0]["timeline_in_ms"] = 0
+    plan["clips"][0]["timeline_out_ms"] = 1351
+    sha = _base_sha(plan)
+    patch = new_patch(sha, created_by="t")
+    add_operation(
+        patch, operation="trim", target_clip_id="clip_0001",
+        source_in_ms=12442, source_out_ms=15442, reason="剔除坏窗",
+        evidence_refs=["black:12.0-13.0"],
+    )
+    candidate, report = apply_patch(plan, patch, expect_base_sha256=sha)
+    assert report["applied_operations"] == ["op_0001"]
+    clips = {c["clip_id"]: c for c in candidate["clips"]}
+    assert (clips["clip_0001"]["source_in_ms"], clips["clip_0001"]["source_out_ms"]) == (12442, 15442)
+    new_span = clips["clip_0001"]["timeline_out_ms"] - clips["clip_0001"]["timeline_in_ms"]
+    assert new_span == 262, f"trim 必须保留隐含速度(期望 262ms,得到 {new_span}ms)"
+    # preserve_and_remap:后继 clip 紧随其后落位
+    assert clips["clip_0002"]["timeline_in_ms"] == 262
+
+
 def test_remove_drops_clip_and_keeps_others(base_plan: dict) -> None:
     sha = _base_sha(base_plan)
     patch = new_patch(sha, created_by="t")

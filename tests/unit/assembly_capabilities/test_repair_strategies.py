@@ -189,6 +189,83 @@ class TestBuildRepairPatch:
         assert patch_fingerprint(patch) == patch_fingerprint({"operations": []})
 
 
+class TestSpeedAwareRepair:
+    """P0 修复(20261117):坏窗→源区间换算必须乘隐含速度(非 1.0 倍速)。
+
+    场景形状(审查文档 §7.2):source 0-4000ms 压进 timeline 0-2000ms
+    (speed=2.0);坏窗在时间轴坐标,keep 区间映射回源坐标须 ×2。
+    """
+
+    @staticmethod
+    def _speedy_plan(base_plan: dict, *, s_in: int, s_out: int, t_in: int, t_out: int) -> dict:
+        plan = json.loads(json.dumps(base_plan))
+        clip = plan["clips"][0]
+        clip["source_in_ms"] = s_in
+        clip["source_out_ms"] = s_out
+        clip["timeline_in_ms"] = t_in
+        clip["timeline_out_ms"] = t_out
+        return plan
+
+    @staticmethod
+    def _issue(start: int, end: int) -> dict:
+        return {
+            "severity": "error", "code": "black_frame",
+            "check": "候选预览 QC", "message": "black frames detected",
+            "range": [start, end],
+        }
+
+    def test_keep_tail_maps_timeline_offset_by_speed(self, base_plan: dict) -> None:
+        """speed=2.0,坏窗 [300,700]:保尾 keep_in = 0 + 700×2 = 1400(不是 700)。"""
+        plan = self._speedy_plan(base_plan, s_in=0, s_out=4000, t_in=0, t_out=2000)
+        patch, manual, _ = build_repair_patch(plan, [self._issue(300, 700)], baseline_plan=base_plan)
+        assert not manual
+        trims = [op for op in patch["operations"] if op["operation"] == "trim"]
+        assert len(trims) == 1
+        assert (trims[0]["source_in_ms"], trims[0]["source_out_ms"]) == (1400, 4000)
+
+    def test_keep_head_maps_head_span_by_speed(self, base_plan: dict) -> None:
+        """speed=2.0,坏窗 [1200,1600]:保头 keep_out = 0 + 1200×2 = 2400。"""
+        plan = self._speedy_plan(base_plan, s_in=0, s_out=4000, t_in=0, t_out=2000)
+        patch, manual, _ = build_repair_patch(plan, [self._issue(1200, 1600)], baseline_plan=base_plan)
+        assert not manual
+        trims = [op for op in patch["operations"] if op["operation"] == "trim"]
+        assert (trims[0]["source_in_ms"], trims[0]["source_out_ms"]) == (0, 2400)
+
+    def test_speed_3x_rounding_and_tail_keep(self, base_plan: dict) -> None:
+        """speed=3.0,坏窗尾界 1001ms → keep_in = round(1001×3) = 3003。"""
+        plan = self._speedy_plan(base_plan, s_in=0, s_out=12000, t_in=0, t_out=4000)
+        patch, manual, _ = build_repair_patch(plan, [self._issue(500, 1001)], baseline_plan=base_plan)
+        assert not manual
+        trims = [op for op in patch["operations"] if op["operation"] == "trim"]
+        assert (trims[0]["source_in_ms"], trims[0]["source_out_ms"]) == (3003, 12000)
+
+    def test_clean_part_too_short_on_timeline_removes_clip(self, base_plan: dict) -> None:
+        """干净区按时间轴口径 <500ms → remove(源坐标 800ms 在 speed=2 下仅 400ms)。
+
+        坏窗 [200,1600]:覆盖率 70%(<0.8 不走覆盖剔除),保尾 clean=400ms
+        (时间轴)< 500ms → remove。
+        """
+        plan = self._speedy_plan(base_plan, s_in=0, s_out=4000, t_in=0, t_out=2000)
+        patch, manual, _ = build_repair_patch(plan, [self._issue(200, 1600)], baseline_plan=base_plan)
+        assert not manual
+        assert [op["operation"] for op in patch["operations"]] == ["remove"]
+
+    def test_speed_1x_keeps_legacy_mapping(self, base_plan: dict) -> None:
+        """speed=1.0 行为不变:保尾 keep_in = 时间轴偏移(既有契约用例同型)。"""
+        plan = self._speedy_plan(base_plan, s_in=0, s_out=4000, t_in=0, t_out=4000)
+        patch, manual, _ = build_repair_patch(plan, [self._issue(1000, 2500)], baseline_plan=base_plan)
+        assert not manual
+        trims = [op for op in patch["operations"] if op["operation"] == "trim"]
+        assert (trims[0]["source_in_ms"], trims[0]["source_out_ms"]) == (2500, 4000)
+
+    def test_window_outside_any_clip_goes_manual(self, base_plan: dict) -> None:
+        """坏窗超出全部候选时间轴(sample 总时长 12000ms)→ manual。"""
+        plan = self._speedy_plan(base_plan, s_in=0, s_out=4000, t_in=0, t_out=2000)
+        patch, manual, _ = build_repair_patch(plan, [self._issue(20000, 21000)], baseline_plan=base_plan)
+        assert patch["operations"] == []
+        assert manual and "不落在任何候选 clip" in manual[0]["manual_reason"]
+
+
 # ---------------------------------------------------------------------------
 # 结构性错误与 fail-closed 路由
 # ---------------------------------------------------------------------------

@@ -106,8 +106,10 @@ def _relayout(clips: list[dict[str, Any]]) -> None:
     """preserve_and_remap:按当前列表顺序顺序拼接,重写 timeline_in/out。
 
     未被 trim/select 触碰的 clip 保持原时长(尊重原计划里可能存在的变速);
-    被 trim/select 重写过 source 区间的 clip,时长 = 新源跨度(速度恒 1.0,
-    见 _apply_one 的 trim/select 分支)。重排只改时间落位,不改任何 clip 的
+    被 trim 重写过 source 区间的 clip,时长 = 新源跨度 / trim 前隐含速度
+    (20261117 修复:trim 保留原速,不再恒 1.0 —— 否则 11.4× 压缩片段被
+    trim 后时间轴膨胀 ≈11 倍,破坏总时长与配音对齐);select 新建片段仍
+    恒 1.0(见 _apply_one 各分支)。重排只改时间落位,不改任何 clip 的
     身份、voiceover_id、转场语义与字幕文本。
     """
     cursor = 0
@@ -168,10 +170,18 @@ def _apply_one(
         new_in, new_out = int(new_in), int(new_out)
         if new_out <= new_in:
             return f"skipped:trim range empty ({new_in}->{new_out})"
+        old_s_span = int(clip["source_out_ms"]) - int(clip["source_in_ms"])
+        old_t_span = _clip_span(clip)
         clip["source_in_ms"] = new_in
         clip["source_out_ms"] = new_out
-        # trim 恒速度 1.0:时间轴跨度 = 新源跨度(重排阶段统一落位)
-        clip["timeline_out_ms"] = clip["timeline_in_ms"] + (new_out - new_in)
+        # trim 保留 trim 前的隐含速度(20261117 修复:此前恒 1.0,时间轴跨度 =
+        # 新源跨度,压缩片段被 trim 后时间轴会成倍膨胀)。新跨度 = 新源跨度 /
+        # 隐含速度;旧跨度非法时回退 1:1(重排阶段统一落位)。
+        if old_s_span > 0 and old_t_span > 0:
+            new_span = int(round((new_out - new_in) * old_t_span / old_s_span))
+            clip["timeline_out_ms"] = clip["timeline_in_ms"] + max(1, new_span)
+        else:
+            clip["timeline_out_ms"] = clip["timeline_in_ms"] + (new_out - new_in)
         # 证据引用并回 clip,保证 diff 可追溯
         merged = [str(r) for r in (clip.get("_patch_evidence") or [])]
         for ref in evidence:

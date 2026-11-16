@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from .draft_patch import add_operation, new_patch, plan_sha256
@@ -265,17 +266,32 @@ def build_repair_patch(
                 handled_clips.add(cid)
                 notes.append(f"clip {cid}: {code} → remove 坏片段")
                 continue
-            # 局部修复:坏窗把 clip 时间轴切成头/尾两段干净区(候选 clip 速度
-            # 恒 1.0,源偏移 = 时间轴偏移)。保留较长一侧并映射回源区间。
-            head_span = max(0, start_ms - int(target["timeline_in_ms"]))
-            tail_span = max(0, int(target["timeline_out_ms"]) - end_ms)
+            # 局部修复:坏窗把 clip 时间轴切成头/尾两段干净区。源偏移 =
+            # 时间轴偏移 × 隐含速度(20261117 修复:此前假设速度恒 1.0 按
+            # 1:1 直映,非 1.0 倍速候选会裁错源素材区间)。保留较长一侧并
+            # 映射回源区间;trim 应用层(draft_patch)同样保留该隐含速度。
+            t_in_ms = int(target["timeline_in_ms"])
+            t_out_ms = int(target["timeline_out_ms"])
+            s_in_ms = int(target["source_in_ms"])
+            s_out_ms = int(target["source_out_ms"])
+            slot_span = t_out_ms - t_in_ms
+            src_span = s_out_ms - s_in_ms
+            speed = (src_span / slot_span) if slot_span > 0 and src_span > 0 else 1.0
+            if speed <= 0 or not math.isfinite(speed):
+                speed = 1.0
+            head_span = max(0, start_ms - t_in_ms)
+            tail_span = max(0, t_out_ms - end_ms)
             if tail_span >= head_span:
-                keep_in = int(target["source_in_ms"]) + (end_ms - int(target["timeline_in_ms"]))
-                keep_out = int(target["source_out_ms"])
+                keep_in = s_in_ms + int(round((end_ms - t_in_ms) * speed))
+                keep_out = s_out_ms
             else:
-                keep_in = int(target["source_in_ms"])
-                keep_out = int(target["source_in_ms"]) + head_span
-            if keep_out - keep_in < 500:
+                keep_in = s_in_ms
+                keep_out = s_in_ms + int(round(head_span * speed))
+            # 夹回源区间(换算误差防御);干净时长按时间轴口径判(观众所见)。
+            keep_in = max(s_in_ms, min(keep_in, s_out_ms))
+            keep_out = max(s_in_ms, min(keep_out, s_out_ms))
+            clean_timeline_ms = int(round((keep_out - keep_in) / speed)) if speed > 0 else 0
+            if clean_timeline_ms < 500:
                 if cid not in handled_clips:
                     add_operation(
                         patch, operation="remove", target_clip_id=cid,
