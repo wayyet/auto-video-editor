@@ -6,7 +6,7 @@
 > 核验基线：`2e6f06c0ebb39173c63647ac279c4052bc9edf00`（2026-11-16 16:47:57 UTC）  
 > 原始问题文档：[`auto-video-editor_英文分支中文配音残留与字幕假翻译_分析与修复计划_20261117.md`](https://github.com/wayyet/auto-video-editor/blob/main/docs/%E7%AC%AC%E5%85%AD%E6%9C%9F%E5%BC%80%E5%8F%91/auto-video-editor_%E8%8B%B1%E6%96%87%E5%88%86%E6%94%AF%E4%B8%AD%E6%96%87%E9%85%8D%E9%9F%B3%E6%AE%8B%E7%95%99%E4%B8%8E%E5%AD%97%E5%B9%95%E5%81%87%E7%BF%BB%E8%AF%91_%E5%88%86%E6%9E%90%E4%B8%8E%E4%BF%AE%E5%A4%8D%E8%AE%A1%E5%88%92_20261117.md)  
 > 原始文档 blob SHA：`86925111c0b48a8572d97b2a68ce2bc895ea79f7`  
-> 本文状态：**已完成源码级核验；修订设计待实施；未执行仓库代码修改与运行测试**。
+> 本文状态：**已完成源码级核验；P0/P1/P2 已按本计划实施并分阶段提交（见 §14 执行记录）；集成回归零新增失败；新任务端到端验收（§9 清单）待操作员执行**。
 
 ---
 
@@ -647,3 +647,36 @@ marker 复用条件必须同时满足：schema 版本兼容、源 fingerprint �
 4. **P3 端到端验收**：新 thread、真实 LLM、真实 TTS、剪映 GUI、完整 QA、审计数据。
 
 **合并门槛：**P0/P1 的所有单测通过；全量单测没有新增失败；集成测试基线有明确 run 证据；新任务端到端满足第 9 节清单。任一 required 英文能力仍处于 `stub`、`failed` 或 `degraded`，不得把该任务标记为正常交付完成。
+
+---
+
+## 14. 执行记录(2026-11-17)
+
+实施会话按 §13 顺序执行,五个提交,全部通过全量单测;集成回归用 worktree 基线对照法定性。
+
+### 14.1 提交清单
+
+| 提交 | 阶段 | 内容 |
+|---|---|---|
+| `c33b836` | docs | 本文档入库 |
+| `0d2fb00` | P0 | 中文配音轨隔离:_dual_draft 常量+remove_chinese_voiceover_from_draft 纯函数(轨名精确匹配删轨/被删轨孤儿素材回收/storyline 边界内链产孤儿配音素材 GC,不删磁盘 WAV);state.en_branch_audio_policy_version;fork 三路径清理(v2 新建/重放幂等/legacy 不改写,fail-fast);node_12 v2 镜像过滤;node_08/node_13 常量收敛;draft_integrity 镜像双侧排除+check_no_zh_voiceover_in_en_draft+voice_language_isolation 类别(v2 gate 无条件必需) |
+| `7acb606` | P1 | 真实翻译:LLMTranslateClient(chat_json_with_trace 传 client=/index 集合精确校验/时间码源段继承/字符预算分批/重试 1 次后 TranslationError fail-closed);marker schema v2(源指纹=文本+时间码+语言+提示词+翻译器身份,legacy list 一律重翻);state 翻译状态三元组;node_16a 状态判定;node_08b/node_17 门禁(非 real 不写正式字幕/不送 TTS,空输入 skip 先于门禁);QA subtitles_en 显式消费状态;agent_gate/bootstrap.install_llm_backend 公共装配,run/resume/agent_gate 三入口统一 |
+| `a7b8798` | P2 | 封面标题:新增 nodes/_cover_title.resolve_zh_title(文本轨最早 start+id 稳定序,不依赖 materials.texts[0]);node_14/node_15 共用;node_15 删 [EN] 拼接改真实翻译,stub/失败 → cover_translation_status=stub/degraded + en_path=None,绝不生成伪英文标题 |
+| `0f83678` | P3 | 集成回归适配(见 14.3) |
+
+### 14.2 实施中的关键发现与实现决策
+
+1. **snapshot② 实证形态(补强 §3.2)**:对 console-553e3e7b34f7 的 snapshots/snapshot2/draft_content.json 逐字段核验——无 `segment-voiceover-*`/`zh-voiceover:*` 段,voiceover WAV 只是 materials.audios 里的**孤儿素材**(无轨道段引用)。即:en 草稿的 `Voiceover_zh` 轨唯一来源是 node_12 镜像(确定性路径),fork 复制的 BGM 轨是干净的;但孤儿配音素材在剪映素材面板可见,属用户可感知残留。因此 P0 清理 helper 在"轨名精确匹配删轨"之外,增加**storyline 边界内无引用 audio 素材 GC**(与 node_08 `_voiceover_track_owned` 的路径归属判定同口径,非模糊匹配;无 id 条目保守跳过)。
+2. **空输入 skip 先于状态门禁**(P1):node_08b/node_17 的"无源字幕/无文本"正常 skip 排在翻译状态门禁之前——无旁白任务保持 empty_text/skipped 的 n/a 语义,不被刷 error(门禁只拦"有文本但翻译非 real")。
+3. **node_12 镜像空轨分支措辞**:v2 过滤后中文草稿只剩配音轨时,提示"除中文配音外无 audio track",不把 VO 当 BGM。
+4. **gate 特判位置**:voice_language_isolation 不进 REQUIRED_FEATURE_KEYS,在 gate_failed 表达式中对 v2 分支无条件 OR 入(legacy/not-applicable 永不阻断);报告回显 required=v2 时为 True。
+
+### 14.3 回归证据
+
+- **全量 unit**:exit 0(P0/P1/P2 每阶段提交前各跑一次;新增 test_en_branch_voiceover_isolation 19+2 例、test_jy_translate_client 15 例、test_cover_title_resolver 8 例;更新 16a/08b/17/run/resume/12/draft_integrity/stage4 既有用例至新契约)。
+- **全量 integration**:首轮 10 失败 → worktree 基线对照(@9458844)定性:**3 个存量**(auto_e2e/reorder尾链/sequential,基线逐字复现,与历史基线一致)+ **7 个 P1 门禁预期行为变更**(stub 译文不再进入正式字幕/TTS)。按新契约适配:conftest 新增 `real_mode_translator` fixture(可编程假 LLM,用例后还原);week4/reorder/week5×3/state 兼容×2 挂 fixture;副作用计数改 LLM chat 计数(字幕 1 次+封面标题 1 次=2,P2 起两个消费方)。复跑后**集成仅剩 3 存量,零新增**。
+
+### 14.4 遗留与待办
+
+- **新任务端到端验收(§9 清单)待操作员**:全新 thread_id + 真实 mcode-cli 后端 + jianying TTS 建英文分支任务,验收英文草稿无 Voiceover_zh 轨、subtitle_en.json 为 v2 指纹 marker、画面字幕/SRT/封面/英文 TTS 全为真英文、`gate_failed=false`。旧任务 console-553e3e7b34f7 与旧草稿不动(根因证据)。
+- 旧任务 resume 语义:旧 checkpoint 无 `subtitle_translation_status`,恢复执行后英文链按 fail-closed 降级(不崩,但 en 交付物缺失,QA 阻断)——属 §5.4 设计语义,不追溯修补。
