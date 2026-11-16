@@ -1,4 +1,10 @@
-"""node_15_localize_covers_en 单测 — Mock Image-Edit 调用 3 次、en_path 写入、缺图降级。"""
+"""node_15_localize_covers_en 单测 — Mock Image-Edit 调用 3 次、en_path 写入、缺图降级。
+
+2026-11-17 P2:英文标题走真实翻译(修订计划 §5.6)——
+- 真实客户端(LLMTranslateClient)→ title_en 为模型译文,status="real";
+- 默认 Mock 桩 → title_en 为空、status="stub",全部 en_path=None 降级,
+  绝不生成 "[EN] 中文" 伪英文封面。
+"""
 
 from __future__ import annotations
 
@@ -8,6 +14,11 @@ from pathlib import Path
 
 import pytest
 
+from jy_common.translate_client import (
+    LLMTranslateClient,
+    MockTranslateClient,
+    set_default_client as set_translate_default,
+)
 from mcp_clients.firered_image_edit_client import (
     MockFireRedImageEditClient,
     set_default_client,
@@ -18,6 +29,32 @@ from nodes.node_15_localize_covers_en import (
     _localize_one_cover,
     _node_15_localize_covers_en_async,
 )
+
+
+class _FakeTitleLLM:
+    """恒定返回 "Real Title" 的假 LLM(实现 vlm LLMClient 的 chat 契约)。"""
+
+    def chat(self, *, system_prompt, user_prompt, media=None, json_schema=None,
+             temperature=0.3, top_p=0.9, max_tokens=4096):
+        payload = json.loads(user_prompt)
+        return json.dumps(
+            {"translations": [
+                {"index": s["index"], "text_en": f"Real {s['text_zh']}"}
+                for s in payload["segments"]
+            ]},
+            ensure_ascii=False,
+        )
+
+
+@pytest.fixture(autouse=True)
+def _restore_translate_default():
+    """node_15 读全局翻译默认客户端:用例后还原为 Mock,防污染。"""
+    yield
+    set_translate_default(MockTranslateClient())
+
+
+def _install_real_translator() -> None:
+    set_translate_default(LLMTranslateClient(_FakeTitleLLM(), translator_id="mcode-cli"))
 
 
 def _seed_draft(draft_dir: Path) -> Path:
@@ -46,22 +83,38 @@ def _reset_client():
 # ---------------------------------------------------------------------------
 # 纯函数测试
 # ---------------------------------------------------------------------------
-def test_get_titles_pair(tmp_path: Path) -> None:
-    """_get_titles 从 draft 读 title_zh,并构造 title_en 占位。"""
+def test_get_titles_real_translation(tmp_path: Path) -> None:
+    """真实翻译客户端 → title_en 为模型译文(无 [EN] 前缀),status=real。"""
+    draft_dir = tmp_path / "draft"
+    _seed_draft(draft_dir)
+    _install_real_translator()
+    state = {"draft_path": str(draft_dir / "draft_content.json")}
+
+    zh, en, status = _get_titles(state)
+    assert zh == "原中文标题"
+    assert en == "Real 原中文标题"
+    assert "[EN]" not in en
+    assert status == "real"
+
+
+def test_get_titles_stub_returns_empty_en(tmp_path: Path) -> None:
+    """默认 Mock 桩 → title_en 空串 + status=stub(绝不拼 [EN] 假标题)。"""
     draft_dir = tmp_path / "draft"
     _seed_draft(draft_dir)
     state = {"draft_path": str(draft_dir / "draft_content.json")}
 
-    zh, en = _get_titles(state)
+    zh, en, status = _get_titles(state)
     assert zh == "原中文标题"
-    assert en == "[EN] 原中文标题"
+    assert en == ""
+    assert status == "stub"
 
 
-def test_get_titles_default_when_no_draft(tmp_path: Path) -> None:
-    """draft_path 缺失时使用默认标题。"""
-    zh, en = _get_titles({})
+def test_get_titles_default_when_no_draft() -> None:
+    """draft_path 缺失时使用默认标题;stub 桩下 title_en 为空。"""
+    zh, en, status = _get_titles({})
     assert zh  # 非空
-    assert en.startswith("[EN] ")
+    assert en == ""
+    assert status == "stub"
 
 
 def test_build_prompt_with_bbox(tmp_path: Path) -> None:
@@ -113,9 +166,10 @@ def test_localize_one_cover_success(tmp_path: Path) -> None:
 # 节点函数测试
 # ---------------------------------------------------------------------------
 def test_node_15_produces_en_path_for_each_cover(tmp_path: Path) -> None:
-    """node_15 应为每张 cover 写入 en_path,共 3 张。"""
+    """真实翻译可用 → node_15 为每张 cover 写入 en_path,共 3 张,status=real。"""
     draft_dir = tmp_path / "draft"
     _seed_draft(draft_dir)
+    _install_real_translator()
     covers = []
     for ratio, name in [("16:9", "16x9"), ("4:3", "4x3"), ("9:16", "9x16")]:
         zh = draft_dir / "covers" / f"cover_{name}_zh.png"
@@ -133,15 +187,43 @@ def test_node_15_produces_en_path_for_each_cover(tmp_path: Path) -> None:
     en_paths = [c.get("en_path") for c in out["covers"]]
     assert all(p is not None for p in en_paths), en_paths
     assert "node_15_localize_covers_en_done" in out["status_log"]
+    assert out["cover_translation_status"] == "real"
     # 每个 en_path 文件都应存在
     for p in en_paths:
         assert Path(p).exists()
 
 
-def test_node_15_graceful_degradation_when_image_missing(tmp_path: Path) -> None:
-    """某张 zh_path 不存在 → en_path=None,累积 error_log,但不抛异常。"""
+def test_node_15_stub_degrades_without_fake_title(tmp_path: Path) -> None:
+    """翻译桩(stub)→ 全部 en_path=None + 降级说明,不生成伪英文封面。"""
     draft_dir = tmp_path / "draft"
     _seed_draft(draft_dir)
+    covers = []
+    for ratio, name in [("16:9", "16x9"), ("4:3", "4x3"), ("9:16", "9x16")]:
+        zh = draft_dir / "covers" / f"cover_{name}_zh.png"
+        _seed_cover(zh, f"src-{ratio}".encode())
+        covers.append({"ratio": ratio, "zh_path": str(zh), "text_bbox": {}})
+
+    state = {
+        "covers": covers,
+        "draft_path": str(draft_dir / "draft_content.json"),
+        "status_log": [],
+        "error_log": [],
+    }
+
+    out = asyncio.run(_node_15_localize_covers_en_async(state))
+    assert all(c.get("en_path") is None for c in out["covers"])
+    assert out["cover_translation_status"] == "stub"
+    assert any("封面标题翻译不可用" in e for e in out["error_log"])
+    assert not any(Path(c["zh_path"]).with_name(
+        Path(c["zh_path"]).name.replace("_zh.png", "_en.png")
+    ).exists() for c in covers)
+
+
+def test_node_15_graceful_degradation_when_image_missing(tmp_path: Path) -> None:
+    """真实翻译可用但 zh_path 不存在 → en_path=None,累积 error_log,不抛异常。"""
+    draft_dir = tmp_path / "draft"
+    _seed_draft(draft_dir)
+    _install_real_translator()
     covers = [
         {"ratio": "16:9", "zh_path": str(tmp_path / "missing1.png"), "text_bbox": {}},
         {"ratio": "4:3", "zh_path": str(tmp_path / "missing2.png"), "text_bbox": {}},

@@ -174,6 +174,9 @@ class WorkflowState(TypedDict, total=False):
 
     # 封面资产列表(节点 14 写 zh_path+text_bbox,节点 15 补 en_path)
     covers: NotRequired[list[CoverAsset]]
+    # 2026-11-17 P2(封面标题真翻译):node_15 写 —— real/stub/degraded。
+    # stub/degraded 时全部 en_path=None 降级,不生成伪英文标题(修订计划 §5.6)。
+    cover_translation_status: NotRequired[str]
 
     # 翻译产物(节点 16 写)
     subtitle_segments_en: NotRequired[list[SubtitleSegment]]

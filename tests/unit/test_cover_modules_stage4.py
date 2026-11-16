@@ -56,11 +56,14 @@ def test_get_title_missing_falls_back_to_default(tmp_path) -> None:
 
 
 def test_node_15_titles_parse_native_json(tmp_path) -> None:
+    """原生 content JSON 标题照常解析;2026-11-17 P2 起翻译桩下 title_en 为空
+    (stub 不再拼 [EN] 假标题,见修订计划 §5.6)。"""
     content = build_text_content_json("周末探店", {})
     d = _write_draft_with_text(tmp_path, content)
-    title_zh, title_en = _get_titles({"draft_path": str(d / "draft_content.json")})
+    title_zh, title_en, status = _get_titles({"draft_path": str(d / "draft_content.json")})
     assert title_zh == "周末探店"
-    assert title_en == "[EN] 周末探店"
+    assert title_en == ""
+    assert status == "stub"
 
 
 # ---------------------------------------------------------------------------

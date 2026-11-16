@@ -6,6 +6,13 @@
 
 降级策略(对齐计划 §4.3):某张图失败 → ``en_path=None``、累积 error_log,
 **不**抛异常中断整图。
+
+2026-11-17 P2(封面标题真翻译,修订计划 §5.6):
+- 标题来源与 node_14 收敛到 ``nodes._cover_title.resolve_zh_title``
+  (文本轨最早 start,不依赖 ``materials.texts[0]`` 数组顺序);
+- 英文标题走默认翻译客户端**真实翻译**,``[EN] `` 前缀拼接删除;
+- 翻译不可用(stub)/失败 → ``cover_translation_status="degraded"``、全部
+  ``en_path=None`` + error_log —— **绝不生成伪英文标题**。
 """
 
 from __future__ import annotations
@@ -14,40 +21,45 @@ import asyncio
 import json
 from pathlib import Path
 
-from draft_ops.atomic_writer_file import atomic_write_file
-from jy_common.native_text import text_display_text
+from jy_common.translate_client import LLMTranslateClient, get_default_client
 from mcp_clients.firered_image_edit_client import call_firered_edit
+from nodes._cover_title import resolve_zh_title
 from state import WorkflowState
 
 
 # ---------------------------------------------------------------------------
-# 标题读取(节点 15 复用节点 14 的逻辑)
+# 标题读取 + 真实翻译
 # ---------------------------------------------------------------------------
-def _get_titles(state: WorkflowState) -> tuple[str, str]:
-    """从 state['draft_path'] 的 draft_content.json 读 title_zh;title_en 由 mock 提供。
+def _get_titles(state: WorkflowState) -> tuple[str, str, str]:
+    """读 title_zh(与 node_14 同一 resolver)并真实翻译;返回 (zh, en, status)。
 
-    2026-11-11 阶段4修复:原生 text material 的 ``content`` 是 JSON 字符串,
-    此前直接 ``str(content)`` 把整段 JSON 当标题发给图编辑;统一经
-    :func:`text_display_text` 双形态解析取真实文字。
-
-    Returns:
-        (title_zh, title_en) 元组。
+    status:``real`` = 真实翻译成功;``stub`` = 默认翻译客户端是 Mock 桩;
+    ``degraded`` = 真实客户端但翻译失败/空译文。stub/degraded 时 ``title_en``
+    为空串 —— 调用方不得拼假英文标题。
     """
     draft_path = state.get("draft_path")
     title_zh = "默认标题"
     if draft_path:
         try:
             draft = json.loads(Path(draft_path).read_text(encoding="utf-8"))
-            texts = draft.get("materials", {}).get("texts", [])
-            if texts and isinstance(texts[0], dict):
-                text = text_display_text(texts[0]).strip()
-                if text:
-                    title_zh = text
-        except (json.JSONDecodeError, OSError, KeyError, IndexError):
+            title_zh = resolve_zh_title(draft)
+        except (json.JSONDecodeError, OSError):
             pass
-    # Week 4 用固定映射,Week 5 接翻译服务
-    title_en = f"[EN] {title_zh}"
-    return title_zh, title_en
+
+    client = get_default_client()
+    if not isinstance(client, LLMTranslateClient):
+        return title_zh, "", "stub"
+    try:
+        translated = client.translate([
+            {"index": 0, "start_ms": 0, "end_ms": 0, "text_zh": title_zh}
+        ])
+        title_en = str((translated[0] or {}).get("text_en") or "").strip()
+    except Exception as exc:  # noqa: BLE001 — 封面翻译非关键路径,失败降级
+        print(f"[node_15] 封面标题翻译失败: {exc!r}")
+        return title_zh, "", "degraded"
+    if not title_en:
+        return title_zh, "", "degraded"
+    return title_zh, title_en, "real"
 
 
 def _build_prompt(title_zh: str, title_en: str, bbox: dict | None) -> str:
@@ -110,24 +122,35 @@ async def _node_15_localize_covers_en_async(state: WorkflowState) -> dict:
     if not covers:
         return {"status_log": ["node_15_localize_covers_skipped"]}
 
-    title_zh, title_en = _get_titles(state)
-    en_paths = await asyncio.gather(*[
-        asyncio.to_thread(_localize_one_cover, c, title_zh, title_en)
-        for c in covers
-    ])
+    title_zh, title_en, translation_status = _get_titles(state)
+
+    errors: list[str] = []
+    if title_en:
+        en_paths = list(await asyncio.gather(*[
+            asyncio.to_thread(_localize_one_cover, c, title_zh, title_en)
+            for c in covers
+        ]))
+    else:
+        # 修订计划 §5.6:标题翻译不可用(stub/degraded)→ 不生成伪英文封面,
+        # 全部 en_path=None 降级,由 covers QA 呈现缺英文封面。
+        en_paths = [None] * len(covers)
+        errors.append(
+            f"[node_15] 封面标题翻译不可用(status={translation_status}),"
+            "英文封面降级不生成(绝不生成 [EN] 假标题)"
+        )
 
     merged: list[dict] = []
-    errors: list[str] = []
     for cover, en_path in zip(covers, en_paths):
         new_cover = dict(cover)
         new_cover["en_path"] = en_path
         merged.append(new_cover)
-        if en_path is None:
+        if en_path is None and title_en:
             ratio = cover.get("ratio", "unknown")
             errors.append(f"[node_15] 封面本地化失败:ratio={ratio}")
 
     return {
         "covers": merged,
         "error_log": errors,
+        "cover_translation_status": translation_status,
         "status_log": ["node_15_localize_covers_en_done"],
     }

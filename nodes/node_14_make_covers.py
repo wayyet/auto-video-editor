@@ -21,7 +21,6 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from draft_ops.atomic_writer_file import atomic_write_file
-from jy_common.native_text import text_display_text
 from mcp_clients.jianying_cover_client import call_write_cover_9x16, default_font
 from state import WorkflowState
 from video_edit_capabilities.render import probe_video_dimensions
@@ -260,22 +259,21 @@ def _produce_cover_source_frame(
 # 标题读取
 # ---------------------------------------------------------------------------
 def _get_title(draft_dir: Path) -> str:
-    """从 ``draft_content.json`` 的 ``materials.texts[0]`` 读标题,缺失时占位。
+    """解析中文 canonical title(2026-11-17 P2 起与 node_15 共用 resolver)。
 
-    2026-11-11 阶段4修复:原生 text material 的 ``content`` 是 JSON 字符串
-    (``{"styles":[...],"text":"文本"}``),此前直接 ``str(content)`` 把整段
-    JSON 当标题绘制。统一经 :func:`text_display_text` 双形态解析。
+    不再依赖 ``materials.texts[0]`` 数组顺序:文本轨最早 start 的我方文本素材
+    才是稳定标题(修订计划 §5.6);缺失时占位。原生 text material 的
+    ``content`` 是 JSON 字符串,经 resolver 内部 :func:`text_display_text`
+    双形态解析。
     """
+    from nodes._cover_title import resolve_zh_title
+
     draft_file = draft_dir / "draft_content.json"
     if draft_file.exists():
         try:
             draft = json.loads(draft_file.read_text(encoding="utf-8"))
-            texts = draft.get("materials", {}).get("texts", [])
-            if texts and isinstance(texts[0], dict):
-                text = text_display_text(texts[0]).strip()
-                if text:
-                    return text
-        except (json.JSONDecodeError, OSError, KeyError, IndexError):
+            return resolve_zh_title(draft)
+        except (json.JSONDecodeError, OSError):
             pass
     return "默认标题"
 
