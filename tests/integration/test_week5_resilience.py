@@ -23,7 +23,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
 from graph import build_graph
-from jy_common.translate_client import MockTranslateClient, set_default_client
+from jy_common.translate_client import LLMTranslateClient, MockTranslateClient, set_default_client
 from state import WorkflowState
 from draft_ops.draft_integrity import REQUIRED_FEATURE_KEYS
 
@@ -106,7 +106,9 @@ def _is_interrupted(g, config: dict) -> bool:
 # 2026-11-15 关卡③删除后剩两道人工关卡)
 # ---------------------------------------------------------------------------
 def test_resume_all_checkpoints_via_shared_checkpointer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    real_mode_translator,
 ) -> None:
     """模拟"全新 graph 实例 + 同一个存档 = 跨实例恢复"。
 
@@ -191,18 +193,26 @@ def test_side_effects_only_once_across_resumes(
         start_heartbeat_thread=False,
     )
 
+    # 2026-11-17 P1:翻译次数以真实适配器底层的 LLM chat 调用计数 ——
+    # stub/Mock 译文被 fail-closed 门禁拦截,不再进入正式字幕/TTS。
     translate_calls = {"n": 0}
 
-    class _CountingTranslate:
-        def translate(self, segments):
+    class _CountingLLM:
+        def chat(self, *, system_prompt, user_prompt, media=None,
+                 json_schema=None, temperature=0.3, top_p=0.9, max_tokens=4096):
             translate_calls["n"] += 1
-            return [
-                {"index": i, "start_ms": s["start_ms"], "end_ms": s["end_ms"],
-                 "text_en": f"EN-{i}"}
-                for i, s in enumerate(segments)
-            ]
+            payload = json.loads(user_prompt)
+            return json.dumps(
+                {"translations": [
+                    {"index": s["index"], "text_en": f"EN-{s['index']}"}
+                    for s in payload["segments"]
+                ]},
+                ensure_ascii=False,
+            )
 
-    set_default_client(_CountingTranslate())
+    set_default_client(
+        LLMTranslateClient(_CountingLLM(), translator_id="integration-real")
+    )
 
     # 完整跑通
     g.invoke(state, config=config)
@@ -211,7 +221,9 @@ def test_side_effects_only_once_across_resumes(
     _add_manual_bgm(draft_file)
     final = g.invoke(Command(resume=True), config=config)
     assert not _is_interrupted(g, config)
-    assert translate_calls["n"] == 1
+    # 2026-11-17 P2 起默认翻译客户端有两个消费方:字幕翻译(16a)1 次 +
+    # 封面标题翻译(15)1 次;marker 幂等保证 16a 不因重放重复调用。
+    assert translate_calls["n"] == 2, f"翻译调用次数异常:{translate_calls['n']}"
 
     # wav 文件存在
     en_audio = final.get("en_audio_path")
@@ -220,7 +232,7 @@ def test_side_effects_only_once_across_resumes(
 
     # 模拟"再次 resume"(LangGraph 重放)— 翻译不调、wav 不重写
     final2 = g.invoke(Command(resume=True), config=config)
-    assert translate_calls["n"] == 1, f"翻译被多次调用:{translate_calls['n']}"
+    assert translate_calls["n"] == 2, f"翻译被多次调用:{translate_calls['n']}"
     wav_size_after = Path(en_audio).stat().st_size
     assert wav_size_after == wav_size_initial, "wav 不应被重写"
 
@@ -234,15 +246,17 @@ def test_side_effects_only_once_across_resumes(
 # 测试 4:node_17 写空 wav 占位 — 验收脚本能跑"英文配音音轨非空"断言
 # ---------------------------------------------------------------------------
 def test_node_17_writes_empty_wav_placeholder(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    real_mode_translator,
 ) -> None:
-    """节点 17 在 draft_dir_en_branch 下生成 en_dub.wav,>5KB,允许验收通过。"""
+    """节点 17 在 draft_dir_en_branch 下生成 en_dub.wav,>5KB,允许验收通过。
+
+    2026-11-17 P1:真实翻译模式( stub 译文被门禁拦,不会送 TTS)。
+    """
     draft_dir = tmp_path / "drafts" / "demo"
     draft_file = _seed_draft(draft_dir)
     monkeypatch.setenv("AUTO_VIDEO_EDITOR_DRAFT_DIR", str(draft_dir))
-
-    # 显式恢复默认翻译客户端(前一个测试可能改成 _WideTranslate)
-    set_default_client(MockTranslateClient())
 
     state = _seed_state(str(draft_file))
     config = {"configurable": {"thread_id": "w5-wav"}}

@@ -188,3 +188,44 @@ def isolated_postgres_db(postgres_test_db: PostgresTestDbFactory) -> Callable[[]
     连不上 Postgres ⇒ 直接 **fail**(不静默 skip,避免"假绿")。
     """
     return postgres_test_db.create
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-17 P1(英文字幕真实翻译):真实翻译模式 fixture
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def real_mode_translator():
+    """把默认翻译客户端换成"真实模式"(LLMTranslateClient + 可编程假 LLM)。
+
+    背景:P1 起 stub/Mock 翻译被 fail-closed 门禁拦截(node_08b 不写正式
+    英文字幕、node_17 不送英文 TTS)。需要英文字幕/配音/封面全链产物的
+    集成用例,用本 fixture 模拟"真实后端已装配"的运行;假 LLM 的 chat()
+    按输入 index 逐段给出确定译文,满足输出契约校验。
+
+    用例结束恢复 Mock 默认,防跨用例污染。
+    """
+    import json as _json
+
+    from jy_common.translate_client import (
+        LLMTranslateClient,
+        MockTranslateClient,
+        set_default_client,
+    )
+
+    class _GenericRealLLM:
+        def chat(self, *, system_prompt, user_prompt, media=None,
+                 json_schema=None, temperature=0.3, top_p=0.9, max_tokens=4096):
+            payload = _json.loads(user_prompt)
+            return _json.dumps(
+                {"translations": [
+                    {"index": s["index"], "text_en": f"EN-{s['index']}"}
+                    for s in payload["segments"]
+                ]},
+                ensure_ascii=False,
+            )
+
+    set_default_client(
+        LLMTranslateClient(_GenericRealLLM(), translator_id="integration-real")
+    )
+    yield
+    set_default_client(MockTranslateClient())

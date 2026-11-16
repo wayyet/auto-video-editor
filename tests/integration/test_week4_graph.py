@@ -109,7 +109,9 @@ def _is_interrupted(g, config: dict) -> bool:
 # 场景 3(基础,先跑):英文字幕正常路径 — ①② 两关走完到 END
 # (2026-11-15 关卡③删除前,本场景验证"正常路径不触发③";改名保语义)
 # ---------------------------------------------------------------------------
-def test_week4_english_subtitle_path_reaches_checkpoint2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_week4_english_subtitle_path_reaches_checkpoint2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, real_mode_translator
+) -> None:
     """正常长度翻译 → 英文线 10b 直连 17,流程 ①→② 一路到 END。"""
     draft_dir = tmp_path / "drafts" / "demo"
     draft_file = _seed_draft(draft_dir)

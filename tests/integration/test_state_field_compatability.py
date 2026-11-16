@@ -120,7 +120,9 @@ def _is_interrupted(g, config: dict) -> bool:
 # 测试 1:旧 checkpoint(Week 4 state schema)resume 不报错
 # ---------------------------------------------------------------------------
 def test_legacy_state_schema_resume_through_full_graph(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    real_mode_translator,
 ) -> None:
     """用 Week 4 schema 的初始 state 跑完整图,验证新字段缺失时节点不抛 KeyError。
 
@@ -249,7 +251,9 @@ def test_workflow_state_new_fields_are_not_required() -> None:
 # 测试 4:仅 en_audio_path(节点 17 唯一写)在 final state 中正确产生
 # ---------------------------------------------------------------------------
 def test_en_audio_path_produced_by_node_17(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    real_mode_translator,
 ) -> None:
     """验证 Week 5 关键产物 ``en_audio_path`` 在最终 state 中被节点 17 写入。
 

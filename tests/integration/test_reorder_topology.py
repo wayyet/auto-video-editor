@@ -209,7 +209,7 @@ def test_english_branch_skips_cleanly_without_source_subtitles(tmp_path, monkeyp
     assert stops == [["①"], ["②"]]
 
 
-def test_english_draft_gets_subtitles_and_text_fx(tmp_path, monkeypatch):
+def test_english_draft_gets_subtitles_and_text_fx(tmp_path, monkeypatch, real_mode_translator):
     """有源字幕(模拟旧线程恢复时 state 已带 asr_segments_zh)→ 英文字幕照常写入。
 
     node_08 不写也不清该键(B1 §3.3 取"缺省"),state 里的段经 {**state} 透传给 16a。
