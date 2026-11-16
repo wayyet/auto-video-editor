@@ -1,14 +1,22 @@
 {
   "_reverse_engineering_pending": false,
   "_week3_status": "real_vip",
-  "_comment": "fx_template.json 的最小 fixture,只放短名索引。真实 ID 由 fx_resource_library.json 提供。",
-  "transitions": [
-    {"name": "渐变模糊"},
-    {"name": "魔法放大"},
-    {"name": "黑白抖动"}
-  ],
+  "_comment": "fx_template.json 的最小 fixture:池成员/特效候选的真实 ID 由 fx_resource_library_fixture.json 提供(分段精确命中,核验报告 §6.4)。",
+  "transition_semantic_map": {
+    "fade": "pool_gentle",
+    "fade_in": "pool_gentle",
+    "fade_out": "pool_gentle",
+    "zoom": "pool_zoom",
+    "cut": null,
+    "none": null,
+    "hard_cut": null
+  },
+  "transition_pools": {
+    "pool_gentle": ["渐变模糊", "魔法放大"],
+    "pool_zoom": ["黑白抖动"]
+  },
   "video_effects": [
-    {"name": "胶片式黑白"},
-    {"name": "老式放大"}
+    {"name": "胶片式黑白", "style_tag": "default", "intensity": 0.5},
+    {"name": "老式放大", "style_tag": "default", "intensity": 0.4}
   ]
 }

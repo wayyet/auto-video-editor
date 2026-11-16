@@ -156,14 +156,40 @@ class TemplateLibrary:
         return dict(self._data.get("default_style", {}))
 
     def transition_semantic_map(self) -> dict[str, str | None]:
-        """转场推荐语义 → 资源库转场名(阶段 3,node_09 消费)。
+        """转场推荐语义 → 池 key(2026-11-17 池化后,node_09 消费)。
 
         数据源 ``fx_template.json`` 的 ``transition_semantic_map``;值为 ``None``
-        表示硬切(该边界不加转场素材)。未配置/缺失时返回空 dict,调用方回落
-        style_tag 现行逻辑。``_comment`` 等下划线键被剔除。
+        表示硬切(该边界不加转场素材);值为池 key(如 ``pool_gentle``)时经
+        :meth:`transition_pool` 解析成真实转场名。未配置/缺失时返回空 dict。
+        ``_comment`` 等下划线键被剔除。
         """
         raw = self._data.get("transition_semantic_map") or {}
         return {k: v for k, v in raw.items() if not k.startswith("_")}
+
+    # ---------- 转场池 / 视频特效白名单(2026-11-17 核验报告 §6.4)----------
+
+    def transition_pool(self, pool_key: str) -> list[str]:
+        """按池 key 返回真实转场名列表(``fx_template.transition_pools``)。
+
+        池缺失/为空/非列表返回 ``[]`` —— 调用方按 degraded 处理并记录,
+        **不得静默换池**(核验报告 §6.4)。
+        """
+        pools = self._data.get("transition_pools") or {}
+        members = pools.get(pool_key) if isinstance(pools, dict) else None
+        if not isinstance(members, list):
+            return []
+        return [str(m) for m in members if m]
+
+    def video_effect_candidates(self) -> list[dict[str, Any]]:
+        """返回视频特效白名单行(``fx_template.video_effects``),保序复制。
+
+        空白名单 = fail-closed 不注入特效(核验报告 §6.6);行内 ``name``
+        由调用方经资源库 ``video_effects`` 段精确解析,``intensity`` 钳制 [0,1]。
+        """
+        rows = self._data.get("video_effects")
+        if not isinstance(rows, list):
+            return []
+        return [dict(r) for r in rows if isinstance(r, dict) and r.get("name")]
 
     # ---------- 新 API:按 name 精确查询 ----------
 

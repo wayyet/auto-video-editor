@@ -3,40 +3,42 @@
   "_week3_status": "real_vip",
   "_source_vip_library": "templates/fx_resource_library.json",
   "_generated_via": "scripts/build_resource_library.py",
-  "_comment": "Week 4 升级:资源 ID 已从 pyJianYingDraft metadata 迁移到 templates/fx_resource_library.json。本文件只保留风格索引(name + style_tag),真实 resource_id 在运行期由 TemplateLibrary.pick_transition_by_name() 解析。如需新增/调整转场,先在 fx_resource_library.json 里选真实 VIP 资源,再把 name 加进下面的索引。",
+  "_comment": "2026-11-17 核验报告 §6.4 重构:transition_semantic_map 只产出池 key,真实 resource_id 在运行期由 TemplateLibrary 从 fx_resource_library.json 解析。池成员/特效候选必须分段精确命中(金色光斑/金沙是转场、推近推远是特效——同名资源可能存在于另一类型数组),完整性由 tests/unit/test_template_library_fx_pools.py 对真实库全量扫描。",
   "_week4_resource_id_field": {
     "transitions": "resource_id (19 位数字,fx_resource_library.json)",
     "video_effects": "resource_id (19 位数字,fx_resource_library.json)"
   },
   "asset_resource_map_ref": "jy_common/asset_resource_map.json",
   "transition_semantic_map": {
-    "_comment": "阶段3:转场推荐语义(recommend_transition 的 transition_in/out 字符串)→ 资源库转场名。null = 硬切,该边界不加转场素材。未收录的语义回落 style_tag 现行逻辑(闪屏故障等)。叠化为免费转场(fx_resource_library.json 已含免费资源)。",
-    "fade": "叠化",
-    "fade_in": "叠化",
-    "fade_out": "叠化",
-    "dissolve": "叠化",
-    "crossfade": "叠化",
+    "_comment": "转场推荐语义(recommend_transition 受控词表 + 旧计划兼容值)→ 池 key。null = 硬切,该边界不加转场素材。未收录语义回退 pool_gentle(核验报告 §6.5:不再落强视觉默认值)。",
+    "fade": "pool_gentle",
+    "fade_in": "pool_gentle",
+    "fade_out": "pool_gentle",
+    "dissolve": "pool_gentle",
+    "crossfade": "pool_gentle",
+    "zoom": "pool_zoom",
+    "slide": "pool_slide",
+    "whip": "pool_whip",
+    "creative": "pool_creative",
     "cut": null,
     "none": null,
     "hard_cut": null
   },
-  "transitions": [
-    {
-      "name": "闪屏故障",
-      "category": "video_transition",
-      "style_tag": "default"
-    },
-    {
-      "name": "横向滑动",
-      "category": "video_transition",
-      "style_tag": "default"
-    },
-    {
-      "name": "翻转冲屏",
-      "category": "video_transition",
-      "style_tag": "default"
-    }
-  ],
-  "_video_effects_disabled": "2026-11-11 清空:原候选'抖动模糊'(0.3)/'胶片暖棕'均为全片挂载型特效,'抖动模糊'实测把成片染成全画面模糊(见 outputs/console-64da836e2f3f/baseline/ab_test_result.md)。清空后 node_09 走降级路径不注入特效;恢复前必须先在剪映实机验证候选特效(且禁止全片模糊类),再逐个加回。注意 pick_video_effect 对无 style_tag 行有 hash 兜底,数组非空时必须给出唯一安全候选。",
-  "video_effects": []
+  "transition_pools": {
+    "_comment": "池成员 = fx_resource_library.json transitions 段的真实转场名(含 VIP,剪映会员已确认可用)。pool_zoom 修正:推近推远属 video_effects 段,替换为推远 II(核验报告 §5.2)。",
+    "pool_gentle": ["叠化", "水墨", "相片切换", "前后对比", "融化"],
+    "pool_zoom": ["推近 II", "推远 II", "中心切开"],
+    "pool_slide": ["三屏滑入", "横向滑动", "上移", "下移"],
+    "pool_whip": ["穿越 III", "横移模糊", "顺时针三角", "闪屏故障"],
+    "pool_creative": ["翻转冲屏", "课本转场", "负片下滑", "赛博马赛克"]
+  },
+  "_video_effects_policy": "2026-11-17 全量启用(操作员拍板):白名单只收氛围光效类(辉光/光斑),明确禁用模糊/抖动/频闪/故障/变焦类——2026-11-11 '抖动模糊' 全片挂载事故(outputs/console-64da836e2f3f)不得重演。候选先经 fx_resource_library.json video_effects 段精确命中 + 19 位 ID 校验;挂载规则克制:仅首段/尾段/中间每第 3 段(0-based i∈{0,n-1}∪{i∈[1,n-2] 且 i%3==0});intensity 钳制 [0,1]。真机验收清单见核验报告 §10.2;scripts/canary_video_effect.py 可对副本草稿做单资源复核。",
+  "video_effects": [
+    {"name": "柔和辉光", "style_tag": "default", "intensity": 0.5},
+    {"name": "金色辉光", "style_tag": "default", "intensity": 0.5},
+    {"name": "梦幻辉光", "style_tag": "default", "intensity": 0.5},
+    {"name": "精致辉光", "style_tag": "default", "intensity": 0.5},
+    {"name": "失焦光斑", "style_tag": "default", "intensity": 0.5},
+    {"name": "幻动光斑", "style_tag": "default", "intensity": 0.5}
+  ]
 }
