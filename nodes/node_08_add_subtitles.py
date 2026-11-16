@@ -51,6 +51,7 @@ from typing import Any
 import config
 from assembly_capabilities.run_context import RunContext
 from nodes._draft_io import apply_and_write, load_draft
+from nodes._dual_draft import ZH_VOICEOVER_TRACK_NAME as _ZH_VOICEOVER_TRACK_NAME
 from nodes._subtitle_texts import build_text_track, make_text_material
 from nodes.storyline._common import (
     PLAN_SOURCE_FINAL_INVALID,
@@ -420,8 +421,9 @@ def _sync_zh_text_track(draft: dict, materials: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 # 阶段 2(2026-11-09 效果缺失修复):中文 TTS 落草稿(权威配音轨重写)
 # ---------------------------------------------------------------------------
-#: 本节点拥有的配音轨名(删除守卫的确定性匹配之一)
-_ZH_VOICEOVER_TRACK_NAME = "Voiceover_zh"
+#: 本节点拥有的配音轨名 —— 2026-11-17 P0 起权威定义移至
+#: ``nodes/_dual_draft.ZH_VOICEOVER_TRACK_NAME``(node_fork 清理/node_12 镜像
+#: 过滤/QA 语言隔离检查三方共用),此处以别名引用,消除双处漂移。
 #: 本节点拥有的配音轨 id(重建时的固定 id,重放幂等)
 _ZH_VOICEOVER_TRACK_ID = "track-audio-zh-voiceover"
 #: WAV 头的保守大小(字节);文件不超过它视为空音频

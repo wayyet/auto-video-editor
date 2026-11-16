@@ -524,33 +524,45 @@ def check_audio_mirror(zh_draft: dict, en_draft: dict) -> dict[str, Any]:
     """校验中文音频轨(含引用的 audio materials)完整镜像到英文草稿。
 
     与 :func:`nodes.node_12_human_add_bgm.mirror_bgm_to_en_draft` 的"按角色
-    合并"语义对齐(P3b,2026-11-08):镜像成功 = 英文侧**镜像轨**(排除
-    ``node_17`` 写入的英文配音轨,即 ``name=EN_VOICEOVER_TRACK_NAME`` 标记轨)
-    的 audio 段集合与中文侧一致,且这些段引用的 audio materials 在英文侧都能
-    解析到。英文配音轨是英文版合法的特有内容,不参与比对、不触发告警。
+    合并"语义对齐(P3b,2026-11-08):镜像成功 = 英文侧**镜像轨**的 audio 段
+    集合与中文侧一致,且这些段引用的 audio materials 在英文侧都能解析到。
+
+    两类配音轨都**不参与镜像比对**(2026-11-17 P0 起):
+    - 英文配音轨 ``EN_VOICEOVER_TRACK_NAME`` —— 英文版合法特有内容(P3b);
+    - 中文配音轨 ``ZH_VOICEOVER_TRACK_NAME`` —— v2 策略下"有意不镜像"
+      (node_12 镜像已排除,英文草稿禁止残留由
+      :func:`check_no_zh_voiceover_in_en_draft` 单独把关)。中文 VO 轨排除出
+      比较集合后,中文主草稿只剩 BGM/人工音轨参与一致性比对。
 
     Returns:
-        ``{"issues": [...], "summary": {...}}``;中文无音频轨时无事可查(镜像
-        本来就不产生内容),不算问题。
+        ``{"issues": [...], "summary": {...}}``;中文无(非配音)音频轨时无事
+        可查(镜像本来就不产生内容),不算问题。
     """
     issues: list[dict[str, str]] = []
     # P3b:英文配音轨标记(权威定义 nodes/_dual_draft.py)。延迟 import:
     # draft_ops 不做包级反向依赖 nodes(nodes 侧 node_join_before_delivery
     # 正向 import 本模块),函数内取值无初始化顺序风险。
-    from nodes._dual_draft import EN_VOICEOVER_TRACK_NAME
+    from nodes._dual_draft import EN_VOICEOVER_TRACK_NAME, ZH_VOICEOVER_TRACK_NAME
 
     def _audio_tracks(draft: dict) -> list[dict]:
         return [t for t in (draft.get("tracks") or []) if isinstance(t, dict) and t.get("type") == "audio"]
 
-    zh_tracks = _audio_tracks(zh_draft)
+    zh_tracks_all = _audio_tracks(zh_draft)
     en_tracks_all = _audio_tracks(en_draft)
-    # P3b:英文配音轨不参与镜像比对
+    # P3b:英文配音轨不参与镜像比对;2026-11-17 P0:中文配音轨同样排除
+    zh_voiceover_tracks = [t for t in zh_tracks_all if t.get("name") == ZH_VOICEOVER_TRACK_NAME]
+    zh_tracks = [t for t in zh_tracks_all if t.get("name") != ZH_VOICEOVER_TRACK_NAME]
     en_voiceover_tracks = [t for t in en_tracks_all if t.get("name") == EN_VOICEOVER_TRACK_NAME]
-    en_tracks = [t for t in en_tracks_all if t.get("name") != EN_VOICEOVER_TRACK_NAME]
+    en_tracks = [
+        t
+        for t in en_tracks_all
+        if t.get("name") not in (EN_VOICEOVER_TRACK_NAME, ZH_VOICEOVER_TRACK_NAME)
+    ]
     summary: dict[str, Any] = {
         "zh_audio_tracks": len(zh_tracks),
         "en_audio_tracks": len(en_tracks),
         "en_voiceover_tracks": len(en_voiceover_tracks),
+        "zh_voiceover_tracks": len(zh_voiceover_tracks),
         "zh_segments": sum(len(t.get("segments") or []) for t in zh_tracks),
         "en_segments": sum(len(t.get("segments") or []) for t in en_tracks),
         "matched": False,
@@ -599,6 +611,46 @@ def check_audio_mirror(zh_draft: dict, en_draft: dict) -> dict[str, Any]:
     return {"issues": issues, "summary": summary}
 
 
+def check_no_zh_voiceover_in_en_draft(
+    en_draft: dict, policy_version: str | None
+) -> list[dict[str, str]]:
+    """英文草稿语言隔离检查(v2 分支的结构不变量,修订计划 §4.5-B)。
+
+    - ``policy_version == "v2"``:英文草稿出现 ``ZH_VOICEOVER_TRACK_NAME`` 音轨
+      → 每轨一条 SEV_ERROR(附 track id / 段数 / material ids,便于定位来源);
+    - legacy / 无版本:返回空列表(not_applicable 语义),不追溯阻断旧任务;
+      legacy 分支的残留由镜像一致性比对排除后不再误报,是否清理由人工决定。
+
+    issue 的 ``check`` 名 "配音隔离" 经 ``DEEP_CHECK_CATEGORY`` 归入
+    ``voice_language_isolation`` 类别;该类别在 :func:`build_qa_categories` 的
+    gate 判定中对 v2 分支**无条件视为必需**,不受 ``required_features`` 配置关闭。
+    """
+    from nodes._dual_draft import EN_BRANCH_AUDIO_POLICY_V2, ZH_VOICEOVER_TRACK_NAME
+
+    if str(policy_version or "") != EN_BRANCH_AUDIO_POLICY_V2:
+        return []
+    issues: list[dict[str, str]] = []
+    for track in en_draft.get("tracks") or []:
+        if (
+            not isinstance(track, dict)
+            or track.get("type") != "audio"
+            or track.get("name") != ZH_VOICEOVER_TRACK_NAME
+        ):
+            continue
+        segs = [s for s in track.get("segments") or [] if isinstance(s, dict)]
+        mat_ids = sorted({str(s.get("material_id")) for s in segs if s.get("material_id")})
+        issues.append(
+            _issue(
+                "配音隔离",
+                SEV_ERROR,
+                "en",
+                f"英文草稿残留中文配音轨 {track.get('id')}"
+                f"(segments={len(segs)}, materials={mat_ids})—— v2 分支禁止中文配音",
+            )
+        )
+    return issues
+
+
 # ---------------------------------------------------------------------------
 # 阶段 6(2026-11-09 效果缺失修复):required-feature gate
 # ---------------------------------------------------------------------------
@@ -618,11 +670,14 @@ REQUIRED_FEATURE_KEYS: tuple[str, ...] = (
 
 #: QA 分类全集 = 9 类必需功能 + 恒检查但不 gate 的交付类别
 #: (video_effects 不进 required:特效属"加分效果",缺资源时降级不阻断交付)。
+#: voice_language_isolation(2026-11-17 P0)不在 REQUIRED_FEATURE_KEYS 里,
+#: 但 v2 分支下在 gate 判定中无条件视为必需(结构不变量,不受配置关闭)。
 CATEGORY_KEYS: tuple[str, ...] = REQUIRED_FEATURE_KEYS + (
     "video_effects",
     "covers",
     "srt",
     "draft_integrity",
+    "voice_language_isolation",
 )
 
 #: 类别 → 创建台展示名(与 DELIVERY QA 明细的 check 字段中文一致)
@@ -640,6 +695,7 @@ CATEGORY_LABELS: dict[str, str] = {
     "covers": "封面",
     "srt": "英文字幕文件",
     "draft_integrity": "草稿结构",
+    "voice_language_isolation": "配音语言隔离",
 }
 
 #: 深度 QA issue 的 check 文本 → category(尾链/交付物 issue 在节点侧自带 category)
@@ -647,6 +703,7 @@ DEEP_CHECK_CATEGORY: dict[str, str] = {
     "字幕文本": "subtitles",  # 按issue draft 标签再细分 zh/en
     "字幕一致": "subtitles",
     "BGM镜像": "bgm",
+    "配音隔离": "voice_language_isolation",
     "双文件": "draft_integrity",
     "草稿元数据": "draft_integrity",
     "根索引": "draft_integrity",
@@ -964,16 +1021,36 @@ def build_qa_categories(
         categories["volume_fades"]["status"] = CAT_NOT_APPLICABLE
         categories["volume_fades"]["note"] = "无 BGM 段"
 
+    # 12) voice_language_isolation(2026-11-17 P0):v2 分支英文草稿禁止中文配音轨。
+    #     issue 由 check_no_zh_voiceover_in_en_draft 经深度 QA 汇入;此处只做
+    #     n/a 归类:legacy / 英文分支未生成时不适用,不追溯阻断旧任务。
+    from nodes._dual_draft import EN_BRANCH_AUDIO_POLICY_V2
+
+    en_policy = str(state.get("en_branch_audio_policy_version") or "")
+    if (not en_checked or en_policy != EN_BRANCH_AUDIO_POLICY_V2) and _status_of(
+        "voice_language_isolation"
+    ) == CAT_PASSED:
+        categories["voice_language_isolation"]["status"] = CAT_NOT_APPLICABLE
+        categories["voice_language_isolation"]["note"] = (
+            "英文分支未生成" if not en_checked else "legacy 分支不启用隔离检查"
+        )
+
     # 11) required 但 required 类别 still passed 的,不额外处理;
     #     未 required 的类别即使 failed 也保持 failed(展示用),gate 只看 required。
+    # 例外(2026-11-17 P0):voice_language_isolation 是 v2 分支的结构不变量,
+    # 在 gate 判定中**无条件视为必需**(不受 required_features 配置关闭);
+    # legacy / 未生成分支该类别为 not_applicable,永不阻断。
     gate_failed = any(
         required.get(key) and categories[key]["status"] in (CAT_FAILED, CAT_DEGRADED)
         for key in REQUIRED_FEATURE_KEYS
-    )
+    ) or categories["voice_language_isolation"]["status"] in (CAT_FAILED, CAT_DEGRADED)
 
     # required_features 回显进报告(创建台展示判定依据)
     for key in CATEGORY_KEYS:
-        categories[key]["required"] = bool(required.get(key)) if key in REQUIRED_FEATURE_KEYS else False
+        if key == "voice_language_isolation":
+            categories[key]["required"] = bool(en_checked and en_policy == EN_BRANCH_AUDIO_POLICY_V2)
+        else:
+            categories[key]["required"] = bool(required.get(key)) if key in REQUIRED_FEATURE_KEYS else False
 
     return categories, new_issues, gate_failed
 
@@ -1028,10 +1105,19 @@ def build_join_qa_report(state: dict[str, Any]) -> dict[str, Any]:
         "summary": {"matched": None, "note": "草稿不齐,镜像检查跳过"},
     }
 
+    # 2026-11-17 P0:英文草稿语言隔离(v2 分支禁止中文配音轨;legacy 不检查)
+    en_policy_raw = str(state.get("en_branch_audio_policy_version") or "")
+    language_isolation = (
+        check_no_zh_voiceover_in_en_draft(en_draft, en_policy_raw)
+        if en_report["present"]
+        else []
+    )
+
     issues: list[dict[str, str]] = [
         *zh_report["issues"],
         *en_report["issues"],
         *mirror["issues"],
+        *language_isolation,
     ]
 
     # 阶段 6:回读 SHA-256(创建台可指出"哪份草稿、哪个版本"的缺失;
@@ -1084,6 +1170,10 @@ def build_join_qa_report(state: dict[str, Any]) -> dict[str, Any]:
         "zh": {k: v for k, v in zh_report.items() if k != "draft"},
         "en": {k: v for k, v in en_report.items() if k != "draft"},
         "mirror": mirror["summary"],
+        "language_isolation": {
+            "policy": en_policy_raw or "legacy",
+            "issue_count": len(language_isolation),
+        },
         "sha256": sha256,
         "mutations": mutations,
         "quality": quality,
@@ -1108,6 +1198,7 @@ __all__ = [
     "build_qa_categories",
     "check_audio_mirror",
     "check_blur_video_effects",
+    "check_no_zh_voiceover_in_en_draft",
     "check_draft_dir",
     "check_dual_files",
     "check_material_paths",

@@ -47,12 +47,17 @@ from nodes._draft_io import (
     upsert_by_id,
     write_draft,
 )
-from nodes._dual_draft import EN_VOICEOVER_TRACK_NAME, dual_draft_targets, missing_en_note
+from nodes._dual_draft import (
+    EN_VOICEOVER_TRACK_NAME,
+    ZH_VOICEOVER_TRACK_NAME,
+    dual_draft_targets,
+    missing_en_note,
+)
 from state import WorkflowState
 
 
 #: 配音轨名标记(node_08 中文配音轨 / node_17 英文配音轨)
-VOICEOVER_TRACK_NAMES = ("Voiceover_zh", EN_VOICEOVER_TRACK_NAME)
+VOICEOVER_TRACK_NAMES = (ZH_VOICEOVER_TRACK_NAME, EN_VOICEOVER_TRACK_NAME)
 
 
 def is_voiceover_track(track: dict) -> bool:

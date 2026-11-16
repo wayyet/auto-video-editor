@@ -283,6 +283,129 @@ def test_mirror_zh_no_audio_keeps_voiceover(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 2026-11-17 P0(英文分支配音隔离):v2 策略下镜像排除中文配音轨
+# ---------------------------------------------------------------------------
+def _zh_draft_with_vo_and_bgm() -> dict:
+    """node_08 权威重写后的中文主草稿形态:Voiceover_zh 专用轨 + BGM 轨。"""
+    draft = _zh_draft_with_bgm()
+    draft["materials"]["audios"].append({
+        "id": "zh-voiceover:0001",
+        "name": "voiceover_0001.wav",
+        "path": "X:/storyline/voiceover_0001.wav",
+    })
+    draft["tracks"].append({
+        "type": "audio",
+        "id": "track-audio-zh-voiceover",
+        "name": "Voiceover_zh",
+        "segments": [{
+            "id": "zh-voiceover-seg:0001", "material_id": "zh-voiceover:0001",
+            "target_timerange": {"start": 0, "duration": 5_000_000},
+        }],
+    })
+    return draft
+
+
+def test_mirror_v2_skips_voiceover_track(tmp_path: Path) -> None:
+    """v2:中文 VO 轨不回灌;BGM 正常镜像;英文配音轨保留;VO 素材不复制。"""
+    zh = _write_json(tmp_path / "zh" / "draft_content.json", _zh_draft_with_vo_and_bgm())
+    en = _write_json(tmp_path / "en" / "draft_content.json", _en_draft_with_voiceover())
+
+    notes = mirror_bgm_to_en_draft({
+        "draft_path": str(zh),
+        "draft_dir_en_branch": str(en.parent),
+        "en_branch_audio_policy_version": "v2",
+    })
+
+    assert any(n.startswith("node_12_bgm_mirrored_en_done") for n in notes), notes
+    en_draft = json.loads(en.read_text(encoding="utf-8"))
+    audio_tracks = [t for t in en_draft["tracks"] if t["type"] == "audio"]
+    assert not [t for t in audio_tracks if t.get("name") == "Voiceover_zh"]
+    assert [t.get("name") for t in audio_tracks if t.get("name") == "en_voiceover"]
+    bgm = next(t for t in audio_tracks if t.get("name") != "en_voiceover")
+    assert bgm["segments"][0]["id"] == "audio-bgm-1"
+    material_ids = {m["id"] for m in en_draft["materials"]["audios"]}
+    assert material_ids == {"en-dub-1", "audio-bgm-1"}  # zh-voiceover:0001 不复制
+
+
+def test_mirror_v2_idempotent(tmp_path: Path) -> None:
+    """v2 重放:音轨数与素材数不增长,中文 VO 不出现。"""
+    zh = _write_json(tmp_path / "zh" / "draft_content.json", _zh_draft_with_vo_and_bgm())
+    en = _write_json(tmp_path / "en" / "draft_content.json", _en_draft_with_voiceover())
+    state = {
+        "draft_path": str(zh),
+        "draft_dir_en_branch": str(en.parent),
+        "en_branch_audio_policy_version": "v2",
+    }
+
+    mirror_bgm_to_en_draft(state)
+    mirror_bgm_to_en_draft(state)
+
+    en_draft = json.loads(en.read_text(encoding="utf-8"))
+    audio_tracks = [t for t in en_draft["tracks"] if t["type"] == "audio"]
+    assert len(audio_tracks) == 2
+    assert len(en_draft["materials"]["audios"]) == 2
+    assert not [t for t in audio_tracks if t.get("name") == "Voiceover_zh"]
+
+
+def test_mirror_v2_cleans_residual_voiceover(tmp_path: Path) -> None:
+    """v2 防御性清理:英文侧遗留的中文 VO 轨与链产孤儿素材一并清掉。"""
+    zh = _write_json(tmp_path / "zh" / "draft_content.json", _zh_draft_with_vo_and_bgm())
+    en_draft = _en_draft_with_voiceover()
+    # 模拟历史残留:VO 轨 + 链产孤儿配音素材(fork 未清的旧目录)
+    en_draft["materials"]["audios"].append({
+        "id": "zh-voiceover:0001",
+        "name": "voiceover_0001.wav",
+        "path": "X:/storyline/voiceover_0001.wav",
+    })
+    en_draft["tracks"].append({
+        "type": "audio",
+        "id": "track-audio-zh-voiceover",
+        "name": "Voiceover_zh",
+        "segments": [{"id": "zh-voiceover-seg:0001", "material_id": "zh-voiceover:0001"}],
+    })
+    en = _write_json(tmp_path / "en" / "draft_content.json", en_draft)
+
+    mirror_bgm_to_en_draft({
+        "draft_path": str(zh),
+        "draft_dir_en_branch": str(en.parent),
+        "en_branch_audio_policy_version": "v2",
+        "storyline_voiceover_artifact": "X:/storyline/voiceover.json",
+    })
+
+    en_result = json.loads(en.read_text(encoding="utf-8"))
+    audio_tracks = [t for t in en_result["tracks"] if t["type"] == "audio"]
+    assert not [t for t in audio_tracks if t.get("name") == "Voiceover_zh"]
+    assert "zh-voiceover:0001" not in {m["id"] for m in en_result["materials"]["audios"]}
+
+
+def test_mirror_v2_zh_only_voiceover_degrades(tmp_path: Path) -> None:
+    """v2:中文草稿只有配音轨(无 BGM)→ 既有缺失语义保持,不把 VO 当 BGM。"""
+    zh_draft = _en_draft_without_audio()
+    zh_draft["materials"]["audios"] = [
+        {"id": "zh-voiceover:0001", "name": "voiceover_0001.wav", "path": "X:/storyline/voiceover_0001.wav"}
+    ]
+    zh_draft["tracks"].append({
+        "type": "audio",
+        "id": "track-audio-zh-voiceover",
+        "name": "Voiceover_zh",
+        "segments": [{"id": "zh-voiceover-seg:0001", "material_id": "zh-voiceover:0001"}],
+    })
+    zh = _write_json(tmp_path / "zh" / "draft_content.json", zh_draft)
+    en = _write_json(tmp_path / "en" / "draft_content.json", _en_draft_with_voiceover())
+
+    notes = mirror_bgm_to_en_draft({
+        "draft_path": str(zh),
+        "draft_dir_en_branch": str(en.parent),
+        "en_branch_audio_policy_version": "v2",
+    })
+
+    assert any("除中文配音外无 audio track" in n for n in notes), notes
+    en_draft_result = json.loads(en.read_text(encoding="utf-8"))
+    audio_tracks = [t for t in en_draft_result["tracks"] if t["type"] == "audio"]
+    assert [t.get("name") for t in audio_tracks] == ["en_voiceover"]
+
+
+# ---------------------------------------------------------------------------
 # 阶段 5:伴随素材镜像(阶段 0 基线实证 EN 侧悬空 companion ×4 的修复)
 # ---------------------------------------------------------------------------
 def _zh_draft_with_bgm_and_companions() -> dict:

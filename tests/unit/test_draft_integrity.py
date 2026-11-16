@@ -405,7 +405,8 @@ def test_build_qa_categories_deep_issue_routed_to_category() -> None:
 def test_build_qa_categories_all_category_keys_present() -> None:
     categories, _, _ = build_qa_categories(_cat_state(), zh_draft=None, en_draft=None, deep_issues=[])
     assert set(categories.keys()) == set(
-        list(REQUIRED_FEATURE_KEYS) + ["video_effects", "covers", "srt", "draft_integrity"]
+        list(REQUIRED_FEATURE_KEYS)
+        + ["video_effects", "covers", "srt", "draft_integrity", "voice_language_isolation"]
     )
 
 

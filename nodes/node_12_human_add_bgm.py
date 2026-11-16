@@ -31,6 +31,7 @@ Week 5 改动(对齐第 5 周计划 §1.1):
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from langgraph.types import interrupt
@@ -42,7 +43,14 @@ from draft_ops.draft_integrity import (
 from draft_ops.draft_lock import hash_draft_files
 from nodes._checkpoint import build_interrupt_payload, post_resume
 from nodes._draft_io import load_draft, write_draft
-from nodes._dual_draft import EN_VOICEOVER_TRACK_NAME, en_draft_file, missing_en_note
+from nodes._dual_draft import (
+    EN_BRANCH_AUDIO_POLICY_V2,
+    EN_VOICEOVER_TRACK_NAME,
+    ZH_VOICEOVER_TRACK_NAME,
+    en_draft_file,
+    missing_en_note,
+    remove_chinese_voiceover_from_draft,
+)
 from state import WorkflowState
 
 
@@ -152,6 +160,11 @@ def mirror_bgm_to_en_draft(state: WorkflowState) -> list[str]:
     草稿(``name=EN_VOICEOVER_TRACK_NAME`` 标记轨),镜像时只替换其余 audio 轨,
     配音轨原样保留;materials 侧本就按 id 保留英文特有素材,无需改动。
 
+    2026-11-17 P0(英文分支配音隔离):``en_branch_audio_policy_version == "v2"``
+    时镜像**排除** ``ZH_VOICEOVER_TRACK_NAME`` 轨(中文配音不回灌英文草稿),
+    并防御性清掉英文侧残留中文配音轨与链产孤儿配音素材;legacy(历史目录)保持
+    整轨镜像旧行为。QA 侧 ``check_audio_mirror`` 同步排除两类配音轨。
+
     Returns:
         要追加进 ``status_log`` / ``error_log`` 的说明列表(空列表=一切正常)。
         失败一律降级通过(记 error_log),中文草稿不受影响。
@@ -177,11 +190,28 @@ def mirror_bgm_to_en_draft(state: WorkflowState) -> list[str]:
         notes.append(f"[node_12] 读取中文草稿失败,BGM 未镜像到英文草稿: {exc}")
         return notes
 
+    # 2026-11-17 P0(英文分支配音隔离):v2 策略下镜像**排除中文配音轨**
+    # (ZH_VOICEOVER_TRACK_NAME,轨名精确匹配)—— 中文 VO 不回灌英文草稿,
+    # referenced_ids / companion refs 随过滤后的集合计算。legacy(历史目录,
+    # 无策略标记)保持整轨镜像旧行为,不追溯改写。
+    policy_v2 = (
+        str(state.get("en_branch_audio_policy_version") or "")
+        == EN_BRANCH_AUDIO_POLICY_V2
+    )
     audio_tracks = [
         t for t in (zh_draft.get("tracks", []) or []) if t.get("type") == "audio"
     ]
+    if policy_v2:
+        audio_tracks = [
+            t for t in audio_tracks if t.get("name") != ZH_VOICEOVER_TRACK_NAME
+        ]
     if not audio_tracks:
-        notes.append("[node_12] 中文草稿无 audio track(关卡②可能未添加),BGM 未镜像到英文草稿")
+        if policy_v2:
+            notes.append(
+                "[node_12] 中文草稿除中文配音外无 audio track(关卡②可能未添加),BGM 未镜像到英文草稿"
+            )
+        else:
+            notes.append("[node_12] 中文草稿无 audio track(关卡②可能未添加),BGM 未镜像到英文草稿")
         return notes
 
     try:
@@ -189,6 +219,13 @@ def mirror_bgm_to_en_draft(state: WorkflowState) -> list[str]:
     except (FileNotFoundError, ValueError) as exc:
         notes.append(f"[node_12] 读取英文草稿失败,BGM 未镜像: {exc}")
         return notes
+
+    if policy_v2:
+        # 防御性清理(修订计划 §4.4):合并前清掉英文侧可能遗留的中文配音轨与
+        # 链产孤儿配音素材;正常路径 fork v2 已清,此处幂等兜底。
+        vo_artifact = state.get("storyline_voiceover_artifact")
+        storyline_root = str(Path(str(vo_artifact)).parent) if vo_artifact else ""
+        remove_chinese_voiceover_from_draft(en_draft, storyline_root=storyline_root)
 
     # 1) 音轨:按角色合并(P3b)—— 只替换镜像轨,保留 node_17 写入的
     #    英文配音轨(name=EN_VOICEOVER_TRACK_NAME);幂等:镜像轨不 append。

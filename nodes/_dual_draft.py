@@ -45,6 +45,134 @@ EN = "en"
 # draft_ops.draft_integrity.check_audio_mirror 据此把配音轨排除出镜像一致性比对。
 EN_VOICEOVER_TRACK_NAME = "en_voiceover"
 
+# 2026-11-17 P0(英文分支配音隔离):node_08 写入中文主草稿的配音轨名(权威定义,
+# node_08 原私有常量 _ZH_VOICEOVER_TRACK_NAME 改为引用此处)。英文分支 v2 策略
+# (en_branch_audio_policy_version)以"轨名精确匹配"为唯一清理条件 —— node_fork
+# 清理、node_12 镜像过滤、QA 语言隔离检查三方共用,禁止按文件名/路径含 zh 等
+# 模糊条件删轨(人工 BGM 可能撞名)。
+ZH_VOICEOVER_TRACK_NAME = "Voiceover_zh"
+
+# 2026-11-17 P0:英文分支音频策略版本(node_fork 写
+# state.en_branch_audio_policy_version)。"v2" = 本次运行新建/重放的英文分支
+# 已按新策略清理中文配音,node_12 镜像过滤与 QA 语言隔离检查仅对 v2 生效;
+# legacy = 历史目录(无标记),三方保持旧行为,不追溯改写历史任务草稿。
+EN_BRANCH_AUDIO_POLICY_V2 = "v2"
+EN_BRANCH_AUDIO_POLICY_LEGACY = "legacy"
+
+
+def _norm_path_key(path: str) -> str:
+    """路径归一化键(与 node_08._norm_path_key 同口径):统一分隔符 + 小写。"""
+    return str(path or "").replace("\\", "/").strip().lower()
+
+
+def _iter_track_refs(track: dict) -> set[str]:
+    """收集一条轨道全部 segment 引用的素材 id(material_id + extra_material_refs)。"""
+    refs: set[str] = set()
+    for seg in track.get("segments") or []:
+        if not isinstance(seg, dict):
+            continue
+        mid = seg.get("material_id")
+        if mid:
+            refs.add(str(mid))
+        for ref in seg.get("extra_material_refs") or []:
+            if ref:
+                refs.add(str(ref))
+    return refs
+
+
+def remove_chinese_voiceover_from_draft(draft: dict, storyline_root: str = "") -> dict:
+    """从草稿 dict 移除中文配音轨与链产孤儿配音素材(纯函数,就地改 draft)。
+
+    2026-11-17 P0(英文分支配音隔离)。清理对象(修订计划 §4.2):
+    1. **轨**:``type == "audio"`` 且 ``name == ZH_VOICEOVER_TRACK_NAME`` ——
+       唯一权威匹配条件,禁止按文件名/路径模糊删轨;
+    2. **素材**:被删轨引用、且移除后全草稿引用归零的 materials 条目
+       (audios 及 speeds/audio_fades 等 companion 桶一并回收);
+    3. **链产孤儿素材**(可选,``storyline_root`` 非空时):无任何轨道段引用、
+       但素材路径位于本次运行 storyline 输出目录内的 audio 条目 —— snapshot②
+       实证 node_05 时代会把 voiceover WAV 写进 materials.audios 却不铺轨,
+       剪映素材面板可见,属用户可感知的"中文配音残留"。
+
+    不删除磁盘上的 WAV 文件(素材可能被中文主草稿/其它任务引用),不落盘 ——
+    调用方负责 ``write_draft`` 与回读校验。
+
+    Returns:
+        摘要 dict:``{"removed_tracks", "removed_segments", "removed_materials",
+        "removed_material_ids", "changed"}``。
+    """
+    tracks = draft.get("tracks") or []
+    removed_tracks = [
+        t
+        for t in tracks
+        if isinstance(t, dict)
+        and t.get("type") == "audio"
+        and t.get("name") == ZH_VOICEOVER_TRACK_NAME
+    ]
+    removed_ref_ids: set[str] = set()
+    removed_segments = 0
+    for t in removed_tracks:
+        removed_ref_ids |= _iter_track_refs(t)
+        removed_segments += len(t.get("segments") or [])
+
+    if removed_tracks:
+        draft["tracks"] = [
+            t
+            for t in tracks
+            if not (
+                isinstance(t, dict)
+                and t.get("type") == "audio"
+                and t.get("name") == ZH_VOICEOVER_TRACK_NAME
+            )
+        ]
+        tracks = draft["tracks"]
+
+    # 剩余轨道的全部引用(判孤儿/判共享的唯一依据)
+    still_referenced: set[str] = set()
+    for t in tracks:
+        if not isinstance(t, dict):
+            continue
+        still_referenced |= _iter_track_refs(t)
+
+    materials = draft.setdefault("materials", {})
+    removed_material_ids: list[str] = []
+    root_key = _norm_path_key(storyline_root)
+    for bucket_name, bucket in list(materials.items()):
+        if not isinstance(bucket, list):
+            continue
+        kept: list[Any] = []
+        bucket_changed = False
+        for m in bucket:
+            if not isinstance(m, dict):
+                kept.append(m)
+                continue
+            mid = str(m.get("id") or "")
+            drop = False
+            if mid and mid in removed_ref_ids and mid not in still_referenced:
+                drop = True  # 被删轨引用、现已无主
+            elif (
+                bool(mid)  # 无 id 条目不回收,保守
+                and mid not in still_referenced
+                and bucket_name == "audios"
+                and root_key
+                and _norm_path_key(str(m.get("path") or "")).startswith(root_key)
+            ):
+                drop = True  # 链产孤儿配音素材(snapshot② 实证形态)
+            if drop:
+                removed_material_ids.append(mid)
+                bucket_changed = True
+            else:
+                kept.append(m)
+        if bucket_changed:
+            materials[bucket_name] = kept
+
+    return {
+        "removed_tracks": len(removed_tracks),
+        "removed_segments": removed_segments,
+        "removed_materials": len(removed_material_ids),
+        "removed_material_ids": removed_material_ids,
+        "changed": bool(removed_tracks or removed_material_ids),
+    }
+
 
 def en_draft_file(state: dict[str, Any]) -> Path | None:
     """返回英文分支草稿文件路径;``draft_dir_en_branch`` 缺失或文件不存在时返回 ``None``。
@@ -105,8 +233,12 @@ __all__ = [
     "ZH",
     "EN",
     "EN_VOICEOVER_TRACK_NAME",
+    "ZH_VOICEOVER_TRACK_NAME",
+    "EN_BRANCH_AUDIO_POLICY_V2",
+    "EN_BRANCH_AUDIO_POLICY_LEGACY",
     "dual_draft_targets",
     "en_draft_file",
     "missing_en_note",
     "en_draft_file_missing_path",
+    "remove_chinese_voiceover_from_draft",
 ]

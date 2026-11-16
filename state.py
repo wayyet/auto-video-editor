@@ -166,6 +166,11 @@ class WorkflowState(TypedDict, total=False):
 
     # 英文分支:从 snapshot② 复制独立草稿副本的目录路径
     draft_dir_en_branch: NotRequired[Optional[str]]
+    # 2026-11-17 P0(英文分支配音隔离):英文分支音频策略版本,node_fork 写。
+    # "v2" = 本次运行的英文分支已按新策略清理中文配音轨与链产孤儿配音素材,
+    # node_12 镜像过滤与 QA 语言隔离检查仅对 v2 生效;缺失/其它值 = legacy
+    # (历史目录或旧 checkpoint),三方保持旧行为,不追溯改写历史任务草稿。
+    en_branch_audio_policy_version: NotRequired[Optional[str]]
 
     # 封面资产列表(节点 14 写 zh_path+text_bbox,节点 15 补 en_path)
     covers: NotRequired[list[CoverAsset]]
