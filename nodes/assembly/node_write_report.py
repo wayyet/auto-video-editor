@@ -469,12 +469,20 @@ def _summarize_trace(trace: Any, final_status: str) -> str:
 
 
 @timed_assembly_node("assembly_write_report")
-def _emit_assembly_qc_summary(state: WorkflowState) -> None:
+def _emit_assembly_qc_summary(
+    state: WorkflowState, submitted: dict[str, Any] | None = None
+) -> None:
     """P2-4:经 LangGraph custom stream 上报 assembly QC 摘要事件。
 
     创建台交付卡(delivery_summary.mjs reduceDeliveryCard)按
     ``summary.event == "assembly.qc"`` 归并出 Assembly QC 行。观测通道,
     任何失败吞掉即可(图运行时外无 stream writer)。
+
+    P1 修复(20261117):final_status 优先取本次 ``_submit_final_plan`` 的
+    真实提交结果 ``submitted["final_status"]`` —— 此前只读 state,而
+    ``assembly_final_plan_path`` 要等节点 return 后才合入 state、
+    ``assembly_final_status`` 又从未被赋值,导致交付卡恒显示
+    ``final:not_available``(哪怕实际已提交)。
     """
     try:
         candidate = state.get("assembly_candidate_plan")
@@ -492,11 +500,14 @@ def _emit_assembly_qc_summary(state: WorkflowState) -> None:
         detail = {
             "event": "assembly.qc",
             "qc_status": state.get("assembly_qc_status"),
-            "final_status": state.get("assembly_final_status")
-            or (
-                "submitted"
-                if state.get("assembly_final_plan_path")
-                else "not_available"
+            "final_status": (
+                (submitted or {}).get("final_status")
+                or state.get("assembly_final_status")
+                or (
+                    "submitted"
+                    if state.get("assembly_final_plan_path")
+                    else "not_available"
+                )
             ),
             "candidate_clip_count": len(candidate.get("clips") or [])
             if isinstance(candidate, dict)
@@ -646,6 +657,9 @@ def assembly_write_report_node(state: WorkflowState) -> dict:
         "assembly_influence_trace_path": trace_path_used or state.get(
             "assembly_influence_trace_path"
         ),
+        # P1(20261117):最终计划真实提交状态入 state(submitted/blocked/
+        # not_available),交付卡事件与后续消费者不再靠猜测。
+        "assembly_final_status": final_status,
         "status_log": append_status_tag(state, *log_tags),
     }
     if final_status == "submitted":
@@ -653,5 +667,5 @@ def assembly_write_report_node(state: WorkflowState) -> dict:
         out["assembly_final_plan_path"] = submitted["final_plan_path"]
         out["assembly_final_plan_sha256"] = submitted["final_plan_sha256"]
     # P2-4:交付卡 Assembly QC 行摘要(观测通道,失败静默)
-    _emit_assembly_qc_summary(state)
+    _emit_assembly_qc_summary(state, submitted=submitted)
     return out

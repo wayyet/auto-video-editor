@@ -602,6 +602,7 @@ def test_write_report_submits_final_plan_and_completes_trace(
     assert Path(out["assembly_final_plan_path"]).is_file()
     assert out.get("assembly_final_plan_sha256") == canonical_json_sha256(plan)
     assert out.get("assembly_final_plan") == plan
+    assert out.get("assembly_final_status") == "submitted"
     assert "assembly_final_plan_submitted" in out["status_log"]
     # trace 收尾:final sha + 六节点贡献 + 契约校验通过
     trace = json.loads(
@@ -639,6 +640,7 @@ def test_write_report_blocks_on_structural_qc_issue(base_state, tmp_path):
     out = assembly_write_report_node(base_state)
     assert "assembly_final_plan_path" not in out
     assert "assembly_final_plan_sha256" not in out
+    assert out.get("assembly_final_status") == "blocked"
     assert "assembly_final_plan_blocked" in out["status_log"]
     trace = json.loads(
         Path(out["assembly_influence_trace_path"]).read_text(encoding="utf-8")
@@ -655,6 +657,7 @@ def test_write_report_blocks_on_base_plan_drift(base_state, tmp_path):
 
     out = assembly_write_report_node(base_state)
     assert "assembly_final_plan_path" not in out
+    assert out.get("assembly_final_status") == "blocked"
     assert "assembly_final_plan_blocked" in out["status_log"]
     report = Path(out["assembly_report_path"]).read_text(encoding="utf-8")
     assert "漂移" in report
@@ -664,10 +667,40 @@ def test_write_report_not_available_without_candidate(base_state, tmp_path):
     """无候选(build 未产出/QC 关姿态)→ not_available,不提交也不算阻断。"""
     out = assembly_write_report_node(base_state)
     assert "assembly_final_plan_path" not in out
+    assert out.get("assembly_final_status") == "not_available"
     assert "assembly_final_plan_submitted" not in out["status_log"]
     assert "assembly_final_plan_blocked" not in out["status_log"]
     report = Path(out["assembly_report_path"]).read_text(encoding="utf-8")
     assert "无候选" in report
+
+
+def test_write_report_qc_event_carries_real_final_status(base_state, tmp_path, monkeypatch):
+    """P1(20261117):assembly.qc 事件的 final_status 取本次真实提交结果。
+
+    此前 emit 在节点 return 前执行,读不到未合入 state 的提交结果,且
+    ``assembly_final_status`` 从未被赋值 —— 交付卡恒显示 final:not_available
+    (哪怕实际已提交,console-553e3e7b34f7 实锤)。writer 抛异常也不影响节点。
+    """
+    from nodes.assembly import node_write_report as wnr
+
+    _p1_7_candidate_state(base_state, tmp_path)
+    captured: list[dict] = []
+    monkeypatch.setattr(wnr, "_emit_progress", lambda detail: captured.append(detail))
+
+    out = assembly_write_report_node(base_state)
+    qc_events = [d for d in captured if d.get("event") == "assembly.qc"]
+    assert qc_events, "必须发出 assembly.qc 事件"
+    assert qc_events[-1]["final_status"] == "submitted"
+    assert out["assembly_final_status"] == "submitted"
+
+    # 观测通道失败(writer 抛异常)静默,不影响节点产物
+    def _boom(_detail: dict) -> None:
+        raise RuntimeError("stream writer gone")
+
+    monkeypatch.setattr(wnr, "_emit_progress", _boom)
+    out2 = assembly_write_report_node(base_state)
+    assert out2.get("assembly_final_status") == "submitted"
+    assert Path(out2["assembly_report_path"]).is_file()
 
 
 def test_write_report_trace_records_repair_not_executed(base_state, tmp_path):

@@ -375,6 +375,10 @@ class WorkflowState(TypedDict, total=False):
     assembly_final_plan: Annotated[Optional[dict], _last_wins]
     assembly_final_plan_path: Annotated[Optional[str], _last_wins]
     assembly_final_plan_sha256: NotRequired[Optional[str]]
+    # P1 修复(20261117):最终计划真实提交状态("submitted"|"blocked"|
+    # "not_available"),write_report 写入;交付卡 assembly.qc 事件优先消费
+    # 本次提交结果,不再因事件先于 state 合并而恒显 not_available。
+    assembly_final_status: NotRequired[Optional[str]]
     # P2-1 LLM 调用诊断(build_timeline 产出):llm_attempted / llm_client_type
     # (stub|real|none)/ request_status(ok|empty_response|parse_error|
     # schema_mismatch|exception|timeout|not_attempted)/ selection_stats 等 ——

@@ -173,6 +173,18 @@ test("reduceDeliveryCard:assembly.qc 无候选 → skip 行", () => {
   assert.equal(next.assembly_qc.state, "skip");
 });
 
+test("reduceDeliveryCard:assembly.qc escalated 但 final 已提交 → warn 行 + final:submitted", () => {
+  // P1(20261117):后端已把真实提交结果带进事件;QC escalated(非结构性)与
+  // final submitted 并存是合法口径,交付卡不得再把 submitted 显示成 not_available
+  const next = reduceDeliveryCard(cardState(), {
+    event: "assembly.qc",
+    qc_status: "escalated",
+    final_status: "submitted",
+  });
+  assert.equal(next.assembly_qc.state, "warn");
+  assert.match(next.assembly_qc.note, /final:submitted/);
+});
+
 test("reduceDeliveryCard:assembly.qc 归并不改入参(纯函数)", () => {
   const state = cardState();
   const snapshot = JSON.stringify(state);
