@@ -19,12 +19,55 @@ helper ``_do_after_resume`` 已删除(设计文档 §6 阶段4;删除前已 grep
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
 from draft_ops.atomic_writer_file import atomic_write_file
 from jy_common.native_text import text_display_text
+from jy_common.translate_client import TRANSLATION_PROMPT_VERSION
 from state import SubtitleSegment
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-17 P1:marker schema v2(修订计划 §5.5)
+# ---------------------------------------------------------------------------
+#: marker 结构版本 —— 旧 list 形态 = legacy mock/unknown,一律视为未命中(重翻)
+_MARKER_SCHEMA_VERSION = 2
+_MARKER_TARGET_LANGUAGE = "en"
+
+
+def _compute_source_fingerprint(
+    segments: list[SubtitleSegment],
+    *,
+    translator_id: str,
+    prompt_version: str = TRANSLATION_PROMPT_VERSION,
+) -> str:
+    """翻译输入指纹(SHA-256):源文本+时间码+目标语言+提示词版本+翻译器身份。
+
+    指纹覆盖 marker 复用的全部判定维度(修订计划 §5.5):源文案变化、模型/
+    翻译器变化、提示词变化任一发生 → 指纹变化 → 旧 marker 失效重翻。
+    """
+    canonical = json.dumps(
+        {
+            "schema_version": _MARKER_SCHEMA_VERSION,
+            "target_language": _MARKER_TARGET_LANGUAGE,
+            "prompt_version": prompt_version,
+            "translator_id": translator_id,
+            "segments": [
+                {
+                    "index": int(seg.get("index", i)),
+                    "text_zh": str(seg.get("text_zh", "")),
+                    "start_ms": int(seg.get("start_ms", 0)),
+                    "end_ms": int(seg.get("end_ms", 0)),
+                }
+                for i, seg in enumerate(segments)
+            ],
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -137,8 +180,21 @@ def _write_marker(draft_dir: Path, segments: list[SubtitleSegment]) -> None:
     write_draft(draft_dir / "draft_content.json", draft, audit_node="node_16")
 
 
-def _marker_exists(draft_dir: Path, expected_count: int) -> bool:
-    """marker 检查:subtitle_en.json 存在且含与预期段数一致的 text_en 字段。"""
+def _marker_exists(
+    draft_dir: Path,
+    expected_count: int,
+    *,
+    fingerprint: str,
+    translator_id: str,
+    prompt_version: str = TRANSLATION_PROMPT_VERSION,
+) -> bool:
+    """marker 命中判定(schema v2,修订计划 §5.5)。
+
+    复用条件**同时**满足:schema_version=2、target_language=en、源指纹一致、
+    翻译器身份一致、提示词版本一致、段数一致、每段 text_en 非空(翻译文本
+    合法)。旧版 list 形态 = legacy mock/unknown → 一律 False(重翻),不把
+    ``[EN] 中文`` 假翻译当真实翻译命中。
+    """
     marker = draft_dir / "subtitle_en.json"
     if not marker.exists():
         return False
@@ -146,15 +202,48 @@ def _marker_exists(draft_dir: Path, expected_count: int) -> bool:
         data = json.loads(marker.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return False
-    return isinstance(data, list) and len(data) == expected_count
+    if not isinstance(data, dict):
+        return False  # legacy list 形态
+    if data.get("schema_version") != _MARKER_SCHEMA_VERSION:
+        return False
+    if data.get("target_language") != _MARKER_TARGET_LANGUAGE:
+        return False
+    if data.get("source_fingerprint") != fingerprint:
+        return False
+    if data.get("translator_id") != translator_id:
+        return False
+    if data.get("prompt_version") != prompt_version:
+        return False
+    segs = data.get("segments")
+    if not isinstance(segs, list) or len(segs) != expected_count:
+        return False
+    return all(
+        isinstance(s, dict) and str(s.get("text_en") or "").strip()
+        for s in segs
+    )
 
 
-def _save_marker(draft_dir: Path, segments: list[SubtitleSegment]) -> None:
-    """保存 subtitle_en.json 标记文件(段数 + text_en 摘要)。"""
+def _save_marker(
+    draft_dir: Path,
+    segments: list[SubtitleSegment],
+    *,
+    fingerprint: str,
+    translator_id: str,
+    prompt_version: str = TRANSLATION_PROMPT_VERSION,
+) -> None:
+    """保存 subtitle_en.json 标记文件(schema v2:指纹 + 翻译器/提示词身份 + 段)。"""
     marker = draft_dir / "subtitle_en.json"
+    payload = {
+        "schema_version": _MARKER_SCHEMA_VERSION,
+        "target_language": _MARKER_TARGET_LANGUAGE,
+        "source_fingerprint": fingerprint,
+        "translator_id": translator_id,
+        "prompt_version": prompt_version,
+        "segments": list(segments),
+    }
     atomic_write_file(
         marker,
-        json.dumps(segments, ensure_ascii=False, indent=2).encode("utf-8"),
+        json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
     )
 
 

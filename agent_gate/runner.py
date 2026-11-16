@@ -423,10 +423,15 @@ class _StatusWriter:
 
 
 def install_client(client: Any) -> None:
-    """把 client 设为仓库的默认 LLM 客户端。"""
-    from storyline_capabilities.vlm_client import set_default_client
+    """把 client 设为仓库的默认 LLM 客户端。
 
-    set_default_client(client)
+    2026-11-17 P1 起经公共装配 ``agent_gate.bootstrap.install_llm_backend``:
+    同一实例同时注入 VLM 与英文翻译(真实后端 → LLMTranslateClient;
+    StubLLMClient → 保持翻译侧 Mock)。
+    """
+    from agent_gate.bootstrap import install_llm_backend
+
+    install_llm_backend(client=client)
 
 
 def production_blocker() -> Optional[str]:

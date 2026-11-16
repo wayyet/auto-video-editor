@@ -46,6 +46,7 @@ def test_node_08b_missing_draft_file_is_error(tmp_path: Path) -> None:
     state = {
         "draft_dir_en_branch": str(en_branch),
         "subtitle_segments_en": [{"index": 0, "start_ms": 0, "end_ms": 1_000, "text_en": "Hi"}],
+        "subtitle_translation_status": "real",
         "status_log": [],
         "error_log": [],
     }
@@ -93,6 +94,7 @@ def test_node_08b_applies_storyline_style_to_en_texts(tmp_path: Path) -> None:
     state = {
         "draft_dir_en_branch": str(en_file.parent),
         "subtitle_segments_en": _segments(),
+        "subtitle_translation_status": "real",
         "storyline_text_style_plan": plan,
         "status_log": [],
         "error_log": [],
@@ -123,6 +125,7 @@ def test_node_08b_without_plan_keeps_default_style(tmp_path: Path) -> None:
     state = {
         "draft_dir_en_branch": str(en_file.parent),
         "subtitle_segments_en": _segments(),
+        "subtitle_translation_status": "real",
         "status_log": [],
         "error_log": [],
     }
@@ -150,6 +153,7 @@ def test_node_08b_font_unavailable_note_only(tmp_path: Path) -> None:
     state = {
         "draft_dir_en_branch": str(en_file.parent),
         "subtitle_segments_en": _segments(),
+        "subtitle_translation_status": "real",
         "storyline_text_style_plan": plan,
         "status_log": [],
         "error_log": [],
@@ -160,3 +164,57 @@ def test_node_08b_font_unavailable_note_only(tmp_path: Path) -> None:
     style = draft["materials"]["texts"][0]["style"]
     assert style["size"] == 5.0 and style["transform_y"] == -0.8
     assert any("NoSuchFont-Bold.ttf" in e and "不存在" in e for e in out["status_log"])
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-17 P1:翻译状态门禁(stub/failed/缺失 → 不写正式英文字幕)
+# ---------------------------------------------------------------------------
+def test_node_08b_stub_status_skips_formal_write(tmp_path: Path) -> None:
+    """translation_status=stub → 不写 materials.texts,记 error_log 降级。"""
+    en_file = _write_en_draft(tmp_path)
+    state = {
+        "draft_dir_en_branch": str(en_file.parent),
+        "subtitle_segments_en": _segments(),
+        "subtitle_translation_status": "stub",
+        "status_log": [],
+        "error_log": [],
+    }
+    out = add_subtitles_en(state)
+
+    assert "node_08b_skipped_translation_not_real" in out["status_log"]
+    assert any("翻译状态非 real(stub)" in e for e in out["error_log"])
+    draft = json.loads(en_file.read_text(encoding="utf-8"))
+    assert not draft.get("materials", {}).get("texts")
+
+
+def test_node_08b_missing_status_skips_formal_write(tmp_path: Path) -> None:
+    """translation_status 缺失(旧 checkpoint)→ 同样不写,不冒充成功。"""
+    en_file = _write_en_draft(tmp_path)
+    state = {
+        "draft_dir_en_branch": str(en_file.parent),
+        "subtitle_segments_en": _segments(),
+        "status_log": [],
+        "error_log": [],
+    }
+    out = add_subtitles_en(state)
+
+    assert "node_08b_skipped_translation_not_real" in out["status_log"]
+    draft = json.loads(en_file.read_text(encoding="utf-8"))
+    assert not draft.get("materials", {}).get("texts")
+
+
+def test_node_08b_real_status_writes_normal(tmp_path: Path) -> None:
+    """translation_status=real → 正常写入(契约锚定,防门禁误伤)。"""
+    en_file = _write_en_draft(tmp_path)
+    state = {
+        "draft_dir_en_branch": str(en_file.parent),
+        "subtitle_segments_en": _segments(),
+        "subtitle_translation_status": "real",
+        "status_log": [],
+        "error_log": [],
+    }
+    out = add_subtitles_en(state)
+
+    assert "node_08b_add_subtitles_en_done" in out["status_log"]
+    draft = json.loads(en_file.read_text(encoding="utf-8"))
+    assert len(draft["materials"]["texts"]) == 2

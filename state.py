@@ -179,6 +179,17 @@ class WorkflowState(TypedDict, total=False):
     subtitle_segments_en: NotRequired[list[SubtitleSegment]]
     subtitle_srt_path: NotRequired[Optional[str]]
 
+    # ===== 2026-11-17 P1(英文字幕真实翻译)=====
+    # 节点 16a 写:real=真实 LLM 翻译;stub=Mock 桩(不冒充成功);skipped=无源段。
+    # stub/非 real 时 node_08b 不写正式英文字幕、node_17 不合成英文 TTS(fail-closed),
+    # 交付 QA 的 subtitles_en / voiceover_en 据此阻断。
+    subtitle_translation_status: NotRequired[str]
+    # 翻译器身份(mcode-cli/claude-cli/gate/mock)—— 与 source_fingerprint、
+    # prompt_version 共同构成 marker 复用判定(修订计划 §5.5),换模型/改提示词
+    # 后旧 marker 失效重翻。
+    subtitle_translator_id: NotRequired[str]
+    subtitle_translation_fingerprint: NotRequired[str]
+
     # ===== 2026-11-09 阶段 1(效果缺失修复):中文字幕原生落草稿 =====
     # 节点 8 写:中文旁白逐句字幕段(形状复用 SubtitleSegment;时间取自当前草稿
     # 视频段反推的组区间)。node_16a 英文翻译以此为准源(替代已废弃的

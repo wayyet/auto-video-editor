@@ -137,17 +137,17 @@ def _parse_args() -> argparse.Namespace:
 def _apply_llm_backend(backend: Optional[str]) -> None:
     """恢复执行前注入 LLM 后端(与 run_workflow.py 同款;第二期阶段 5)。
 
-    不传时**不注入** —— 旧 CLI 行为完全不变。此前 resume 入口没有注入通道,
-    生产环境恢复的运行会静默回落 Stub,故与 run_workflow 对齐补齐。
+    2026-11-17 P1 起改走公共装配 ``agent_gate.bootstrap.install_llm_backend``:
+    同一个 client 实例同时注入 VLM 与英文翻译(``LLMTranslateClient``)——
+    避免恢复执行后翻译能力退回 Mock(修订计划 §5.3 三入口对齐)。
+    不传时**不注入** —— 旧 CLI 行为完全不变。
     gate 后端需要 mailbox,不在本入口的选择集内(agent_gate CLI 自行处理)。
     """
     if not backend:
         return
-    from agent_gate.factory import build_client
-    from storyline_capabilities.vlm_client import set_default_client
+    from agent_gate.bootstrap import install_llm_backend
 
-    client = build_client(backend)
-    set_default_client(client)
+    install_llm_backend(backend)
     print(f"[llm] 已注入 LLM 后端: {backend}", file=sys.stderr)
 
 

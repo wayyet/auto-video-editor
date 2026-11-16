@@ -30,6 +30,8 @@ def _empty_state() -> dict:
 def _state_with_segments(segments: list[dict]) -> dict:
     return {
         "subtitle_segments_en": segments,
+        # 2026-11-17 P1 门禁:非 real 状态不送 TTS;happy path 用例默认 real
+        "subtitle_translation_status": "real",
         "status_log": [],
         "error_log": [],
     }
@@ -57,6 +59,42 @@ def test_node_17_missing_segments_key_returns_none() -> None:
     out = node_17_inject_english_tts(state)
 
     assert out["en_audio_path"] is None
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-17 P1:翻译状态门禁(stub/failed/缺失 → 不送英文 TTS)
+# ---------------------------------------------------------------------------
+def test_node_17_stub_status_skips_tts() -> None:
+    """translation_status=stub → tts_issue=translation_not_real,不调 TTS。"""
+    state = _state_with_segments(
+        [{"index": 0, "start_ms": 0, "end_ms": 1_000, "text_en": "[EN] 中文"}]
+    )
+    state["subtitle_translation_status"] = "stub"
+    with patch(
+        "nodes.node_17_inject_english_tts.speech_synthesize"
+    ) as fake_synth:
+        out = node_17_inject_english_tts(state)
+
+    fake_synth.assert_not_called()
+    assert out["en_audio_path"] is None
+    assert out["tts_issue"] == "translation_not_real:stub"
+    assert "node_17_inject_english_tts_done" in out["status_log"]
+    assert out.get("error_log", []) == []
+
+
+def test_node_17_missing_status_skips_tts() -> None:
+    """translation_status 缺失(旧 checkpoint)→ 同样不送 TTS,不冒充成功。"""
+    state = _state_with_segments(
+        [{"index": 0, "start_ms": 0, "end_ms": 1_000, "text_en": "Hello"}]
+    )
+    del state["subtitle_translation_status"]
+    with patch(
+        "nodes.node_17_inject_english_tts.speech_synthesize"
+    ) as fake_synth:
+        out = node_17_inject_english_tts(state)
+
+    fake_synth.assert_not_called()
+    assert out["tts_issue"] == "translation_not_real:missing"
 
 
 # ---------------------------------------------------------------------------
@@ -305,6 +343,7 @@ def _run_node_17_with_en_draft(tmp_path: Path, duration_ms: int = 3000) -> tuple
     )
     state = {
         "subtitle_segments_en": [{"text_en": "hello"}],
+        "subtitle_translation_status": "real",
         "status_log": [],
         "error_log": [],
         "draft_dir_en_branch": str(en_file.parent),
@@ -360,6 +399,7 @@ def test_node_17_en_voiceover_idempotent(tmp_path: Path) -> None:
     )
     state = {
         "subtitle_segments_en": [{"text_en": "hello"}],
+        "subtitle_translation_status": "real",
         "status_log": [],
         "error_log": [],
         "draft_dir_en_branch": str(en_file.parent),
@@ -382,7 +422,7 @@ def test_node_17_en_voiceover_idempotent(tmp_path: Path) -> None:
 def test_node_17_skips_draft_write_without_fork() -> None:
     """fork 早退(draft_dir_en_branch 缺失)→ 静默跳过草稿写入,state 契约不变。"""
     fake_result = ToolResult(text="ok", data={"audio_path": "/x.wav", "duration_ms": 1})
-    state = {"subtitle_segments_en": [{"text_en": "hi"}], "status_log": [], "error_log": []}
+    state = {"subtitle_segments_en": [{"text_en": "hi"}], "subtitle_translation_status": "real", "status_log": [], "error_log": []}
     with patch(
         "nodes.node_17_inject_english_tts.speech_synthesize",
         return_value=fake_result,
@@ -398,6 +438,7 @@ def test_node_17_en_draft_missing_file_notes(tmp_path: Path) -> None:
     fake_result = ToolResult(text="ok", data={"audio_path": "/x.wav", "duration_ms": 1})
     state = {
         "subtitle_segments_en": [{"text_en": "hi"}],
+        "subtitle_translation_status": "real",
         "status_log": [],
         "error_log": [],
         "draft_dir_en_branch": str(tmp_path / "nope"),
@@ -419,6 +460,7 @@ def test_node_17_duration_unknown_skips_track(tmp_path: Path) -> None:
     )
     state = {
         "subtitle_segments_en": [{"text_en": "hello"}],
+        "subtitle_translation_status": "real",
         "status_log": [],
         "error_log": [],
         "draft_dir_en_branch": str(en_file.parent),

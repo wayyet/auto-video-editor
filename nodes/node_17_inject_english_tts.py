@@ -10,6 +10,8 @@ Week 5 stub 节点 ``node_17_inject_english_tts_stub`` 升级为真实 TTS 调�
    provider 默认剪映 SAMI,英文音色默认英语女王,env TTS_VOICE_EN 覆盖)
 3. 成功 → ``en_audio_path`` = 音频路径
 4. 失败 → ``en_audio_path = None``、``error_log`` 追加一条,**不阻塞主链**
+5. 2026-11-17 P1:``subtitle_translation_status != "real"`` 时跳过 TTS
+   (``tts_issue = "translation_not_real:<status>"``)—— Mock 文本不进英文音色。
 
 失败不写静音 WAV 占位(Week 5 stub 的行为)— 主链 ``join_before_delivery``
 之后 ``en_audio_path = None`` 是合法状态,阶段六联调由人工决策是否需要补
@@ -37,6 +39,7 @@ from nodes._dual_draft import (
     en_draft_file,
     missing_en_note,
 )
+from nodes.node_16a_translate_and_check import STATUS_REAL
 from state import WorkflowState
 from video_edit_capabilities.speech_synthesize import speech_synthesize
 
@@ -184,9 +187,22 @@ def node_17_inject_english_tts(state: WorkflowState) -> dict:
 
     if not text:
         # 没有可合成文本(空字幕段 / 缺字段)→ 不阻塞,直接返回 None
+        # (先于翻译状态门禁:无旁白任务保持 empty_text 的 n/a 语义,不刷 error)
         return {
             "en_audio_path": None,
             "tts_issue": "empty_text: no text_en segments to synthesize",
+            "status_log": ["node_17_inject_english_tts_done"],
+        }
+
+    # 2026-11-17 P1(英文字幕真实翻译,修订计划 §5.4):翻译状态门禁 ——
+    # 非真实翻译(stub/failed/缺失)的文本(含 Mock "[EN] 中文")绝不送英文
+    # TTS,否则"英语女王"音色会朗读中文。tts_issue 供交付 QA
+    # voiceover_en(required)按既有非 empty_text 前缀判 failed 的口径阻断。
+    translation_status = str(state.get("subtitle_translation_status") or "")
+    if translation_status != STATUS_REAL:
+        return {
+            "en_audio_path": None,
+            "tts_issue": f"translation_not_real:{translation_status or 'missing'}",
             "status_log": ["node_17_inject_english_tts_done"],
         }
 

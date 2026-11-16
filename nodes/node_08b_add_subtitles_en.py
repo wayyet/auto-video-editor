@@ -8,6 +8,11 @@ node_08,所以草稿里 ``materials.texts`` 为空;16a 的 ``_write_marker`` 只
 本节点补上这一步:读 ``state["subtitle_segments_en"]``(16a 产出),把每段英文写成
 一条 ``materials.texts`` 素材。
 
+2026-11-17 P1(英文字幕真实翻译,修订计划 §5.4):**翻译状态门禁** ——
+``subtitle_translation_status != "real"``(stub/failed/缺失)时不把文本写进正式
+``Subtitles_en`` 轨:Mock 文本(``[EN] `` 前缀)一旦落草稿就是用户可见的假英文字幕。
+缺失记 error_log 降级放行,由交付 QA 的 ``subtitles_en`` 类别(required)阻断。
+
 设计要点:
 - **只返回变更字段(delta)**:本节点与中文主线节点同一超步并行,返回整份 state 会让
   LastValue 通道在同一超步被写两次(InvalidUpdateError)。
@@ -23,20 +28,35 @@ from pathlib import Path
 from nodes._draft_io import apply_and_write, load_draft
 from nodes._subtitle_texts import make_text_material, sync_text_track
 from nodes.node_08_add_subtitles import _overlay_storyline_style, _style_from_scout
+from nodes.node_16a_translate_and_check import STATUS_REAL
 from state import WorkflowState
 
 
 def add_subtitles_en(state: WorkflowState) -> dict:
-    """英文字幕 → 英文分支草稿 ``materials.texts``。"""
+    """英文字幕 → 英文分支草稿 ``materials.texts``(仅限真实翻译)。"""
     draft_dir_raw = state.get("draft_dir_en_branch")
     segments = list(state.get("subtitle_segments_en") or [])
 
     if not draft_dir_raw:
         return {"error_log": ["[node_08b] draft_dir_en_branch 缺失,跳过英文字幕写入"]}
+
     if not segments:
         # B1 ASR 移除(2026-11-08)后 16a 无源字幕 → 正常 skip 是**常态输入**:
         # 只记 skip 状态,不算错误,不写 error_log,后续节点(node_10b 等)照常放行。
         return {"status_log": ["node_08b_skipped_no_en_segments"]}
+
+    translation_status = str(state.get("subtitle_translation_status") or "")
+    if translation_status != STATUS_REAL:
+        # 修订计划 §5.4:stub/failed/缺失一律不得冒充正式英文字幕 —— Mock 文本
+        # 落草稿即用户可见假英文;降级放行由 QA subtitles_en(required)阻断。
+        # 注意:空段 skip 先于本门禁 —— 无旁白任务不该被刷 error。
+        return {
+            "status_log": ["node_08b_skipped_translation_not_real"],
+            "error_log": [
+                f"[node_08b] 英文字幕翻译状态非 real({translation_status or 'missing'}),"
+                "不写正式英文字幕(stub 不冒充成功)"
+            ],
+        }
 
     draft_file = Path(draft_dir_raw) / "draft_content.json"
     if not draft_file.exists():

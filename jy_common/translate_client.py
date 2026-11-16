@@ -1,28 +1,86 @@
-"""翻译客户端 — Week 4 节点 16 使用(对照计划 §4.4)。
+"""翻译客户端 — 字幕/封面标题英译的统一入口。
 
 接口约定:同 asr_client.py 模式,返回 ``list[dict]``(每段一条):
-- ``index: int`` — 段索引(与 asr_segments_zh 对齐)
-- ``start_ms: int`` / ``end_ms: int`` — 起止毫秒
+- ``index: int`` — 段索引(与源段对齐)
+- ``start_ms: int`` / ``end_ms: int`` — 起止毫秒(恒从源段继承,不采信模型)
 - ``text_en: str`` — 翻译结果
 
-Week 4 用 ``MockTranslateClient``:把中文 text 简单附加 ``"[EN] "`` 前缀,
-便于联调跑通;Week 5 替换为真实翻译服务(如 GPT-4 / DeepL)。
+2026-11-17 P1(英文字幕真实翻译,修订计划 §5.2):
+- 默认客户端仍是 ``MockTranslateClient``(stub/单测/本地联调用,显式输出
+  ``[EN] `` 前缀,**不冒充真实翻译** —— 下游 node_08b/node_17/QA 依赖
+  ``subtitle_translation_status`` 门禁拦截);
+- 真实翻译经 :class:`LLMTranslateClient`:复用本次运行已装配的 LLM client
+  (``storyline_capabilities.vlm_client.LLMClient`` Protocol,只有 ``chat``),
+  由公共装配函数 ``agent_gate.bootstrap.install_llm_backend`` 在三个入口
+  (run / resume / Agent Gate worker)同址安装;
+- 翻译失败(schema 不符 / index 缺重 / 空译文 / LLM 异常)重试 1 次后抛
+  :class:`TranslationError` —— fail-closed:marker 不落盘,resume 可重试,
+  绝不把未翻译段当成功。
 """
 
 from __future__ import annotations
 
-from typing import Protocol
+import json
+from typing import Any, Protocol
+
+#: 提示词版本 —— 参与 marker 指纹,改提示词必须换版本号(否则旧 marker 误命中)
+TRANSLATION_PROMPT_VERSION = "subtitle-translate-v1"
+#: 失败重试次数(总尝试 = 1 + 重试)
+TRANSLATION_MAX_RETRIES = 1
+#: 单批输入字符预算(超预算切段分批,批间按原始 index 对齐)
+TRANSLATION_BATCH_CHAR_BUDGET = 3000
+
+#: 结构化输出 schema(chat_json_with_trace 的 json_schema 参数)
+_TRANSLATION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "translations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "index": {"type": "integer"},
+                    "text_en": {"type": "string"},
+                },
+                "required": ["index", "text_en"],
+            },
+        }
+    },
+    "required": ["translations"],
+}
+
+_SYSTEM_PROMPT = (
+    "你是专业的短视频字幕翻译器。把中文短句字幕翻译成自然、口语化的英文,"
+    "适配字幕显示与英文 TTS 朗读。要求:"
+    "1) 忠实原意,语气口语化,不逐字直译;"
+    "2) 保留 emoji、数字、专有名词与品牌名(品牌名可保留原文);"
+    "3) 长度与原文相当,不扩写不缩写;"
+    "4) 禁止添加任何前缀、注释或额外说明;"
+    "5) 只输出 JSON,不要输出其它文字。"
+)
+
+
+class TranslationError(RuntimeError):
+    """真实翻译失败(重试后仍不满足输出契约)。
+
+    ``trace`` 携带最后一次 ``chat_json_with_trace`` 的排障信息
+    (ok/error/raw_head/parsed),调用方记日志不得包含任何密钥。
+    """
+
+    def __init__(self, message: str, *, trace: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.trace: dict[str, Any] = trace or {}
 
 
 class TranslateClient(Protocol):
-    """翻译客户端协议 — Week 5 真实实现应满足此接口。"""
+    """翻译客户端协议 — 真实实现应满足此接口。"""
 
     def translate(self, segments: list[dict]) -> list[dict]:
         ...
 
 
 class MockTranslateClient:
-    """Week 4 Mock — 中文加 ``"[EN] "`` 前缀。
+    """Week 4 Mock — 中文加 ``"[EN] "`` 前缀(stub 语义,非真实翻译)。
 
     Args:
         prefix_en: 翻译前缀,便于单测断言。
@@ -44,6 +102,151 @@ class MockTranslateClient:
         return out
 
 
+class LLMTranslateClient:
+    """真实翻译适配器:经既有 LLM client(只要求实现 ``chat``)批量翻译。
+
+    - 输出按 ``index`` 集合**精确校验**(缺段/重段/多余段/空译文都判失败,
+      禁止 zip 静默截短 —— LLM 少返回一段时字幕数与时间轴会错位);
+    - ``start_ms`` / ``end_ms`` 恒从源段继承,不采信模型返回的时间码;
+    - 按字符预算分批,批间独立校验,任何一批失败整体抛
+      :class:`TranslationError`(不把未翻译段当成功);
+    - ``translator_id`` / ``prompt_version`` 是 marker 指纹的一部分(修订计划
+      §5.5):换模型或改提示词后旧 marker 自动失效并重翻。
+    """
+
+    def __init__(
+        self,
+        llm_client: Any,
+        *,
+        translator_id: str | None = None,
+        prompt_version: str = TRANSLATION_PROMPT_VERSION,
+        batch_char_budget: int = TRANSLATION_BATCH_CHAR_BUDGET,
+        max_retries: int = TRANSLATION_MAX_RETRIES,
+    ) -> None:
+        self._llm = llm_client
+        self._translator_id = translator_id or type(llm_client).__name__
+        self._prompt_version = prompt_version
+        self._batch_char_budget = max(200, int(batch_char_budget))
+        self._max_retries = max(0, int(max_retries))
+
+    @property
+    def translator_id(self) -> str:
+        return self._translator_id
+
+    @property
+    def prompt_version(self) -> str:
+        return self._prompt_version
+
+    def translate(self, segments: list[dict]) -> list[dict]:
+        """批量翻译;任一批校验失败即抛 :class:`TranslationError`。"""
+        out: list[dict] = []
+        for batch in self._split_batches(segments):
+            out.extend(self._translate_batch(batch))
+        return out
+
+    # -- 内部 -----------------------------------------------------------------
+    def _split_batches(self, segments: list[dict]) -> list[list[dict]]:
+        """按字符预算切批(保持顺序;单段超预算也独占一批)。"""
+        batches: list[list[dict]] = []
+        current: list[dict] = []
+        budget = 0
+        for seg in segments:
+            size = len(str(seg.get("text_zh", ""))) + 40
+            if current and budget + size > self._batch_char_budget:
+                batches.append(current)
+                current, budget = [], 0
+            current.append(seg)
+            budget += size
+        if current:
+            batches.append(current)
+        return batches
+
+    def _translate_batch(self, batch: list[dict]) -> list[dict]:
+        expected_indexes = [int(seg.get("index", i)) for i, seg in enumerate(batch)]
+        payload = json.dumps(
+            {
+                "segments": [
+                    {
+                        "index": int(seg.get("index", i)),
+                        "text_zh": str(seg.get("text_zh", "")),
+                        "start_ms": int(seg.get("start_ms", 0)),
+                        "end_ms": int(seg.get("end_ms", 0)),
+                    }
+                    for i, seg in enumerate(batch)
+                ]
+            },
+            ensure_ascii=False,
+        )
+        last_error: TranslationError | None = None
+        last_trace: dict[str, Any] = {}
+        for attempt in range(self._max_retries + 1):
+            obj, trace = self._call_llm(payload)
+            try:
+                return self._validate_and_merge(obj, batch, expected_indexes)
+            except TranslationError as exc:
+                last_error, last_trace = exc, trace
+        raise TranslationError(
+            f"翻译重试 {self._max_retries} 次后仍失败: {last_error}", trace=last_trace
+        )
+
+    def _call_llm(self, payload: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        # 延迟 import:vlm_client 可能尚未装配默认 client,这里显式传本次
+        # 运行的 client 实例(与 storyline 共用同一对象,修订计划 §5.3)。
+        from storyline_capabilities.vlm_client import chat_json_with_trace
+
+        return chat_json_with_trace(
+            system_prompt=_SYSTEM_PROMPT,
+            user_prompt=payload,
+            schema=_TRANSLATION_SCHEMA,
+            client=self._llm,
+        )
+
+    @staticmethod
+    def _validate_and_merge(
+        obj: dict[str, Any], batch: list[dict], expected_indexes: list[int]
+    ) -> list[dict]:
+        """校验模型输出并按源段合成结果;任何不符都抛 :class:`TranslationError`。"""
+        if not isinstance(obj, dict):
+            raise TranslationError(f"翻译输出不是 JSON 对象: {type(obj).__name__}")
+        rows = obj.get("translations")
+        if not isinstance(rows, list):
+            raise TranslationError("翻译输出缺少 translations 数组")
+
+        by_index: dict[int, str] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                raise TranslationError("translations 含非对象元素")
+            raw_index = row.get("index")
+            if not isinstance(raw_index, int) or isinstance(raw_index, bool):
+                raise TranslationError(f"index 非整数: {raw_index!r}")
+            text_en = row.get("text_en")
+            if not isinstance(text_en, str) or not text_en.strip():
+                raise TranslationError(f"index={raw_index} 的 text_en 为空或非字符串")
+            if raw_index in by_index:
+                raise TranslationError(f"index={raw_index} 重复出现")
+            by_index[raw_index] = text_en
+
+        expected_set = set(expected_indexes)
+        got_set = set(by_index)
+        if got_set != expected_set:
+            missing = sorted(expected_set - got_set)
+            extra = sorted(got_set - expected_set)
+            raise TranslationError(
+                f"翻译 index 集合不匹配: 缺 {missing} 多 {extra}"
+            )
+
+        # 按源段顺序合成:时间码恒从源段继承(修订计划 §5.2 第 3/5 条)
+        out: list[dict] = []
+        for seg, idx in zip(batch, expected_indexes):
+            out.append({
+                "index": idx,
+                "start_ms": int(seg.get("start_ms", 0)),
+                "end_ms": int(seg.get("end_ms", 0)),
+                "text_en": by_index[idx],
+            })
+        return out
+
+
 _default_client: TranslateClient = MockTranslateClient()
 
 
@@ -52,11 +255,11 @@ def get_default_client() -> TranslateClient:
 
 
 def set_default_client(client: TranslateClient) -> None:
-    """允许单测/Week 5 替换默认翻译客户端。"""
+    """运行入口(公共装配函数)替换默认翻译客户端;stub 保持 Mock。"""
     global _default_client
     _default_client = client
 
 
 def translate_segments(segments: list[dict]) -> list[dict]:
-    """便捷调用 — 节点 16 的统一入口。"""
+    """便捷调用 — 节点 16a 的统一入口。真实客户端失败时抛 TranslationError。"""
     return get_default_client().translate(segments)

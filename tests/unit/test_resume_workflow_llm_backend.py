@@ -3,6 +3,9 @@
 背景:此前 resume 入口没有 LLM 注入通道,生产环境恢复的运行会静默回落
 懒加载 Stub —— 阶段 5 与 run_workflow --llm-backend 对齐补齐。
 覆盖:默认不注入(旧 CLI 行为不变)/ 已知后端解析 / 注入发生在图执行前。
+
+2026-11-17 P1:注入改走公共装配 ``agent_gate.bootstrap.install_llm_backend`` ——
+同一 client 实例同时注入 VLM 与英文翻译;恢复执行不再退回 Mock 翻译。
 """
 
 from __future__ import annotations
@@ -18,6 +21,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import storyline_capabilities.vlm_client as vlm  # noqa: E402
 from scripts import resume_workflow as rw  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _restore_global_clients():
+    """注入测试会改写模块级默认 client(VLM+翻译),用例后必须还原。"""
+    from jy_common.translate_client import MockTranslateClient, set_default_client
+
+    yield
+    vlm.set_default_client(None)
+    set_default_client(MockTranslateClient())
 
 
 class TestParseArgs:
@@ -75,6 +88,22 @@ class TestApplyLlmBackend:
         )
         with pytest.raises(ValueError):
             rw._apply_llm_backend("nonexistent")
+
+    def test_real_backend_installs_translation_adapter(self, monkeypatch):
+        """2026-11-17 P1:恢复执行也装配翻译 client(不退回 Mock)。"""
+        sentinel = object()
+        monkeypatch.setattr("agent_gate.factory.build_client", lambda b: sentinel)
+        rw._apply_llm_backend("claude-cli")
+
+        from jy_common.translate_client import (
+            LLMTranslateClient,
+            get_default_client,
+        )
+
+        translator = get_default_client()
+        assert isinstance(translator, LLMTranslateClient)
+        assert translator._llm is sentinel
+        assert translator.translator_id == "claude-cli"
 
 
 class TestResumeAsyncOrdering:

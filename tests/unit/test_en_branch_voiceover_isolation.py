@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from draft_ops.draft_integrity import (
+    CAT_FAILED,
     CAT_NOT_APPLICABLE,
     CAT_PASSED,
     build_join_qa_report,
@@ -498,3 +499,32 @@ def test_qa_categories_v2_clean_passes() -> None:
     )
     assert categories["voice_language_isolation"]["status"] == CAT_PASSED
     assert gate_failed is False
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-17 P1:QA 消费 subtitle_translation_status(stub 不冒充成功)
+# ---------------------------------------------------------------------------
+def test_subtitles_en_stub_status_blocks() -> None:
+    """translation_status=stub → subtitles_en 类别 failed(required 默认阻断)。"""
+    state = _qa_state("v2")
+    state["subtitle_translation_status"] = "stub"
+    state["subtitle_translator_id"] = "mock"
+    en_draft = {"tracks": [], "materials": {"texts": [{"id": "text-en-1"}]}}
+    categories, new_issues, gate_failed = build_qa_categories(
+        state, zh_draft=None, en_draft=en_draft, deep_issues=[]
+    )
+    assert categories["subtitles_en"]["status"] == CAT_FAILED
+    assert any("翻译状态非真实" in i["detail"] for i in new_issues)
+    assert gate_failed is True
+
+
+def test_subtitles_en_real_status_passes() -> None:
+    """translation_status=real + 有英文字幕 → 类别 passed(不误伤)。"""
+    state = _qa_state("v2")
+    state["subtitle_translation_status"] = "real"
+    state["subtitle_translator_id"] = "mcode-cli"
+    en_draft = {"tracks": [], "materials": {"texts": [{"id": "text-en-1"}]}}
+    categories, _, gate_failed = build_qa_categories(
+        state, zh_draft=None, en_draft=en_draft, deep_issues=[]
+    )
+    assert categories["subtitles_en"]["status"] == CAT_PASSED

@@ -911,11 +911,19 @@ def build_qa_categories(
         categories["subtitles_zh"]["status"] = CAT_NOT_APPLICABLE
         categories["subtitles_zh"]["note"] = "无旁白产物"
 
-    # 3) subtitles_en:英文分支存在且中文侧有字幕时,英文侧必须有字幕
+    # 3) subtitles_en:英文分支存在且中文侧有字幕时,英文侧必须有字幕;
+    #    且翻译状态必须 real(2026-11-17 P1:stub/failed 不冒充可交付英文字幕)
     en_texts = _our_text_ids(en_draft, "text-en-")
+    translation_status = str(state.get("subtitle_translation_status") or "")
     if not en_checked:
         categories["subtitles_en"]["status"] = CAT_NOT_APPLICABLE
         categories["subtitles_en"]["note"] = "英文分支未生成"
+    elif translation_status in ("stub", "failed"):
+        _append_issue(
+            "subtitles_en", "英文字幕",
+            f"英文字幕翻译状态非真实({translation_status},translator="
+            f"{state.get('subtitle_translator_id') or 'unknown'}):stub 不冒充成功",
+        )
     elif en_texts:
         categories["subtitles_en"]["counts"] = {"texts": len(en_texts)}
     elif zh_texts:
