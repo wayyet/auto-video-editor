@@ -1,0 +1,22 @@
+{
+  "rounds": [
+    {
+      "round": 1,
+      "before_plan_sha256": "<64hex-before>",
+      "after_plan_sha256": "<64hex-after>",
+      "patch_fingerprint": "<64hex-fingerprint>",
+      "applied_operations": [
+        "op_0001"
+      ],
+      "skipped_operations": [],
+      "manual_issues": [],
+      "strategy_notes": [
+        "clip clip_0002: broken_reference: 引用/段错位,恢复基线 clip → restore 基线 clip"
+      ],
+      "noop_reason": null,
+      "issue_codes": [
+        "broken_reference"
+      ]
+    }
+  ]
+}

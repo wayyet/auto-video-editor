@@ -1,0 +1,25 @@
+{
+  "candidate_qc": true,
+  "status": "fail",
+  "candidate_plan_sha256": "<64hex>",
+  "issues": [
+    {
+      "severity": "error",
+      "code": "broken_reference",
+      "check": "track_references",
+      "message": "segment 引用的 material_id 不存在(dangling)",
+      "clip_id": "clip_0002",
+      "segment_id": "segment-2",
+      "material_id": "video-9"
+    },
+    {
+      "severity": "warning",
+      "code": "missing_asset",
+      "check": "material_paths",
+      "message": "素材文件不存在(种子草稿流允许,降 warning)",
+      "material_id": "video-1"
+    }
+  ],
+  "timeline_validation_ok": true,
+  "preview_render_ok": true
+}
