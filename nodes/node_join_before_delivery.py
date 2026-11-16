@@ -73,12 +73,25 @@ def _count(materials: dict, key: str) -> int:
     return len(materials.get(key, []) or [])
 
 
-def _tail_chain_structured(draft: dict, draft_tag: str, label: str) -> list[dict[str, Any]]:
+def _tail_chain_structured(
+    draft: dict,
+    draft_tag: str,
+    label: str,
+    *,
+    skip_missing: frozenset[str] = frozenset(),
+) -> list[dict[str, Any]]:
     """对一份草稿做尾链四项检查,返回结构化 issue(带 category)。
 
     ``label`` 取 ``"英文草稿"`` / ``"中文主草稿"``;英文侧的 issue 文本与
     K2=B 原实现逐字一致(单测契约),中文侧同构生成。``detail`` 即原文本,
     ``error_texts`` 字符串视图由调用方用 ``detail`` 原文保持。
+
+    ``skip_missing``(P1 修复 20261117):不报「缺失」issue 的类别键集合
+    (transitions/video_effects/stickers)。未勾选的 required 功能与恒可选的
+    视频特效,其素材桶为空是预期而非链路故障 —— 无条件报缺失曾让交付卡
+    误报「效果落盘失败/交付 QA 降级」(console-553e3e7b34f7 实锤,两草稿
+    贴纸误报各一条)。**只豁免缺失,不豁免绑定/孤儿类结构错误**(后者前提
+    是素材桶有条目,与 required 无关)。
     """
     structured: list[dict[str, Any]] = []
 
@@ -92,11 +105,11 @@ def _tail_chain_structured(draft: dict, draft_tag: str, label: str) -> list[dict
     transitions = _count(materials, "transitions")
     video_effects = _count(materials, "video_effects")
     stickers = _count(materials, "stickers")
-    if transitions == 0:
+    if transitions == 0 and "transitions" not in skip_missing:
         _add("转场", f"{label}转场缺失(尾链 node_09 未对{label}生效?)", "transitions")
-    if video_effects == 0:
+    if video_effects == 0 and "video_effects" not in skip_missing:
         _add("视频特效", f"{label}视频特效缺失(尾链 node_09 未对{label}生效?)", "video_effects")
-    if stickers == 0:
+    if stickers == 0 and "stickers" not in skip_missing:
         _add("贴纸", f"{label}贴纸缺失(尾链 node_11 未对{label}生效?)", "stickers")
 
     # 第四期阶段 2(2026-11-13,G3 孤儿口径收口):转场/视频特效孤儿检测 ——
@@ -305,6 +318,17 @@ def join_before_delivery(state: WorkflowState) -> dict:
     en_dict: dict[str, Any] | None = None
     if not qa_report.get("skipped"):
         targets = dict(dual_draft_targets(state))
+        # P1 修复(20261117):「缺失」检查按 required 闸门 —— 未勾选的功能与
+        # 恒可选的视频特效,素材桶为空是预期,不再产出 error 级 issue(否则
+        # build_qa_categories 的「非必需 → 不适用」兜底被抢先污染,交付卡
+        # 误报效果落盘失败/交付 QA 降级)。绑定/孤儿类结构错误不受闸门影响。
+        required_features = resolve_required_features(state)
+        skip_missing = {"video_effects"}  # 特效恒可选,不进 required gate
+        if not required_features.get("transitions"):
+            skip_missing.add("transitions")
+        if not required_features.get("stickers"):
+            skip_missing.add("stickers")
+        skip_missing = frozenset(skip_missing)
         if "zh" not in targets:
             _add("目录", f"中文主草稿缺失: {state.get('draft_path')}", category="draft_integrity")
         else:
@@ -313,7 +337,9 @@ def join_before_delivery(state: WorkflowState) -> dict:
                 _add("目录", f"中文主草稿不可读: {zh_err}", category="draft_integrity")
             elif zh_dict is not None:
                 zh_checked = True
-                for it in _tail_chain_structured(zh_dict, "zh", "中文主草稿"):
+                for it in _tail_chain_structured(
+                    zh_dict, "zh", "中文主草稿", skip_missing=skip_missing
+                ):
                     structured.append(it)
                     issues.append(it["detail"])
 
@@ -325,7 +351,9 @@ def join_before_delivery(state: WorkflowState) -> dict:
             if en_err is not None:
                 _add("目录", f"英文分支草稿不可读: {en_err}", category="draft_integrity")
             elif en_dict is not None:
-                for it in _tail_chain_structured(en_dict, "en", "英文草稿"):
+                for it in _tail_chain_structured(
+                    en_dict, "en", "英文草稿", skip_missing=skip_missing
+                ):
                     structured.append(it)
                     issues.append(it["detail"])
 

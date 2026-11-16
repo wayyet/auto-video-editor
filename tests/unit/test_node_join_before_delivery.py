@@ -205,7 +205,13 @@ def test_join_en_draft_complete_no_issues(tmp_path: Path) -> None:
 
 
 def test_join_en_draft_missing_tail_chain_items(tmp_path: Path) -> None:
-    """英文草稿转场/特效/贴纸全空 → 报 3 条 issue。"""
+    """英文草稿尾链全空 → 缺失类 issue 按 required 闸门产出(P1 修复 20261117)。
+
+    默认集(transitions=True / stickers=False / bgm=False;video_effects 恒
+    可选):只报转场缺失。特效/贴纸空桶是预期而非链路故障 —— 无条件报缺失
+    曾让 build_qa_categories 的「非必需 → 不适用」兜底被抢先污染,交付卡
+    误报效果落盘失败/交付 QA 降级(console-553e3e7b34f7 实锤)。
+    """
     en_dir = tmp_path / "en_branch"
     _healthy_draft(en_dir)
     # 覆写成尾链全空的英文草稿(深度 QA 会另报视频轨为空,不影响本断言)
@@ -224,9 +230,123 @@ def test_join_en_draft_missing_tail_chain_items(tmp_path: Path) -> None:
     }
     out = join_before_delivery(state)
     joined = " ".join(out["join_qa_report"]["error_texts"])
-    assert "英文草稿转场缺失" in joined
-    assert "英文草稿视频特效缺失" in joined
-    assert "英文草稿贴纸缺失" in joined
+    assert "英文草稿转场缺失" in joined, "转场默认必需,缺失必须报"
+    assert "英文草稿视频特效缺失" not in joined, "特效恒可选,缺失不报"
+    assert "英文草稿贴纸缺失" not in joined, "贴纸默认未回填不阻断,缺失不报"
+    # (gate_failed 在此夹具下还受 bare 英文草稿连累的其他必需类别影响,不在此断言)
+
+
+def _draft_files(state: dict) -> list[Path]:
+    """state → zh/en 两份 draft_content.json 路径(en 侧是目录,取其下文件)。"""
+    return [Path(state["draft_path"]), Path(state["draft_dir_en_branch"]) / "draft_content.json"]
+
+
+def _strip_stickers(state: dict) -> None:
+    """把 zh/en 两份草稿的贴纸(素材桶 + 片段引用)一起清掉。"""
+    for p in _draft_files(state):
+        draft = json.loads(p.read_text(encoding="utf-8"))
+        draft["materials"]["stickers"] = []
+        for track in draft["tracks"]:
+            for seg in track.get("segments") or []:
+                seg["extra_material_refs"] = [
+                    r for r in (seg.get("extra_material_refs") or [])
+                    if not str(r).startswith("sticker-")
+                ]
+        p.write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
+
+
+def test_join_sticker_missing_required_vs_optional(tmp_path: Path) -> None:
+    """§7.5 组合:两草稿均无贴纸时,required 决定 failed(gate 阻断)或 n/a(不阻断)。"""
+    # stickers=true → 缺失必须报,类别 failed,gate 阻断(必需缺失不退化)
+    state = _state_with_drafts(
+        tmp_path, required_features={"stickers": True, "bgm": True}
+    )
+    _strip_stickers(state)
+    out = join_before_delivery(state)
+    joined = " ".join(out["join_qa_report"]["error_texts"])
+    assert "贴纸缺失" in joined
+    cats = out["join_qa_report"]["categories"]
+    assert cats["stickers"]["status"] == "failed"
+    assert out["join_qa_report"]["gate_failed"] is True
+
+    # stickers=false(默认,未回填不阻断)→ 不报缺失,类别 n/a「未要求贴纸」
+    (tmp_path / "opt").mkdir()  # _healthy_draft 先写 src 再建草稿目录,父目录须先存在
+    state2 = _state_with_drafts(tmp_path / "opt", required_features={"stickers": False})
+    _strip_stickers(state2)
+    out2 = join_before_delivery(state2)
+    joined2 = " ".join(out2["join_qa_report"]["error_texts"])
+    assert "贴纸缺失" not in joined2
+    cats2 = out2["join_qa_report"]["categories"]
+    assert cats2["stickers"]["status"] == "not_applicable"
+    assert cats2["stickers"]["note"] == "未要求贴纸"
+    assert out2["join_qa_report"]["gate_failed"] is False
+
+
+def test_join_missing_transition_skipped_when_not_required(tmp_path: Path) -> None:
+    """§7.5 组合:transitions=false + 多镜头无转场 → n/a「未要求转场」;gate 不阻断。"""
+    state = _state_with_drafts(
+        tmp_path, required_features={"transitions": False}
+    )
+    for p in _draft_files(state):
+        draft = json.loads(p.read_text(encoding="utf-8"))
+        draft["materials"]["transitions"] = []
+        for track in draft["tracks"]:
+            if track.get("type") != "video":
+                continue
+            # 补第二个视频段(复用 video-1)→ 多镜头,排除「单镜头」n/a 分支
+            first = track["segments"][0]
+            t = first["target_timerange"]
+            track["segments"].append({
+                **first,
+                "id": first["id"] + "-b",
+                "target_timerange": {
+                    "start": t["start"] + t["duration"],
+                    "duration": t["duration"],
+                },
+                "extra_material_refs": [
+                    r for r in (first.get("extra_material_refs") or [])
+                    if not str(r).startswith("transition-")
+                ],
+            })
+            for seg in track["segments"]:
+                seg["extra_material_refs"] = [
+                    r for r in (seg.get("extra_material_refs") or [])
+                    if not str(r).startswith("transition-")
+                ]
+        p.write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
+
+    out = join_before_delivery(state)
+    joined = " ".join(out["join_qa_report"]["error_texts"])
+    assert "转场缺失" not in joined
+    cats = out["join_qa_report"]["categories"]
+    assert cats["transitions"]["status"] == "not_applicable"
+    assert cats["transitions"]["note"] == "未要求转场"
+    assert out["join_qa_report"]["gate_failed"] is False
+
+
+def test_join_unbound_sticker_still_reported_when_not_required(tmp_path: Path) -> None:
+    """§7.5 组合:stickers=false 但有贴纸未挂载 → 结构错误仍报(gate 不阻断)。
+
+    不 required 只豁免「缺失」,不豁免「存在但结构错误」。
+    """
+    state = _state_with_drafts(
+        tmp_path, required_features={"stickers": False}
+    )
+    # 贴纸条目留在素材桶,但从视频段引用里摘掉 → 贴纸绑定(孤儿)错误
+    for p in _draft_files(state):
+        draft = json.loads(p.read_text(encoding="utf-8"))
+        for track in draft["tracks"]:
+            for seg in track.get("segments") or []:
+                seg["extra_material_refs"] = [
+                    r for r in (seg.get("extra_material_refs") or [])
+                    if not str(r).startswith("sticker-")
+                ]
+        p.write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
+
+    out = join_before_delivery(state)
+    joined = " ".join(out["join_qa_report"]["error_texts"])
+    assert "贴纸未挂到任何视频段" in joined, "绑定类结构错误不受 required 闸门豁免"
+    assert out["join_qa_report"]["gate_failed"] is False
 
 
 def test_join_en_draft_bgm_without_fade_binding(tmp_path: Path) -> None:

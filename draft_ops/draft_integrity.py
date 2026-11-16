@@ -918,9 +918,16 @@ def build_qa_categories(
     # 7) transitions:单镜头(≤1 视频段)= not_applicable
     video_segments = _video_segment_count(zh_draft)
     categories["transitions"]["counts"] = {"video_segments": video_segments}
-    if video_segments <= 1 and _status_of("transitions") == CAT_PASSED:
+    # P1 修复(20261117):未要求转场的多镜头草稿也归 n/a(与 stickers/bgm
+    # 同型)—— 尾链「转场缺失」issue 已按 required 闸门跳过,类别兜底不再被
+    # 抢先污染,效果落盘不因未勾选的功能变红。
+    if _status_of("transitions") == CAT_PASSED and (
+        video_segments <= 1 or not required.get("transitions")
+    ):
         categories["transitions"]["status"] = CAT_NOT_APPLICABLE
-        categories["transitions"]["note"] = "单镜头无剪辑边界"
+        categories["transitions"]["note"] = (
+            "单镜头无剪辑边界" if video_segments <= 1 else "未要求转场"
+        )
 
     # 8) text_animation:无我方字幕(zh+en)时 n/a;缺绑定已由尾链 issue 报
     if not zh_texts and not en_texts and _status_of("text_animation") == CAT_PASSED:
