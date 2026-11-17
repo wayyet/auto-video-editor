@@ -41,11 +41,26 @@ _NO_LINE_HEAD_CHARS = set("，。、；：！？…·）】》」』〉”’%,.
 #: 行尾禁则:开口类标点不得悬在行尾(回溯断点时甩给下一行)
 _NO_LINE_TAIL_CHARS = set("（【《「『〈“‘([{")
 
+# ---------------------------------------------------------------------------
+# 布局质量告警阈值(设计审查 20261118 P2-04:只告警,不自动改时间轴)
+# ---------------------------------------------------------------------------
+
+#: 单条字幕折行后超过该行数 → 告警(阅读吃力/易遮挡画面)
+MAX_LINES_WARN = 3
+#: 字幕块垂直占用超过画布高的该比例 → 告警(底部字幕遮挡防护)
+SAFE_HEIGHT_RATIO = 0.25
+#: 平均阅读速度上限(字符/秒,超出 = 观众大概率读不完)
+MAX_CPS_WARN = 12.0
+
 __all__ = [
     "LINE_WIDTH_RATIO",
+    "MAX_CPS_WARN",
+    "MAX_LINES_WARN",
     "PX_PER_SIZE_UNIT",
+    "SAFE_HEIGHT_RATIO",
     "char_units",
     "estimate_line_px",
+    "layout_warnings",
     "line_units",
     "max_line_units",
     "wrap_subtitle_text",
@@ -117,6 +132,8 @@ def _find_cut(s: str, budget: float, prefer_punct: bool) -> int:
             for j in range(i, 0, -1):
                 if not _can_break_before(s, j):
                     continue
+                if not s[:j].strip():
+                    continue  # 断点左侧全是空白 → 吞空格却不产生新行(幻影断行),跳过
                 if prefer_punct and s[j - 1] in _NO_LINE_HEAD_CHARS:
                     return j  # 标点后断行(语义边界,最优先)
                 if fallback == 0:
@@ -124,6 +141,22 @@ def _find_cut(s: str, budget: float, prefer_punct: bool) -> int:
             return fallback if fallback else i  # 无合法断点 → 硬切
         acc += char_units(ch)
     return len(s)
+
+
+def _split_at_break(s: str, cut: int) -> tuple[str, str]:
+    """在断点处切分,恰好吸收**一个**半角空格作为换行分隔符(20261118 P2-01)。
+
+    其余空格(连续空格的剩余部分)与 Tab 一律保留,不得丢失:
+    - 断点左侧以空格结尾 → 行尾吸收一个,其余行尾空格保留在行尾;
+    - 否则断点右侧以空格开头 → 行首吸收一个,其余行首空格保留在行首;
+    - 两侧都无空格(硬切 / 标点断点)→ 原样切分,不吞任何字符。
+    """
+    seg, nxt = s[:cut], s[cut:]
+    if seg.endswith(" "):
+        seg = seg[:-1]
+    elif nxt.startswith(" "):
+        nxt = nxt[1:]
+    return seg, nxt
 
 
 def _wrap_line(line: str, budget: float) -> list[str]:
@@ -139,8 +172,9 @@ def _wrap_line(line: str, budget: float) -> list[str]:
         cut = _find_cut(rest, budget, prefer_punct)
         if cut <= 0:
             break  # 防御:断点无法推进(理论不可达),避免死循环
-        out.append(rest[:cut].rstrip(" "))
-        rest = rest[cut:].lstrip(" ")
+        seg, rest = _split_at_break(rest, cut)
+        if seg:
+            out.append(seg)  # 防御:吸收分隔空格后可能为空串,不产生空行
     if rest:
         out.append(rest)
     return out
@@ -170,3 +204,56 @@ def wrap_subtitle_text(text: str, *, size: float, canvas_width: int = 1080) -> s
     for seg in str(text).split("\n"):
         lines.extend(_wrap_line(seg, budget))
     return "\n".join(lines)
+
+
+def layout_warnings(
+    text: str,
+    *,
+    size: float,
+    canvas_width: int = 1080,
+    canvas_height: int = 1920,
+    duration_us: int | None = None,
+) -> list[str]:
+    """折行后字幕的布局质量告警(只读、只告警,不修改内容/时间轴;P2-04)。
+
+    检查项(设计审查 20261118 §6 P2-04):
+    - 行数:折行后行数 > ``MAX_LINES_WARN``(长文本折成 4+ 行,阅读吃力/遮挡);
+    - 垂直占位:行数 × 行高估算 超出画布高 ``SAFE_HEIGHT_RATIO``;
+    - 每行估宽:超出行预算(防御性检查 —— wrap 后理论上不会发生);
+    - 阅读速度:``duration_us`` 给出时按 字符/秒(CPS)检查,> ``MAX_CPS_WARN``
+      告警(折行不重排时间轴,超长 cue 仍可能读不完,提示人工关注)。
+
+    Returns:
+        可直接打印的告警文案列表;无告警返回空列表(普通字幕零误报)。
+    """
+    warnings: list[str] = []
+    if not text or not isinstance(text, str) or size <= 0:
+        return warnings
+    lines = text.split("\n")
+    if len(lines) > MAX_LINES_WARN:
+        warnings.append(
+            f"行数 {len(lines)} > {MAX_LINES_WARN}:阅读吃力/易遮挡画面"
+        )
+    # 行高粗估:字号×PX_PER_SIZE_UNIT×1.3(含行距与行间呼吸空间)
+    block_px = len(lines) * PX_PER_SIZE_UNIT * size * 1.3
+    if block_px > canvas_height * SAFE_HEIGHT_RATIO:
+        warnings.append(
+            f"垂直占位 {block_px:.0f}px ≈ 画布高 {block_px / canvas_height:.0%}"
+            f"(阈值 {SAFE_HEIGHT_RATIO:.0%})"
+        )
+    budget = max_line_units(size, canvas_width)
+    if budget > 0:
+        for line in lines:
+            if line_units(line) > budget:
+                warnings.append(
+                    f"行超预算 {line_units(line):.1f} > {budget} 单位: {line[:20]}…"
+                )
+                break
+    if duration_us is not None and duration_us > 0:
+        seconds = duration_us / 1_000_000
+        cps = len(text.replace("\n", "")) / seconds
+        if cps > MAX_CPS_WARN:
+            warnings.append(
+                f"阅读速度 {cps:.1f} 字/秒 > {MAX_CPS_WARN}(时长 {seconds:.1f}s)"
+            )
+    return warnings

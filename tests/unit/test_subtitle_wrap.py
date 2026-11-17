@@ -3,15 +3,21 @@
 标定口径与规则说明见 ``jy_common/subtitle_wrap.py`` docstring;本文件把
 "size → 每行单位数"与真机两口径(zh 6.25 → 21 / en 5.0 → 26)钉死,防止
 无意改动让字幕重新超宽。小预算用例用 size=60 造 budget=2,便于手算断点。
+
+2026-11-18 第二轮补充(设计审查 P2-01/P2-02/P2-04):断点空白保留、
+布局质量告警、标定样本表(估算值钉值,实测值 TODO 待真机)。
 """
 
 from __future__ import annotations
+
+import pytest
 
 from jy_common.subtitle_wrap import (
     LINE_WIDTH_RATIO,
     PX_PER_SIZE_UNIT,
     char_units,
     estimate_line_px,
+    layout_warnings,
     line_units,
     max_line_units,
     wrap_subtitle_text,
@@ -135,3 +141,120 @@ class TestWrapRules:
 
     def test_trailing_newline_preserved(self) -> None:
         assert wrap_subtitle_text("我你\n", size=60, canvas_width=1080) == "我你\n"
+
+
+class TestWhitespacePreservation:
+    """断点空白保留(20261118 审查 P2-01):恰好吸收一个空格,其余字符不丢。"""
+
+    def test_consecutive_spaces_keep_extra(self) -> None:
+        # budget=2(size 60):"A␣␣B" 断在两个空格之间 → 行尾吸收一个,另一个保留
+        out = wrap_subtitle_text("A  B", size=60, canvas_width=1080)
+        assert out == "A \nB", "连续空格只消费一个,剩余保留在行尾"
+        assert out.replace("\n", "") == "A B", "原文 4 字符 - 1 分隔空格 = 3 字符"
+
+    def test_tab_never_consumed(self) -> None:
+        # Tab 不是断行分隔符:断点落在 Tab 之后(前一字符是字母数字不可断 →
+        # 回溯到 Tab 后),Tab 原样保留在行尾
+        out = wrap_subtitle_text("A\tB\tC\tD\tE", size=60, canvas_width=1080)
+        assert out.replace("\n", "") == "A\tB\tC\tD\tE", "Tab 一律不得丢失"
+        for line in out.split("\n"):
+            assert line_units(line) <= 2
+
+    def test_break_space_leading_side(self) -> None:
+        # 断点右侧有空格时从行首吸收:"我␣␣你" → 行1"我",行2"␣你"(保留一个行首空格)
+        out = wrap_subtitle_text("我  你", size=60, canvas_width=1080)
+        assert out == "我\n 你"
+        assert out.replace("\n", "") == "我 你"
+
+    def test_no_space_hard_cut_loses_nothing(self) -> None:
+        # 硬切(两侧无空格)不吞任何字符
+        out = wrap_subtitle_text("abcde", size=60, canvas_width=1080)
+        assert out.replace("\n", "") == "abcde"
+
+    def test_space_preservation_idempotent(self) -> None:
+        once = wrap_subtitle_text("A  B", size=60, canvas_width=1080)
+        assert wrap_subtitle_text(once, size=60, canvas_width=1080) == once
+        once_en = wrap_subtitle_text(EN157 + "  tail", size=5.0, canvas_width=1080)
+        assert wrap_subtitle_text(once_en, size=5.0, canvas_width=1080) == once_en
+
+    def test_double_spaces_two_breaks_exact(self) -> None:
+        # 两组双空格、两个断点(budget=2):每个断点恰好消费一个空格,
+        # 双空格的另一个分别保留在行首/行尾 —— 手算钉死,防回归
+        out = wrap_subtitle_text("ab  cd  ef", size=60, canvas_width=1080)
+        assert out == "ab\n cd\n ef", "每断点吸收一个空格;剩余空格各归其位"
+        assert out.replace("\n", "") == "ab cd ef", "10 字符 - 2 断点空格 = 8 字符,无丢失"
+
+
+class TestLayoutWarnings:
+    """布局质量告警(20261118 审查 P2-04):长文本明确告警,普通字幕零误报。"""
+
+    def test_en157_wrapped_warns_line_count(self) -> None:
+        out = wrap_subtitle_text(EN157, size=5.0, canvas_width=1080)
+        warns = layout_warnings(out, size=5.0, canvas_width=1080)
+        assert any(f"行数 {len(out.splitlines())}" in w for w in warns), "4 行英文 cue 必须告警"
+
+    def test_cps_warning_when_too_fast(self) -> None:
+        # 39 字 / 3 秒 = 13 字/秒 > 12 → 告警
+        warns = layout_warnings(ZH39, size=6.25, canvas_width=1080, duration_us=3_000_000)
+        assert any("阅读速度" in w for w in warns)
+
+    def test_no_warning_for_normal_cue(self) -> None:
+        warns = layout_warnings(
+            "别眨眼!", size=6.25, canvas_width=1080, duration_us=2_000_000
+        )
+        assert warns == [], "普通短字幕零误报"
+
+    def test_no_warning_without_duration(self) -> None:
+        # 折行后的文本(2 行、每行 ≤ 预算)→ 零告警;duration 缺省则无 CPS 检查
+        wrapped = wrap_subtitle_text(ZH39, size=6.25, canvas_width=1080)
+        assert layout_warnings(wrapped, size=6.25, canvas_width=1080) == []
+
+    def test_vertical_occupancy_warning(self) -> None:
+        # 5 行 × size 12:块高 5×6.4×12×1.3 ≈ 499px > 1920×0.25 → 告警
+        text = "\n".join(["我"] * 5)
+        warns = layout_warnings(text, size=12.0, canvas_width=1080, canvas_height=1920)
+        assert any("垂直占位" in w for w in warns)
+
+    def test_overwide_line_defensive_check(self) -> None:
+        # 防御性:未折行的超宽行(如外来素材)给出行超预算告警
+        warns = layout_warnings("超" * 60, size=5.0, canvas_width=1080)
+        assert any("行超预算" in w for w in warns)
+
+
+class TestCalibrationSamples:
+    """标定样本表(20261118 审查 P2-02):估算值钉值。
+
+    估算模型:px = line_units(text) × PX_PER_SIZE_UNIT × size(±15% 不确定度,
+    单一真机样本 size 6.25 → 40px/全角字 反推)。**剪映实测值列为 TODO**,
+    真机验收(阶段 P3)时逐样本回填;若实测低估误差 > 10%,收紧
+    PX_PER_SIZE_UNIT 或 LINE_WIDTH_RATIO 并重跑本表。
+    """
+
+    def test_estimated_values_pinned(self) -> None:
+        # 每组样本的估算 px(手算钉值);模型常量一变,这里立刻红
+        assert estimate_line_px(ZH39, 6.25) == pytest.approx(38.1 * 6.4 * 6.25)  # 1524.0
+        assert estimate_line_px("THE QUICK BROWN FOX", 5.0) == pytest.approx(12.37 * 6.4 * 5.0)
+        assert estimate_line_px("2026-11-18 10:30:00", 5.0) == pytest.approx(10.45 * 6.4 * 5.0)
+        assert estimate_line_px("马六甲 Malacca 海峡", 6.25) == pytest.approx(10.07 * 6.4 * 6.25)
+        assert estimate_line_px("Stained-glass", 5.0) == pytest.approx(7.27 * 6.4 * 5.0)
+
+    def test_emoji_counted_fullwidth(self) -> None:
+        # emoji(≥U+2E80)按 1.0 全角单位计 —— 真机实际渲染可能更宽,
+        # 属已知低估方向(保守折行靠 LINE_WIDTH_RATIO 三重余量兜住)
+        assert char_units("👀") == 1.0
+        assert estimate_line_px("别眨眼👀", 6.25) == pytest.approx(4 * 6.4 * 6.25)
+
+    def test_uppercase_uses_wider_unit(self) -> None:
+        # 全大写行不低估:每个大写 0.67 > 平均 0.55
+        assert char_units("T") == 0.67
+        assert line_units("THE") == pytest.approx(3 * 0.67)
+
+    # TODO(真机 P3):下表为剪映实测列,验收时逐行回填:
+    # | 样本                        | size  | 估算 px | 剪映实测 px | 误差  |
+    # |-----------------------------|-------|---------|-------------|-------|
+    # | ZH39(全角句)              | 6.25  | 1524    | TODO        | TODO  |
+    # | THE QUICK BROWN FOX(全大写)| 5.0   | 396     | TODO        | TODO  |
+    # | 2026-11-18 10:30:00(数字)  | 5.0   | 334     | TODO        | TODO  |
+    # | 马六甲 Malacca 海峡(混排)  | 6.25  | 403     | TODO        | TODO  |
+    # | Stained-glass(连字符词)    | 5.0   | 233     | TODO        | TODO  |
+    # | 别眨眼👀(emoji)            | 6.25  | 256     | TODO        | TODO  |

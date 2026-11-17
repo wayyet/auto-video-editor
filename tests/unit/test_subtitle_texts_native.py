@@ -111,6 +111,40 @@ class TestMakeTextMaterial:
         )
         assert text_display_text(m) == json.loads(m["content"])["text"]
 
+    def test_canvas_width_param_overrides_config(self) -> None:
+        """P2-03:canvas_width 参数生效 —— 窄画布预算更小,折行更多。"""
+        # 20 全角字:size 5.0 下 1080 预算 26 → 不折;720 预算 17 → 折 2 行
+        m1080 = make_text_material(
+            index=0, content="字" * 20, start_us=0, duration_us=1_000_000,
+            style=_DEFAULT_STYLE, track_name="Subtitles", canvas_width=1080,
+        )
+        m720 = make_text_material(
+            index=0, content="字" * 20, start_us=0, duration_us=1_000_000,
+            style=_DEFAULT_STYLE, track_name="Subtitles", canvas_width=720,
+        )
+        assert "\n" not in json.loads(m1080["content"])["text"], "1080 口径 20 字不折"
+        assert "\n" in json.loads(m720["content"])["text"], "720 口径 20 字必须折行"
+
+    def test_canvas_width_none_falls_back_to_config(self) -> None:
+        """canvas_width=None/非法 → 回落 config.CANVAS_WIDTH(1080,兼容旧行为)。"""
+        m = make_text_material(
+            index=0, content="字" * 20, start_us=0, duration_us=1_000_000,
+            style=_DEFAULT_STYLE, track_name="Subtitles",
+        )
+        assert "\n" not in json.loads(m["content"])["text"], "config 默认 1080 下 20 字不折"
+
+    def test_canvas_width_from_draft_helper(self) -> None:
+        """canvas_width_from_draft:草稿画布提取 + 非法/缺失回落 None。"""
+        from nodes._subtitle_texts import canvas_width_from_draft
+
+        assert canvas_width_from_draft({"canvas_config": {"width": 720}}) == 720
+        assert canvas_width_from_draft({"canvas_config": {"width": "720"}}) == 720
+        assert canvas_width_from_draft({"canvas_config": {"width": 0}}) is None
+        assert canvas_width_from_draft({"canvas_config": {}}) is None
+        assert canvas_width_from_draft({}) is None
+        assert canvas_width_from_draft(None) is None
+        assert canvas_width_from_draft({"canvas_config": {"width": "abc"}}) is None
+
     def test_display_text_dual(self) -> None:
         m = _two_materials()[0]
         assert text_display_text(m) == "txt0", "原生 content JSON 解析"

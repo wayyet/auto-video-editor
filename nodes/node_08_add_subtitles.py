@@ -52,7 +52,11 @@ import config
 from assembly_capabilities.run_context import RunContext
 from nodes._draft_io import apply_and_write, load_draft
 from nodes._dual_draft import ZH_VOICEOVER_TRACK_NAME as _ZH_VOICEOVER_TRACK_NAME
-from nodes._subtitle_texts import build_text_track, make_text_material
+from nodes._subtitle_texts import (
+    build_text_track,
+    canvas_width_from_draft,
+    make_text_material,
+)
 from nodes.storyline._common import (
     PLAN_SOURCE_FINAL_INVALID,
     effective_canonical_plan,
@@ -355,6 +359,8 @@ def _build_zh_subtitles(
     materials: list[dict] = []
     segments: list[dict] = []
     index = 0
+    # 2026-11-18 P2-03:折行宽度优先用目标草稿自身画布(config 只作兼容回落)
+    canvas_width = canvas_width_from_draft(draft)
     for gid, (start_us, end_us) in sorted(spans.items(), key=lambda kv: kv[1][0]):
         text = (narration.get(gid) or "").strip()
         if not text:
@@ -373,6 +379,7 @@ def _build_zh_subtitles(
                     track_name=_ZH_TRACK_NAME,
                     id_prefix=_ZH_ID_PREFIX,
                     extra={"text_zh": sentence},
+                    canvas_width=canvas_width,
                 )
             )
             segments.append(

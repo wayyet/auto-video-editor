@@ -21,10 +21,26 @@ from jy_common.native_text import (
     build_text_content_json,
     text_check_flag,
 )
-from jy_common.subtitle_wrap import wrap_subtitle_text
+from jy_common.subtitle_wrap import layout_warnings, wrap_subtitle_text
 
 #: text 轨 render_index(pyJianYingDraft 口径:video 0 / audio 0 / text 15000)
 _TEXT_TRACK_RENDER_INDEX = 15000
+
+
+def canvas_width_from_draft(draft: dict[str, Any] | None) -> int | None:
+    """从草稿 dict 读 ``canvas_config.width``;非法/缺失返回 None(调用方回落 config)。
+
+    2026-11-18 P2-03:折行宽度优先用**目标草稿自身的画布**,config.CANVAS_WIDTH
+    (1080)只作兼容回退 —— 以后支持多画布草稿时,不能把配置宽度错用到
+    不同画布的草稿上。
+    """
+    if not isinstance(draft, dict):
+        return None
+    try:
+        width = int((draft.get("canvas_config") or {}).get("width") or 0)
+    except (TypeError, ValueError):
+        return None
+    return width if width > 0 else None
 
 
 def make_text_material(
@@ -37,6 +53,7 @@ def make_text_material(
     track_name: str,
     id_prefix: str = "text",
     extra: dict[str, Any] | None = None,
+    canvas_width: int | None = None,
 ) -> dict[str, Any]:
     """构造一条 ``materials.texts`` 条目(微秒时间轴;原生键+私有键双形态)。
 
@@ -52,16 +69,19 @@ def make_text_material(
         track_name: 轨道名(中文 ``"Subtitles"``,英文 ``"Subtitles_en"``)。
         id_prefix: id 前缀(中文 ``"text"``,英文 ``"text-en"``)。
         extra: 追加字段(英文用来写 ``text_en``,与 16a 的 marker 约定一致)。
+        canvas_width: 目标草稿画布宽(px);None/非法回落 ``config.CANVAS_WIDTH``
+            (2026-11-18 P2-03:优先草稿自身画布,配置值只作兼容回退)。
     """
     style_copy = copy.deepcopy(style)
     # 2026-11-18 折行:渲染 content 按画布宽×字号内嵌 \n,修复单行超宽被画布
     # 两端裁剪(真机 AutoVideo_console-31a8a8e9edd2 实证;根因/标定见
     # jy_common/subtitle_wrap.py docstring)。只折渲染口径 —— 调用方经 extra
     # 写入的私有键(text_zh/text_en)是原文,翻译/导出链照旧。
+    effective_width = canvas_width if isinstance(canvas_width, int) and canvas_width > 0 else config.CANVAS_WIDTH
     render_text = wrap_subtitle_text(
         content,
         size=float(style_copy.get("size") or 5.0),
-        canvas_width=config.CANVAS_WIDTH,
+        canvas_width=effective_width,
     )
     item: dict[str, Any] = {
         # ---- 原生必填键(剪映识别用)----
@@ -84,6 +104,19 @@ def make_text_material(
     }
     if extra:
         item.update(extra)
+    # 2026-11-18 P2-04:折行后布局质量告警(行数/垂直占位/阅读速度)。
+    # 只打印提示,不改内容、不重排时间轴 —— 超长 cue 是否重切属另案设计变更。
+    try:
+        cues = layout_warnings(
+            render_text,
+            size=float(style_copy.get("size") or 5.0),
+            canvas_width=effective_width,
+            duration_us=int(duration_us) if duration_us else None,
+        )
+    except Exception:  # pragma: no cover - 告警是尽力而为,不得影响素材构造
+        cues = []
+    for w in cues:
+        print(f"[subtitle-layout] {item['id']}: {w}")
     return item
 
 

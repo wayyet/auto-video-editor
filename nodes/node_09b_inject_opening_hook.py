@@ -47,7 +47,11 @@ from nodes._draft_io import (
     upsert_by_id,
 )
 from nodes._dual_draft import ZH, dual_draft_targets, missing_en_note
-from nodes._subtitle_texts import make_text_material, make_text_segment
+from nodes._subtitle_texts import (
+    canvas_width_from_draft,
+    make_text_material,
+    make_text_segment,
+)
 from state import WorkflowState
 
 #: 我方开场钩子产物的确定性 id / 轨道约定(幂等清理只动这些;人工素材 id 是
@@ -198,6 +202,7 @@ def _inject_hook_into(draft: dict, title: str | None, tag: str) -> tuple[list[st
             style=_HOOK_TITLE_STYLE,
             track_name=HOOK_TITLE_TRACK_NAME,
             id_prefix="hook-title",
+            canvas_width=canvas_width_from_draft(draft),
         )
         upsert_by_id(materials.setdefault("texts", []), title_material)
 

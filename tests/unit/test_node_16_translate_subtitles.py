@@ -75,3 +75,52 @@ def test_read_segments_from_draft(tmp_path: Path) -> None:
     assert segs[0]["start_ms"] == 1000
     assert segs[0]["end_ms"] == 3000
     assert segs[0]["text_en"] == "Hello"
+
+
+def test_wrapped_native_content_srt_roundtrip(tmp_path: Path) -> None:
+    """P2-05(20261118 审查):折行后的原生 content → native 回读 → SRT。
+
+    回填脚本在 content.text 内嵌 \\n 后,node_16 读取侧经 text_display_text
+    取到的是**折行后**文本 —— 本用例钉住该行为的预期(§4.2 P2-08):文字
+    无丢失、时间戳不变、SRT cue 文本块内换行按设计保留(SRT 支持多行 cue)。
+    """
+    wrapped = "line one\nline two"
+    draft_dir = tmp_path / "draft"
+    draft_dir.mkdir()
+    draft = {
+        "canvas_config": {"width": 1080, "height": 1920},
+        "materials": {
+            "texts": [
+                {
+                    "id": "text-en-1",
+                    "content": json.dumps(
+                        {"text": wrapped, "styles": [{"size": 5.0, "range": [0, len(wrapped)]}]},
+                        ensure_ascii=False,
+                    ),
+                }
+            ]
+        },
+        "tracks": [
+            {
+                "type": "text",
+                "segments": [
+                    {
+                        "material_id": "text-en-1",
+                        "target_timerange": {"start": 0, "duration": 2_000_000},
+                    }
+                ],
+            }
+        ],
+    }
+    (draft_dir / "draft_content.json").write_text(
+        json.dumps(draft, ensure_ascii=False), encoding="utf-8"
+    )
+
+    segs = _read_segments_from_draft(draft_dir)
+    assert len(segs) == 1
+    assert segs[0]["start_ms"] == 0 and segs[0]["end_ms"] == 2000, "时间取轨道段,不因折行改变"
+    assert segs[0]["text_en"] == wrapped, "折行文本原样回读,字符无丢失"
+
+    srt = _segments_to_srt(segs)
+    assert "00:00:00,000 --> 00:00:02,000" in srt
+    assert "line one\nline two" in srt, "SRT cue 内多行按设计保留"

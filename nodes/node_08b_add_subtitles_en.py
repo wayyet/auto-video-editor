@@ -26,7 +26,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from nodes._draft_io import apply_and_write, load_draft
-from nodes._subtitle_texts import make_text_material, sync_text_track
+from nodes._subtitle_texts import canvas_width_from_draft, make_text_material, sync_text_track
 from nodes.node_08_add_subtitles import _overlay_storyline_style, _style_from_scout
 from nodes.node_16a_translate_and_check import STATUS_REAL
 from state import WorkflowState
@@ -78,6 +78,8 @@ def add_subtitles_en(state: WorkflowState) -> dict:
     )
 
     texts = []
+    # 2026-11-18 P2-03:折行宽度优先用目标草稿自身画布(config 只作兼容回落)
+    canvas_width = canvas_width_from_draft(draft)
     for i, seg in enumerate(segments):
         start_ms = int(seg.get("start_ms", 0))
         end_ms = int(seg.get("end_ms", start_ms + 1_000))
@@ -91,6 +93,7 @@ def add_subtitles_en(state: WorkflowState) -> dict:
             track_name="Subtitles_en",
             id_prefix="text-en",
             extra={"text_en": text_en},
+            canvas_width=canvas_width,
         ))
 
     # 整表替换 = 幂等(重放不会叠出重复字幕)
