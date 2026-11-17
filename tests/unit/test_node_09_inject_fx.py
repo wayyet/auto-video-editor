@@ -34,10 +34,13 @@ REPO = Path(__file__).resolve().parents[2]
 
 _VIP_ID_PATTERN = re.compile(r"^\d{19}$")
 
-# 真实 fx_template.json 的池(与 templates/fx_template.json 同步维护)
-POOL_GENTLE = ("叠化", "水墨", "相片切换", "前后对比", "融化")
-POOL_ZOOM = ("推近 II", "推远 II", "中心切开")
-EFFECT_WHITELIST = ("柔和辉光", "金色辉光", "梦幻辉光", "精致辉光", "失焦光斑", "幻动光斑")
+# 真实 fx_template.json 的池/白名单(2026-11-18 全库分池后成员变大,改为运行时
+# 读取单一事实源,免维护数百名元组;成员归属断言语义不变)
+with open(REPO / "templates" / "fx_template.json", "r", encoding="utf-8") as _f:
+    _FX_TEMPLATE = json.load(_f)
+POOL_GENTLE: tuple[str, ...] = tuple(_FX_TEMPLATE["transition_pools"]["pool_gentle"])
+POOL_ZOOM: tuple[str, ...] = tuple(_FX_TEMPLATE["transition_pools"]["pool_zoom"])
+EFFECT_WHITELIST: tuple[str, ...] = tuple(row["name"] for row in _FX_TEMPLATE["video_effects"])
 
 
 def _seg(seg_id: str, start: int, duration: int = 10_000_000) -> dict:

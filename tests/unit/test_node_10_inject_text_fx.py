@@ -103,14 +103,74 @@ def test_inject_text_fx_writes_native_animations(tmp_draft_with_texts: Path) -> 
     assert "node_10_inject_text_fx_done" in out["status_log"]
 
 
-def test_inject_text_fx_default_animation_is_new_year_typewriter(
-    tmp_draft_with_texts: Path,
+def test_inject_text_fx_fixed_mode_uses_config_name(
+    tmp_draft_with_texts: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """默认动画名是库内实证存在的"新年打字机"(旧默认四个名字全不在库内)。"""
+    """fixed 模式(旧行为):config 固定名"新年打字机"(旧默认四个名字全不在库内)。"""
+    monkeypatch.setattr(
+        "nodes.node_10_inject_text_fx.TEXT_FX_INTRO_POOL_MODE", "fixed"
+    )
     inject_text_fx(_state(tmp_draft_with_texts))
     draft = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
     names = {a["animations"][0]["name"] for a in draft["materials"]["material_animations"]}
     assert names == {"新年打字机"}
+
+
+def _intro_library_names() -> set[str]:
+    """text_resource_library.json intro 段全部 VIP 动画名(auto 池的合法域)。"""
+    lib_path = Path(__file__).resolve().parents[2] / "templates" / "text_resource_library.json"
+    with open(lib_path, "r", encoding="utf-8") as f:
+        return {row["name"] for row in json.load(f).get("intro", [])}
+
+
+def test_inject_text_fx_auto_pool_picks_valid_member_deterministically(
+    tmp_draft_with_texts: Path,
+) -> None:
+    """auto 池模式(2026-11-18 默认):选中的动画 ∈ intro VIP 库;同任务确定复现。"""
+    inject_text_fx(_state(tmp_draft_with_texts))
+    draft = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    names = {a["animations"][0]["name"] for a in draft["materials"]["material_animations"]}
+    assert len(names) == 1, "同一支视频所有字幕应共用同一入场动画"
+    (name,) = names
+    assert name in _intro_library_names()
+
+    # 同 job_id(thread_id 缺省兜底草稿目录名)重跑 → 同一动画(确定性轮换)
+    inject_text_fx(_state(tmp_draft_with_texts))
+    draft2 = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    names2 = {a["animations"][0]["name"] for a in draft2["materials"]["material_animations"]}
+    assert names2 == names
+
+
+def test_inject_text_fx_auto_pool_same_job_zh_en_consistent(
+    tmp_draft_with_texts: Path, tmp_path: Path
+) -> None:
+    """auto 模式下相同 job_id 的 zh/en 两次调用选出同一动画(同 seed 原则)。"""
+    from nodes.node_10_inject_text_fx import apply_text_fx
+
+    def _run(draft_file: Path) -> str:
+        apply_text_fx(
+            draft_file, [], node_tag="t", done_tag="t_done", job_id="job-consistent"
+        )
+        d = json.loads(draft_file.read_text(encoding="utf-8"))
+        return d["materials"]["material_animations"][0]["animations"][0]["name"]
+
+    zh_name = _run(tmp_draft_with_texts)
+    en_draft = tmp_path / "draft_en" / "draft_content.json"
+    en_draft.parent.mkdir(parents=True, exist_ok=True)
+    en_draft.write_text(
+        json.dumps({
+            "canvas_config": {"width": 1080, "height": 1920},
+            "duration": 10_000_000,
+            "materials": {"texts": [_text_material("text-en-1", "hello", 0, 1_500_000)]},
+            "tracks": [{"type": "text", "id": "t1", "segments": [
+                {"id": "s1", "material_id": "text-en-1",
+                 "target_timerange": {"start": 0, "duration": 1_500_000}}]}],
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    en_name = _run(en_draft)
+    assert zh_name == en_name
+    assert zh_name in _intro_library_names()
 
 
 def test_inject_text_fx_dual_write_content_and_info(tmp_draft_with_texts: Path) -> None:

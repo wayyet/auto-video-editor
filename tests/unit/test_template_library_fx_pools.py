@@ -100,6 +100,31 @@ class TestTransitionPoolsIntegrity:
                     f"{banned!r} 不得出现在 {key}"
                 )
 
+    def test_pools_plus_excluded_cover_entire_library(
+        self, real_template, library_sections
+    ):
+        """2026-11-18 全库分池不变量:每个库内转场名 ∈ 恰好一个池 或 ∈
+        transition_excluded 禁用清单 —— 防止资源库扩充后出现"既不入池也无理由
+        排除"的漂移。"""
+        tr_rows, _fx_rows = library_sections
+        with open(FX_TEMPLATE_PATH, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        excluded = raw.get("transition_excluded") or {}
+        pooled = [name for _, name in _pool_members(real_template)]
+        pooled_set = set(pooled)
+        lib_names = set(tr_rows.keys())
+        assert len(pooled) == len(pooled_set), "同一转场名出现在多个池"
+        assert pooled_set | set(excluded) == lib_names, (
+            "池+禁用清单未覆盖全库,缺: "
+            f"{sorted(lib_names - pooled_set - set(excluded))[:10]}"
+        )
+        assert not (pooled_set & set(excluded)), (
+            f"禁用名单同时进了池: {sorted(pooled_set & set(excluded))[:10]}"
+        )
+        assert set(excluded) <= lib_names, (
+            f"禁用清单含库内不存在的名字: {sorted(set(excluded) - lib_names)[:10]}"
+        )
+
     def test_missing_pool_returns_empty_not_cross_pool(self, tmp_path):
         """池缺失/为空 → [] 调用方 degraded,不得静默换池(核验报告 §6.4)。"""
         lib = TemplateLibrary({"transition_pools": {"pool_gentle": []}})

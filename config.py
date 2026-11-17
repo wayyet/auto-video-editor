@@ -157,6 +157,13 @@ CANVAS_HEIGHT: int = 1920
 # "新年打字机"。可用环境变量覆盖。
 TEXT_FX_INTRO_ANIMATION: str = os.environ.get("TEXT_FX_INTRO_ANIMATION", "新年打字机").strip() or "新年打字机"
 
+# 字幕入场动画池模式(2026-11-18 全库分池):auto = 每任务从
+# templates/text_resource_library.json intro 段全部 VIP 入场动画中,按
+# sha256(job_id|"text_intro_pool") 确定性选 1 个 —— 同一支视频所有字幕用同一
+# 动画(避免花哨),zh/en 双草稿一致(与 node_09 转场池轮换同款机制、同 seed 原则);
+# fixed = 用上面的 TEXT_FX_INTRO_ANIMATION 固定名(旧行为)。非法值按 auto 处理。
+TEXT_FX_INTRO_POOL_MODE: str = os.environ.get("TEXT_FX_INTRO_POOL_MODE", "auto").strip().lower() or "auto"
+
 # ---------------------------------------------------------------------------
 # 节点 13:adjust_volume(阶段 5,2026-11-09)—— 分角色音量与淡入淡出
 # ---------------------------------------------------------------------------

@@ -11,17 +11,22 @@
 动画 id 确定性(``text-anim-{字幕 material id}``)→ 重放按 id 覆盖;重放前剥离
 我方旧 refs、清理孤儿动画素材(人工动画是 uuid,不受影响)。
 
-默认动画:``config.TEXT_FX_INTRO_ANIMATION``(缺省"新年打字机",库内实证存在的
-VIP 资源;旧默认列表四个名字全不在库内)未命中时回落库内第一个 VIP intro;
-资源库缺失 → 动画降级不写入(不伪装成功,degraded 计数)。
+默认动画(2026-11-18 池化):``config.TEXT_FX_INTRO_POOL_MODE`` = auto(缺省)时,
+每任务从 text_resource_library intro 段全部 VIP 入场动画按
+``sha256(job_id|"text_intro_pool")`` 确定性选 1 个 —— 同一支视频所有字幕同一动画
+(避免花哨),zh/en 双草稿一致(与 node_09 转场池轮换同款机制、同 seed 原则);
+= fixed 时走旧行为:``config.TEXT_FX_INTRO_ANIMATION``(缺省"新年打字机",库内
+实证存在的 VIP 资源;旧默认列表四个名字全不在库内)未命中时回落库内第一个 VIP
+intro。资源库缺失 → 动画降级不写入(不伪装成功,degraded 计数)。
 """
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
-from config import TEXT_FX_INTRO_ANIMATION
+from config import TEXT_FX_INTRO_ANIMATION, TEXT_FX_INTRO_POOL_MODE
 from jy_common.native_fx import OUR_TEXT_ANIMATION_PREFIX, build_native_text_animation_material
 from jy_common.template_library import TemplateLibrary, load_resource_libraries
 from nodes._draft_io import apply_and_write, find_text_segment_by_material_id, load_draft
@@ -39,17 +44,26 @@ def _is_our_text(text_obj: dict) -> bool:
     return any(text_id.startswith(p) for p in _OUR_TEXT_PREFIXES)
 
 
-def _pick_intro_animation(template_lib: TemplateLibrary) -> dict | None:
-    """默认入场动画:config 名 → 旧默认名兜底 → 库内第一个 VIP intro。"""
+def _pick_intro_animation(template_lib: TemplateLibrary, job_id: str = "") -> dict | None:
+    """入场动画选取(池化,2026-11-18)。
+
+    - auto(缺省):intro 段全部 VIP 动画按 ``sha256(job_id|"text_intro_pool")``
+      确定性选 1 个 —— 同任务同结果,zh/en 一致,跨任务多样化。
+    - fixed:config 名 → 旧默认名兜底 → 库内第一个 VIP intro。
+    """
     if template_lib.is_empty or not template_lib.has_text_lib:
         return None
+    intro_list = template_lib.list_text_animations("intro", vip_only=True)
+    if not intro_list:
+        return None
+    if TEXT_FX_INTRO_POOL_MODE != "fixed":
+        seed_input = f"{job_id}|text_intro_pool"
+        seed = int(hashlib.sha256(seed_input.encode("utf-8")).hexdigest()[:8], 16)
+        return template_lib.pick_text_animation("intro", intro_list[seed % len(intro_list)])
     for name in (TEXT_FX_INTRO_ANIMATION, *_LEGACY_INTRO_NAMES):
         anim = template_lib.pick_text_animation("intro", name)
         if anim is not None:
             return anim
-    intro_list = template_lib.list_text_animations("intro", vip_only=True)
-    if not intro_list:
-        return None
     return template_lib.pick_text_animation("intro", intro_list[0])
 
 
@@ -85,10 +99,11 @@ def _apply_text_animations(
     draft: dict,
     template_lib: TemplateLibrary,
     tag: str,
+    job_id: str = "",
 ) -> tuple[list[str], dict]:
     """为我方字幕写原生入场动画(就地改 ``draft``),返回 (告警, 摘要)。"""
     warnings: list[str] = []
-    anim_meta = _pick_intro_animation(template_lib)
+    anim_meta = _pick_intro_animation(template_lib, job_id)
 
     summary: dict[str, Any] = {
         "texts_scanned": 0,
@@ -142,10 +157,12 @@ def apply_text_fx(
     *,
     node_tag: str,
     done_tag: str,
+    job_id: str = "",
 ) -> tuple[list[str], dict]:
     """读取草稿 → 为我方字幕写原生入场动画 → 原子写回。
 
     中文主线(``inject_text_fx``)与英文分支(``inject_text_fx_en``)共用的核心。
+    ``job_id`` 仅用于 auto 池模式的确定性轮换 seed(zh/en 传同一值保证动画一致)。
 
     Returns:
         (新的 status_log 列表, text_fx 摘要 dict)。
@@ -157,7 +174,7 @@ def apply_text_fx(
         text_resource="templates/text_resource_library.json",
     )
 
-    warnings, summary = _apply_text_animations(draft, template_lib, node_tag)
+    warnings, summary = _apply_text_animations(draft, template_lib, node_tag, job_id)
 
     log = list(status_log or [])
     log.extend(warnings)
@@ -180,11 +197,16 @@ def inject_text_fx(state: WorkflowState) -> dict:
         status_log = list(state.get("status_log", []) or [])
         status_log.append("node_10_inject_text_fx_skipped")
         return {**state, "status_log": status_log}
+    # job_id 与 node_09 同款解析(thread_id,兜底草稿目录名)—— zh/en 池轮换一致
+    job_id = str(state.get("thread_id") or "").strip()
+    if not job_id:
+        job_id = Path(str(raw_draft_path)).parent.name
     log, _ = apply_text_fx(
         Path(raw_draft_path),
         state.get("status_log"),
         node_tag="node_10",
         done_tag="node_10_inject_text_fx_done",
+        job_id=job_id,
     )
     return {**state, "status_log": log}
 
@@ -203,11 +225,14 @@ def inject_text_fx_en(state: WorkflowState) -> dict:
     draft_file = Path(draft_dir_raw) / "draft_content.json"
     if not draft_file.exists():
         return {"error_log": [f"[node_10b] 英文分支草稿不存在,跳过: {draft_file}"]}
+    # job_id 与中文主线同源(thread_id;兜底英文草稿目录的上级名),保证 zh/en 池轮换一致
+    job_id = str(state.get("thread_id") or "").strip() or Path(str(draft_dir_raw)).parent.name
     log, summary = apply_text_fx(
         draft_file,
         [],
         node_tag="node_10b",
         done_tag="node_10b_inject_text_fx_en_done",
+        job_id=job_id,
     )
     return {
         "status_log": [
