@@ -420,6 +420,38 @@ export function parseResumeValue(raw) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 恢复尝试审计展示(P0-06,2026-11-18 审查计划 §4.4/§8.2)
+// ---------------------------------------------------------------------------
+
+/** attempt result → 中文(与 web/console_service.py _ATTEMPT_RESULT_BY_EXIT 对齐)。 */
+export const ATTEMPT_RESULT_LABEL = Object.freeze({
+  succeeded: "成功",
+  failed_execution: "执行失败",
+  failed_preflight: "启动前检查未通过",
+  cancelled: "已取消",
+  failed_unknown: "失败(原因不明)",
+});
+
+/**
+ * 单条恢复尝试审计(console_run.json 的 resumes[] 条目)→ 单行展示串。
+ * entry: { attempt_id?, at?, mode?, result?, exit_code?, finished_at? }。
+ * null/非对象返回 "";字段缺省就少一段,不做任何猜测补齐。
+ */
+export function formatAttemptEntry(entry) {
+  if (!entry || typeof entry !== "object") return "";
+  const parts = [entry.mode === "retry" ? "重试失败节点" : "恢复运行"];
+  if (entry.at) parts.push(String(entry.at).replace("T", " ").slice(0, 19));
+  if (entry.result) {
+    parts.push(ATTEMPT_RESULT_LABEL[entry.result] || String(entry.result));
+  }
+  if (entry.exit_code !== undefined && entry.exit_code !== null) {
+    parts.push(`exit=${entry.exit_code}`);
+  }
+  if (entry.attempt_id) parts.push(`attempt=${entry.attempt_id}`);
+  return parts.join(" · ");
+}
+
 /**
  * 单行历史 → 操作提示(哪个动作可用;服务端仍是权威,这里只做即时反馈)。
  * 返回 { resume: bool, cancel: bool, delete: bool }。

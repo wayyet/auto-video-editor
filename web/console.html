@@ -268,7 +268,7 @@
       validateNewFiles, addFiles, removeFile, validateParams, hasErrors, canSubmit,
       createConsoleState, beginUpload, updateProgress, acceptCreated, failSubmission,
       buildCreateFormData, friendlyError, formatBytes, formatDuration, DEFAULT_LIMITS,
-      canCancel, canResumeOrRetry, parseResumeValue, eventFromSse,
+      canCancel, canResumeOrRetry, parseResumeValue, eventFromSse, formatAttemptEntry,
     } from "/static/workflow_console.mjs";
     import {
       progressSummaryOf, reduceDeliveryCard,
@@ -402,6 +402,16 @@
           // 先等服务端限制/下拉选项就绪,再回填任务原始设置
           await configReady;
           applyViewFormState(detail);
+          // P0-06(2026-11-18):展示最近一次恢复尝试的审计终态(如有)——
+          // attempt_id/退出码/结果与 resumes[] 审计、CLI 日志一一对应。
+          const resumes = (detail && detail.record && detail.record.resumes) || [];
+          const lastAttempt = resumes.length ? formatAttemptEntry(resumes[resumes.length - 1]) : "";
+          if (lastAttempt) {
+            renderFormMeta(
+              `查看模式:已附着任务 ${VIEW_THREAD_ID},创建已禁用;新建任务请从监控首页「创建任务」进入。`
+              + `最近一次恢复尝试:${lastAttempt}`
+            );
+          }
         } catch (err) {
           runMeta.classList.add("err-text");
           runMeta.textContent = `任务状态校验失败:${err && err.message ? err.message : ""};请刷新重试。`;
@@ -1174,9 +1184,11 @@
       )) return;
       btnResumeRun.disabled = true;
       try {
-        await postJson(CONSOLE_API_PATHS.resumeRun(tid), { checkpoint: null, value: true });
+        const resp = await postJson(CONSOLE_API_PATHS.resumeRun(tid), { checkpoint: null, value: true });
         resumeErr.textContent = "";
-        runMeta.textContent = "执行状态:重试已提交,等待执行事件…";
+        // P0-06(2026-11-18):202 = 受理而非执行成功;attempt_id 与服务端
+        // resumes[] 审计、CLI 日志([resume] attempt=…)一一对应。
+        runMeta.textContent = `执行状态:重试已受理${resp && resp.attempt_id ? `(attempt=${resp.attempt_id})` : ""},等待执行事件…`;
         // run.failed 是终态,服务端已关流;EventSource 会自动重连按游标补发,
         // 仅在连接已彻底关闭时才重订阅(整体重置右栏,最后手段)
         if (!source || source.readyState === 2) subscribeToThread(tid);

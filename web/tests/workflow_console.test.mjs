@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import {
   CONSOLE_API_PATHS, CONSOLE_BACKENDS, DEFAULT_LIMITS, HISTORY_STATE_LABEL, acceptCreated, addFiles,
   applyEvent, beginUpload, buildCreateFormData, canCancel, canDelete, canResume, canResumeOrRetry, canSubmit,
-  createConsoleState, createMonitorState, failSubmission, filterHistoryRows,
+  createConsoleState, createMonitorState, failSubmission, filterHistoryRows, formatAttemptEntry,
   formatBytes, formatDuration, friendlyError, historyActions, makeFileEntry,
   parseResumeValue, removeFile, updateProgress, validateNewFiles, validateParams,
   hasErrors,
@@ -355,4 +355,43 @@ test("parseResumeValue:JSON 优先 → true/false 字面量 → 非法报错;空
   assert.equal(bad.ok, false);
   assert.match(bad.error, /JSON/);
   assert.equal(parseResumeValue("继续").value, null);
+});
+
+// ---------------------------------------------------------------------------
+// P0-06(2026-11-18):恢复尝试审计展示(formatAttemptEntry)
+// ---------------------------------------------------------------------------
+
+test("formatAttemptEntry:retry 条目全字段 → 重试 · 时间 · 结果 · exit · attempt", () => {
+  assert.equal(
+    formatAttemptEntry({
+      attempt_id: "a1b2c3d4e5f6", at: "2026-11-18T03:04:05+00:00",
+      mode: "retry", result: "failed_preflight", exit_code: 7,
+    }),
+    "重试失败节点 · 2026-11-18 03:04:05 · 启动前检查未通过 · exit=7 · attempt=a1b2c3d4e5f6",
+  );
+});
+
+test("formatAttemptEntry:resume 条目缺省字段逐段省略", () => {
+  assert.equal(formatAttemptEntry({ mode: "resume" }), "恢复运行");
+  assert.equal(
+    formatAttemptEntry({ at: "2026-11-18T03:04:05+00:00", mode: "resume", result: "succeeded" }),
+    "恢复运行 · 2026-11-18 03:04:05 · 成功",
+  );
+});
+
+test("formatAttemptEntry:exit_code=0 显示(exit=0 不是缺省),未知 result 原样透传", () => {
+  assert.equal(
+    formatAttemptEntry({ mode: "retry", exit_code: 0, result: "failed_unknown" }),
+    "重试失败节点 · 失败(原因不明) · exit=0",
+  );
+  assert.equal(
+    formatAttemptEntry({ mode: "retry", result: "some_new_result" }),
+    "重试失败节点 · some_new_result",
+  );
+});
+
+test("formatAttemptEntry:null/非对象返回空串", () => {
+  assert.equal(formatAttemptEntry(null), "");
+  assert.equal(formatAttemptEntry(undefined), "");
+  assert.equal(formatAttemptEntry("not-an-object"), "");
 });
