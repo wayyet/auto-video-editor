@@ -673,6 +673,38 @@ def test_zh_subtitles_replay_is_idempotent(tmp_path: Path) -> None:
     assert draft_file.read_text(encoding="utf-8") == first
 
 
+def test_zh_subtitles_long_sentence_wrapped(tmp_path: Path) -> None:
+    """2026-11-18 折行:39 字长句 → content 内嵌 \\n 且每行不超宽;state 段保持原文。
+
+    真机 AutoVideo_console-31a8a8e9edd2 实证:该长句单行 ≈1524px 超出 1080
+    画布被两端裁剪。修复后渲染文本折行,但 state 段(text_zh)仍是原文 ——
+    node_16a 翻译指纹与 SRT 语义不变。
+    """
+    from jy_common.subtitle_wrap import line_units, max_line_units
+
+    draft_file = _write_draft(tmp_path, _zh_draft())
+    long_sentence = (
+        "我沿着栈桥往里走,白色拱廊、灰色立柱、绿色花纹地毯和金蓝穹顶,一样样收进眼里。"
+    )
+    state = _zh_state(draft_file, tmp_path, long_sentence, "")
+
+    out = add_subtitles(state)
+
+    assert out["subtitle_segments_zh"][0]["text_zh"] == long_sentence, (
+        "state 段保持原文(16a 翻译指纹不变)"
+    )
+    draft = json.loads(draft_file.read_text(encoding="utf-8"))
+    content = json.loads(draft["materials"]["texts"][0]["content"])
+    assert "\n" in content["text"], "默认样式 size 5.0(容量 26 单位)下 38.1 单位必须折行"
+    assert content["text"].replace("\n", "") == long_sentence, "折行不丢字符"
+    assert content["styles"][0]["range"] == [0, len(content["text"])]
+    for line in content["text"].split("\n"):
+        assert line_units(line) <= max_line_units(5.0, 1080)
+    first = draft_file.read_text(encoding="utf-8")
+    add_subtitles(state)
+    assert draft_file.read_text(encoding="utf-8") == first, "折行文本重放幂等"
+
+
 def test_zh_subtitles_written_without_voiceover_id_via_subtitle_style(tmp_path: Path) -> None:
     """TTS 失败(has_tts=False)→ clips 无 voiceover_id:subtitle_style.group_id 兜底。
 

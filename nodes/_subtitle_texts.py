@@ -15,11 +15,13 @@ from __future__ import annotations
 import copy
 from typing import Any
 
+import config
 from jy_common.native_text import (
     TEXT_MATERIAL_TYPE,
     build_text_content_json,
     text_check_flag,
 )
+from jy_common.subtitle_wrap import wrap_subtitle_text
 
 #: text 轨 render_index(pyJianYingDraft 口径:video 0 / audio 0 / text 15000)
 _TEXT_TRACK_RENDER_INDEX = 15000
@@ -40,7 +42,10 @@ def make_text_material(
 
     Args:
         index: 从 0 开始的序号,生成 id 为 ``f"{id_prefix}-{index + 1}"``。
-        content: 字幕文本。
+        content: 字幕文本(**原文**)。写进原生 content 前会按画布宽×字号
+            自动折行(超宽处内嵌 ``\\n``,见 :mod:`jy_common.subtitle_wrap`);
+            私有键(text_zh/text_en)保持原文 —— 16a 翻译指纹与 SRT 语义
+            不受影响。
         start_us / duration_us: ``target_timerange`` 起点与时长(微秒)。
         style: 样式 dict;内部做 deepcopy,每条字幕互不污染。单位是剪映原生
             口径(size 5.0 / border.width 40.0,见 node_08 校准注释)。
@@ -49,10 +54,19 @@ def make_text_material(
         extra: 追加字段(英文用来写 ``text_en``,与 16a 的 marker 约定一致)。
     """
     style_copy = copy.deepcopy(style)
+    # 2026-11-18 折行:渲染 content 按画布宽×字号内嵌 \n,修复单行超宽被画布
+    # 两端裁剪(真机 AutoVideo_console-31a8a8e9edd2 实证;根因/标定见
+    # jy_common/subtitle_wrap.py docstring)。只折渲染口径 —— 调用方经 extra
+    # 写入的私有键(text_zh/text_en)是原文,翻译/导出链照旧。
+    render_text = wrap_subtitle_text(
+        content,
+        size=float(style_copy.get("size") or 5.0),
+        canvas_width=config.CANVAS_WIDTH,
+    )
     item: dict[str, Any] = {
         # ---- 原生必填键(剪映识别用)----
         "id": f"{id_prefix}-{index + 1}",
-        "content": build_text_content_json(content, style_copy),
+        "content": build_text_content_json(render_text, style_copy),
         "typesetting": 0,
         "alignment": 1,
         "letter_spacing": 0.0,

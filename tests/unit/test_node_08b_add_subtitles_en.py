@@ -218,3 +218,44 @@ def test_node_08b_real_status_writes_normal(tmp_path: Path) -> None:
     assert "node_08b_add_subtitles_en_done" in out["status_log"]
     draft = json.loads(en_file.read_text(encoding="utf-8"))
     assert len(draft["materials"]["texts"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-18 折行:超长英文 cue → 渲染 content 折行,私有键保持原文
+# ---------------------------------------------------------------------------
+_EN157 = (
+    "The stained-glass windows break the sunlight into pieces, and the wall "
+    "clock, second-floor railing, and black-and-gold wooden pulpit are all "
+    "clearly visible."
+)
+
+
+def test_node_08b_long_en_text_wrapped(tmp_path: Path) -> None:
+    """157 字符英文 cue → content 内嵌 \\n 每行不超宽;text_en 私有键保持原文。
+
+    真机 en_branch_console-31a8a8e9edd2 实证:该 cue 单行 ≈2760px(2.6 倍
+    1080 画布宽)。折行只发生在渲染口径;16a marker/SRT 消费的 text_en 不变。
+    """
+    from jy_common.subtitle_wrap import line_units, max_line_units
+
+    en_file = _write_en_draft(tmp_path)
+    state = {
+        "draft_dir_en_branch": str(en_file.parent),
+        "subtitle_segments_en": [
+            {"index": 0, "start_ms": 0, "end_ms": 7_000, "text_en": _EN157},
+        ],
+        "subtitle_translation_status": "real",
+        "status_log": [],
+        "error_log": [],
+    }
+    out = add_subtitles_en(state)
+
+    assert "node_08b_add_subtitles_en_done" in out["status_log"]
+    draft = json.loads(en_file.read_text(encoding="utf-8"))
+    text = draft["materials"]["texts"][0]
+    content = json.loads(text["content"])
+    assert "\n" in content["text"], "size 5.0(容量 26 单位)下 157 字符必须折行"
+    assert content["text"].replace("\n", " ") == _EN157, "词边界折行可无损还原"
+    assert text["text_en"] == _EN157, "私有键保持原文(16a marker/SRT 语义)"
+    for line in content["text"].split("\n"):
+        assert line_units(line) <= max_line_units(5.0, 1080)

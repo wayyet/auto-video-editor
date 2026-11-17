@@ -84,6 +84,33 @@ class TestMakeTextMaterial:
         mats[0]["style"]["size"] = 99.0
         assert mats[1]["style"]["size"] == 5.0, "每条字幕样式互不污染"
 
+    def test_long_content_wrapped_with_range_synced(self) -> None:
+        """2026-11-18 折行:超宽文本 → content 内嵌 \n;range 覆盖折行后全文。"""
+        m = make_text_material(
+            index=0,
+            content="字" * 40,
+            start_us=0,
+            duration_us=1_000_000,
+            style=_DEFAULT_STYLE,
+            track_name="Subtitles",
+        )
+        obj = json.loads(m["content"])
+        assert "\n" in obj["text"], "size 5.0 容量 26 单位,40 全角字必须折行"
+        assert obj["text"].replace("\n", "") == "字" * 40, "折行不丢字符"
+        assert obj["styles"][0]["range"] == [0, len(obj["text"])], "range 覆盖含 \n 全文"
+
+    def test_wrapped_display_text_roundtrip(self) -> None:
+        """折行后的显示文本经 text_display_text 回读原样(读取侧契约不破)。"""
+        m = make_text_material(
+            index=0,
+            content="字" * 40,
+            start_us=0,
+            duration_us=1_000_000,
+            style=_DEFAULT_STYLE,
+            track_name="Subtitles",
+        )
+        assert text_display_text(m) == json.loads(m["content"])["text"]
+
     def test_display_text_dual(self) -> None:
         m = _two_materials()[0]
         assert text_display_text(m) == "txt0", "原生 content JSON 解析"
