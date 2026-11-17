@@ -145,6 +145,84 @@ class TestMatchInterrupt:
 # ---------------------------------------------------------------------------
 import asyncio  # noqa: E402
 
+from typing import Any  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# P0-04(2026-11-18 审查计划 §4.3):恢复初始化链路异常归一化
+# ---------------------------------------------------------------------------
+def _impl_args(**over):
+    ns = SimpleNamespace(
+        thread_id="prod-001", checkpoint=None, value="true", dry_run=False,
+        continue_run=True, allow_jianying_running=False,
+    )
+    return SimpleNamespace(**{**vars(ns), **over})
+
+
+def _spy_run_with_events(monkeypatch):
+    """替换 run_with_events 为哨兵:初始化失败路径绝不允许进入图执行。"""
+    run_calls: list[Any] = []
+
+    def spy(*a, **k):
+        run_calls.append(a)
+        raise AssertionError("初始化失败绝不能进入 run_with_events")
+
+    monkeypatch.setattr("monitoring.workflow_runner.run_with_events", spy)
+    return run_calls
+
+
+class TestInitFailureFailClosed:
+    """迁移/checkpointer 连接/图构建/state 读取任一段失败 → 退出码 7 + 不跑图。
+
+    修复前:这些前置段没有异常边界,DB 挂掉会以未捕获异常退出(退出码 1 =
+    「图执行失败」),语义误导且绕过 EXIT_NO_CHECKPOINT。
+    """
+
+    def test_migration_failure_returns_7_without_running_graph(self, rw, monkeypatch):
+        def boom():
+            raise RuntimeError("pg down during migration")
+
+        monkeypatch.setattr("db.migrations.apply_migrations_to_db", boom)
+        run_calls = _spy_run_with_events(monkeypatch)
+        rc = asyncio.run(rw._resume_async_impl(_impl_args()))
+        assert rc == rw.EXIT_NO_CHECKPOINT == 7
+        assert run_calls == []
+
+    def test_checkpointer_connect_failure_returns_7(self, rw, monkeypatch):
+        class BoomCM:
+            async def __aenter__(self):
+                raise RuntimeError("connection refused")
+
+            async def __aexit__(self, *a):
+                return False
+
+        monkeypatch.setattr("db.migrations.apply_migrations_to_db", lambda: None)
+        monkeypatch.setattr("graph.get_checkpointer", lambda: BoomCM())
+        run_calls = _spy_run_with_events(monkeypatch)
+        rc = asyncio.run(rw._resume_async_impl(_impl_args()))
+        assert rc == rw.EXIT_NO_CHECKPOINT == 7
+        assert run_calls == []
+
+    def test_aget_state_failure_returns_7(self, rw, monkeypatch):
+        class FakeG:
+            async def aget_state(self, config):
+                raise RuntimeError("state read failed")
+
+        class OkCM:
+            async def __aenter__(self):
+                return object()
+
+            async def __aexit__(self, *a):
+                return False
+
+        monkeypatch.setattr("db.migrations.apply_migrations_to_db", lambda: None)
+        monkeypatch.setattr("graph.get_checkpointer", lambda: OkCM())
+        monkeypatch.setattr("graph.build_graph", lambda **k: FakeG())
+        run_calls = _spy_run_with_events(monkeypatch)
+        rc = asyncio.run(rw._resume_async_impl(_impl_args()))
+        assert rc == rw.EXIT_NO_CHECKPOINT == 7
+        assert run_calls == []
+
 
 def _continue_args(**over):
     ns = SimpleNamespace(

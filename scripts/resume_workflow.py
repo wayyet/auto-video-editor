@@ -50,6 +50,9 @@
 - ``5``  指定 checkpoint 与挂起关卡不匹配(或多重挂起未指定);
 - ``6``  恢复前文件安全门禁未通过(阶段 3:剪映未关闭 / 草稿缺失或损坏 /
   目录被占用;stderr 附问题清单与人工修改后草稿的 SHA-256 审计值)。
+- ``7``  --continue 续跑前置失败(fail-closed):Postgres 确无 checkpoint /
+  数据库不可用 / 恢复初始化链路失败(应用层迁移 / checkpointer 连接 /
+  图构建 / checkpoint 状态读取,任一段异常统一此退出码,stderr 附阶段标签)。
 """
 
 from __future__ import annotations
@@ -425,16 +428,33 @@ async def _resume_async_impl(args: argparse.Namespace) -> int:
 
     2026-11-17:无挂起关卡且给了 ``--continue`` 时改走 :func:`_continue_after_failure`
     (失败节点重试);不给 ``--continue`` 保持原行为(退出码 4 拒绝)。
+    2026-11-18 P0-04(审查计划 §4.3):初始化链路(应用层迁移 → checkpointer
+    连接 → 图构建 → checkpoint 状态读取)整体 fail-closed —— 任一段异常都按
+    「数据库不可用/初始化失败」返回退出码 7,不让异常绕过统一退出码语义
+    (未捕获异常会以退出码 1「图执行失败」误导操作员),更不许带病进入
+    ``run_with_events``。
     """
+    # P0-06(2026-11-18):attempt 关联标识由创建台经 env 注入,与
+    # console_run.log / resumes[] 审计记录一一对应;手动 CLI 调用无此 env,
+    # 打 "-" 不失败。
+    attempt_id = str(os.environ.get("AUTO_VIDEO_RESUME_ATTEMPT_ID") or "").strip()
+    print(f"[resume] attempt={attempt_id or '-'} thread={args.thread_id}", file=sys.stderr)
+
     from graph import build_graph, get_checkpointer, normalize_thread_id
 
     thread_id = normalize_thread_id(args.thread_id)
     # 应用层迁移先行(fail-closed,与 run_workflow 同口径)。
     from db.migrations import apply_migrations_to_db
 
-    apply_migrations_to_db()
-
-    async with get_checkpointer() as saver:
+    stage = "应用层迁移"
+    checkpointer_cm = None
+    saver = None
+    try:
+        apply_migrations_to_db()
+        stage = "checkpointer 初始化(PostgreSQL 连接)"
+        checkpointer_cm = get_checkpointer()
+        saver = await checkpointer_cm.__aenter__()
+        stage = "工作流图构建"
         g = build_graph(
             checkpointer=saver,
             thread_id=thread_id,
@@ -442,9 +462,28 @@ async def _resume_async_impl(args: argparse.Namespace) -> int:
             run_preflight=False,
         )
         config = {"configurable": {"thread_id": thread_id}}
-
-        # §4.2 任务 4:恢复前读挂起信息,校验 checkpoint 确属该 thread。
+        stage = "checkpoint 状态读取(aget_state)"
         snapshot = await g.aget_state(config)
+    except Exception as e:  # noqa: BLE001 — 初始化任何一段失败都统一退出码 7
+        print(
+            f"[resume] ✗ 恢复初始化失败 —— 阶段: {stage};"
+            f"{type(e).__name__}: {e}",
+            file=sys.stderr,
+        )
+        print(
+            f"[resume]   数据库不可用或初始化失败,拒绝恢复/续跑;"
+            f"请先恢复数据库连接再重试,不要新建任务盲目重跑(退出码 {EXIT_NO_CHECKPOINT})",
+            file=sys.stderr,
+        )
+        if checkpointer_cm is not None and saver is not None:
+            try:
+                await checkpointer_cm.__aexit__(type(e), e, e.__traceback__)
+            except Exception:  # noqa: BLE001 — 清理失败不掩盖退出码语义
+                pass
+        return EXIT_NO_CHECKPOINT
+
+    try:
+        # §4.2 任务 4:恢复前读挂起信息,校验 checkpoint 确属该 thread。
         interrupts = describe_interrupts(snapshot)
         _print_interrupts(interrupts)
         if not interrupts:
@@ -519,8 +558,10 @@ async def _resume_async_impl(args: argparse.Namespace) -> int:
         else:
             print("[resume] ✓ 恢复执行完成,无新的挂起关卡", file=sys.stderr)
 
-    rc = _check_final_state(result)
-    return rc
+        rc = _check_final_state(result)
+        return rc
+    finally:
+        await checkpointer_cm.__aexit__(None, None, None)
 
 
 async def _main_async(args: argparse.Namespace) -> int:
