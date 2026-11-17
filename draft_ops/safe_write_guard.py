@@ -1,7 +1,10 @@
 """剪映写入安全护栏(Week 5 新增;对齐计划 §1.4 / §2.1)。
 
 模块组成:
-- :func:`check_jianying_not_running` — 剪映进程检测(告警,**不**阻断)。
+- :func:`probe_jianying_state` — 剪映进程**三态**检测(running / not_running /
+  unknown,fail-closed 语义;设计审查 20261118 P1-02)。
+- :func:`check_jianying_not_running` — 旧布尔口径(True=在跑),语义固化在
+  告警类消费方,内部改由三态探测实现(unknown 折叠为 False,行为不变)。
 - :func:`snapshot_before_edit` — 写入前复制整目录快照到 ``<draft_dir>/.snapshots/<ts>/``。
 - :func:`restore_from_snapshot` — verify 失败时整目录回退到最近快照。
 - :func:`cleanup_old_snapshots` — GC 保留最近 N 个快照。
@@ -29,8 +32,13 @@ from typing import Callable
 
 
 # ---------------------------------------------------------------------------
-# 剪映进程检测
+# 剪映进程检测(三态,fail-closed)
 # ---------------------------------------------------------------------------
+
+# 三态检测结果(设计审查 20261118 §5.4):
+PROC_RUNNING = "running"          # 确认剪映进程在运行(写入门禁应拒绝)
+PROC_NOT_RUNNING = "not_running"  # 确认剪映进程不存在(允许写入)
+PROC_UNKNOWN = "unknown"          # 检测失败/超时/工具缺失/结果无法判定(一律拒绝写入)
 
 # 剪映 Windows 客户端的可执行文件名(常见命名;5.9+ 验证)。
 _JIANYING_PROC_NAMES_WINDOWS: tuple[str, ...] = (
@@ -44,10 +52,12 @@ _JIANYING_PROC_NAMES_POSIX: tuple[str, ...] = (
 )
 
 
-def _default_windows_proc_query() -> list[str]:
+def _default_windows_proc_query() -> list[str] | None:
     """Windows:`tasklist /FI "IMAGENAME eq JianyingPro.exe"` → 匹配行列表。
 
-    返回包含 ``JianyingPro.exe`` 的非空行(去掉表头)。
+    返回包含 ``JianyingPro`` 的非空行(去掉表头);命令失败/超时/工具缺失时
+    返回 ``None`` —— 调用方必须把 ``None`` 视为**状态未知**(UNKNOWN),不得
+    当成"剪映不在运行"(fail-open)。
     """
     try:
         result = subprocess.run(
@@ -64,7 +74,7 @@ def _default_windows_proc_query() -> list[str]:
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return []
+        return None
     out: list[str] = []
     for line in (result.stdout or "").splitlines():
         if "JianyingPro" in line:
@@ -72,8 +82,8 @@ def _default_windows_proc_query() -> list[str]:
     return out
 
 
-def _default_posix_proc_query() -> list[str]:
-    """POSIX:`pgrep -fl JianyingPro` → 匹配行列表(best-effort,pgrep 不存在时不抛)。"""
+def _default_posix_proc_query() -> list[str] | None:
+    """POSIX:`pgrep -fl JianyingPro` → 匹配行列表;失败/超时/工具缺失 → None。"""
     try:
         result = subprocess.run(
             ["pgrep", "-fl", "JianyingPro"],
@@ -83,35 +93,60 @@ def _default_posix_proc_query() -> list[str]:
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired, FileNotFoundError):
-        return []
+        return None
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-def check_jianying_not_running(
-    proc_query_fn: Callable[[], list[str]] | None = None,
-) -> bool:
-    """检测剪映进程是否在运行(只读、不阻断)。
+def probe_jianying_state(
+    proc_query_fn: Callable[[], list[str] | None] | None = None,
+) -> str:
+    """三态剪映进程检测 —— 写入门禁专用(fail-closed,设计审查 20261118 P1-02)。
 
     Args:
         proc_query_fn: 可注入的进程查询函数(返回包含 ``JianyingPro`` 字符串的
-            行列表);默认按平台自动选 ``tasklist`` 或 ``pgrep``。
+            行列表,命令失败返回 ``None``);默认按平台自动选 ``tasklist`` 或
+            ``pgrep``。
 
     Returns:
-        True 表示检测到剪映进程在运行(调用方应写告警日志);
-        False 表示进程不在或检测失败(本机不在 Windows / 工具缺失)。
+        ``PROC_RUNNING``:确认剪映进程在运行 → 写入必须拒绝;
+        ``PROC_NOT_RUNNING``:确认剪映进程不存在 → 允许写入;
+        ``PROC_UNKNOWN``:命令失败/超时/工具缺失/注入函数返回 ``None`` 或抛异常
+        → **一律拒绝写入**(检测状态不明确 ≠ 剪映不在运行)。
+
+    Notes:
+        这只是"进程状态门禁":检查通过后剪映仍可能随即被启动,没有系统级
+        互斥机制,日志与文档不得声称获得排他锁。
     """
     if proc_query_fn is not None:
         try:
             rows = proc_query_fn()
-        except Exception:  # pragma: no cover - 防御
-            return False
-        return any("JianyingPro" in r for r in rows)
+        except Exception:
+            return PROC_UNKNOWN
+        if rows is None:
+            return PROC_UNKNOWN
+        return PROC_RUNNING if any("JianyingPro" in r for r in rows) else PROC_NOT_RUNNING
 
-    if sys.platform == "win32":
-        rows = _default_windows_proc_query()
-    else:
-        rows = _default_posix_proc_query()
-    return any("JianyingPro" in r for r in rows)
+    rows = (
+        _default_windows_proc_query()
+        if sys.platform == "win32"
+        else _default_posix_proc_query()
+    )
+    if rows is None:
+        return PROC_UNKNOWN
+    return PROC_RUNNING if any("JianyingPro" in r for r in rows) else PROC_NOT_RUNNING
+
+
+def check_jianying_not_running(
+    proc_query_fn: Callable[[], list[str] | None] | None = None,
+) -> bool:
+    """旧布尔口径(True = 检测到剪映进程在运行;只读、不阻断)。
+
+    True=在跑 的语义固化在 5 处调用方(draft_lock / draft_publisher / 脚本预检 /
+    atomic_writer 默认门禁 / 单测),不得反转。unknown 状态在本口径下折叠为
+    False(与历史 fail-open 行为一致,仅供告警类消费方);**写入门禁必须直接用
+    :func:`probe_jianying_state` 并对 unknown 拒绝**(见 atomic_writer)。
+    """
+    return probe_jianying_state(proc_query_fn) == PROC_RUNNING
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +269,11 @@ def cleanup_old_snapshots(draft_dir: Path, keep: int = 5) -> int:
 
 
 __all__ = [
+    "PROC_RUNNING",
+    "PROC_NOT_RUNNING",
+    "PROC_UNKNOWN",
     "check_jianying_not_running",
+    "probe_jianying_state",
     "snapshot_before_edit",
     "restore_from_snapshot",
     "cleanup_old_snapshots",

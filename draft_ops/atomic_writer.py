@@ -14,8 +14,9 @@
   和 ``draft_info.json``(剪映客户端 5.9+ 期望二者内容一致;Week 5 起接入)。
 - 两个文件各自独立 mkstemp + os.replace,**不**共用临时文件。
   - 任一失败不影响另一个(已成功的那个保留;失败的清临时文件后 raise)。
-  - 若两个都失败,目标文件可能保持旧值 — 由上层的 ``safe_write_draft`` 配套
-    ``snapshot_before_edit`` + ``restore_from_snapshot`` 在 verify 失败时整目录回退。
+  - 若任一文件写失败,content 新 / info 旧的中间态只存在于函数返回前的瞬间 ——
+    上层 ``safe_write_draft`` 捕获异常后**恢复快照**再抛复合错误
+    (20261118 设计审查 P1-01:异常路径与 verify 失败同走整目录回退)。
 
 Week 5 顶层入口:
 - ``safe_write_draft(draft_dir, content)`` 把
@@ -125,11 +126,34 @@ Verifier = Callable[[Path], tuple[bool, str]]
 # 可注入的"时长索引更新"函数(便于测试跳过)
 DurationUpdater = Callable[[Path, int], dict[str, bool]]
 
+#: safe_write_draft 成功提交后保留的快照数量,更旧的自动清理。
+#: 快照是整目录素材副本,不清理会随每次节点写入无限累积占满磁盘
+#: (20261118 审查附加发现:cleanup_old_snapshots 原本无生产调用方);
+#: 失败回退永远取最新快照,清理最旧的不影响回滚路径。
+SNAPSHOT_KEEP = 3
+
 
 def _default_proc_checker() -> bool:
-    from draft_ops.safe_write_guard import check_jianying_not_running
+    """默认进程门禁:三态探测收敛为写入互斥布尔口径。
 
-    return check_jianying_not_running()
+    - running → True(上层按 ``strict_running`` 拒绝);
+    - not_running → False(放行);
+    - unknown → raise RuntimeError(**fail-closed**:检测状态不明时拒绝写入;
+      设计审查 20261118 P1-02 —— 检测失败不得被当成"剪映没在跑")。
+    """
+    from draft_ops.safe_write_guard import (
+        PROC_RUNNING,
+        PROC_UNKNOWN,
+        probe_jianying_state,
+    )
+
+    state = probe_jianying_state()
+    if state == PROC_UNKNOWN:
+        raise RuntimeError(
+            "剪映进程状态未知(进程检测命令失败/超时/工具缺失),"
+            "fail-closed 拒绝写入;请人工确认剪映已关闭后重试"
+        )
+    return state == PROC_RUNNING
 
 
 def _default_snapshotter(draft_dir: Path) -> Path:
@@ -171,7 +195,9 @@ def safe_write_draft(
     """Week 5 顶层写入入口:剪映 5.9+ 双写 + 校验 + 回退 + 时长索引同步。
 
     流程(对齐计划 §2.1;阶段 3 起第 1 步可配置为严格互斥):
-        1. ``proc_checker`` — 剪映进程检测(默认 :func:`check_jianying_not_running`)。
+        1. ``proc_checker`` — 剪映进程检测(默认 :func:`_default_proc_checker`,
+           三态探测:running → True;not_running → False;unknown → **直接
+           raise,fail-closed 拒绝写入**,20261118 审查 P1-02)。
            ``strict_running``(缺省读 ``config.JY_WRITE_FAIL_ON_JIANYING_RUNNING``,
            默认 True)为 True 且检测到剪映在跑 → **raise RuntimeError 拒绝写入**
            (计划 §8 阶段 3:人工编辑与工作流写入互斥,不再"告警继续");
@@ -180,16 +206,21 @@ def safe_write_draft(
            即使剪映在跑,也保证写入失败时能回退。
         3. ``atomic_write_draft_pair`` — 双写 content + info(各自独立 mkstemp)。
         4. ``verifier`` — 双文件一致性 + JSON 合法性校验。
-           - 通过 → 返回 ``{"ok": True, ...}``,无回退。
-           - 失败 → 触发 ``restorer`` 整目录回退,然后 raise ``RuntimeError``。
+           - 通过 → 继续;返回 ``{"ok": True, ...}``,无回退。
+           - 返回 False **或抛异常** → 触发 ``restorer`` 整目录回退,然后 raise
+             ``RuntimeError``(复合信息:失败原因 + 快照位置;回退本身失败时
+             同时携带原始异常与恢复异常,20261118 审查 P1-01/P1-02)。
         5. ``duration_updater``(可选)— 若 ``duration_us`` 给出,同步更新
            ``draft_meta_info.json`` + ``root_meta_info.json`` 的 ``tm_duration``。
+        6. GC — 成功提交后 ``cleanup_old_snapshots`` 只保留最近 ``SNAPSHOT_KEEP``
+           个快照(回退永远取最新,清理最旧不影响失败路径)。
 
     Args:
         draft_dir: 草稿目录(将写入 ``draft_content.json`` + ``draft_info.json``)。
         content: 草稿内容(dict)。
         duration_us: 若给定,同步更新时长索引(微秒)。
-        proc_checker: 可注入的进程检测函数;默认 stdlib ``check_jianying_not_running``。
+        proc_checker: 可注入的进程检测函数;默认三态探测收敛的布尔门禁
+            (unknown 抛 RuntimeError)。
         snapshotter: 可注入的快照函数(``(draft_dir) -> snap_path``)。
         restorer: 可注入的回退函数(``(draft_dir) -> used_snap_path``)。
         verifier: 可注入的校验函数(``(draft_dir) -> (ok, reason)``)。
@@ -202,9 +233,12 @@ def safe_write_draft(
         "duration_index": dict | None}``,便于上层写到 ``state``。
 
     Raises:
-        RuntimeError: 严格互斥拒绝写入(剪映在跑),或 verify 失败且已 restore 时
-            携带 ``reason``。
-        TypeError/OSError: 透传自 :func:`atomic_write_draft_pair`。
+        RuntimeError: ①严格互斥拒绝写入(剪映在跑);②进程检测 unknown
+            (fail-closed);③verify 失败/双写异常且已 restore(携带失败原因
+            与快照位置);④restore 也失败(同时携带原始异常、恢复异常与
+            快照位置,并提示草稿可能不一致)。
+        TypeError/OSError: ``snapshotter`` 快照创建失败时透传(发生在写入前,
+            目标文件未被污染,属 fail-closed)。
     """
     draft_dir = Path(draft_dir)
 
@@ -238,19 +272,44 @@ def safe_write_draft(
 
     snapshot_path = snapshotter(draft_dir)
 
-    atomic_write_draft_pair(draft_dir, content)
+    def _restore_or_fail(fail_desc: str, cause: BaseException | None) -> None:
+        """尽力恢复快照后抛复合错误;回退本身失败时两个异常都不得丢失(P1-01/P1-02)。"""
+        try:
+            used_snap = restorer(draft_dir)
+        except Exception as restore_exc:
+            raise RuntimeError(
+                f"safe_write_draft {fail_desc};且快照回退失败({restore_exc!r});"
+                f"草稿可能处于不一致状态,请人工从快照恢复: {snapshot_path}"
+            ) from cause
+        raise RuntimeError(
+            f"safe_write_draft {fail_desc};已从快照 {used_snap} 回退"
+        ) from cause
 
-    ok, reason = verifier(draft_dir)
+    try:
+        atomic_write_draft_pair(draft_dir, content)
+        ok, reason = verifier(draft_dir)
+    except Exception as exc:
+        # 双写或校验抛异常:与 verify 失败同走整目录回退,不允许草稿停留在
+        # "content 新 / info 旧"的半成品状态(设计审查 20261118 P1-01)
+        _restore_or_fail(f"写入/校验异常({exc!r})", exc)
+
     if not ok:
         # 校验失败:从最近快照整目录回退 → 然后 raise
-        used_snap = restorer(draft_dir)
-        raise RuntimeError(
-            f"safe_write_draft 校验失败 ({reason});已从快照 {used_snap} 回退"
-        )
+        _restore_or_fail(f"校验失败 ({reason})", None)
 
     duration_index_result: dict[str, bool] | None = None
     if duration_us is not None:
         duration_index_result = duration_updater(draft_dir, int(duration_us))
+
+    # 成功提交后 GC:只保留最近 SNAPSHOT_KEEP 个快照。失败回退永远取最新快照
+    # (restore_from_snapshot 按字典序取最新),清理最旧的不影响回滚路径;
+    # GC 自身失败不影响已提交的写入结果。
+    try:
+        from draft_ops.safe_write_guard import cleanup_old_snapshots
+
+        cleanup_old_snapshots(draft_dir, keep=SNAPSHOT_KEEP)
+    except Exception:  # pragma: no cover - GC 是尽力而为的磁盘保护
+        pass
 
     return {
         "ok": True,

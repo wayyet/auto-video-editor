@@ -8,11 +8,20 @@ from unittest.mock import patch
 
 import pytest
 
+import draft_ops.atomic_writer as aw_module
 from draft_ops.atomic_writer import (
+    SNAPSHOT_KEEP,
+    _default_proc_checker,
     atomic_write_draft,
     atomic_write_draft_pair,
     safe_write_draft,
 )
+from draft_ops.safe_write_guard import _SNAPSHOT_DIR_NAME
+
+# conftest 的 autouse fixture 会把 aw_module._default_proc_checker 打桩成
+# lambda: False(防止剪映开着时全量回归抖动)。这里在模块导入期(打桩发生
+# 之前)捕获真实函数对象,供 unknown fail-closed 用例临时恢复使用。
+_real_default_proc_checker = _default_proc_checker
 
 
 def test_atomic_write_happy_path(tmp_path: Path) -> None:
@@ -322,27 +331,161 @@ def test_safe_write_draft_calls_duration_updater_when_specified(tmp_path: Path) 
     assert seen == [(draft_dir, 99_000_000)]
 
 
-def test_safe_write_draft_propagates_oserror(tmp_path: Path) -> None:
-    """atomic_write_draft_pair 内部 OSError → 透传,不走 verify/restore。"""
+def test_safe_write_draft_write_exception_restores_and_raises_composite(
+    tmp_path: Path,
+) -> None:
+    """双写抛异常 → 恢复快照 + RuntimeError(含原始写入错误与快照位置)(P1-01)。
+
+    20261118 审查前的行为是 OSError 裸透传、不回滚,草稿停留在 content 新 /
+    info 旧的半成品状态;审查后异常路径与 verify 失败同走整目录回退。
+    """
+    draft_dir = tmp_path / "draft"
+    content_file = draft_dir / "draft_content.json"
+    info_file = draft_dir / "draft_info.json"
+    content_file.parent.mkdir(parents=True, exist_ok=True)
+    old_content = {"old": "content"}
+    old_info = {"old": "info"}
+    content_file.write_text(json.dumps(old_content), encoding="utf-8")
+    info_file.write_text(json.dumps(old_info), encoding="utf-8")
+
+    # 只让 info 的 os.replace 失败(content 先写成功 → 制造真实不一致场景)
+    real_replace = __import__("os").replace
+
+    def selective_replace(src, dst):
+        if Path(dst).name == "draft_info.json":
+            raise OSError("simulated info write failure")
+        return real_replace(src, dst)
+
+    with patch("draft_ops.atomic_writer.os.replace", side_effect=selective_replace):
+        with pytest.raises(RuntimeError) as excinfo:
+            safe_write_draft(draft_dir, {"new": True}, proc_checker=lambda: False)
+
+    msg = str(excinfo.value)
+    # 异常同时包含原始写入错误与恢复结果(P1-01 验收标准)
+    assert "simulated info write failure" in msg
+    assert "已从快照" in msg
+    assert ".snapshots" in msg
+    # 两个文件恢复为原字节(默认真实 snapshotter / restorer 生效)
+    assert content_file.read_text(encoding="utf-8") == json.dumps(old_content)
+    assert info_file.read_text(encoding="utf-8") == json.dumps(old_info)
+
+
+def test_safe_write_draft_restore_failure_raises_composite_with_both_errors(
+    tmp_path: Path,
+) -> None:
+    """回退也失败 → RuntimeError 同时含原始异常、恢复异常与快照位置(P1-02)。"""
     draft_dir = tmp_path / "draft"
 
+    def broken_restorer(d: Path) -> Path:
+        raise FileNotFoundError("no snapshots dir")
+
     def fake_snapshotter(d: Path) -> Path:
-        snap = d / ".snapshots" / "x"
+        snap = d / ".snapshots" / "snap"
         snap.mkdir(parents=True, exist_ok=True)
         return snap
 
-    real_pair = atomic_write_draft_pair
     with patch(
         "draft_ops.atomic_writer.atomic_write_draft",
-        side_effect=OSError("simulated write failure"),
+        side_effect=OSError("write boom"),
     ):
-        with pytest.raises(OSError, match="simulated write failure"):
+        with pytest.raises(RuntimeError) as excinfo:
             safe_write_draft(
                 draft_dir,
                 {"a": 1},
                 proc_checker=lambda: False,
                 snapshotter=fake_snapshotter,
+                restorer=broken_restorer,
                 verifier=lambda d: (True, "ok"),  # 不应被调用
             )
-    # 真实 pair 函数没被调用(被 patched 替换);这个测试只是确保 OSError 透传
-    assert True  # placeholder,真正的断言是上面那个 pytest.raises
+
+    msg = str(excinfo.value)
+    assert "write boom" in msg          # 原始写入异常不得丢失
+    assert "no snapshots dir" in msg    # 恢复异常不得丢失
+    assert "不一致" in msg              # 明确提示草稿可能处于不一致状态
+    assert ".snapshots" in msg          # 输出可人工恢复的快照位置
+
+
+def test_safe_write_draft_verifier_exception_also_restores(tmp_path: Path) -> None:
+    """verifier 抛异常(而非返回 False)→ 同样触发快照回退 + 复合 RuntimeError。"""
+    draft_dir = tmp_path / "draft"
+    draft_dir.mkdir()
+    (draft_dir / "draft_content.json").write_text('{"old": true}', encoding="utf-8")
+    (draft_dir / "draft_info.json").write_text('{"old": true}', encoding="utf-8")
+
+    def broken_verifier(d: Path) -> tuple[bool, str]:
+        raise ValueError("verifier crashed")
+
+    with pytest.raises(RuntimeError) as excinfo:
+        safe_write_draft(
+            draft_dir,
+            {"new": True},
+            proc_checker=lambda: False,
+            verifier=broken_verifier,
+        )
+
+    msg = str(excinfo.value)
+    assert "verifier crashed" in msg
+    assert "已从快照" in msg
+    # 真实快照/回退:文件恢复原字节
+    assert json.loads(
+        (draft_dir / "draft_content.json").read_text(encoding="utf-8")
+    ) == {"old": True}
+
+
+def test_safe_write_draft_gc_keeps_recent_snapshots(tmp_path: Path) -> None:
+    """成功写入后自动清理旧快照,只保留最近 SNAPSHOT_KEEP 个(含本次新快照)。
+
+    回退永远取字典序最新的快照,清理最旧的不影响失败回滚路径。
+    """
+    draft_dir = tmp_path / "draft"
+    draft_dir.mkdir()
+    (draft_dir / "draft_content.json").write_text('{"old": true}', encoding="utf-8")
+    (draft_dir / "draft_info.json").write_text('{"old": true}', encoding="utf-8")
+
+    # 预置 5 个按时间序的旧快照(UTC ISO 目录名,字典序 == 时间序)
+    for i in range(5):
+        ts_dir = draft_dir / _SNAPSHOT_DIR_NAME / f"2026-01-01T00-00-0{i}Z"
+        ts_dir.mkdir(parents=True)
+        (ts_dir / "draft_content.json").write_text("{}", encoding="utf-8")
+
+    result = safe_write_draft(draft_dir, {"new": True}, proc_checker=lambda: False)
+
+    assert result["ok"] is True
+    snaps = sorted(p.name for p in (draft_dir / _SNAPSHOT_DIR_NAME).iterdir())
+    assert len(snaps) == SNAPSHOT_KEEP
+    # 最新一个是本次写入产生的快照(字典序最大)
+    assert snaps[-1] > "2026-01-01T00-00-04Z"
+
+
+# ---------------------------------------------------------------------------
+# 默认进程门禁 unknown fail-closed(20261118 审查 P1-02)
+# ---------------------------------------------------------------------------
+
+
+def test_default_proc_checker_unknown_raises_fail_closed(monkeypatch) -> None:
+    """进程检测 unknown → 默认门禁 raise,不再折叠成"不在跑"(fail-open)。"""
+    from draft_ops import safe_write_guard as guard
+
+    monkeypatch.setattr(aw_module, "_default_proc_checker", _real_default_proc_checker)
+    monkeypatch.setattr(guard, "probe_jianying_state", lambda q=None: "unknown")
+
+    with pytest.raises(RuntimeError, match="状态未知"):
+        aw_module._default_proc_checker()
+
+
+def test_safe_write_draft_unknown_process_refuses_before_snapshot(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """默认门禁 unknown → safe_write_draft 直接拒绝:不快照、不落盘。"""
+    from draft_ops import safe_write_guard as guard
+
+    draft_dir = tmp_path / "draft"
+
+    monkeypatch.setattr(aw_module, "_default_proc_checker", _real_default_proc_checker)
+    monkeypatch.setattr(guard, "probe_jianying_state", lambda q=None: "unknown")
+
+    with pytest.raises(RuntimeError, match="状态未知"):
+        safe_write_draft(draft_dir, {"a": 1})
+
+    assert not (draft_dir / "draft_content.json").exists(), "拒绝写入时不得落盘"
+    assert not (draft_dir / ".snapshots").exists(), "门禁失败时不得创建快照"

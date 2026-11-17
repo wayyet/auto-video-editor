@@ -7,8 +7,12 @@ from pathlib import Path
 import pytest
 
 from draft_ops.safe_write_guard import (
+    PROC_NOT_RUNNING,
+    PROC_RUNNING,
+    PROC_UNKNOWN,
     check_jianying_not_running,
     cleanup_old_snapshots,
+    probe_jianying_state,
     restore_from_snapshot,
     snapshot_before_edit,
 )
@@ -67,6 +71,100 @@ def test_check_jianying_no_injection_does_not_crash() -> None:
     # 不抛异常即可。
     result = check_jianying_not_running()
     assert isinstance(result, bool)
+
+
+# ---------------------------------------------------------------------------
+# probe_jianying_state — 三态进程检测(20261118 审查 P1-02)
+# ---------------------------------------------------------------------------
+
+
+def test_probe_running() -> None:
+    """确认剪映在跑 → PROC_RUNNING。"""
+    assert probe_jianying_state(lambda: ["JianyingPro.exe  12345 Console"]) == PROC_RUNNING
+
+
+def test_probe_not_running() -> None:
+    """确认无匹配进程 → PROC_NOT_RUNNING。"""
+    assert probe_jianying_state(lambda: []) == PROC_NOT_RUNNING
+    assert probe_jianying_state(lambda: ["explorer.exe  1"]) == PROC_NOT_RUNNING
+
+
+def test_probe_query_raises_unknown() -> None:
+    """注入查询函数抛异常 → PROC_UNKNOWN(不得当成"不在跑")。"""
+
+    def fake_query() -> list[str]:
+        raise OSError("tasklist missing")
+
+    assert probe_jianying_state(fake_query) == PROC_UNKNOWN
+
+
+def test_probe_query_returns_none_unknown() -> None:
+    """查询函数返回 None(命令失败的新约定)→ PROC_UNKNOWN。"""
+    assert probe_jianying_state(lambda: None) == PROC_UNKNOWN
+
+
+def test_windows_proc_query_timeout_returns_none(monkeypatch) -> None:
+    """Windows 默认查询超时 → None(补 TimeoutExpired 零覆盖)。"""
+    import subprocess
+
+    from draft_ops import safe_write_guard as guard
+
+    def boom(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="tasklist", timeout=5)
+
+    monkeypatch.setattr(guard.subprocess, "run", boom)
+    assert guard._default_windows_proc_query() is None
+
+
+def test_windows_proc_query_missing_tool_returns_none(monkeypatch) -> None:
+    """Windows tasklist 工具缺失 → None(UNKNOWN,拒绝写入)。"""
+    from draft_ops import safe_write_guard as guard
+
+    def boom(*args, **kwargs):
+        raise FileNotFoundError("tasklist missing")
+
+    monkeypatch.setattr(guard.subprocess, "run", boom)
+    assert guard._default_windows_proc_query() is None
+
+
+def test_windows_proc_query_no_match_returns_empty(monkeypatch) -> None:
+    """tasklist 无匹配(输出 INFO 行,无 JianyingPro 子串)→ [] = NOT_RUNNING。"""
+    from types import SimpleNamespace
+
+    from draft_ops import safe_write_guard as guard
+
+    fake = SimpleNamespace(stdout="INFO: 没有运行的任务匹配指定的标准。\n", stderr="")
+    monkeypatch.setattr(guard.subprocess, "run", lambda *a, **k: fake)
+    assert guard._default_windows_proc_query() == []
+
+
+def test_posix_proc_query_timeout_returns_none(monkeypatch) -> None:
+    """POSIX pgrep 超时 → None(UNKNOWN)。"""
+    import subprocess
+
+    from draft_ops import safe_write_guard as guard
+
+    def boom(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="pgrep", timeout=5)
+
+    monkeypatch.setattr(guard.subprocess, "run", boom)
+    assert guard._default_posix_proc_query() is None
+
+
+def test_probe_default_path_unknown(monkeypatch) -> None:
+    """默认平台查询返回 None → probe 返回 UNKNOWN(非注入路径)。"""
+    from draft_ops import safe_write_guard as guard
+
+    monkeypatch.setattr(guard, "_default_windows_proc_query", lambda: None)
+    monkeypatch.setattr(guard, "_default_posix_proc_query", lambda: None)
+    assert probe_jianying_state() == PROC_UNKNOWN
+
+
+def test_legacy_bool_wraps_probe_unknown_as_false() -> None:
+    """旧布尔口径:True=在跑 语义不反转;unknown 折叠为 False(告警语义不变)。"""
+    assert check_jianying_not_running(lambda: ["JianyingPro.exe"]) is True
+    assert check_jianying_not_running(lambda: []) is False
+    assert check_jianying_not_running(lambda: None) is False
 
 
 # ---------------------------------------------------------------------------
