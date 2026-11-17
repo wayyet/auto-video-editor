@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 
 import {
   CONSOLE_API_PATHS, CONSOLE_BACKENDS, DEFAULT_LIMITS, HISTORY_STATE_LABEL, acceptCreated, addFiles,
-  applyEvent, beginUpload, buildCreateFormData, canCancel, canDelete, canResume, canSubmit,
+  applyEvent, beginUpload, buildCreateFormData, canCancel, canDelete, canResume, canResumeOrRetry, canSubmit,
   createConsoleState, createMonitorState, failSubmission, filterHistoryRows,
   formatBytes, formatDuration, friendlyError, historyActions, makeFileEntry,
   parseResumeValue, removeFile, updateProgress, validateNewFiles, validateParams,
@@ -289,6 +289,17 @@ test("canResume / canCancel 状态门禁(waiting_human 是唯一可恢复态)", 
   for (const s of ["prepared", "waiting_human", "completed", "failed", "cancelled", "unknown"]) {
     assert.equal(canCancel(s), false, s);
   }
+});
+
+test("canResumeOrRetry 创建台「继续运行」门禁(waiting_human + failed;canResume 不受影响)", () => {
+  // 2026-11-17:关卡等待弹恢复面板、失败重试失败节点,两种状态可用
+  assert.equal(canResumeOrRetry("waiting_human"), true);
+  assert.equal(canResumeOrRetry("failed"), true);
+  for (const s of ["prepared", "starting", "running", "completed", "cancelled", "unknown"]) {
+    assert.equal(canResumeOrRetry(s), false, s);
+  }
+  // 监控页行内「恢复」仍只认 waiting_human(行为零变化)
+  assert.equal(canResume("failed"), false);
 });
 
 test("canDelete 状态门禁(仅终态 + prepared;与服务端 DELETABLE_STATES 一致)", () => {

@@ -3,7 +3,9 @@
 全部注入假实现(事件库快照 / Popen / PG 预检),无真机依赖。
 覆盖:waiting_human 门禁(非等待态 409)、argv 形状(resume_workflow.py +
 --value JSON + --checkpoint 可选 + --llm-backend 与 start_run 同门禁)、
-并发额度 409、PG 不可达 503、Popen 失败 500 + 记录落盘、API 级 CSRF 门禁。
+并发额度 409、PG 不可达 503、Popen 失败 500 + 记录落盘、API 级 CSRF 门禁;
+2026-11-17 失败节点重试(failed 状态 → --continue argv / mode=retry 审计 /
+completed·cancelled 仍 409 / 默认门禁 allow_missing_draft 接线)。
 """
 
 from __future__ import annotations
@@ -51,6 +53,10 @@ def _ok_probe(path) -> dict:
 
 def _waiting_snapshot(tid):
     return {"available": True, "last_event": {"event_type": "run.interrupted"}}
+
+
+def _failed_snapshot(tid):
+    return {"available": True, "last_event": {"event_type": "run.failed"}}
 
 
 @pytest.fixture()
@@ -271,6 +277,128 @@ class TestResumeRunService:
         )
         assert record["status"] == "failed"
         assert "恢复进程启动失败" in record["error"]
+
+
+class TestRetryRunService:
+    """2026-11-17 失败节点重试:failed 状态放行,argv 走 --continue 续跑。
+
+    failed_env 不注入 draft_guard(走默认门禁):fixture 把 gate_state 取数层
+    mock 成无草稿,验证 retry 模式 allow_missing_draft=True 放行的接线;
+    门禁本体行为见 test_console_resume_guard.py。
+    """
+
+    @pytest.fixture()
+    def failed_env(self, tmp_path, monkeypatch):
+        """已启动(starting)任务 + 事件库调和为 failed(节点报错终态)。"""
+        monkeypatch.setattr(config, "CONSOLE_OUTPUTS_ROOT", tmp_path)
+        monkeypatch.setattr(config, "CONSOLE_LLM_BACKEND", "stub")
+        monkeypatch.setattr(config, "CONSOLE_ALLOW_STUB", True)
+        monkeypatch.setattr(cs, "_latest_snapshot", _failed_snapshot)
+        monkeypatch.setattr(cs, "_pid_alive", lambda pid: None)
+        # 默认门禁链的取数层:state 无 draft_path(失败发生在产草稿前)
+        monkeypatch.setattr("web.gate_state.fetch_state_values", lambda tid: {})
+        result = prepare_run(
+            prompt="剪一条短片", uploads=[_upload("a.mp4", b"abc")],
+            target_duration_ms=30000, ratio="9:16", lang="zh",
+            outputs_root=tmp_path, probe=_ok_probe,
+        )
+        record_path = cs.console_run_json_path(result["task_dir"])
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        record["status"] = "starting"
+        record["pid"] = 4321
+        cs._write_run_json(result["task_dir"], record)
+        yield result, tmp_path
+        cs._ACTIVE_PROCS.clear()
+        cs._STARTED_AT.clear()
+        api_console._CSRF_TOKENS.clear()
+
+    def test_retry_happy_path_argv_and_mode(self, failed_env):
+        result, _root = failed_env
+        captured: dict = {}
+
+        def fake_popen(argv, **kwargs):
+            captured["argv"] = argv
+            return FakeProc(4321)
+
+        record = resume_run(
+            result["thread_id"], popen=fake_popen, pg_check=lambda: None,
+            venv_python="py-exe",
+        )
+        argv = captured["argv"]
+        # retry 分支:--continue 续跑;--value/--checkpoint 不适用
+        assert "--continue" in argv
+        assert "--value" not in argv and "--checkpoint" not in argv
+        assert argv[argv.index("--thread-id") + 1] == result["thread_id"]
+        assert argv[argv.index("--llm-backend") + 1] == "stub"  # 与关卡恢复同门禁
+        # 审计记录:mode=retry,checkpoint/value 记缺省
+        entry = record["resumes"][-1]
+        assert entry["mode"] == "retry"
+        assert entry["checkpoint"] is None and entry["value"] is True
+        assert record["status"] == "starting"
+
+    def test_retry_still_409_for_completed(self, failed_env, monkeypatch):
+        result, _root = failed_env
+        monkeypatch.setattr(
+            cs, "_latest_snapshot",
+            lambda tid: {"available": True,
+                         "last_event": {"event_type": "run.completed"}},
+        )
+        with pytest.raises(ConsoleLaunchError) as ei:
+            resume_run(result["thread_id"], popen=lambda a, **k: FakeProc(),
+                       pg_check=lambda: None)
+        assert ei.value.status_code == 409
+
+    def test_retry_still_409_for_cancelled_record(self, failed_env):
+        """record.status=cancelled(canceled 终态)→ 409,事件库不参与调和。"""
+        result, _root = failed_env
+        record_path = cs.console_run_json_path(result["task_dir"])
+        stored = json.loads(record_path.read_text(encoding="utf-8"))
+        stored["status"] = "cancelled"
+        cs._write_run_json(result["task_dir"], stored)
+        with pytest.raises(ConsoleLaunchError) as ei:
+            resume_run(result["thread_id"], popen=lambda a, **k: FakeProc(),
+                       pg_check=lambda: None)
+        assert ei.value.status_code == 409
+
+    def test_retry_default_guard_receives_allow_missing_draft(self, failed_env, monkeypatch):
+        """默认门禁在 retry 模式下透传 allow_missing_draft=True(无草稿放行)。"""
+        result, _root = failed_env
+        seen: dict = {}
+
+        def spy_guard(tid, *, allow_missing_draft=False):
+            seen["allow_missing_draft"] = allow_missing_draft
+            return {"ok": True, "problems": [], "hashes": {}}
+
+        monkeypatch.setattr(cs, "_resume_draft_guard", spy_guard)
+        resume_run(result["thread_id"], popen=lambda a, **k: FakeProc(),
+                   pg_check=lambda: None)
+        assert seen["allow_missing_draft"] is True
+
+    def test_retry_guard_fail_409_no_popen(self, failed_env):
+        """retry 模式下有草稿但门禁不过(如剪映未关)→ 409,不启动进程。"""
+        result, _root = failed_env
+        popen_calls = []
+
+        def bad_guard(tid):
+            return {"ok": False, "problems": ["检测到剪映客户端正在运行"], "hashes": {}}
+
+        with pytest.raises(ConsoleLaunchError) as ei:
+            resume_run(result["thread_id"], popen=lambda a, **k: popen_calls.append(a) or FakeProc(),
+                       pg_check=lambda: None, draft_guard=bad_guard)
+        assert ei.value.status_code == 409
+        assert popen_calls == []
+
+    def test_api_retry_202(self, failed_env, monkeypatch):
+        result, _root = failed_env
+        monkeypatch.setattr(cs, "_default_popen", lambda: (lambda a, **k: FakeProc(4321)))
+        monkeypatch.setattr(cs, "_check_postgres", lambda: None)
+        resp = client.post(
+            f"/api/console/runs/{result['thread_id']}/resume",
+            json={"checkpoint": None, "value": True},
+        )
+        assert resp.status_code == 202, resp.text
+        body = resp.json()
+        assert body["ok"] is True and body["state"] == "resuming"
 
 
 class TestResumeApi:

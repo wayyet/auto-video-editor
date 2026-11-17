@@ -103,6 +103,7 @@
     }
     .params input{ width:110px; }
     #btnCreate{ margin-top:12px; padding:8px 18px; font-size:13px; }
+    #btnResumeRun{ margin-top:12px; }
     #formMeta, #runMeta{ font-family:var(--mono); font-size:11px; color:var(--muted); margin-top:8px; white-space:pre-wrap; }
     #progressWrap{ display:none; margin-top:10px; }
     #progressWrap.active{ display:block; }
@@ -188,7 +189,10 @@
         <label style="display:block; width:100%">必需功能<span class="hint" style="margin-left:6px">交付 QA 将逐项把关,勾选项缺失/降级时阻断交付(阶段 6)</span></label>
         <div id="requiredFeatures" style="display:flex; flex-wrap:wrap; gap:4px 12px; width:100%"></div>
       </div>
-      <button class="btn primary" id="btnCreate">创建并运行工作流</button>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-start">
+        <button class="btn primary" id="btnCreate">创建并运行工作流</button>
+        <button class="btn" id="btnResumeRun" style="display:none" title="继续当前工作流:等待人工关卡时打开恢复面板;节点失败时从 checkpoint 重试失败节点">继续运行</button>
+      </div>
       <div id="formMeta">创建后自动在本页订阅执行事件;提示词不会进入监控事件日志。</div>
       <div id="progressWrap">
         <div id="progressOuter"><div id="progressBar"></div></div>
@@ -199,7 +203,8 @@
       <div class="hint">
         创建台只负责创建运行;订阅、断开与刷新均为只读 GET,不会重复启动工作流。
         历史任务与清除缓存已移至监控首页;执行的完整节点轨迹请在监控首页查看,
-        等待人工关卡属正常状态,恢复操作见监控页指引。
+        等待人工关卡属正常状态,点「继续运行」打开恢复面板确认放行;节点失败可
+        点「重试失败节点」从 checkpoint 续跑(真实重跑)。恢复操作亦见监控页指引。
       </div>
 
       <h2>04 · 执行 Agent</h2>
@@ -263,7 +268,7 @@
       validateNewFiles, addFiles, removeFile, validateParams, hasErrors, canSubmit,
       createConsoleState, beginUpload, updateProgress, acceptCreated, failSubmission,
       buildCreateFormData, friendlyError, formatBytes, formatDuration, DEFAULT_LIMITS,
-      canCancel, parseResumeValue, eventFromSse,
+      canCancel, canResumeOrRetry, parseResumeValue, eventFromSse,
     } from "/static/workflow_console.mjs";
     import {
       progressSummaryOf, reduceDeliveryCard,
@@ -290,6 +295,7 @@
     const speedInput = $("speedInput");
     const backendSelect = $("backendSelect");
     const btnCreate = $("btnCreate"), formMeta = $("formMeta");
+    const btnResumeRun = $("btnResumeRun");
     const progressWrap = $("progressWrap"), progressBar = $("progressBar"), progressText = $("progressText");
     const threadLine = $("threadLine"), videoSummary = $("videoSummary"), agentLine = $("agentLine");
     const btnCancel = $("btnCancel");
@@ -600,6 +606,17 @@
         ? `完成 ${c.done} · 执行中 ${c.running} · 等待 ${c.waiting} · 失败 ${c.failed}` : "";
       // 取消只对服务端还能管到的活跃运行开放(终态/未知一律隐藏)
       btnCancel.style.display = liveThreadId && canCancel(st) ? "" : "none";
+      // 2026-11-17 创建台「继续运行」:关卡等待 → 打开恢复面板;失败 → 重试失败节点。
+      // 与 btnCancel 同款显隐模式;查看模式(?thread_id=)不额外禁用。
+      const resumable = !!(liveThreadId && canResumeOrRetry(st));
+      btnResumeRun.style.display = resumable ? "" : "none";
+      if (resumable) {
+        const isRetry = st === "failed";
+        btnResumeRun.textContent = isRetry ? "重试失败节点" : "继续运行";
+        btnResumeRun.title = isRetry
+          ? "从最后 checkpoint 续跑,重跑失败的节点(真实重跑,消耗 LLM 调用与时间)"
+          : "工作流已暂停在人工关卡;点击打开恢复面板,人工确认后继续运行";
+      }
     }
     function renderAll() {
       renderFileList();
@@ -1135,6 +1152,38 @@
         resumeErr.textContent = err && err.message ? err.message : "恢复提交失败";
       } finally {
         btnResume.disabled = false;
+      }
+    });
+
+    // ------------------------------------------------------------------
+    // 2026-11-17 创建台「继续运行」:waiting_human → 打开恢复面板(人工确认
+    // 后放行,与自动弹出面板同一流程);failed → confirm 后走 resume 端点,
+    // 服务端按状态分派 CLI --continue(从最后 checkpoint 续跑失败节点)。
+    // ------------------------------------------------------------------
+    btnResumeRun.addEventListener("click", async () => {
+      const tid = liveThreadId;
+      if (!tid) return;
+      const st = monitor.run.state;
+      if (st === "waiting_human") {
+        showResumePanel();
+        return;
+      }
+      if (st !== "failed") return;
+      if (!window.confirm(
+        `确认重试任务 ${tid} 的失败节点?\n将从最后 checkpoint 续跑并重跑失败节点(真实重跑,消耗 LLM 调用与时间)。`
+      )) return;
+      btnResumeRun.disabled = true;
+      try {
+        await postJson(CONSOLE_API_PATHS.resumeRun(tid), { checkpoint: null, value: true });
+        resumeErr.textContent = "";
+        runMeta.textContent = "执行状态:重试已提交,等待执行事件…";
+        // run.failed 是终态,服务端已关流;EventSource 会自动重连按游标补发,
+        // 仅在连接已彻底关闭时才重订阅(整体重置右栏,最后手段)
+        if (!source || source.readyState === 2) subscribeToThread(tid);
+      } catch (err) {
+        runMeta.textContent = `执行状态:重试提交失败 —— ${err && err.message ? err.message : ""}`;
+      } finally {
+        btnResumeRun.disabled = false;
       }
     });
 

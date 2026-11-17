@@ -138,3 +138,91 @@ class TestMatchInterrupt:
     def test_empty_interrupts(self, rw):
         assert rw.match_interrupt([], "①") is None
         assert rw.match_interrupt([], None) is None
+
+
+# ---------------------------------------------------------------------------
+# --continue 续跑(2026-11-17 创建台失败重试:无挂起关卡从最后 checkpoint 续跑)
+# ---------------------------------------------------------------------------
+import asyncio  # noqa: E402
+
+
+def _continue_args(**over):
+    ns = SimpleNamespace(
+        thread_id="prod-001", dry_run=False, allow_jianying_running=False,
+    )
+    return SimpleNamespace(**{**vars(ns), **over})
+
+
+class TestContinueAfterFailure:
+    def test_parse_args_continue_flag(self, rw, monkeypatch):
+        monkeypatch.setattr("sys.argv", ["resume_workflow", "--thread-id", "t", "--continue"])
+        args = rw._parse_args()
+        assert args.continue_run is True
+
+    def test_continue_and_checkpoint_mutually_exclusive(self, rw):
+        """--continue 与 --checkpoint 同给 → 退出码 2(参数非法),不做任何环境准备。"""
+        args = SimpleNamespace(
+            production=False, thread_id="t", checkpoint="①", continue_run=True,
+        )
+        rc = asyncio.run(rw._main_async(args))
+        assert rc == rw.EXIT_PREFLIGHT == 2
+
+    def test_no_checkpoint_returns_7_fail_closed(self, rw):
+        """Postgres 确无 checkpoint → 退出码 7,绝不盲目续跑。"""
+
+        class FakeSaver:
+            async def aget_tuple(self, config):
+                return None
+
+        rc = asyncio.run(rw._continue_after_failure(
+            object(), FakeSaver(), {"configurable": {"thread_id": "t"}},
+            _continue_args(), SimpleNamespace(values={}),
+        ))
+        assert rc == rw.EXIT_NO_CHECKPOINT == 7
+
+    def test_db_query_failure_returns_7_fail_closed(self, rw):
+        """查询失败(数据库不可达)≠ 无 checkpoint:同样拒绝,语义准确。"""
+
+        class BoomSaver:
+            async def aget_tuple(self, config):
+                raise RuntimeError("pg down")
+
+        rc = asyncio.run(rw._continue_after_failure(
+            object(), BoomSaver(), {"configurable": {"thread_id": "t"}},
+            _continue_args(), SimpleNamespace(values={}),
+        ))
+        assert rc == rw.EXIT_NO_CHECKPOINT == 7
+
+    def test_dry_run_with_checkpoint_returns_0(self, rw):
+        """--continue --dry-run:确认 checkpoint 存在即返回,不执行续跑。"""
+
+        class FakeSaver:
+            async def aget_tuple(self, config):
+                return SimpleNamespace(checkpoint={"ts": "2026-11-17T00:00:00Z"})
+
+        rc = asyncio.run(rw._continue_after_failure(
+            object(), FakeSaver(), {"configurable": {"thread_id": "t"}},
+            _continue_args(dry_run=True), SimpleNamespace(values={}),
+        ))
+        assert rc == rw.EXIT_OK
+
+    def test_guard_fail_returns_6(self, rw, monkeypatch):
+        """state 有 draft_path 时照常执行文件门禁(剪映未关 → 退出码 6)。"""
+
+        class FakeSaver:
+            async def aget_tuple(self, config):
+                return SimpleNamespace(checkpoint={"ts": "t"})
+
+        monkeypatch.setattr(
+            "draft_ops.draft_lock.assert_resume_ready",
+            lambda draft_file, **k: {
+                "ok": False, "problems": ["检测到剪映客户端正在运行"],
+                "hashes": {}, "jianying_running": True,
+            },
+        )
+        snap = SimpleNamespace(values={"draft_path": "X:/d/draft_content.json"})
+        rc = asyncio.run(rw._continue_after_failure(
+            object(), FakeSaver(), {"configurable": {"thread_id": "t"}},
+            _continue_args(), snap,
+        ))
+        assert rc == rw.EXIT_RESUME_GUARD

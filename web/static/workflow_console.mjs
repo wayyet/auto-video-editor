@@ -356,6 +356,15 @@ export function canResume(state) {
   return state === "waiting_human";
 }
 
+/**
+ * 创建台「继续运行」按钮(2026-11-17):关卡等待(waiting_human,弹恢复面板)
+ * 或失败(failed,--continue 重试失败节点)时可用。与 canResume 分开成纯函数:
+ * 监控页行内「恢复」按钮仍只认 waiting_human,行为零变化。
+ */
+export function canResumeOrRetry(state) {
+  return state === "waiting_human" || state === "failed";
+}
+
 /** 取消只对"服务端还能管到的活跃运行"开放(unknown/终态一律不可)。 */
 export function canCancel(state) {
   return state === "running" || state === "starting";

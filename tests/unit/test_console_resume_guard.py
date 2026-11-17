@@ -101,6 +101,36 @@ class TestGateStateResumeGuard:
         assert out["ok"] is False
         assert out["problems"] == ["state.draft_path 缺失"]
 
+    def test_allow_missing_draft_short_circuits_when_no_draft(self, monkeypatch):
+        """2026-11-17 失败重试:allow_missing_draft=True + state 无 draft_path →
+        直接放行(hashes 空),绝不触碰 assert_resume_ready。"""
+        monkeypatch.setattr(gate_state, "fetch_state_values", lambda tid: {})
+        called = {"n": 0}
+
+        def fake_assert(draft_file, **k):
+            called["n"] += 1
+            return {"ok": False, "problems": ["不应被调用"], "hashes": {}, "jianying_running": False}
+
+        monkeypatch.setattr("draft_ops.draft_lock.assert_resume_ready", fake_assert)
+        out = gate_state.resume_guard("console-ab12cd34ef56", allow_missing_draft=True)
+        assert out == {"ok": True, "problems": [], "hashes": {}}
+        assert called["n"] == 0
+
+    def test_allow_missing_draft_ignored_when_draft_present(self, monkeypatch):
+        """state 有 draft_path 时 allow_missing_draft 不生效,照常全量校验。"""
+        seen = {}
+
+        def fake_assert(draft_file, **k):
+            seen["draft_file"] = draft_file
+            return {"ok": True, "problems": [], "hashes": {}, "jianying_running": False}
+
+        monkeypatch.setattr(gate_state, "fetch_state_values",
+                            lambda tid: {"draft_path": "X:/d/draft_content.json"})
+        monkeypatch.setattr("draft_ops.draft_lock.assert_resume_ready", fake_assert)
+        out = gate_state.resume_guard("console-ab12cd34ef56", allow_missing_draft=True)
+        assert seen["draft_file"] == "X:/d/draft_content.json"
+        assert out["ok"] is True
+
 
 class TestConsoleResumeGuard:
     def test_guard_fail_blocks_popen_409(self, waiting_env):
