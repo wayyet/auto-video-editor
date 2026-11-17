@@ -77,18 +77,67 @@ def resume_guard(
 
     Args:
         allow_missing_draft: 允许 state 无 ``draft_path``(2026-11-17 失败重试
-            用):失败发生在草稿产出前没有草稿可保护,跳过草稿校验直接放行
-            (hashes 为空)。state 有 ``draft_path`` 时本参数不生效,照常全量校验。
+            用)。2026-11-18 P0-03 起语义收紧:state 无 ``draft_path`` **不再**
+            直接放行,先按 thread 物理定位 staging/正式库的本任务草稿产物
+            (:func:`draft_ops.draft_lock.find_task_draft_artifacts`)——
+            确认有草稿就恢复完整门禁(含剪映进程检查);确认无产物才按
+            「产草稿前失败」放行(附 note 审计);目录不可读一律 fail-closed。
+            state 有 ``draft_path`` 时本参数不生效,照常全量校验。
 
     Returns:
-        ``{"ok": bool, "problems": [...], "hashes": {...}}``。
+        ``{"ok": bool, "problems": [...], "hashes": {...}}``;无草稿放行时附
+        ``note``,定位到草稿时附 ``located``。
     """
-    from draft_ops.draft_lock import assert_resume_ready
+    from draft_ops.draft_lock import assert_resume_ready, find_task_draft_artifacts
 
     values = fetch_state_values(thread_id)
     draft_path = values.get("draft_path")
     if allow_missing_draft and not (draft_path and str(draft_path).strip()):
-        return {"ok": True, "problems": [], "hashes": {}}
+        # P0-03:「无 draft_path」≠「磁盘无草稿」—— 物理定位后再决定门禁策略
+        import config
+
+        task_dir = Path(config.CONSOLE_OUTPUTS_ROOT) / thread_id
+        artifacts = find_task_draft_artifacts(
+            task_dir, getattr(config, "JIANYING_DRAFT_ROOT", None), thread_id
+        )
+        if artifacts["unreadable"]:
+            return {
+                "ok": False,
+                "problems": [
+                    "无法确认本任务草稿产物状态(任务目录或草稿库不可读,fail-closed);"
+                    "请人工检查 outputs 任务目录与剪映草稿库后再试"
+                ],
+                "hashes": {},
+            }
+        # 定位到的所有草稿(staging + 正式库)都过完整门禁 —— 每一份都是
+        # 恢复后工作流可能继续改写的对象,漏一份就可能与剪映自动保存竞争
+        candidates: list[Path] = []
+        if artifacts["official"] is not None:
+            candidates.append(Path(artifacts["official"]))
+        candidates.extend(Path(p) for p in artifacts["staging"])
+        if candidates:
+            problems: list[str] = []
+            hashes: dict[str, str] = {}
+            for draft_file in candidates:
+                result = assert_resume_ready(
+                    draft_file,
+                    proc_checker=proc_checker,
+                    require_jianying_closed=require_jianying_closed,
+                )
+                problems.extend(result["problems"])
+                hashes.update(result.get("hashes") or {})
+            return {
+                "ok": not problems,
+                "problems": problems,
+                "hashes": hashes,
+                "located": str(candidates[0]),
+            }
+        return {
+            "ok": True,
+            "problems": [],
+            "hashes": {},
+            "note": "已确认无本任务草稿产物(staging 与正式库均无),按产草稿前失败放行",
+        }
     result = assert_resume_ready(
         draft_path,
         proc_checker=proc_checker,

@@ -71,6 +71,7 @@ def waiting_env(tmp_path, monkeypatch):
     yield result, tmp_path
     cs._ACTIVE_PROCS.clear()
     cs._STARTED_AT.clear()
+    cs._CLAIMED_TIDS.clear()
 
 
 class TestGateStateResumeGuard:
@@ -101,9 +102,12 @@ class TestGateStateResumeGuard:
         assert out["ok"] is False
         assert out["problems"] == ["state.draft_path 缺失"]
 
-    def test_allow_missing_draft_short_circuits_when_no_draft(self, monkeypatch):
-        """2026-11-17 失败重试:allow_missing_draft=True + state 无 draft_path →
-        直接放行(hashes 空),绝不触碰 assert_resume_ready。"""
+    def test_no_draft_anywhere_passes_with_note(self, tmp_path, monkeypatch):
+        """P0-03 矩阵「无 draft_path + 无草稿」:物理确认 staging 与正式库均无
+        本任务产物 → 按「产草稿前失败」放行(附 note 审计),绝不触碰
+        assert_resume_ready(没有草稿可保护)。"""
+        monkeypatch.setattr(config, "CONSOLE_OUTPUTS_ROOT", tmp_path)
+        monkeypatch.setattr(config, "JIANYING_DRAFT_ROOT", tmp_path / "jy_root")
         monkeypatch.setattr(gate_state, "fetch_state_values", lambda tid: {})
         called = {"n": 0}
 
@@ -113,7 +117,8 @@ class TestGateStateResumeGuard:
 
         monkeypatch.setattr("draft_ops.draft_lock.assert_resume_ready", fake_assert)
         out = gate_state.resume_guard("console-ab12cd34ef56", allow_missing_draft=True)
-        assert out == {"ok": True, "problems": [], "hashes": {}}
+        assert out["ok"] is True and out["problems"] == [] and out["hashes"] == {}
+        assert "已确认无本任务草稿产物" in out["note"]
         assert called["n"] == 0
 
     def test_allow_missing_draft_ignored_when_draft_present(self, monkeypatch):
@@ -130,6 +135,136 @@ class TestGateStateResumeGuard:
         out = gate_state.resume_guard("console-ab12cd34ef56", allow_missing_draft=True)
         assert seen["draft_file"] == "X:/d/draft_content.json"
         assert out["ok"] is True
+
+
+class TestFindTaskDraftArtifacts:
+    """P0-03:draft_ops.draft_lock.find_task_draft_artifacts 定位规则本体。"""
+
+    def test_empty_task_dir_and_missing_draft_root(self, tmp_path):
+        from draft_ops.draft_lock import find_task_draft_artifacts
+
+        out = find_task_draft_artifacts(
+            tmp_path / "console-ab12cd34ef56", tmp_path / "jy_root", "console-ab12cd34ef56"
+        )
+        assert out == {"staging": [], "official": None, "unreadable": False}
+
+    def test_staging_found_depth1_and_depth2(self, tmp_path):
+        from draft_ops.draft_lock import find_task_draft_artifacts
+
+        task_dir = tmp_path / "console-ab12cd34ef56"
+        d1 = task_dir / "drafts" / "zh-main"
+        d2 = task_dir / "drafts" / "en-branch" / "nested"
+        (d1 / "draft_content.json").parent.mkdir(parents=True)
+        (d1 / "draft_content.json").write_text("{}", encoding="utf-8")
+        (d2 / "draft_content.json").parent.mkdir(parents=True)
+        (d2 / "draft_content.json").write_text("{}", encoding="utf-8")
+        out = find_task_draft_artifacts(task_dir, None, "console-ab12cd34ef56")
+        assert len(out["staging"]) == 2
+        assert out["official"] is None and out["unreadable"] is False
+
+    def test_official_found_by_registry_naming(self, tmp_path):
+        from draft_ops.draft_lock import find_task_draft_artifacts
+        from draft_ops.jianying_registry import official_draft_dir
+
+        root = tmp_path / "jy_root"
+        official_dir = official_draft_dir(root, "console-ab12cd34ef56")
+        official_dir.mkdir(parents=True)
+        (official_dir / "draft_content.json").write_text("{}", encoding="utf-8")
+        out = find_task_draft_artifacts(
+            tmp_path / "console-ab12cd34ef56", root, "console-ab12cd34ef56"
+        )
+        assert out["official"] == official_dir / "draft_content.json"
+        assert out["staging"] == []
+
+
+class TestPhysicalDraftArtifacts:
+    """P0-03(审查计划 §4.2 / §7.4 矩阵):state 无 draft_path 时的物理草稿门禁。
+
+    「checkpoint 无 draft_path」不能推出「磁盘无草稿」—— 定位到产物必须恢复
+    完整门禁(含剪映进程检查),确认无产物才放行,目录不可读 fail-closed。
+    """
+
+    def _patch_roots(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "CONSOLE_OUTPUTS_ROOT", tmp_path)
+        monkeypatch.setattr(config, "JIANYING_DRAFT_ROOT", tmp_path / "jy_root")
+        monkeypatch.setattr(gate_state, "fetch_state_values", lambda tid: {})
+
+    def test_staging_draft_found_runs_full_gate(self, tmp_path, monkeypatch):
+        tid = "console-ab12cd34ef56"
+        self._patch_roots(tmp_path, monkeypatch)
+        draft_file = tmp_path / tid / "drafts" / "zh-main" / "draft_content.json"
+        draft_file.parent.mkdir(parents=True)
+        draft_file.write_text("{}", encoding="utf-8")
+        seen = {}
+
+        def fake_assert(draft_file_arg, **k):
+            seen["draft_file"] = draft_file_arg
+            return {"ok": True, "problems": [], "hashes": {"draft_content.json": "abc"},
+                    "jianying_running": False}
+
+        monkeypatch.setattr("draft_ops.draft_lock.assert_resume_ready", fake_assert)
+        out = gate_state.resume_guard(tid, allow_missing_draft=True)
+        assert seen["draft_file"] == draft_file, "定位到 staging 草稿必须恢复完整门禁"
+        assert out["ok"] is True and out["located"] == str(draft_file)
+
+    def test_official_draft_found_runs_full_gate(self, tmp_path, monkeypatch):
+        from draft_ops.jianying_registry import official_draft_dir
+
+        tid = "console-ab12cd34ef56"
+        self._patch_roots(tmp_path, monkeypatch)
+        official_dir = official_draft_dir(tmp_path / "jy_root", tid)
+        official_dir.mkdir(parents=True)
+        (official_dir / "draft_content.json").write_text("{}", encoding="utf-8")
+        seen = {}
+
+        def fake_assert(draft_file_arg, **k):
+            seen["draft_file"] = draft_file_arg
+            return {"ok": True, "problems": [], "hashes": {}, "jianying_running": False}
+
+        monkeypatch.setattr("draft_ops.draft_lock.assert_resume_ready", fake_assert)
+        out = gate_state.resume_guard(tid, allow_missing_draft=True)
+        assert seen["draft_file"] == official_dir / "draft_content.json"
+        assert out["ok"] is True
+
+    def test_found_draft_with_jianying_running_rejected(self, tmp_path, monkeypatch):
+        """矩阵「无 draft_path + staging 有草稿 + 剪映运行」→ 拒绝恢复。"""
+        tid = "console-ab12cd34ef56"
+        self._patch_roots(tmp_path, monkeypatch)
+        draft_file = tmp_path / tid / "drafts" / "zh-main" / "draft_content.json"
+        draft_file.parent.mkdir(parents=True)
+        draft_file.write_text("{}", encoding="utf-8")
+        out = gate_state.resume_guard(
+            tid, allow_missing_draft=True, proc_checker=lambda: True
+        )
+        assert out["ok"] is False
+        assert any("剪映" in p for p in out["problems"])
+
+    def test_unreadable_artifacts_fail_closed(self, tmp_path, monkeypatch):
+        """目录不可读/归属不明 → fail-closed,拒绝自动恢复。"""
+        tid = "console-ab12cd34ef56"
+        self._patch_roots(tmp_path, monkeypatch)
+
+        def unreadable_finder(task_dir, draft_root, thread_id):
+            return {"staging": [], "official": None, "unreadable": True}
+
+        monkeypatch.setattr("draft_ops.draft_lock.find_task_draft_artifacts", unreadable_finder)
+        out = gate_state.resume_guard(tid, allow_missing_draft=True)
+        assert out["ok"] is False
+        assert "fail-closed" in out["problems"][0]
+
+    def test_real_staging_draft_gate_passes_when_jianying_closed(self, tmp_path, monkeypatch):
+        """真文件 + 剪映未运行(注入):门禁全量执行并通过,hashes 落审计值。"""
+        tid = "console-ab12cd34ef56"
+        self._patch_roots(tmp_path, monkeypatch)
+        draft_file = tmp_path / tid / "drafts" / "zh-main" / "draft_content.json"
+        draft_file.parent.mkdir(parents=True)
+        draft_file.write_text('{"name":"zh-main"}', encoding="utf-8")
+        out = gate_state.resume_guard(
+            tid, allow_missing_draft=True,
+            proc_checker=lambda: False, require_jianying_closed=True,
+        )
+        assert out["ok"] is True, out["problems"]
+        assert "draft_content.json" in out["hashes"]
 
 
 class TestConsoleResumeGuard:

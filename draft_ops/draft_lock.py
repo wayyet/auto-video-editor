@@ -103,6 +103,71 @@ def validate_draft_for_resume(draft_file: Path | str | None) -> list[str]:
     return problems
 
 
+def find_task_draft_artifacts(
+    task_dir: Path | str,
+    draft_root: Path | str | None,
+    thread_id: str,
+) -> dict[str, Any]:
+    """按 thread 定位本任务可能产生的草稿产物(staging + 正式库,只读)。
+
+    「checkpoint 无 draft_path」不等于「磁盘上无草稿」—— 节点可能先写了草稿
+    文件、还没把 ``draft_path`` 提交进 checkpoint 就失败(审查计划 §4.2 P0-03)。
+    恢复门禁因此不能以 state 字段缺失作为"无草稿"证明,必须物理定位:
+
+    - staging:任务目录 ``drafts/``(``AUTO_VIDEO_EDITOR_DRAFT_DIR`` 指向)下
+      限深 2 层的 ``draft_content.json`` —— 中英文分支草稿都长在这棵子树里
+      (``drafts/<草稿名>/draft_content.json``,或发布前的中间层目录);
+    - official:``draft_root/<official_draft_dir_name(thread_id)>``
+      (``draft_publisher`` 发布的正式目录,目录名 ``AutoVideo_<thread_id>``,
+      复用 :func:`draft_ops.jianying_registry.official_draft_dir` 保持零漂移)。
+
+    Args:
+        task_dir: 任务输出目录(outputs/<thread_id>)。
+        draft_root: 剪映正式草稿库根(``config.JIANYING_DRAFT_ROOT``);
+            None/空 = 未配置,正式库按"无"处理(不构成 unreadable)。
+        thread_id: 任务标识(决定正式目录名)。
+
+    Returns:
+        ``{"staging": [Path, ...], "official": Path | None, "unreadable": bool}``。
+        ``unreadable=True`` 表示目录存在但无法遍历(归属/状态不明),调用方必须
+        fail-closed 拒绝自动恢复;本函数绝不删除/覆盖/修复任何文件。
+    """
+    staging: list[Path] = []
+    unreadable = False
+    staging_root = Path(task_dir) / "drafts"
+    if staging_root.is_dir():
+        try:
+            # 限深 2:direct children(发布前 staging)与一层子目录(分支草稿)
+            for child in sorted(staging_root.iterdir()):
+                candidate = child / "draft_content.json"
+                if candidate.is_file():
+                    staging.append(candidate)
+                elif child.is_dir():
+                    for sub in sorted(child.iterdir()):
+                        sub_candidate = sub / "draft_content.json"
+                        if sub_candidate.is_file():
+                            staging.append(sub_candidate)
+        except OSError:
+            unreadable = True
+
+    official: Path | None = None
+    if draft_root and str(draft_root).strip():
+        from draft_ops.jianying_registry import official_draft_dir
+
+        candidate_dir = official_draft_dir(Path(str(draft_root)), thread_id)
+        try:
+            entries = os.listdir(candidate_dir)  # 存在性 + 可读性一步完成
+        except FileNotFoundError:
+            entries = None  # 正式库无本任务草稿:正常"无"
+        except OSError:
+            unreadable = True
+            entries = None
+        if entries is not None and "draft_content.json" in entries:
+            official = candidate_dir / "draft_content.json"
+
+    return {"staging": staging, "official": official, "unreadable": unreadable}
+
+
 def hash_draft_files(draft_file: Path | str) -> dict[str, str]:
     """对草稿双文件计算 SHA-256(审计用;缺哪个文件就少一个键)。"""
     out: dict[str, str] = {}
@@ -155,6 +220,7 @@ def assert_resume_ready(
 __all__ = [
     "assert_resume_ready",
     "draft_dir_locked",
+    "find_task_draft_artifacts",
     "hash_draft_files",
     "jianying_running",
     "validate_draft_for_resume",
