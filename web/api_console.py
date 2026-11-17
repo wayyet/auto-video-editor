@@ -549,8 +549,10 @@ async def open_draft_dir(
 def resume_run(request: Request, thread_id: str, body: ResumeBody) -> JSONResponse:
     """人工关卡恢复(阶段 5):复用 ``scripts/resume_workflow.py``,202 即返回。
 
-    前置:事件库派生状态必须 waiting_human(否则 409);恢复语义与入口 A 一致
-    (ADR-2026-11-04),事件仍由统一 runner 落库,既有 SSE 按游标继续补发。
+    前置:事件库派生状态必须 waiting_human(关卡恢复)或 failed(2026-11-17
+    失败节点重试,走 CLI --continue 续跑;body 的 checkpoint/value 在该模式
+    下不适用),否则 409;恢复语义与入口 A 一致(ADR-2026-11-04),事件仍由
+    统一 runner 落库,既有 SSE 按游标继续补发。
     """
     _verify_same_origin(request)
     _enforce_csrf(request)

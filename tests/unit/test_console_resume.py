@@ -116,7 +116,9 @@ class TestResumeRunService:
         assert result["thread_id"] in cs._ACTIVE_PROCS
         assert result["thread_id"] in cs._STARTED_AT
         # 阶段 3:resume 记录带 draft_sha256 审计字段(门禁注入放行时为空 dict)
+        # 2026-11-17:审计增加 mode 键(resume=关卡恢复 / retry=失败节点重试)
         assert record["resumes"] == [{"at": record["resumes"][0]["at"],
+                                      "mode": "resume",
                                       "checkpoint": None, "value": True,
                                       "draft_sha256": {}}]
         assert record["status"] == "starting"
@@ -156,7 +158,8 @@ class TestResumeRunService:
             resume_run(result["thread_id"], popen=lambda a, **k: FakeProc(),
                        pg_check=lambda: None)
         assert ei.value.status_code == 409
-        assert "未处于人工等待" in str(ei.value)
+        # 2026-11-17:文案随语义扩宽(waiting_human 恢复 / failed 重试之外仍 409)
+        assert "未处于可恢复状态" in str(ei.value)
 
     def test_running_state_409(self, waiting_env, monkeypatch):
         result, root = waiting_env

@@ -679,16 +679,18 @@ def get_console_run(
     }
 
 
-def _resume_draft_guard(thread_id: str) -> dict[str, Any]:
+def _resume_draft_guard(thread_id: str, *, allow_missing_draft: bool = False) -> dict[str, Any]:
     """恢复前文件安全门禁(阶段 3;独立出口便于单测注入)。
 
     剪映必须已关闭 + 草稿存在/JSON 可解析/mtime 合理;返回
     ``{"ok", "problems", "hashes"}``(hashes 为人工修改后草稿的 SHA-256 审计值)。
+    ``allow_missing_draft``(2026-11-17 失败重试用):state 无 draft_path 时
+    跳过草稿校验直接放行(失败发生在产草稿前,没有草稿可保护)。
     取数层 ``web.gate_state`` 延迟 import,避免模块级循环依赖。
     """
     from web.gate_state import resume_guard
 
-    return resume_guard(thread_id)
+    return resume_guard(thread_id, allow_missing_draft=allow_missing_draft)
 
 
 def resume_run(
@@ -712,17 +714,24 @@ def resume_run(
     不盲发 Command(resume);通过时把人工修改后草稿的 SHA-256 写进
     ``console_run.json`` 的本次 resume 记录(审计)。
 
+    2026-11-17(创建台失败重试):waiting_human 之外 ``failed`` 也放行 ——
+    走 CLI ``--continue`` 续跑(None 输入,重跑失败节点;checkpoint 存在性
+    由子进程 fail-closed 校验);无草稿时跳过草稿门禁,有草稿仍全量校验。
+
     Args:
-        thread_id: 目标任务(事件库派生状态必须 waiting_human,否则 409)。
+        thread_id: 目标任务(事件库派生状态必须 waiting_human 或 failed,
+            否则 409)。
         checkpoint: 关卡标识(①/② 或 interrupt id);省略时仅当
             "恰好一个挂起关卡"可自动匹配(否则子进程退出码 5,日志可查)。
+            failed 重试模式下不适用(不发 --checkpoint)。
         value: 放行值(JSON 语义;经 json.dumps 后交 --value)。
+            failed 重试模式下不适用(不发 --value)。
         draft_guard: 门禁函数(缺省 :func:`_resume_draft_guard`;单测注入)。
 
     Raises:
-        ConsoleLaunchError: 404(任务不存在)/ 409(非等待态/并发满/已在运行/
-            门禁不过)/ 503(PG 或记录 stub 未放行)/ 500(Popen 失败或记录
-            后端非法)。
+        ConsoleLaunchError: 404(任务不存在)/ 409(非等待态且非失败/
+            并发满/已在运行/门禁不过)/ 503(PG 或记录 stub 未放行)/
+            500(Popen 失败或记录后端非法)。
     """
     spawn = popen if popen is not None else _default_popen()
     check_pg = pg_check if pg_check is not None else _check_postgres
@@ -738,14 +747,25 @@ def resume_run(
         raise ConsoleLaunchError(f"运行记录损坏: {e}", status_code=500) from e
 
     state = reconcile_run_state(record, thread_id)
-    if state != "waiting_human":
+    # 2026-11-17:failed 也放行 —— 失败节点重试(CLI --continue 续跑,无挂起
+    # 关卡;checkpoint 是否存在由子进程 fail-closed 校验)。其余状态一律 409:
+    # prepared 从未跑过(无 checkpoint)/ running 活跃 / completed·cancelled·
+    # unknown 终态或未知。
+    retry_mode = state == "failed"
+    if state != "waiting_human" and not retry_mode:
         raise ConsoleLaunchError(
-            f"任务 {thread_id} 未处于人工等待状态(当前: {state}),不可恢复",
+            f"任务 {thread_id} 未处于可恢复状态(当前: {state};"
+            f"仅等待人工关卡可恢复、失败可重试),不可恢复",
             status_code=409,
         )
 
     # 阶段 3:恢复前文件安全门禁(剪映未关闭 / 草稿缺失损坏 → 409,不盲发 resume)
-    guard_result = guard(thread_id)
+    # 2026-11-17:失败重试允许无草稿 —— 失败发生在产草稿前时没有草稿可保护;
+    # 默认门禁透传 allow_missing_draft,注入门禁(单测)保持 (thread_id) 原签名。
+    if retry_mode and draft_guard is None:
+        guard_result = _resume_draft_guard(thread_id, allow_missing_draft=True)
+    else:
+        guard_result = guard(thread_id)
     if not guard_result.get("ok"):
         raise ConsoleLaunchError(
             "恢复前检查未通过:" + ";".join(guard_result.get("problems") or []),
@@ -776,11 +796,16 @@ def resume_run(
         "--production",
         "--skip-preflight",
         "--thread-id", thread_id,
-        "--value", json.dumps(value, ensure_ascii=False),
         "--llm-backend", backend,
     ]
-    if checkpoint is not None and str(checkpoint).strip():
-        argv += ["--checkpoint", str(checkpoint).strip()]
+    if retry_mode:
+        # 2026-11-17 失败重试:无挂起关卡,None 输入续跑;checkpoint 存在性与
+        # 草稿门禁由子进程 fail-closed 校验,--value/--checkpoint 不适用。
+        argv += ["--continue"]
+    else:
+        argv += ["--value", json.dumps(value, ensure_ascii=False)]
+        if checkpoint is not None and str(checkpoint).strip():
+            argv += ["--checkpoint", str(checkpoint).strip()]
 
     log_path = task_dir / "console_run.log"
     creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
@@ -810,6 +835,8 @@ def resume_run(
     resumes.append(
         {
             "at": _now_iso(),
+            # 2026-11-17:retry = 失败节点重试(--continue 续跑);缺省为关卡恢复
+            "mode": "retry" if retry_mode else "resume",
             "checkpoint": checkpoint,
             "value": value,
             # 阶段 3 审计:恢复时人工修改后草稿的 SHA-256

@@ -66,6 +66,7 @@ def resume_guard(
     *,
     require_jianying_closed: bool | None = None,
     proc_checker: Any = None,
+    allow_missing_draft: bool = False,
 ) -> dict[str, Any]:
     """恢复前文件安全门禁(计划 §8 阶段 3)。
 
@@ -74,14 +75,22 @@ def resume_guard(
       (:func:`draft_ops.draft_lock.validate_draft_for_resume`);
     - 通过时返回对人工修改后草稿的 SHA-256(写任务 manifest 审计)。
 
+    Args:
+        allow_missing_draft: 允许 state 无 ``draft_path``(2026-11-17 失败重试
+            用):失败发生在草稿产出前没有草稿可保护,跳过草稿校验直接放行
+            (hashes 为空)。state 有 ``draft_path`` 时本参数不生效,照常全量校验。
+
     Returns:
         ``{"ok": bool, "problems": [...], "hashes": {...}}``。
     """
     from draft_ops.draft_lock import assert_resume_ready
 
     values = fetch_state_values(thread_id)
+    draft_path = values.get("draft_path")
+    if allow_missing_draft and not (draft_path and str(draft_path).strip()):
+        return {"ok": True, "problems": [], "hashes": {}}
     result = assert_resume_ready(
-        values.get("draft_path"),
+        draft_path,
         proc_checker=proc_checker,
         require_jianying_closed=require_jianying_closed,
     )
