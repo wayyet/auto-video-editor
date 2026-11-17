@@ -25,6 +25,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -161,6 +162,7 @@ __all__ = [
     "list_console_runs",
     "prepare_run",
     "reconcile_run_state",
+    "reconcile_stale_starting",
     "reap_now",
     "resume_run",
     "start_run",
@@ -184,6 +186,14 @@ _ACTIVE_PROCS: dict[str, "subprocess.Popen[bytes]"] = {}
 #: 各活跃进程的启动时刻(time.monotonic 基准),超时收割用(阶段 5)。
 _STARTED_AT: dict[str, float] = {}
 _ACTIVE_LOCK = threading.Lock()
+#: 启动/恢复「占用登记表」(2026-11-18 P0-01/02,审查计划 §4.1):
+#: 从状态门禁通过后、子进程启动前独占 thread_id,到进程注册进 _ACTIVE_PROCS
+#: (转正)或启动链路任一步失败(finally 释放)为止。修复"锁内检查活跃进程
+#: → 放锁 → spawn → 注册"窗口内两个并发请求同时通过检查的竞态。
+#: 与 _ACTIVE_PROCS 同为进程内内存态:当前生产部署是**单 uvicorn 进程**
+#:(start_production.ps1 无 --workers),进程内锁即跨请求互斥;若未来多
+#: worker/多实例部署,必须换成共享存储(DB 锁/租约),不得以本表为唯一保障。
+_CLAIMED_TIDS: set[str] = set()
 
 
 def _check_postgres(timeout: float = 5.0) -> None:
@@ -310,6 +320,11 @@ def _prune_active_procs() -> None:
         if proc.poll() is not None:
             _ACTIVE_PROCS.pop(tid, None)
             _STARTED_AT.pop(tid, None)
+            # P0-05(2026-11-18):进程退出即收尾 —— 退出码/结束时刻/结果写进
+            # 末条 resumes[] 条目,并在事件库无终态时把 record 从 starting 收敛
+            # 为 failed,绝不遗留永久 starting。收尾含一次只读事件库查询,仅在
+            # 进程真实退出时触发(频率极低),锁内执行无死锁风险(snapshot 不取本锁)。
+            _finalize_attempt_on_exit(tid, proc.poll())
             if timed_out:
                 _mark_record(
                     _task_dir_for(tid),
@@ -321,10 +336,167 @@ def _prune_active_procs() -> None:
                 )
 
 
+#: CLI 退出码 → 恢复尝试结果(与 scripts/resume_workflow.py 退出码表对齐;
+#: 工作流状态与尝试状态分开记录 —— 尝试结果只是审计,终态仍由事件库调和)。
+_ATTEMPT_RESULT_BY_EXIT: dict[int, str] = {
+    0: "succeeded",
+    1: "failed_execution",
+    2: "failed_preflight",
+    4: "failed_preflight",
+    5: "failed_preflight",
+    6: "failed_preflight",
+    7: "failed_preflight",
+    130: "cancelled",
+}
+
+
+def _finalize_attempt_on_exit(thread_id: str, exit_code: int | None) -> None:
+    """进程退出后收尾本次恢复尝试(P0-05;调用方持 ``_ACTIVE_LOCK``)。
+
+    - 末条 ``resumes[]`` 条目补 ``finished_at``/``exit_code``/``result``;
+    - ``exit_code != 0`` 且事件库无可用终态 → record.status 从 starting 收敛为
+      failed(事件库有终态则以事件库为准,不动记录);``exit_code == 0`` 一律
+      交事件库调和(waiting_human/completed 属正常落点)。
+    """
+    # 注意:exit_code=0 是 falsy,不能用 `exit_code or -1` 兜底(None 才是未知)
+    key = -1 if exit_code is None else exit_code
+    result = _ATTEMPT_RESULT_BY_EXIT.get(key, "failed_unknown")
+    try:
+        task_dir = _task_dir_for(thread_id)
+        record = json.loads(console_run_json_path(task_dir).read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 — 记录读取失败时不收尾,不掩盖主流程
+        return
+    # P0-05:进程退出标记 —— 服务重启对账据此区分"收割器已观察过本次退出"
+    # (跳过,避免把 exit=0 正常落点误翻成 failed)与"服务死亡导致从未收割"
+    # (遗留 starting,需要收敛)。
+    record["last_proc_exit"] = {"exit_code": exit_code, "at": _now_iso()}
+    resumes = record.get("resumes") or []
+    if resumes and isinstance(resumes[-1], dict) and "finished_at" not in resumes[-1]:
+        resumes[-1]["finished_at"] = _now_iso()
+        resumes[-1]["exit_code"] = exit_code
+        resumes[-1]["result"] = result
+        record["resumes"] = resumes
+    if exit_code not in (0, None) and record.get("status") not in (
+        "failed", "cancelled", "prepared", "completed",
+    ):
+        snap = _latest_snapshot(thread_id)
+        derived = _derive_state_of(snap.get("last_event")) if snap.get("available") else None
+        if derived not in ("completed", "failed", "waiting_human"):
+            record["status"] = "failed"
+            record["error"] = (
+                f"恢复/运行进程已退出(exit={exit_code},result={result})且事件库无终态;"
+                "如需继续可从 checkpoint 重试"
+            )
+            record["failed_at"] = _now_iso()
+    try:
+        _write_run_json(task_dir, record)
+    except Exception:  # noqa: BLE001
+        return
+
+
+#: 服务重启对账节流(秒;time.monotonic 基准)—— reap_now 随每次查询触发,
+#: 全目录扫描有成本,60s 一次足够对账;force 参数供单测绕过节流。
+_STALE_RECONCILE_INTERVAL_SEC = 60.0
+_last_stale_reconcile: float = 0.0
+
+
+def reconcile_stale_starting(
+    *, outputs_root: Path | None = None, force: bool = False
+) -> list[str]:
+    """服务重启对账(P0-05 审查计划 §4.4 条目 6;对应验收 P2-09)。
+
+    扫描任务根目录,把同时满足以下条件的 starting/running 记录收敛为明确终态:
+    - 不在本实例注册表/占用表(活跃进程由收割器负责);
+    - 记录 PID 已死或缺失(还活着 → 可能是入口 A 直启,PID 复用风险下绝不误判)。
+
+    收敛规则(事件库是事实来源):
+    - 派生 ``waiting_human`` → 不动(正常停在人工关卡的稳态);
+    - 派生 ``completed`` → record.status = completed;
+    - 其余(派生 failed/running/无事件)→ record.status = failed 并附对账说明:
+      进程已死且无终态事件,唯一诚实的解释是异常终止或服务重启;恢复重试仍可
+      从 checkpoint 继续。末条无 ``finished_at`` 的 resumes[] 条目同步收尾。
+
+    Returns:
+        本次收敛的 thread_id 列表(节流窗口内返回空列表)。
+    """
+    global _last_stale_reconcile
+    now = time.monotonic()
+    if not force and (now - _last_stale_reconcile) < _STALE_RECONCILE_INTERVAL_SEC:
+        return []
+    _last_stale_reconcile = now
+    root = (
+        Path(outputs_root) if outputs_root is not None else Path(config.CONSOLE_OUTPUTS_ROOT)
+    )
+    try:
+        entries = sorted(root.iterdir(), key=lambda p: p.name)
+    except OSError:
+        return []
+    converged: list[str] = []
+    for child in entries:
+        if not child.is_dir() or not CONSOLE_THREAD_ID_RE.match(child.name):
+            continue
+        with _ACTIVE_LOCK:
+            if child.name in _ACTIVE_PROCS or child.name in _CLAIMED_TIDS:
+                continue
+        record_path = console_run_json_path(child)
+        if not record_path.exists():
+            continue
+        try:
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 — 损坏记录跳过
+            continue
+        if record.get("status") not in ("starting", "running"):
+            continue
+        if _pid_alive(record.get("pid")) is True:
+            continue
+        # 只收敛"服务死亡导致从未被收割"的遗留记录:末条 attempt 无 finished_at
+        # (该次退出的收尾没发生过),或从未有任何收割标记。收割器已观察过本次
+        # 进程退出的记录(无论 exit 0/非 0)一律跳过 —— exit=0 的正常落点
+        # (waiting_human/completed)不因事件库暂时不可达被误翻成 failed。
+        resumes_probe = record.get("resumes") or []
+        unfinished_attempt = bool(resumes_probe) and isinstance(resumes_probe[-1], dict) \
+            and "finished_at" not in resumes_probe[-1]
+        if not unfinished_attempt and record.get("last_proc_exit") is not None:
+            continue
+        snap = _latest_snapshot(child.name)
+        derived = _derive_state_of(snap.get("last_event")) if snap.get("available") else None
+        resumes = record.get("resumes") or []
+        if resumes and isinstance(resumes[-1], dict) and "finished_at" not in resumes[-1]:
+            resumes[-1]["finished_at"] = _now_iso()
+            resumes[-1]["exit_code"] = None
+            resumes[-1]["result"] = (
+                "succeeded" if derived in ("completed", "waiting_human") else "failed_execution"
+            )
+            record["resumes"] = resumes
+        if derived == "waiting_human":
+            pass  # 正常挂起稳态:调和态已正确,不改记录
+        elif derived == "completed":
+            record["status"] = "completed"
+            converged.append(child.name)
+        else:
+            record["status"] = "failed"
+            record["error"] = (
+                "服务重启对账:进程已退出且事件库无终态事件(服务重启或进程提前退出);"
+                "如需继续可从 checkpoint 重试"
+            )
+            record["failed_at"] = _now_iso()
+            converged.append(child.name)
+        try:
+            _write_run_json(child, record)
+        except Exception:  # noqa: BLE001 — 单条收敛失败不影响其他任务
+            continue
+    return converged
+
+
 def reap_now() -> None:
-    """惰性收割入口(超时清理;由 API 查询/写路径调用)。"""
+    """惰性收割入口(超时清理;由 API 查询/写路径调用)。
+
+    2026-11-18 P0-05 起顺带执行服务重启对账(内部 60s 节流):重启遗留的
+    starting/running 记录收敛为明确终态,不遗留永久 starting。
+    """
     with _ACTIVE_LOCK:
         _prune_active_procs()
+    reconcile_stale_starting()
 
 
 def active_thread_ids() -> list[str]:
@@ -339,17 +511,52 @@ def active_thread_ids() -> list[str]:
         return list(_ACTIVE_PROCS.keys())
 
 
-def _build_launch_env(task_dir: Path) -> dict[str, str]:
+def _try_claim_thread(thread_id: str) -> str | None:
+    """原子占用一个 thread 的启动/恢复资格(2026-11-18 P0-01/02)。
+
+    必须在启动子进程**之前**调用:占用失败(已有活跃进程 / 已被并发请求占用 /
+    活跃+占用总数达上限)立即返回 409 文案,绝不排队等待 —— 前端 confirm 与
+    进程内字典都不构成互斥,这里才是唯一闸门。占用成功后由调用方在启动链路
+    结束(进程注册转正或任一步失败)时 :func:`_release_claim` 释放。
+
+    人工关卡恢复与失败节点重试走同一 :func:`resume_run`,共用同一 thread 级
+    占用,天然满足"两种恢复模式不得同时运行"(审查计划 P0-02)。
+    """
+    with _ACTIVE_LOCK:
+        _prune_active_procs()
+        if thread_id in _ACTIVE_PROCS:
+            return f"任务 {thread_id} 已有活跃进程"
+        if thread_id in _CLAIMED_TIDS:
+            return f"任务 {thread_id} 已有恢复/重试进行中"
+        limit = int(config.CONSOLE_MAX_CONCURRENT_RUNS)
+        if len(_ACTIVE_PROCS) + len(_CLAIMED_TIDS) >= limit:
+            return f"活跃任务数已达上限({limit}),请稍后重试"
+        _CLAIMED_TIDS.add(thread_id)
+        return None
+
+
+def _release_claim(thread_id: str) -> None:
+    """释放 thread 占用(与 :func:`_try_claim_thread` 配对;幂等)。"""
+    with _ACTIVE_LOCK:
+        _CLAIMED_TIDS.discard(thread_id)
+
+
+def _build_launch_env(task_dir: Path, attempt_id: str | None = None) -> dict[str, str]:
     """子进程 env:继承受控环境 + staging 草稿目录 + production(计划 §7.4)。
 
     阶段 1(人工关卡与剪映草稿导入)起 ``AUTO_VIDEO_EDITOR_DRAFT_DIR`` 只指向
     **staging**(任务目录 drafts/);node_05 写完 staging 后会发布注册到
     ``config.JIANYING_DRAFT_ROOT`` 的正式目录并把后续节点切过去
     (见 ``draft_ops/draft_publisher.py``)。outputs 目录仅负责 staging 与任务产物。
+
+    ``attempt_id``(2026-11-18 P0-06):恢复尝试关联标识经 env 注入子进程,
+    由 resume_workflow.py 打进日志,与 resumes[] 审计/202 响应一一对应。
     """
     env = dict(os.environ)
     env["AUTO_VIDEO_EDITOR_DRAFT_DIR"] = str((task_dir / "drafts").resolve())
     env["WORKFLOW_ENV"] = "production"
+    if attempt_id:
+        env["AUTO_VIDEO_RESUME_ATTEMPT_ID"] = attempt_id
     return env
 
 
@@ -394,63 +601,62 @@ def start_run(
             f"任务 {tid} 状态为 {record.get('status')!r},不可重复启动", status_code=409
         )
 
-    with _ACTIVE_LOCK:
-        _prune_active_procs()
-        if tid in _ACTIVE_PROCS:
-            raise ConsoleLaunchError(f"任务 {tid} 已在运行", status_code=409)
-        limit = int(config.CONSOLE_MAX_CONCURRENT_RUNS)
-        if len(_ACTIVE_PROCS) >= limit:
-            raise ConsoleLaunchError(
-                f"活跃任务数已达上限({limit}),请稍后重试", status_code=409
-            )
-
-    # fail-closed 前置检查:任一不过就拒绝启动(不伪成功)
-    check_pg()
-    backend = resolve_launch_backend(llm_backend)
-
-    # argv 数组 + shell=False(计划 §7.3);提示词在 initial_state.json 里,
-    # 不进命令行;--skip-preflight 依据见阶段 0 契约文档 §6。
-    repo_root = Path(__file__).resolve().parents[1]
-    argv = [
-        venv_python if venv_python is not None else _default_venv_python(),
-        "scripts/run_workflow.py",
-        "--production",
-        "--skip-preflight",
-        "--thread-id", tid,
-        "--initial-state-json", str(state_path),
-        "--llm-backend", backend,
-    ]
-    log_path = Path(task_dir) / "console_run.log"
-    creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)  # Windows 独立进程组
+    # P0-01(2026-11-18):原子占用替代"锁内检查→放锁→spawn→注册" ——
+    # 占用失败立即 409,占用成功即独占该 thread 直到链路结束。
+    claim_error = _try_claim_thread(tid)
+    if claim_error:
+        raise ConsoleLaunchError(claim_error, status_code=409)
     try:
-        with open(log_path, "ab") as log_file:
-            proc = spawn(
-                argv,
-                shell=False,
-                cwd=str(repo_root),
-                env=_build_launch_env(Path(task_dir)),
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                creationflags=creationflags,
-            )
-    except Exception as e:
-        record["status"] = "failed"
-        record["error"] = f"进程启动失败: {e}"
-        record["failed_at"] = _now_iso()
-        _write_run_json(Path(task_dir), record)
-        raise ConsoleLaunchError(f"进程启动失败: {e}", status_code=500) from e
+        # fail-closed 前置检查:任一不过就拒绝启动(不伪成功)
+        check_pg()
+        backend = resolve_launch_backend(llm_backend)
 
-    record["status"] = "starting"
-    record["pid"] = proc.pid
-    record["llm_backend"] = backend
-    record["started_at"] = _now_iso()
-    record["log_path"] = str(log_path.resolve())
-    record["argv"] = argv
-    _write_run_json(Path(task_dir), record)
-    with _ACTIVE_LOCK:
-        _ACTIVE_PROCS[tid] = proc
-        _STARTED_AT[tid] = time.monotonic()
-    return record
+        # argv 数组 + shell=False(计划 §7.3);提示词在 initial_state.json 里,
+        # 不进命令行;--skip-preflight 依据见阶段 0 契约文档 §6。
+        repo_root = Path(__file__).resolve().parents[1]
+        argv = [
+            venv_python if venv_python is not None else _default_venv_python(),
+            "scripts/run_workflow.py",
+            "--production",
+            "--skip-preflight",
+            "--thread-id", tid,
+            "--initial-state-json", str(state_path),
+            "--llm-backend", backend,
+        ]
+        log_path = Path(task_dir) / "console_run.log"
+        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)  # Windows 独立进程组
+        try:
+            with open(log_path, "ab") as log_file:
+                proc = spawn(
+                    argv,
+                    shell=False,
+                    cwd=str(repo_root),
+                    env=_build_launch_env(Path(task_dir)),
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    creationflags=creationflags,
+                )
+        except Exception as e:
+            record["status"] = "failed"
+            record["error"] = f"进程启动失败: {e}"
+            record["failed_at"] = _now_iso()
+            _write_run_json(Path(task_dir), record)
+            raise ConsoleLaunchError(f"进程启动失败: {e}", status_code=500) from e
+
+        record["status"] = "starting"
+        record["pid"] = proc.pid
+        record["llm_backend"] = backend
+        record["started_at"] = _now_iso()
+        record["log_path"] = str(log_path.resolve())
+        record["argv"] = argv
+        _write_run_json(Path(task_dir), record)
+        with _ACTIVE_LOCK:
+            _ACTIVE_PROCS[tid] = proc
+            _STARTED_AT[tid] = time.monotonic()
+        return record
+    finally:
+        # 转正或失败都释放占用;转正后的互斥由 _ACTIVE_PROCS 接管
+        _release_claim(tid)
 
 
 # ---------------------------------------------------------------------------
@@ -759,97 +965,99 @@ def resume_run(
             status_code=409,
         )
 
-    # 阶段 3:恢复前文件安全门禁(剪映未关闭 / 草稿缺失损坏 → 409,不盲发 resume)
-    # 2026-11-17:失败重试允许无草稿 —— 失败发生在产草稿前时没有草稿可保护;
-    # 默认门禁透传 allow_missing_draft,注入门禁(单测)保持 (thread_id) 原签名。
-    if retry_mode and draft_guard is None:
-        guard_result = _resume_draft_guard(thread_id, allow_missing_draft=True)
-    else:
-        guard_result = guard(thread_id)
-    if not guard_result.get("ok"):
-        raise ConsoleLaunchError(
-            "恢复前检查未通过:" + ";".join(guard_result.get("problems") or []),
-            status_code=409,
-        )
-
-    with _ACTIVE_LOCK:
-        _prune_active_procs()
-        if thread_id in _ACTIVE_PROCS:
-            raise ConsoleLaunchError(
-                f"任务 {thread_id} 已有活跃进程", status_code=409
-            )
-        limit = int(config.CONSOLE_MAX_CONCURRENT_RUNS)
-        if len(_ACTIVE_PROCS) >= limit:
-            raise ConsoleLaunchError(
-                f"活跃任务数已达上限({limit}),请稍后重试", status_code=409
-            )
-
-    check_pg()
-    # 恢复的运行必须用同一真实后端:优先取创建时固化的 record["llm_backend"];
-    # 记录缺失(旧任务)时回落 env 门禁(stub 仍需 CONSOLE_ALLOW_STUB 显式放行)
-    backend = resolve_record_backend(record.get("llm_backend"))
-
-    repo_root = Path(__file__).resolve().parents[1]
-    argv = [
-        venv_python if venv_python is not None else _default_venv_python(),
-        "scripts/resume_workflow.py",
-        "--production",
-        "--skip-preflight",
-        "--thread-id", thread_id,
-        "--llm-backend", backend,
-    ]
-    if retry_mode:
-        # 2026-11-17 失败重试:无挂起关卡,None 输入续跑;checkpoint 存在性与
-        # 草稿门禁由子进程 fail-closed 校验,--value/--checkpoint 不适用。
-        argv += ["--continue"]
-    else:
-        argv += ["--value", json.dumps(value, ensure_ascii=False)]
-        if checkpoint is not None and str(checkpoint).strip():
-            argv += ["--checkpoint", str(checkpoint).strip()]
-
-    log_path = task_dir / "console_run.log"
-    creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    # P0-01/02(2026-11-18):状态门禁通过后、启动链路之前原子占用该 thread ——
+    # 人工恢复与失败重试共用本函数,同一占用天然互斥;占用失败立即 409。
+    claim_error = _try_claim_thread(thread_id)
+    if claim_error:
+        raise ConsoleLaunchError(claim_error, status_code=409)
     try:
-        with open(log_path, "ab") as log_file:
-            proc = spawn(
-                argv,
-                shell=False,
-                cwd=str(repo_root),
-                env=_build_launch_env(task_dir),
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                creationflags=creationflags,
+        # P0-06(2026-11-18):本次恢复尝试的关联标识 —— 贯穿 resumes[] 审计、
+        # 子进程 env(CLI 日志行)与 202 响应,一次重试可全链路追踪。
+        attempt_id = uuid.uuid4().hex[:12]
+        # 阶段 3:恢复前文件安全门禁(剪映未关闭 / 草稿缺失损坏 → 409,不盲发 resume)
+        # 2026-11-17:失败重试允许无草稿 —— 失败发生在产草稿前时没有草稿可保护;
+        # 默认门禁透传 allow_missing_draft,注入门禁(单测)保持 (thread_id) 原签名。
+        if retry_mode and draft_guard is None:
+            guard_result = _resume_draft_guard(thread_id, allow_missing_draft=True)
+        else:
+            guard_result = guard(thread_id)
+        if not guard_result.get("ok"):
+            raise ConsoleLaunchError(
+                "恢复前检查未通过:" + ";".join(guard_result.get("problems") or []),
+                status_code=409,
             )
-    except Exception as e:
-        _mark_record(
-            task_dir,
-            {
-                "status": "failed",
-                "error": f"恢复进程启动失败: {e}",
-                "failed_at": _now_iso(),
-            },
-        )
-        raise ConsoleLaunchError(f"恢复进程启动失败: {e}", status_code=500) from e
 
-    resumes = list(record.get("resumes") or [])
-    resumes.append(
-        {
-            "at": _now_iso(),
-            # 2026-11-17:retry = 失败节点重试(--continue 续跑);缺省为关卡恢复
-            "mode": "retry" if retry_mode else "resume",
-            "checkpoint": checkpoint,
-            "value": value,
-            # 阶段 3 审计:恢复时人工修改后草稿的 SHA-256
-            "draft_sha256": guard_result.get("hashes") or {},
-        }
-    )
-    record["resumes"] = resumes
-    record["status"] = "starting"  # 运行继续;终态由事件库调和给出
-    _write_run_json(task_dir, record)
-    with _ACTIVE_LOCK:
-        _ACTIVE_PROCS[thread_id] = proc
-        _STARTED_AT[thread_id] = time.monotonic()
-    return record
+        check_pg()
+        # 恢复的运行必须用同一真实后端:优先取创建时固化的 record["llm_backend"];
+        # 记录缺失(旧任务)时回落 env 门禁(stub 仍需 CONSOLE_ALLOW_STUB 显式放行)
+        backend = resolve_record_backend(record.get("llm_backend"))
+
+        repo_root = Path(__file__).resolve().parents[1]
+        argv = [
+            venv_python if venv_python is not None else _default_venv_python(),
+            "scripts/resume_workflow.py",
+            "--production",
+            "--skip-preflight",
+            "--thread-id", thread_id,
+            "--llm-backend", backend,
+        ]
+        if retry_mode:
+            # 2026-11-17 失败重试:无挂起关卡,None 输入续跑;checkpoint 存在性与
+            # 草稿门禁由子进程 fail-closed 校验,--value/--checkpoint 不适用。
+            argv += ["--continue"]
+        else:
+            argv += ["--value", json.dumps(value, ensure_ascii=False)]
+            if checkpoint is not None and str(checkpoint).strip():
+                argv += ["--checkpoint", str(checkpoint).strip()]
+
+        log_path = task_dir / "console_run.log"
+        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        try:
+            with open(log_path, "ab") as log_file:
+                proc = spawn(
+                    argv,
+                    shell=False,
+                    cwd=str(repo_root),
+                    env=_build_launch_env(task_dir, attempt_id=attempt_id),
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    creationflags=creationflags,
+                )
+        except Exception as e:
+            _mark_record(
+                task_dir,
+                {
+                    "status": "failed",
+                    "error": f"恢复进程启动失败: {e}",
+                    "failed_at": _now_iso(),
+                },
+            )
+            raise ConsoleLaunchError(f"恢复进程启动失败: {e}", status_code=500) from e
+
+        resumes = list(record.get("resumes") or [])
+        resumes.append(
+            {
+                # 2026-11-18 P0-06:attempt 关联标识(全链路追踪)
+                "attempt_id": attempt_id,
+                "at": _now_iso(),
+                # 2026-11-17:retry = 失败节点重试(--continue 续跑);缺省为关卡恢复
+                "mode": "retry" if retry_mode else "resume",
+                "checkpoint": checkpoint,
+                "value": value,
+                # 阶段 3 审计:恢复时人工修改后草稿的 SHA-256
+                "draft_sha256": guard_result.get("hashes") or {},
+            }
+        )
+        record["resumes"] = resumes
+        record["status"] = "starting"  # 运行继续;终态由事件库调和给出
+        _write_run_json(task_dir, record)
+        with _ACTIVE_LOCK:
+            _ACTIVE_PROCS[thread_id] = proc
+            _STARTED_AT[thread_id] = time.monotonic()
+        return record
+    finally:
+        # 转正或失败都释放占用;转正后的互斥由 _ACTIVE_PROCS 接管
+        _release_claim(thread_id)
 
 
 def cancel_run(
@@ -870,6 +1078,10 @@ def cancel_run(
         raise ConsoleLaunchError(f"任务不存在: {thread_id}", status_code=404)
     kill = terminate if terminate is not None else _terminate_process_tree
     with _ACTIVE_LOCK:
+        if thread_id in _CLAIMED_TIDS:
+            raise ConsoleLaunchError(
+                f"任务 {thread_id} 正在启动恢复进程,请稍后再试", status_code=409,
+            )
         proc = _ACTIVE_PROCS.get(thread_id)
         if proc is None or proc.poll() is not None:
             raise ConsoleLaunchError(
@@ -936,6 +1148,10 @@ def delete_run(thread_id: str) -> dict[str, Any]:
             status_code=409,
         )
     with _ACTIVE_LOCK:
+        if thread_id in _CLAIMED_TIDS:
+            raise ConsoleLaunchError(
+                f"任务 {thread_id} 正在启动恢复进程,请稍后再试", status_code=409,
+            )
         if thread_id in _ACTIVE_PROCS:
             raise ConsoleLaunchError(
                 f"任务 {thread_id} 仍有本实例管理的活跃进程,拒绝删除", status_code=409,

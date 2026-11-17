@@ -13,7 +13,10 @@ from __future__ import annotations
 import io
 import json
 import sys
+import threading
+import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -35,12 +38,13 @@ client = TestClient(app)
 
 
 class FakeProc:
-    def __init__(self, pid: int = 4321, alive: bool = True):
+    def __init__(self, pid: int = 4321, alive: bool = True, returncode: int = 0):
         self.pid = pid
         self._alive = alive
+        self._returncode = returncode
 
     def poll(self):
-        return None if self._alive else 0
+        return None if self._alive else self._returncode
 
 
 def _upload(name: str, data: bytes) -> UploadFile:
@@ -90,6 +94,7 @@ def waiting_env(tmp_path, monkeypatch):
     yield result, tmp_path
     cs._ACTIVE_PROCS.clear()
     cs._STARTED_AT.clear()
+    cs._CLAIMED_TIDS.clear()
     api_console._CSRF_TOKENS.clear()
 
 
@@ -123,10 +128,12 @@ class TestResumeRunService:
         assert result["thread_id"] in cs._STARTED_AT
         # 阶段 3:resume 记录带 draft_sha256 审计字段(门禁注入放行时为空 dict)
         # 2026-11-17:审计增加 mode 键(resume=关卡恢复 / retry=失败节点重试)
-        assert record["resumes"] == [{"at": record["resumes"][0]["at"],
-                                      "mode": "resume",
-                                      "checkpoint": None, "value": True,
-                                      "draft_sha256": {}}]
+        # 2026-11-18 P0-06:审计增加 attempt_id 键(与 env 注入/202 响应一一对应)
+        entry = record["resumes"][0]
+        assert entry["mode"] == "resume"
+        assert entry["checkpoint"] is None and entry["value"] is True
+        assert entry["draft_sha256"] == {}
+        assert isinstance(entry.get("attempt_id"), str) and entry["attempt_id"]
         assert record["status"] == "starting"
 
     def test_with_checkpoint_flag(self, waiting_env, monkeypatch):
@@ -279,6 +286,128 @@ class TestResumeRunService:
         assert "恢复进程启动失败" in record["error"]
 
 
+class TestAtomicClaim:
+    """P0-01/02(2026-11-18 审查计划 §4.1):恢复/启动的 thread 级原子占用互斥。
+
+    修复前:`_ACTIVE_LOCK` 内查完 `_ACTIVE_PROCS` 即放锁,spawn 与注册在锁外,
+    两个并发请求可同时通过检查 → 同一 thread 双进程恢复。
+    """
+
+    def test_concurrent_resume_same_thread_single_acceptance(self, waiting_env, monkeypatch):
+        """两个并发恢复请求同一 thread:恰一个受理、一个 409;popen 恰启动一次。"""
+        result, _root = waiting_env
+        spawn_calls: list[list[str]] = []
+        release_pg = threading.Event()
+        barrier = threading.Barrier(2, timeout=5)
+
+        def sync_snapshot(tid):
+            # 两个请求都在状态门禁处对齐,同时进入占用点(放大旧竞态窗口)
+            barrier.wait()
+            return {"available": True, "last_event": {"event_type": "run.interrupted"}}
+
+        def slow_pg():
+            # 胜者持占用阻塞在 PG 预检,确保败者此时撞占用 → 409
+            release_pg.wait(timeout=5)
+
+        def fake_popen(argv, **kwargs):
+            spawn_calls.append(argv)
+            return FakeProc(4321)
+
+        monkeypatch.setattr(cs, "_latest_snapshot", sync_snapshot)
+
+        outcomes: dict[int, tuple[str, Any]] = {}
+
+        def worker(idx: int) -> None:
+            try:
+                outcomes[idx] = (
+                    "ok",
+                    resume_run(result["thread_id"], popen=fake_popen,
+                               pg_check=slow_pg, venv_python="py-exe"),
+                )
+            except ConsoleLaunchError as e:
+                outcomes[idx] = ("err", e)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in (0, 1)]
+        for t in threads:
+            t.start()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if any(v[0] == "err" for v in outcomes.values()):
+                break
+            time.sleep(0.02)
+        release_pg.set()
+        for t in threads:
+            t.join(timeout=10)
+
+        results = list(outcomes.values())
+        assert len(results) == 2 and all(r[0] in ("ok", "err") for r in results)
+        accepted = [r for r in results if r[0] == "ok"]
+        rejected = [r for r in results if r[0] == "err"]
+        assert len(accepted) == 1, "并发同 thread 恢复必须恰一个受理"
+        assert len(rejected) == 1, "另一个请求必须 409"
+        assert rejected[0][1].status_code == 409
+        assert len(spawn_calls) == 1, "绝不能启动第二个恢复进程"
+        assert result["thread_id"] in cs._ACTIVE_PROCS, "胜者进程已注册"
+        assert result["thread_id"] not in cs._CLAIMED_TIDS, "占用已随转正释放"
+
+    def test_manual_claim_blocks_resume_and_start(self, waiting_env, monkeypatch):
+        """占用中的 thread:恢复与新建启动都 409(人工恢复/失败重试/新建互斥)。"""
+        result, root = waiting_env
+        monkeypatch.setattr(cs, "_latest_snapshot", _waiting_snapshot)
+        monkeypatch.setattr(cs, "_pid_alive", lambda pid: None)
+        cs._CLAIMED_TIDS.add(result["thread_id"])
+        try:
+            with pytest.raises(ConsoleLaunchError) as ei:
+                resume_run(result["thread_id"], popen=lambda a, **k: FakeProc(),
+                           pg_check=lambda: None)
+            assert ei.value.status_code == 409
+            assert "已有恢复/重试进行中" in str(ei.value)
+            # start_run 要求 prepared 状态才会走到占用检查;临时改回
+            record_path = cs.console_run_json_path(result["task_dir"])
+            stored = json.loads(record_path.read_text(encoding="utf-8"))
+            stored["status"] = "prepared"
+            cs._write_run_json(result["task_dir"], stored)
+            with pytest.raises(ConsoleLaunchError) as ei2:
+                cs.start_run(result["task_dir"], popen=lambda a, **k: FakeProc(),
+                             pg_check=lambda: None)
+            assert ei2.value.status_code == 409
+            assert "已有恢复/重试进行中" in str(ei2.value)
+            # 还原 starting,便于释放占用后验证恢复放行
+            stored["status"] = "starting"
+            cs._write_run_json(result["task_dir"], stored)
+        finally:
+            cs._release_claim(result["thread_id"])
+        # 释放后恢复放行
+        record = resume_run(result["thread_id"], popen=lambda a, **k: FakeProc(4321),
+                            pg_check=lambda: None, venv_python="py-exe")
+        assert record["status"] == "starting"
+
+    def test_different_thread_ids_not_blocked(self, waiting_env, monkeypatch):
+        """不同 thread 并发恢复互不阻塞(互斥是 thread 级,不是全局)。"""
+        result, _root = waiting_env
+        # 另一个任务占着,不影响本任务恢复
+        cs._CLAIMED_TIDS.add("console-zzzzzzzzzzzz")
+        try:
+            record = resume_run(result["thread_id"], popen=lambda a, **k: FakeProc(4321),
+                                pg_check=lambda: None, venv_python="py-exe")
+            assert record["status"] == "starting"
+        finally:
+            cs._release_claim("console-zzzzzzzzzzzz")
+
+    def test_claim_blocks_cancel_and_delete(self, waiting_env):
+        result, _root = waiting_env
+        cs._CLAIMED_TIDS.add(result["thread_id"])
+        try:
+            with pytest.raises(ConsoleLaunchError) as ei:
+                cs.cancel_run(result["thread_id"], terminate=lambda p: None)
+            assert ei.value.status_code == 409
+            with pytest.raises(ConsoleLaunchError) as ei2:
+                cs.delete_run(result["thread_id"])
+            assert ei2.value.status_code == 409
+        finally:
+            cs._release_claim(result["thread_id"])
+
+
 class TestRetryRunService:
     """2026-11-17 失败节点重试:failed 状态放行,argv 走 --continue 续跑。
 
@@ -399,6 +528,163 @@ class TestRetryRunService:
         assert resp.status_code == 202, resp.text
         body = resp.json()
         assert body["ok"] is True and body["state"] == "resuming"
+        # P0-06:202 = 受理而非执行成功,attempt_id 必须随受理返回
+        assert isinstance(body.get("attempt_id"), str) and body["attempt_id"]
+
+
+class TestAttemptLifecycle:
+    """P0-05/06(审查计划 §4.4):进程退出收割 + attempt 审计生命周期。
+
+    CLI 在发出 run.resumed 前提前退出(前置检查失败/PG 不可达)时,事件库没有
+    新事件,服务端必须自己把 attempt 收敛为明确终态,不遗留永久 starting;
+    工作流状态与恢复尝试状态分开记录,绝不覆盖事件库给出的真实终态。
+    """
+
+    def test_reaper_finalizes_attempt_on_early_exit(self, waiting_env, monkeypatch):
+        """CLI 已退出(exit=7,无事件)→ attempt=failed_preflight + record 收敛 failed。"""
+        result, _root = waiting_env
+        # 受理阶段事件库仍是 waiting_human(fixture 快照);进程退出后无新事件
+        record = resume_run(
+            result["thread_id"],
+            popen=lambda a, **k: FakeProc(4321, alive=False, returncode=7),
+            pg_check=lambda: None, venv_python="py-exe",
+        )
+        assert record["resumes"][-1]["mode"] == "resume"
+        monkeypatch.setattr(cs, "_latest_snapshot", lambda tid: {"available": False})
+        cs.reap_now()
+        stored = json.loads(
+            cs.console_run_json_path(result["task_dir"]).read_text(encoding="utf-8")
+        )
+        entry = stored["resumes"][-1]
+        assert entry["exit_code"] == 7
+        assert entry["result"] == "failed_preflight"
+        assert entry["finished_at"]
+        assert stored["status"] == "failed", "提前退出且无终态事件 → 不得停留在 starting"
+        assert "exit=7" in stored["error"]
+        assert result["thread_id"] not in cs._ACTIVE_PROCS
+        # 收割标记落盘:重启对账不会再翻这条记录
+        assert stored["last_proc_exit"]["exit_code"] == 7
+
+    def test_reaper_exit0_leaves_status_to_reconciliation(self, waiting_env, monkeypatch):
+        """exit=0 → attempt=succeeded + 收割标记;record 状态交事件库调和
+        (waiting_human/completed 属正常落点,对账不因事件库暂时不可达误翻)。"""
+        result, _root = waiting_env
+        resume_run(
+            result["thread_id"],
+            popen=lambda a, **k: FakeProc(4321, alive=False, returncode=0),
+            pg_check=lambda: None, venv_python="py-exe",
+        )
+        monkeypatch.setattr(cs, "_latest_snapshot", lambda tid: {"available": False})
+        cs.reap_now()
+        stored = json.loads(
+            cs.console_run_json_path(result["task_dir"]).read_text(encoding="utf-8")
+        )
+        entry = stored["resumes"][-1]
+        assert entry["exit_code"] == 0 and entry["result"] == "succeeded"
+        assert stored["status"] == "starting"
+
+    def test_reaper_nonzero_exit_with_terminal_event_keeps_event_truth(self, waiting_env, monkeypatch):
+        """exit≠0 但事件库已有 run.failed → 终态以事件库为准,记录不被覆盖。"""
+        result, _root = waiting_env
+        resume_run(
+            result["thread_id"],
+            popen=lambda a, **k: FakeProc(4321, alive=False, returncode=1),
+            pg_check=lambda: None, venv_python="py-exe",
+        )
+        monkeypatch.setattr(
+            cs, "_latest_snapshot",
+            lambda tid: {"available": True, "last_event": {"event_type": "run.failed"}},
+        )
+        cs.reap_now()
+        stored = json.loads(
+            cs.console_run_json_path(result["task_dir"]).read_text(encoding="utf-8")
+        )
+        assert stored["resumes"][-1]["exit_code"] == 1
+        assert stored["resumes"][-1]["result"] == "failed_execution"
+        assert stored["status"] == "starting", "事件库是事实来源,不被退出码覆盖"
+
+    def test_attempt_id_injected_via_env(self, waiting_env):
+        """attempt_id 经 env 注入子进程,与审计条目一致(P0-06 全链路)。"""
+        result, _root = waiting_env
+        captured: dict = {}
+
+        def fake_popen(argv, **kwargs):
+            captured["env"] = kwargs.get("env") or {}
+            return FakeProc(4321)
+
+        record = resume_run(
+            result["thread_id"], popen=fake_popen, pg_check=lambda: None,
+            venv_python="py-exe",
+        )
+        env_attempt = captured["env"].get("AUTO_VIDEO_RESUME_ATTEMPT_ID")
+        assert env_attempt == record["resumes"][-1]["attempt_id"]
+        assert env_attempt, "env 必须携带 attempt_id"
+
+
+class TestStaleReconcile:
+    """P0-05 服务重启对账:遗留 starting/running 收敛,不误伤活进程/正常挂起。"""
+
+    def test_dead_pid_no_events_converges_failed(self, waiting_env, monkeypatch):
+        """重启遗留(未收尾 attempt + 无事件 + 进程已死)→ failed + attempt 收尾。"""
+        result, _root = waiting_env
+        monkeypatch.setattr(cs, "_latest_snapshot", lambda tid: {"available": False})
+        record_path = cs.console_run_json_path(result["task_dir"])
+        stored = json.loads(record_path.read_text(encoding="utf-8"))
+        stored["resumes"] = [
+            {"at": "2026-11-18T00:00:00+00:00", "mode": "retry", "attempt_id": "abc123"}
+        ]  # 无 finished_at = 服务死亡导致收尾从未发生
+        cs._write_run_json(result["task_dir"], stored)
+        converged = cs.reconcile_stale_starting(force=True)
+        assert result["thread_id"] in converged
+        after = json.loads(record_path.read_text(encoding="utf-8"))
+        assert after["status"] == "failed"
+        assert "服务重启对账" in after["error"]
+        assert after["resumes"][-1]["finished_at"]
+        assert after["resumes"][-1]["exit_code"] is None
+        assert after["resumes"][-1]["result"] == "failed_execution"
+
+    def test_reaped_exit0_record_not_reflipped(self, waiting_env, monkeypatch):
+        """收割器已观察过 exit=0(有 finished_at + last_proc_exit)→ 对账跳过。"""
+        result, _root = waiting_env
+        monkeypatch.setattr(cs, "_latest_snapshot", lambda tid: {"available": False})
+        record_path = cs.console_run_json_path(result["task_dir"])
+        stored = json.loads(record_path.read_text(encoding="utf-8"))
+        stored["resumes"] = [{
+            "at": "2026-11-18T00:00:00+00:00", "mode": "resume", "attempt_id": "x1",
+            "finished_at": "2026-11-18T00:01:00+00:00", "exit_code": 0, "result": "succeeded",
+        }]
+        stored["last_proc_exit"] = {"exit_code": 0, "at": "2026-11-18T00:01:00+00:00"}
+        cs._write_run_json(result["task_dir"], stored)
+        converged = cs.reconcile_stale_starting(force=True)
+        assert result["thread_id"] not in converged
+        after = json.loads(record_path.read_text(encoding="utf-8"))
+        assert after["status"] == "starting"
+
+    def test_waiting_human_untouched(self, waiting_env, monkeypatch):
+        """事件库派生 waiting_human = 正常挂起稳态:不改记录,attempt 记成功。"""
+        result, _root = waiting_env
+        monkeypatch.setattr(cs, "_latest_snapshot", _waiting_snapshot)
+        record_path = cs.console_run_json_path(result["task_dir"])
+        stored = json.loads(record_path.read_text(encoding="utf-8"))
+        stored["resumes"] = [{"at": "2026-11-18T00:00:00+00:00", "mode": "resume"}]
+        cs._write_run_json(result["task_dir"], stored)
+        converged = cs.reconcile_stale_starting(force=True)
+        assert result["thread_id"] not in converged
+        after = json.loads(record_path.read_text(encoding="utf-8"))
+        assert after["status"] == "starting"
+        assert after["resumes"][-1]["result"] == "succeeded"
+
+    def test_alive_pid_skipped(self, waiting_env, monkeypatch):
+        """PID 仍活着(入口 A 直启/PID 复用)→ 绝不误判,保持调和态。"""
+        result, _root = waiting_env
+        monkeypatch.setattr(cs, "_latest_snapshot", lambda tid: {"available": False})
+        monkeypatch.setattr(cs, "_pid_alive", lambda pid: True)
+        converged = cs.reconcile_stale_starting(force=True)
+        assert result["thread_id"] not in converged
+        after = json.loads(
+            cs.console_run_json_path(result["task_dir"]).read_text(encoding="utf-8")
+        )
+        assert after["status"] == "starting"
 
 
 class TestResumeApi:

@@ -570,19 +570,24 @@ def resume_run(request: Request, thread_id: str, body: ResumeBody) -> JSONRespon
             status_code=409,
         ))
     try:
-        console_service.resume_run(
+        record = console_service.resume_run(
             thread_id, checkpoint=body.checkpoint, value=body.value
         )
     except ConsoleLaunchError as e:
         raise _launch_error(e) from e
     except ConsoleUploadError as e:
         raise _upload_error(e) from e
+    # P0-06(2026-11-18):202 = 受理而非执行成功;attempt_id 让本次恢复尝试
+    # 可与 resumes[] 审计、CLI 日志([resume] attempt=…)一一对应。
+    resumes = record.get("resumes") or []
+    attempt_id = resumes[-1].get("attempt_id") if resumes else None
     return JSONResponse(
         status_code=202,
         content={
             "ok": True,
             "thread_id": thread_id,
             "state": "resuming",
+            "attempt_id": attempt_id,
             "events_url": f"/api/workflow/runs/{thread_id}/events",
         },
     )
