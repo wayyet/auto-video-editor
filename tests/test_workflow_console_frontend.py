@@ -63,3 +63,27 @@ def test_sse_frame_contract_node_tests_pass():
     output = (proc.stdout or "") + (proc.stderr or "")
     assert proc.returncode == 0, "SSE 帧契约前端用例失败:\n" + output[-4000:]
     assert "pass 0" not in output, "SSE 帧契约前端用例一个都没跑:\n" + output[-2000:]
+
+
+AI_CONTENT_NODE_TEST = REPO_ROOT / "web" / "tests" / "ai_content.test.mjs"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="本机没有 node,跳过前端单测")
+def test_ai_content_frontend_unit_tests_pass():
+    """AI 内容明细页纯逻辑层 Node 单测必须全绿(2026-11-19 第八期审查修订版;
+    显式包装 —— 测试包装器点名运行,不依赖 glob 发现,审查文档 D07)。"""
+    assert AI_CONTENT_NODE_TEST.exists(), f"前端测试文件不存在: {AI_CONTENT_NODE_TEST}"
+
+    proc = subprocess.run(
+        ["node", "--test", str(AI_CONTENT_NODE_TEST)],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=180,
+    )
+
+    output = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, "AI 内容明细前端单测失败:\n" + output[-4000:]
+    assert "pass 0" not in output, "AI 内容明细前端单测一个都没跑:\n" + output[-2000:]
