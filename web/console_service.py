@@ -25,6 +25,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -883,6 +884,484 @@ def get_console_run(
         "state": reconcile_run_state(record, thread_id),
         "initial_state": _read_initial_state(task_dir, record),
     }
+
+
+# ---------------------------------------------------------------------------
+# AI 内容明细(2026-11-19 第八期审查修订版;只读展示,零工作流副作用)
+# ---------------------------------------------------------------------------
+
+#: 字幕 cue 返回上限(审查文档 P1-10:防超量字幕/超大产物拖垮响应)
+_AI_CONTENT_MAX_CUES = 500
+#: 单文本字段截断上限(字符)
+_AI_CONTENT_MAX_TEXT = 2000
+
+#: web_topic 产物状态取值域(能力层三态 + 节点层 cache_hit 复用改写)
+_WEB_TOPIC_STATUSES = ("ok", "cache_hit", "no_results", "failed")
+#: 模板推荐产物状态取值域(节点任何情况都落盘,节点层异常降级为 unavailable)
+_TEMPLATE_STATUSES = ("ok", "no_match", "unavailable")
+
+#: 网页检索/字幕节点写进 status_log 的固定标签(证据链;标签名与节点源码一致)
+_WEB_TOPIC_SKIPPED_TAG = "storyline_search_web_topic_skipped"
+_WEB_TOPIC_FAILED_TAG = "storyline_search_web_topic_failed"
+_GENERATE_SCRIPT_DONE_TAG = "storyline_generate_script_done"
+_ZH_SUBTITLE_NODE_TAGS = ("node_08_add_subtitles_done", "node_08_add_subtitles_skipped")
+_EN_TRANSLATE_DONE_TAG = "node_16a_translate_done"
+_EN_TRANSLATE_SKIPPED_TAGS = ("node_16a_translate_skipped", "skipped_no_source_subtitles")
+
+#: 仍在进行中的任务态:缺产物证据时按「等待生成」而不是「缺失」
+#: (prepared=已创建未启动,同样不该显示成缺失;unknown 绝不解释成等待)
+_PENDING_STATES = frozenset({"running", "starting", "waiting_human", "prepared"})
+
+
+def _fetch_checkpoint_values(thread_id: str) -> dict[str, Any]:
+    """读当前 thread 的 checkpoint state values(复用 ``web.gate_state`` 取数层)。
+
+    lazy import:避免模块加载期连带 graph 构建。PG 不可达等异常由调用方
+    (:func:`get_ai_content_details`)就地捕获 → 仅字幕区降级 unavailable,
+    其余区块不受影响(审查文档 §5.5 部分失败策略)。本接缝同时是单测注入点。
+    """
+    from web.gate_state import fetch_state_values
+
+    return dict(fetch_state_values(thread_id) or {})
+
+
+def _clamp_str(value: Any, limit: int = _AI_CONTENT_MAX_TEXT) -> str | None:
+    """str 化并截断;None 原样返回 None(不伪造空串)。"""
+    if value is None:
+        return None
+    text = str(value)
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def _read_json_file(path: Path) -> tuple[Any | None, str | None]:
+    """读单个 JSON 文件;返回 ``(doc, error)``,error ∈ None | "invalid"。
+
+    文件不存在不算 error(返回 ``(None, None)``),由调用方按证据链推导状态。
+    """
+    if not path.exists():
+        return None, None
+    try:
+        return json.loads(path.read_text(encoding="utf-8")), None
+    except (OSError, ValueError):
+        return None, "invalid"
+
+
+def _safe_domain(url: Any) -> str | None:
+    """从 URL 提取域名;仅接受 http/https(审查文档 §6.3),解析失败返回 None。"""
+    raw = str(url or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = urllib.parse.urlparse(raw)
+    except ValueError:
+        return None
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return None
+    return parsed.hostname
+
+
+def _normalize_topic_entries(entries: Any) -> list[dict[str, Any]]:
+    """检索条目归一化(原生 max_results=10,这里只做防线)。"""
+    out: list[dict[str, Any]] = []
+    if not isinstance(entries, list):
+        return out
+    for item in entries[:_AI_CONTENT_MAX_CUES]:
+        if not isinstance(item, dict):
+            continue
+        url = _clamp_str(item.get("url"))
+        out.append(
+            {
+                "title": _clamp_str(item.get("title"), 300),
+                "url": url,
+                "domain": _safe_domain(url),
+                "snippet": _clamp_str(item.get("snippet"), 500),
+            }
+        )
+    return out
+
+
+def _normalize_template_item(item: Any) -> dict[str, Any] | None:
+    """候选/选中模板对象归一化(description/score 在对象内,不在 artifact 顶层)。"""
+    if not isinstance(item, dict):
+        return None
+    score = item.get("score")
+    tags = item.get("tags")
+    version = item.get("version")
+    return {
+        "template_id": _clamp_str(item.get("template_id"), 300),
+        "description": _clamp_str(item.get("description"), 500),
+        "score": score if isinstance(score, (int, float)) else None,
+        "language": _clamp_str(item.get("language"), 16),
+        "tags": [str(t) for t in tags[:20]] if isinstance(tags, list) else [],
+        "version": version if isinstance(version, int) else None,
+    }
+
+
+def _normalize_cues(segments: Any, text_key: str) -> list[dict[str, Any]]:
+    """checkpoint 字幕段 → cue 列表(封顶 + 字段收紧;原始毫秒保留)。"""
+    if not isinstance(segments, list):
+        return []
+    cues: list[dict[str, Any]] = []
+    for seg in segments[:_AI_CONTENT_MAX_CUES]:
+        if not isinstance(seg, dict):
+            continue
+        cues.append(
+            {
+                "index": seg.get("index"),
+                "start_ms": seg.get("start_ms"),
+                "end_ms": seg.get("end_ms"),
+                "text": _clamp_str(seg.get(text_key)),
+            }
+        )
+    return cues
+
+
+def _pending_or_missing(task_state: str) -> str:
+    """无产物且无标签证据时的兜底状态:任务进行中 → pending,否则 missing。"""
+    return "pending" if task_state in _PENDING_STATES else "missing"
+
+
+def _web_topic_section(
+    task_dir: Path, task_state: str, status_log: list[str], error_log: list[str]
+) -> dict[str, Any]:
+    """01 网页话题检索:artifact 状态透传;无产物时按 status_log/error_log 证据链推导。
+
+    节点在开关关闭/检索词为空/检索异常三种情况下**不写产物**(只落标签),
+    因此「文件缺失 ≠ 未生成」—— 证据链优先级见审查文档 §5.4。
+    """
+    base: dict[str, Any] = {
+        "status": None,
+        "engine": "DuckDuckGo",
+        "query": None,
+        "searched_at": None,
+        "entries": [],
+        "reason": None,
+    }
+    doc, err = _read_json_file(task_dir / "storyline" / "search_web_topic.json")
+    if err == "invalid":
+        return {**base, "status": "invalid", "reason": "检索产物 JSON 无法解析(文件存在但格式损坏)"}
+    if isinstance(doc, dict):
+        status = doc.get("status")
+        if status not in _WEB_TOPIC_STATUSES:
+            return {
+                **base,
+                "status": "invalid",
+                "reason": f"检索产物状态无法识别: {status!r}",
+            }
+        reason = None
+        if status == "failed":
+            reason = _clamp_str(doc.get("message"), 300) or "检索执行失败"
+        elif status == "no_results":
+            reason = "检索完成,搜索引擎未返回结果"
+        return {
+            **base,
+            "status": status,
+            "query": _clamp_str(doc.get("query")),
+            "searched_at": _clamp_str(doc.get("searched_at"), 64),
+            "entries": _normalize_topic_entries(doc.get("search_web_topic")),
+            "reason": reason,
+        }
+    if _WEB_TOPIC_SKIPPED_TAG in status_log:
+        return {**base, "status": "skipped", "reason": "本次任务跳过网页检索(检索开关关闭或检索词为空)"}
+    if _WEB_TOPIC_FAILED_TAG in status_log:
+        detail = next(
+            (line for line in error_log if "storyline:search_web_topic" in line), None
+        )
+        return {
+            **base,
+            "status": "failed",
+            "reason": _clamp_str(detail, 300) or "网页检索节点执行失败(无产物落盘)",
+        }
+    status = _pending_or_missing(task_state)
+    return {
+        **base,
+        "status": status,
+        "reason": "等待网页检索节点生成" if status == "pending" else "任务已结束但无检索产物与状态证据",
+    }
+
+
+def _template_section(task_dir: Path, task_state: str) -> dict[str, Any]:
+    """02 文案模板推荐:节点任何情况都落盘,状态 ok/no_match/unavailable 透传。"""
+    base: dict[str, Any] = {
+        "status": None,
+        "template_id": None,
+        "template_version": None,
+        "selected_template": None,
+        "candidates": [],
+        "retrieval_method": None,
+        "selection_method": None,
+        "selected_template_content": None,
+        "content_truncated": False,
+        "reason": None,
+    }
+    doc, err = _read_json_file(task_dir / "storyline" / "script_template_plan.json")
+    if err == "invalid":
+        return {**base, "status": "invalid", "reason": "模板推荐产物 JSON 无法解析"}
+    if not isinstance(doc, dict):
+        status = _pending_or_missing(task_state)
+        return {
+            **base,
+            "status": status,
+            "reason": "等待模板推荐节点生成" if status == "pending" else "任务已结束但无模板推荐产物",
+        }
+    status = doc.get("status")
+    if status not in _TEMPLATE_STATUSES:
+        return {**base, "status": "invalid", "reason": f"模板推荐产物状态无法识别: {status!r}"}
+    reason = None
+    if status == "no_match":
+        reason = _clamp_str(doc.get("fallback_reason"), 300) or "模板库中无匹配模板"
+    elif status == "unavailable":
+        reason = _clamp_str(doc.get("fallback_reason"), 300) or "模板推荐不可用"
+    candidates_raw = doc.get("candidates")
+    template_version = doc.get("template_version")
+    return {
+        **base,
+        "status": status,
+        "template_id": _clamp_str(doc.get("template_id"), 300),
+        "template_version": (
+            template_version if isinstance(template_version, (str, int)) else None
+        ),
+        "selected_template": _normalize_template_item(doc.get("selected_template")),
+        "candidates": [
+            _normalize_template_item(c)
+            for c in (candidates_raw[:10] if isinstance(candidates_raw, list) else [])
+            if isinstance(c, dict)
+        ],
+        "retrieval_method": _clamp_str(doc.get("retrieval_method"), 64),
+        "selection_method": _clamp_str(doc.get("selection_method"), 64),
+        "selected_template_content": _clamp_str(doc.get("selected_template_content")),
+        "content_truncated": bool(doc.get("content_truncated")),
+        "reason": reason,
+    }
+
+
+def _script_section(
+    task_dir: Path,
+    task_state: str,
+    status_log: list[str],
+    checkpoint_error: str | None = None,
+) -> dict[str, Any]:
+    """03 生成文案:script.json **先落盘后裁决** —— 文件存在不代表节点成功,
+    完成证据以 status_log 的 done 标签为准(审查文档 §3.3)。
+
+    checkpoint 不可读时无法核验 done 标签 → 该区降级 unavailable(不误判 failed,
+    审查文档 §5.5:局部降级只影响受影响的区块)。
+    """
+    base: dict[str, Any] = {
+        "status": None,
+        "lang": None,
+        "voiceover_style": None,
+        "groups": [],
+        "references": [],
+        "reason": None,
+    }
+    doc, err = _read_json_file(task_dir / "storyline" / "script.json")
+    done = _GENERATE_SCRIPT_DONE_TAG in status_log
+    if err == "invalid":
+        return {**base, "status": "invalid", "reason": "生成文案产物 JSON 无法解析"}
+    if isinstance(doc, dict):
+        groups_raw = doc.get("group_scripts")
+        groups: list[dict[str, Any]] = []
+        if isinstance(groups_raw, list):
+            for g in groups_raw[:200]:
+                if not isinstance(g, dict):
+                    continue
+                groups.append(
+                    {
+                        "group_id": _clamp_str(g.get("group_id"), 100),
+                        "summary": _clamp_str(g.get("summary"), 500),
+                        "narration": _clamp_str(g.get("narration")),
+                    }
+                )
+        refs_raw = doc.get("references")
+        references: list[dict[str, Any]] = []
+        if isinstance(refs_raw, list):
+            for r in refs_raw[:10]:
+                if not isinstance(r, dict):
+                    continue
+                url = _clamp_str(r.get("url"))
+                references.append(
+                    {
+                        "title": _clamp_str(r.get("title"), 300),
+                        "url": url,
+                        "domain": _safe_domain(url),
+                    }
+                )
+        if done:
+            status, reason = "ok", None
+        elif checkpoint_error is not None:
+            status = "unavailable"
+            reason = f"{checkpoint_error};无法核验文案节点完成标签,以下为落盘内容"
+        elif task_state in _PENDING_STATES:
+            status, reason = "pending", "文案已落盘,等待旁白有效性裁决/节点完成"
+        else:
+            status = "failed"
+            reason = "存在文案产物但节点未标记完成(旁白有效性裁决未通过或节点未完成,内容为裁决前落盘)"
+        return {
+            **base,
+            "status": status,
+            "lang": _clamp_str(doc.get("lang"), 16),
+            "voiceover_style": _clamp_str(doc.get("voiceover_style"), 100),
+            "groups": groups,
+            "references": references,
+            "reason": reason,
+        }
+    if done:
+        return {
+            **base,
+            "status": "missing",
+            "reason": "状态记录文案已完成,但产物文件缺失(可能被清理)",
+        }
+    status = _pending_or_missing(task_state)
+    return {
+        **base,
+        "status": status,
+        "reason": "等待生成文案节点" if status == "pending" else "任务已结束但无生成文案产物",
+    }
+
+
+def _subtitles_zh_section(
+    values: dict[str, Any], task_state: str, status_log: list[str]
+) -> dict[str, Any]:
+    """04 中文字幕:无段落不一定是异常(node_08 仅在非空时写键)。"""
+    base: dict[str, Any] = {
+        "status": None,
+        "count": 0,
+        "cues": [],
+        "cues_truncated": False,
+        "reason": None,
+    }
+    segments = values.get("subtitle_segments_zh")
+    if isinstance(segments, list) and segments:
+        return {
+            **base,
+            "status": "ok",
+            "count": len(segments),
+            "cues": _normalize_cues(segments, "text_zh"),
+            "cues_truncated": len(segments) > _AI_CONTENT_MAX_CUES,
+        }
+    if any(tag in status_log for tag in _ZH_SUBTITLE_NODE_TAGS):
+        return {
+            **base,
+            "status": "skipped",
+            "reason": "该任务没有生成中文字幕段(无旁白字幕源或节点跳过,属正常路径)",
+        }
+    status = _pending_or_missing(task_state)
+    return {
+        **base,
+        "status": status,
+        "reason": "等待中文字幕节点生成" if status == "pending" else "任务已结束但无中文字幕段",
+    }
+
+
+def _subtitles_en_section(
+    values: dict[str, Any], task_state: str, status_log: list[str]
+) -> dict[str, Any]:
+    """05 英文字幕:skipped(无源字幕/缺英文草稿目录)是常态输入,不是失败。"""
+    base: dict[str, Any] = {
+        "status": None,
+        "count": 0,
+        "translation_status": None,
+        "cues": [],
+        "cues_truncated": False,
+        "reason": None,
+    }
+    segments = values.get("subtitle_segments_en")
+    tstat = values.get("subtitle_translation_status")
+    tstat = tstat if tstat in ("real", "stub", "skipped") else None
+    if isinstance(segments, list) and segments:
+        return {
+            **base,
+            "status": "ok",
+            "count": len(segments),
+            "translation_status": tstat,
+            "cues": _normalize_cues(segments, "text_en"),
+            "cues_truncated": len(segments) > _AI_CONTENT_MAX_CUES,
+        }
+    if tstat == "skipped" or any(tag in status_log for tag in _EN_TRANSLATE_SKIPPED_TAGS):
+        return {
+            **base,
+            "status": "skipped",
+            "translation_status": "skipped",
+            "reason": "本次未执行英文翻译(无源字幕或英文草稿目录缺失,属正常路径)",
+        }
+    if _EN_TRANSLATE_DONE_TAG in status_log:
+        return {
+            **base,
+            "status": "missing",
+            "reason": "状态记录翻译完成,但无英文字幕段",
+        }
+    status = _pending_or_missing(task_state)
+    return {
+        **base,
+        "status": status,
+        "reason": "等待英文翻译节点生成" if status == "pending" else "任务已结束但无英文字幕段",
+    }
+
+
+def get_ai_content_details(
+    thread_id: str, *, outputs_root: Path | None = None
+) -> dict[str, Any]:
+    """AI 内容明细只读载荷(2026-11-19 第八期;五区块归一化,零工作流副作用)。
+
+    - 任务存在性以 console_run.json 为准(缺失 → 404,与 :func:`get_console_run`
+      对齐;outputs 下只有 storyline/ 的游离目录一律 404);
+    - 三个磁盘 artifact 独立读取、独立降级(单区 invalid 不影响其它区);
+    - checkpoint 字幕键经 :func:`_fetch_checkpoint_values`,不可读时仅两个字幕区
+      unavailable,整体仍 200(审查文档 §5.5 部分失败策略);
+    - 纯只读:不调 reap_now、不写任何文件、不触发节点。
+    """
+    validate_thread_id(thread_id)
+    task_dir = _task_dir_for(thread_id, outputs_root)
+    record_path = console_run_json_path(task_dir)
+    if not record_path.exists():
+        raise ConsoleLaunchError(f"任务不存在: {thread_id}", status_code=404)
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+    except Exception as e:  # noqa: BLE001
+        raise ConsoleLaunchError(f"运行记录损坏: {e}", status_code=500) from e
+
+    task_state = reconcile_run_state(record, thread_id)
+
+    # checkpoint 字幕键:读取失败只降级字幕区,不影响三个磁盘 artifact 区
+    checkpoint_error: str | None = None
+    values: dict[str, Any] = {}
+    try:
+        values = _fetch_checkpoint_values(thread_id)
+    except Exception as e:  # noqa: BLE001 — PG 不可达/图构建失败等
+        checkpoint_error = f"checkpoint 不可读: {e}"
+
+    status_log = [str(x) for x in (values.get("status_log") or []) if str(x)]
+    error_log = [str(x) for x in (values.get("error_log") or []) if str(x)]
+
+    details: dict[str, Any] = {
+        "thread_id": thread_id,
+        "task_status": task_state,
+        "generated_at": _now_iso(),
+        "web_topic": _web_topic_section(task_dir, task_state, status_log, error_log),
+        "template": _template_section(task_dir, task_state),
+        "script": _script_section(task_dir, task_state, status_log, checkpoint_error),
+    }
+    if checkpoint_error is not None:
+        details["subtitles_zh"] = {
+            "status": "unavailable",
+            "count": 0,
+            "cues": [],
+            "cues_truncated": False,
+            "reason": checkpoint_error,
+        }
+        details["subtitles_en"] = {
+            "status": "unavailable",
+            "count": 0,
+            "translation_status": None,
+            "cues": [],
+            "cues_truncated": False,
+            "reason": checkpoint_error,
+        }
+    else:
+        details["subtitles_zh"] = _subtitles_zh_section(values, task_state, status_log)
+        details["subtitles_en"] = _subtitles_en_section(values, task_state, status_log)
+    return details
 
 
 def _resume_draft_guard(thread_id: str, *, allow_missing_draft: bool = False) -> dict[str, Any]:

@@ -447,6 +447,26 @@ async def run_gates(request: Request, thread_id: str) -> dict:
     }
 
 
+@router.get("/runs/{thread_id}/content-details")
+async def run_content_details(request: Request, thread_id: str) -> dict:
+    """AI 内容明细只读载荷(2026-11-19 第八期审查修订版;五区块归一化)。
+
+    纯只读展示:**不调** reap_now、不触发工作流、不写任何状态。artifact 局部
+    损坏 → 该区 invalid;checkpoint 不可读 → 仅字幕区 unavailable,整体仍 200
+    (审查文档 §5.5 部分失败策略);任务不存在 → 404;thread_id 非法 → 400。
+    业务归一化在 :func:`web.console_service.get_ai_content_details`,路由保持薄。
+    """
+    _verify_same_origin(request)
+    try:
+        validate_thread_id(thread_id)
+        data = await run_in_threadpool(console_service.get_ai_content_details, thread_id)
+    except ConsoleUploadError as e:
+        raise _upload_error(e) from e
+    except ConsoleLaunchError as e:
+        raise _launch_error(e) from e
+    return {"ok": True, **data}
+
+
 class OpenDraftDirBody(BaseModel):
     """POST /runs/{tid}/open-draft-dir 请求体:打开哪一份草稿目录。"""
 
