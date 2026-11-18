@@ -23,6 +23,8 @@ intro。资源库缺失 → 动画降级不写入(不伪装成功,degraded 计�
 资源须已下载到剪映本地缓存才能真正渲染(「螺旋上升」下载不完整即「动画丢失」
 实证)。选取只落在「verified(GUI 实证)+ 缓存目录存在」的条目上:seed 命中
 不可用条目时按池序向后回退,全不可用则降级不写 —— 宁可没有动画,不出丢失徽章。
+降级是**非破坏性**的:草稿已有的我方动画素材与轨段引用原样保留(审查 P1-01),
+旧动画清理只发生在「本轮已写入新动画」的替换场景。
 
 job_id 解析(2026-11-18 缺陷修复):两个入口统一走公共层
 ``jy_common.job_identity.resolve_job_id`` —— LangGraph config 的
@@ -76,7 +78,9 @@ def _intro_usable(anim_meta: dict) -> bool:
     return text_animation_cache_available(anim_meta, JIANYING_CACHE_ROOT)
 
 
-def _pick_intro_animation(template_lib: TemplateLibrary, job_id: str = "") -> dict | None:
+def _pick_intro_animation(
+    template_lib: TemplateLibrary, job_id: str = ""
+) -> tuple[dict | None, dict[str, Any]]:
     """入场动画选取(池化,2026-11-18;缓存可用性守卫,2026-11-19)。
 
     - auto(缺省):intro 段全部 VIP 动画按 ``sha256(job_id|"text_intro_pool")``
@@ -84,34 +88,60 @@ def _pick_intro_animation(template_lib: TemplateLibrary, job_id: str = "") -> di
       且本地缓存存在)—— 同任务同结果,zh/en 一致,跨任务多样化;seed 命中
       不可用条目时向后回退,不产生「动画丢失」草稿。
     - fixed:config 名 → 旧默认名兜底(均须过守卫)→ 可用子集池序第一个。
-    - 无可用条目 → ``None``,调用方降级不写动画(degraded 计数,不伪装成功)。
+    - 无可用条目 → ``(None, audit)``,调用方降级不写动画(非破坏,审查 P1-01)。
+
+    返回 ``(选中条目或 None, 选取审计)``;审计含池大小/可用数/seed 起点/
+    最终选中 index/回退偏移/缓存根 —— 事件流与测试均可复算选择结果(审查 P2-01)。
     """
+    audit: dict[str, Any] = {
+        "mode": "fixed" if TEXT_FX_INTRO_POOL_MODE == "fixed" else "auto",
+        "cache_root": JIANYING_CACHE_ROOT,
+        "pool_size": 0,
+        "usable_count": 0,
+        "seed_start_index": None,
+        "selected_index": None,
+        "fallback_offset": None,
+    }
     if template_lib.is_empty or not template_lib.has_text_lib:
-        return None
+        return None, audit
     intro_rows = template_lib.list_text_animation_rows("intro", vip_only=True)
+    audit["pool_size"] = len(intro_rows)
     if not intro_rows:
-        return None
+        return None, audit
     usable_ids = {id(row) for row in intro_rows if _intro_usable(row)}
+    audit["usable_count"] = len(usable_ids)
     if not usable_ids:
-        return None
+        return None, audit
     if TEXT_FX_INTRO_POOL_MODE != "fixed":
         seed_input = f"{job_id}|text_intro_pool"
         seed = int(hashlib.sha256(seed_input.encode("utf-8")).hexdigest()[:8], 16)
         start = seed % len(intro_rows)
+        audit["seed_start_index"] = start
         for offset in range(len(intro_rows)):
             candidate = intro_rows[(start + offset) % len(intro_rows)]
             if id(candidate) in usable_ids:
-                return candidate
-        return None
+                audit["selected_index"] = (start + offset) % len(intro_rows)
+                audit["fallback_offset"] = offset
+                return candidate, audit
+        return None, audit
     for name in (TEXT_FX_INTRO_ANIMATION, *_LEGACY_INTRO_NAMES):
         anim = template_lib.pick_text_animation("intro", name)
         if anim is not None and _intro_usable(anim):
-            return anim
+            audit["selected_index"] = next(
+                (
+                    i
+                    for i, r in enumerate(intro_rows)
+                    if r.get("name") == anim.get("name")
+                ),
+                None,
+            )
+            return anim, audit
     # fixed 兜底:可用子集按池序第一个(不再无条件回退 rows[0] —— 它可能不可用)
-    for row in intro_rows:
+    for idx, row in enumerate(intro_rows):
         if id(row) in usable_ids:
-            return row
-    return None
+            audit["selected_index"] = idx
+            return row, audit
+    return None, audit
 
 
 def _cleanup_stale_animations(draft: dict, kept_ids: set[str]) -> int:
@@ -150,7 +180,7 @@ def _apply_text_animations(
 ) -> tuple[list[str], dict]:
     """为我方字幕写原生入场动画(就地改 ``draft``),返回 (告警, 摘要)。"""
     warnings: list[str] = []
-    anim_meta = _pick_intro_animation(template_lib, job_id)
+    anim_meta, selection_audit = _pick_intro_animation(template_lib, job_id)
 
     summary: dict[str, Any] = {
         "texts_scanned": 0,
@@ -158,6 +188,7 @@ def _apply_text_animations(
         "degraded": 0,
         "no_text_segment": 0,
         "cleaned_stale": 0,
+        "selection_audit": selection_audit,
     }
     if anim_meta is None:
         warnings.append(f"[{tag}] 无可用入场动画资源,动画降级不写入")
@@ -200,7 +231,13 @@ def _apply_text_animations(
             refs.append(anim_material["id"])
         summary["animations_written"] += 1
 
-    summary["cleaned_stale"] = _cleanup_stale_animations(draft, kept_ids)
+    # 非破坏性降级(2026-11-19 审查 P1-01):选取失败 ≠ 删除旧数据。缓存根配置
+    # 错误/缓存暂时不可见/资源池异常时,若以空 kept_ids 走清理,会把草稿里上一轮
+    # 已有的我方字幕动画连 refs 一起删掉 —— 与 fail-closed 目标相反。因此清理
+    # 只在「本轮已选中并写入新动画」分支执行;旧动画的显式移除由单独的修复动作
+    # 负责,不与普通任务重跑绑定。
+    if anim_meta is not None:
+        summary["cleaned_stale"] = _cleanup_stale_animations(draft, kept_ids)
     return warnings, summary
 
 
@@ -232,9 +269,14 @@ def apply_text_fx(
     log = list(status_log or [])
     selected = summary.get("selected") or {}
     if selected.get("name"):
-        # 审计标签:不打开草稿也能在事件流里看到选了哪个动画(降级时走 warnings)
+        # 审计标签(P2-01):池大小/可用数/seed 起点/选中 index/回退偏移齐全,
+        # 不打开草稿也能复算并解释选择结果(降级时走 warnings)
+        audit = summary.get("selection_audit") or {}
         log.append(
             f"{node_tag}_text_anim_selected:{selected['name']}@{selected.get('effect_id')}"
+            f"(pool={audit.get('pool_size')},usable={audit.get('usable_count')},"
+            f"start={audit.get('seed_start_index')},pick={audit.get('selected_index')},"
+            f"offset={audit.get('fallback_offset')},mode={audit.get('mode')})"
         )
     log.extend(warnings)
     log.extend(apply_and_write(draft_path, draft, node_tag, done_tag=done_tag))

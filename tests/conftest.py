@@ -21,18 +21,20 @@ os.environ.setdefault("JY_DRAFT_PUBLISH_ENABLED", "0")
 
 
 @pytest.fixture(autouse=True)
-def _hermetic_anim_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def _hermetic_anim_cache(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
     """入场动画缓存守卫的封闭化(2026-11-19 动画丢失根因修复配套)。
 
     守卫(node_10/09b)读取本机剪映缓存 ``Cache/effect/<effect_id>/<md5>``,
     不封闭会让全套测试依赖操作机环境(有缓存=写动画,无缓存=降级,结果漂移)。
     这里把缓存根统一指到临时目录,并按真实池 JSON 的 verified 条目 + 标题动画
     候选[0] 伪造缓存目录 —— 行为等价于"资源已下载且可用"。
+
+    ⚠️ 用 ``tmp_path_factory.mktemp`` 而不是测试级 ``tmp_path``:后者会被
+    「目录清点」类测试(test_api_console_runs 等)当作环境污染计入。
     """
     import json as _json
 
-    cache_root = tmp_path / "jy-cache-effect"
-    cache_root.mkdir(parents=True, exist_ok=True)
+    cache_root = tmp_path_factory.mktemp("jy-cache-effect")
 
     def _fabricate(effect_id: object, md5: object) -> None:
         if effect_id and md5:

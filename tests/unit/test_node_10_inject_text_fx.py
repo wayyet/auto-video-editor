@@ -667,3 +667,191 @@ def test_selected_animation_audited_in_status_log(tmp_draft_with_texts: Path) ->
     assert len(tags) == 1
     assert expected["name"] in tags[0]
     assert expected["effect_id"] in tags[0]
+
+
+def test_selection_audit_recomputable_from_tag(
+    tmp_draft_with_texts: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P2-01:标签携带 pool/usable/start/pick/offset,可从池 JSON+缓存根复算验证。"""
+    from nodes.node_10_inject_text_fx import JIANYING_CACHE_ROOT
+
+    tid = "console-audit1"
+    inject_text_fx(_state(tmp_draft_with_texts), {"configurable": {"thread_id": tid}})
+    draft = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    (name,) = {a["animations"][0]["name"] for a in draft["materials"]["material_animations"]}
+
+    # 从真实池 JSON + 当前缓存根独立复算 seed 起点与回退偏移
+    lib_path = Path(__file__).resolve().parents[2] / "templates" / "text_resource_library.json"
+    with open(lib_path, "r", encoding="utf-8") as f:
+        rows = list(json.load(f).get("intro", []))
+    usable = _usable_intro_rows(JIANYING_CACHE_ROOT)
+    seed = int(hashlib.sha256(f"{tid}|text_intro_pool".encode("utf-8")).hexdigest()[:8], 16)
+    start = seed % len(rows)
+    offset = next(
+        i for i in range(len(rows)) if rows[(start + i) % len(rows)] in usable
+    )
+    pick = (start + offset) % len(rows)
+
+    out = inject_text_fx(_state(tmp_draft_with_texts), {"configurable": {"thread_id": tid}})
+    tag = next(
+        t for t in out["status_log"] if t.startswith("node_10_text_anim_selected:")
+    )
+    assert name in tag
+    assert f"pool={len(rows)}" in tag
+    assert f"usable={len(usable)}" in tag
+    assert f"start={start}" in tag
+    assert f"pick={pick}" in tag
+    assert f"offset={offset}" in tag
+    assert "mode=auto" in tag
+
+
+# ---------------------------------------- 非破坏性降级(2026-11-19 审查 P1-01)
+
+
+def _preset_our_animation(text_id: str, anim_name: str = "旧动画A") -> dict:
+    """预置一条「上一轮已写入」的我方动画条目(真实构造器产出)。"""
+    from jy_common.native_fx import build_native_text_animation_material
+
+    return build_native_text_animation_material(
+        material_id=f"{_ANIM_REF_PREFIX}{text_id}",
+        anim_meta={
+            "name": anim_name,
+            "duration_s": 0.5,
+            "resource_id": "1111111111111111111",
+            "effect_id": "1111111",
+            "md5": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        },
+        kind="in",
+    )
+
+
+def _empty_cache_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """覆盖 conftest 封闭化:缓存根指向**空目录**(模拟缓存全缺/暂时不可见)。"""
+    empty = tmp_path / "empty-cache-root"
+    empty.mkdir()
+    monkeypatch.setattr("nodes.node_10_inject_text_fx.JIANYING_CACHE_ROOT", str(empty))
+
+
+def test_degrade_keeps_existing_our_animations(
+    tmp_draft_with_texts: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """无可用资源且草稿已有我方动画 → 旧素材与 refs 原样保留,仅降级告警。"""
+    old_anim = _preset_our_animation("text-zh-1", anim_name="旧动画A")
+    draft = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    draft["materials"]["material_animations"] = [old_anim]
+    draft["tracks"][0]["segments"][0]["extra_material_refs"] = [old_anim["id"]]
+    tmp_draft_with_texts.write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
+
+    _empty_cache_root(tmp_path, monkeypatch)
+    out = inject_text_fx(_state(tmp_draft_with_texts))
+
+    after = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    anims = after["materials"]["material_animations"]
+    assert [a["id"] for a in anims] == ["text-anim-text-zh-1"], "旧动画素材不得被降级清除"
+    assert anims[0]["animations"][0]["name"] == "旧动画A"
+    seg_refs = after["tracks"][0]["segments"][0]["extra_material_refs"]
+    assert seg_refs == ["text-anim-text-zh-1"], "旧引用不得被剥离"
+    assert any("无可用入场动画资源" in t for t in out["status_log"])
+    assert "node_10_inject_text_fx_done" in out["status_log"]
+
+
+def test_degrade_on_missing_cache_root_keeps_animations(
+    tmp_draft_with_texts: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """缓存根路径不存在(配置错误)→ 同样非破坏降级,不清除现有草稿动画。"""
+    old_anim = _preset_our_animation("text-zh-2")
+    draft = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    draft["materials"]["material_animations"] = [old_anim]
+    draft["tracks"][0]["segments"][1]["extra_material_refs"] = [old_anim["id"]]
+    tmp_draft_with_texts.write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
+
+    missing = tmp_path / "no-such-cache-root"
+    monkeypatch.setattr(
+        "nodes.node_10_inject_text_fx.JIANYING_CACHE_ROOT", str(missing)
+    )
+    out = inject_text_fx(_state(tmp_draft_with_texts))
+
+    after = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    assert [a["id"] for a in after["materials"]["material_animations"]] == [
+        "text-anim-text-zh-2"
+    ]
+    assert after["tracks"][0]["segments"][1]["extra_material_refs"] == [
+        "text-anim-text-zh-2"
+    ]
+    assert any("无可用入场动画资源" in t for t in out["status_log"])
+
+
+def test_degrade_keeps_human_animations(
+    tmp_draft_with_texts: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """无可用资源且草稿有人工动画(uuid id)→ 人工素材与 refs 完全不变。"""
+    human_anim = {
+        "id": "4F1A2B3C-HUMAN-ANIM",
+        "type": "sticker_animation",
+        "multi_language_current": "none",
+        "animations": [{
+            "id": "4F1A2B3C-HUMAN-ANIM:in", "name": "人工动画", "type": "in",
+            "start": 0, "duration": 500000, "resource_id": "9999999999999999999",
+        }],
+    }
+    draft = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    draft["materials"]["material_animations"] = [human_anim]
+    draft["tracks"][0]["segments"][1]["extra_material_refs"] = ["4F1A2B3C-HUMAN-ANIM"]
+    tmp_draft_with_texts.write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
+
+    _empty_cache_root(tmp_path, monkeypatch)
+    inject_text_fx(_state(tmp_draft_with_texts))
+
+    after = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    assert [a["id"] for a in after["materials"]["material_animations"]] == [
+        "4F1A2B3C-HUMAN-ANIM"
+    ]
+    assert after["tracks"][0]["segments"][1]["extra_material_refs"] == [
+        "4F1A2B3C-HUMAN-ANIM"
+    ]
+
+
+def test_new_animation_replaces_old_and_cleans_orphans(tmp_draft_with_texts: Path) -> None:
+    """有新可用资源 → 新动画替换旧同 id 条目并绑定;孤儿我方旧动画被清理。"""
+    old_anim = _preset_our_animation("text-zh-1", anim_name="旧动画A")
+    orphan = _preset_our_animation("text-zh-9", anim_name="孤儿旧动画")
+    draft = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    draft["materials"]["material_animations"] = [old_anim, orphan]
+    draft["tracks"][0]["segments"][0]["extra_material_refs"] = [old_anim["id"]]
+    tmp_draft_with_texts.write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
+
+    expected = _expected_pool_member("draft")
+    inject_text_fx(_state(tmp_draft_with_texts))
+
+    after = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    anims = {a["id"]: a for a in after["materials"]["material_animations"]}
+    assert set(anims) == {"text-anim-text-zh-1", "text-anim-text-zh-2"}, "孤儿 text-anim-text-zh-9 应被清理"
+    assert anims["text-anim-text-zh-1"]["animations"][0]["name"] == expected["name"], "同 id 条目应被新动画替换"
+    seg_refs = after["tracks"][0]["segments"][0]["extra_material_refs"]
+    assert seg_refs == ["text-anim-text-zh-1"], "refs 仍指向被替换后的同 id 条目"
+
+
+def test_human_animation_survives_successful_rewrite(tmp_draft_with_texts: Path) -> None:
+    """成功写入新动画时,人工动画素材与引用仍不受清理影响。"""
+    human_anim = {
+        "id": "4F1A2B3C-HUMAN-ANIM",
+        "type": "sticker_animation",
+        "multi_language_current": "none",
+        "animations": [{
+            "id": "4F1A2B3C-HUMAN-ANIM:in", "name": "人工动画", "type": "in",
+            "start": 0, "duration": 500000, "resource_id": "9999999999999999999",
+        }],
+    }
+    draft = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    draft["materials"]["material_animations"] = [human_anim]
+    draft["tracks"][0]["segments"][1]["extra_material_refs"] = ["4F1A2B3C-HUMAN-ANIM"]
+    tmp_draft_with_texts.write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
+
+    inject_text_fx(_state(tmp_draft_with_texts))
+
+    after = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    ids = {a["id"] for a in after["materials"]["material_animations"]}
+    assert "4F1A2B3C-HUMAN-ANIM" in ids, "人工动画不得被我方清理波及"
+    assert "text-anim-text-zh-1" in ids and "text-anim-text-zh-2" in ids
+    seg_refs = after["tracks"][0]["segments"][1]["extra_material_refs"]
+    assert "4F1A2B3C-HUMAN-ANIM" in seg_refs
