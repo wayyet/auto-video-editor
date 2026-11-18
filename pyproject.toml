@@ -16,6 +16,9 @@ dependencies = [
     # langgraph-checkpoint
     # langgraph-prebuilt
     "httpx>=0.27",
+    # 网页话题检索 HTTP 客户端(2026-11-19 审查修订版 P1-02:SOCKS 走 extra,
+    # 与 requirements.txt 的 requests[socks]==2.34.2 保持一致;socks5h 代理必需)
+    "requests[socks]>=2.34.2,<3",
     # PostgreSQL 统一改造:运行时唯一持久化后端(方案 §4.8)。
     # SQLite checkpointer 依赖已删除 —— 不再有本地 .sqlite 落盘。
     "langgraph-checkpoint-postgres>=3.1",  # AsyncPostgresSaver / PostgresSaver

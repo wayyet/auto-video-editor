@@ -59,7 +59,7 @@ pytest==9.1.1
 pytest-asyncio==1.4.0
 pytest-mock==3.15.1
 PyYAML==6.0.3
-requests==2.34.2
+requests[socks]==2.34.2
 requests-toolbelt==1.0.0
 # Phase 1:FireRed-OpenStoryline MCP 集成(plan §7.2)
 # mcp SDK 曾由 langgraph-sdk==0.4.4 间接传递;agent_gate 已直接依赖它,故在下方显式钉版。

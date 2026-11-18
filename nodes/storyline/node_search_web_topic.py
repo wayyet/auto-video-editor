@@ -20,7 +20,10 @@ from pathlib import Path
 
 import config
 from state import WorkflowState
-from storyline_capabilities.search_web_topic import search_web_topic as cap_topic
+from storyline_capabilities.search_web_topic import (
+    build_request_hash,
+    search_web_topic as cap_topic,
+)
 from nodes.storyline._common import (
     _read_json_artifact,
     _resolve_outputs_root,
@@ -31,9 +34,14 @@ from nodes.storyline._common import (
 
 # 能力层 error_code → 固定状态标签(前置化设计方案 §4.5:标签静态,动态数值
 # 只进产物 JSON 与 error_log;能力层新字段缺失时走 .get 默认 → done,兼容旧桩)。
+# 2026-11-19 审查修订版 P2-04:新错误码 HTTP_ERROR / PROXY_ERROR /
+# PROVIDER_BLOCKED 均映射到既有 failed 标签(软失败语义不变)。
 _ERROR_STATUS_TAGS: dict[str, str] = {
     "NO_RESULTS": "storyline_search_web_topic_no_results",
     "NETWORK_ERROR": "storyline_search_web_topic_failed",
+    "HTTP_ERROR": "storyline_search_web_topic_failed",
+    "PROXY_ERROR": "storyline_search_web_topic_failed",
+    "PROVIDER_BLOCKED": "storyline_search_web_topic_failed",
     "PARSE_ERROR": "storyline_search_web_topic_failed",
     "UNKNOWN_PROVIDER": "storyline_search_web_topic_failed",
 }
@@ -45,18 +53,27 @@ _KNOWN_STATUSES = ("ok", "no_results", "failed", "cache_hit")
 SKIPPED_STATUS_TAG = "storyline_search_web_topic_skipped"
 
 
-def _load_reusable_cache(state: WorkflowState, query_hash: str) -> dict | None:
-    """读本线程自己的检索产物,结构有效且 ``query_hash`` 一致则返回(否则 None)。
+def _load_reusable_cache(
+    state: WorkflowState, query_hash: str, request_hash: str
+) -> dict | None:
+    """读本线程自己的检索产物,结构有效且 hash 一致则返回(否则 None)。
 
     设计方案 §4.6:QA 重试期间分组/概述未变 → 检索词与 hash 不变 → 复用,
     不重复请求互联网。``failed`` 产物同样复用(标签如实落在 failed,error_log
     可对账);要重试网络请启动新任务 —— 重试回路里反复打已超时的外部搜索
     只会把 QA 回路拖慢,不会改变结果。
+
+    2026-11-19 审查修订版 §4.5/P2-02/§P2-06:缓存必须比较 ``request_hash``
+    (provider+query+参数+语言+解析器+schema 版本)—— 同 query 换引擎必得
+    不同 request_hash → 缓存未命中重新检索;老产物没有 ``request_hash`` 字段
+    一律视为未命中,不得跨引擎复用(防止"切了 Google 仍命中旧 DDG 失败缓存")。
     """
     doc = _read_json_artifact(state, "storyline_web_topic_artifact")
     if not isinstance(doc, dict):
         return None
     if doc.get("query_hash") != query_hash:
+        return None
+    if doc.get("request_hash") != request_hash:
         return None
     if doc.get("status") not in _KNOWN_STATUSES:
         return None
@@ -91,26 +108,38 @@ def storyline_search_web_topic_node(state: WorkflowState) -> dict:
         }
     query_hash = hashlib.sha256(query.encode("utf-8")).hexdigest()
 
-    # 2026-11-10 前置化阶段3:query_hash 一致且结构有效 → cache_hit 直接复用,
-    # 不重复请求互联网(设计方案 §4.6);status 改写为 cache_hit 留痕,
-    # error_code / message / searched_at 原样保留,标签仍按 error_code 映射。
-    cached = _load_reusable_cache(state, query_hash)
-    if cached is not None:
-        cached = dict(cached)
-        cached["status"] = "cache_hit"
-        out_path.write_text(
-            json.dumps(cached, ensure_ascii=False, default=str), encoding="utf-8"
-        )
-        return {
-            "storyline_web_topic_artifact": str(out_path),
-            "status_log": append_status_tag(state, _status_tag_for(cached)),
-        }
+    # 2026-11-19 审查修订版 P2-01/P2-03:引擎/代理/诊断开关由 config 决定
+    # (进程启动时读取,改后须重启进程;§5.1-5)。google_html 强制 socks5h://
+    # 代理的校验在能力层(PROXY_ERROR),节点只透传。
+    engine = str(config.STORYLINE_WEB_TOPIC_ENGINE)
+    proxy_url = (config.STORYLINE_WEB_TOPIC_SOCKS5_PROXY or "").strip() or None
+    debug_dir = out_dir if config.STORYLINE_WEB_TOPIC_DEBUG else None
+    request_hash = build_request_hash(query=query, provider=engine, max_results=10)
+
+    # 2026-11-10 前置化阶段3:hash 一致且结构有效 → cache_hit 直接复用,不重复
+    # 请求互联网(设计方案 §4.6);2026-11-19 升级为 request_hash 匹配(§4.5)。
+    # status 改写为 cache_hit 留痕,error_code / message / searched_at 原样保留,
+    # 标签仍按 error_code 映射。web_topic_force_refresh=true 显式绕过缓存重检索。
+    if not state.get("web_topic_force_refresh"):
+        cached = _load_reusable_cache(state, query_hash, request_hash)
+        if cached is not None:
+            cached = dict(cached)
+            cached["status"] = "cache_hit"
+            out_path.write_text(
+                json.dumps(cached, ensure_ascii=False, default=str), encoding="utf-8"
+            )
+            return {
+                "storyline_web_topic_artifact": str(out_path),
+                "status_log": append_status_tag(state, _status_tag_for(cached)),
+            }
 
     try:
         result = cap_topic(
             query=query,
             max_results=10,
-            provider="duckduckgo_html",
+            provider=engine,
+            proxy_url=proxy_url,
+            debug_dir=debug_dir,
         )
     except Exception as e:  # noqa: BLE001
         return {
@@ -122,6 +151,11 @@ def storyline_search_web_topic_node(state: WorkflowState) -> dict:
                 state, "storyline_search_web_topic_failed"
             ),
         }
+
+    # 节点是 request_hash 的权威写入位:能力层/旧桩没带就补上本节点计算的值,
+    # 保证 QA 回路缓存命中判断成立(§4.5;旧桩返回体兼容)。
+    if isinstance(result, dict):
+        result.setdefault("request_hash", request_hash)
 
     out_path.write_text(
         json.dumps(result, ensure_ascii=False, default=str), encoding="utf-8"

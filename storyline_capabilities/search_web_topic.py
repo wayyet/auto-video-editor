@@ -1,29 +1,39 @@
-"""本地化 search_web_topic(plan_v4 §5 阶段 1 / A 类)。
+"""本地化 search_web_topic(plan_v4 §5 阶段 1 / A 类;2026-11-19 审查修订版扩展)。
 
 策略:
-- 本地实现基于 DuckDuckGo 的 ``/html/`` 端点(无需 API key),返回搜索结果列表
-  (text / image / topic)。
-- 真正复杂的 web 主题抓取(Tavily / Bing Search API 等)在阶段 1 仅留接口 +
-  stub;阶段 5 接入真实供应商。
-- 通过 ``search_provider`` 名字注入位,默认 ``"duckduckgo_html"``;None 时返回
-  empty。
+- Provider 可插拔:``duckduckgo_html``(存量)、``google_html``(2026-11-19 按用户
+  拍板接入,走本地 SOCKS5;检测到挑战/人机验证页即停,**不做任何规避动作**)、
+  ``stub``。google_html 为生产默认引擎由节点层配置决定,能力层默认保持存量值。
+- google_html **强制 SOCKS5 代理**(``socks5h://``,域名解析走代理端防本地 DNS
+  污染);代理缺失/格式不对返回 ``PROXY_ERROR``,绝不静默回退直连。
+- 错误码体系(审查修订版 §4.4 表):``NO_RESULTS`` / ``NETWORK_ERROR`` /
+  ``HTTP_ERROR`` / ``PROXY_ERROR`` / ``PROVIDER_BLOCKED`` / ``PARSE_ERROR`` /
+  ``UNKNOWN_PROVIDER``。
+- 诊断:摘要随产物 ``diagnostics`` 字段返回(不含代理凭据/Cookie);仅当调用方
+  显式传 ``debug_dir`` 时才把响应片段落成受限文本文件(≤64KiB、.txt、原子替换,
+  审查修订版 §5.5)。
 
 设计约束(plan §5 阶段 1 第 1~3 行):本模块不依赖 FireRed NodeState / 任何
 私有框架;可作为独立 CLI/Script 跑。
 """
 from __future__ import annotations
 
+import base64
 import datetime as _dt
 import hashlib
+import json
 import urllib.parse
+from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 try:
     import requests  # type: ignore[import-untyped]
+    from requests import exceptions as _requests_exceptions  # noqa: F401
     _HAS_REQUESTS = True
 except ImportError:
     _HAS_REQUESTS = False
+    _requests_exceptions = None  # type: ignore[assignment]
 
 
 DEFAULT_USER_AGENT = (
@@ -45,6 +55,84 @@ _DDG_NO_RESULTS_MARKERS: tuple[str, ...] = ("no-results", "No results")
 
 _ALLOWED_URL_SCHEMES: tuple[str, ...] = ("http", "https")
 
+# ---------------------------------------------------------------------------
+# 2026-11-19 审查修订版:产物 schema v2 / request_hash / 解析器版本 / 诊断
+# ---------------------------------------------------------------------------
+# 产物 schema 版本:v2 = +schema_version/engine/provider/request_hash/diagnostics;
+# 旧字段全保留,读侧一律 .get 兼容(§4.4)。
+ARTIFACT_SCHEMA_VERSION: int = 2
+
+# 每供应商解析器版本与语言参数(request_hash 组成部分,§4.5)。
+# 2026-11-19 补充:google_html 纯 HTTP 路线被实测关闭(无 JS 桩页,enablejs 重试
+# 也要求 JS)、DDG 挑战 VPS 出口 → 用户拍板默认引擎改 bing_html(Bing 结果页服务端
+# 渲染,隧道/直连均实测返回 10 条真实结果);google_html 代码保留可随时切回。
+_PARSER_VERSIONS: dict[str, str] = {
+    "duckduckgo_html": "ddg_html_v1",
+    "google_html": "google_html_v1",
+    "bing_html": "bing_html_v1",
+    "stub": "stub_v1",
+}
+_PROVIDER_LOCALES: dict[str, str] = {
+    "duckduckgo_html": "",
+    "google_html": "zh-CN",
+    "bing_html": "zh-CN",
+    "stub": "",
+}
+_PROVIDER_ENGINE_LABELS: dict[str, str] = {
+    "duckduckgo_html": "DuckDuckGo",
+    "google_html": "Google",
+    "bing_html": "Bing",
+    "stub": "stub",
+}
+
+# 调试片段落盘上限(§5.5:≤64KiB)。
+WEB_TOPIC_DEBUG_MAX_BYTES: int = 64 * 1024
+
+# Google 挑战/同意页特征(§5.4 识别顺序:挑战页优先于一切解析;命中即
+# PROVIDER_BLOCKED 并停止,不做验证码处理/出口轮换等任何规避动作)。
+_GOOGLE_BLOCKED_MARKERS: tuple[str, ...] = (
+    "unusual traffic",
+    "异常流量",
+    "g-recaptcha",
+    "recaptcha/api",
+    "/sorry/",
+)
+_GOOGLE_CONSENT_HOST = "consent.google.com"
+_GOOGLE_NO_RESULTS_MARKERS: tuple[str, ...] = (
+    "did not match any documents",
+    "未找到和您查询",
+    "没有找到和您查询",
+    "不包含某些字词",
+)
+# 摘要块 class 提示(有限回退:Google 版面实验会换 class,命中其一即采,§5.4-4)。
+_GOOGLE_SNIPPET_CLASS_HINTS: tuple[str, ...] = (
+    "VwiC3b",
+    "b_lineclamp",
+    "s3v9rd",
+    "IsZvec",
+)
+
+# ---------------------------------------------------------------------------
+# Bing(2026-11-19:默认引擎 bing_html;结果块 b_algo 服务端渲染)
+# ---------------------------------------------------------------------------
+_BING_SNIPPET_CLASS_HINTS: tuple[str, ...] = (
+    "b_caption",
+    "b_algoSlug",
+    "b_lineclamp",
+)
+# 零结果时 Bing 的「无结果」特征(b_no 空态容器/文案;只在解析出零条时才查询)
+_BING_NO_RESULTS_MARKERS: tuple[str, ...] = (
+    "b_no",
+    "There are no results for",
+    "没有找到",
+    "没有与此相关的结果",
+)
+_BING_BLOCKED_MARKERS: tuple[str, ...] = (
+    "captcha",
+    "unusual traffic",
+    "异常流量",
+)
+
 
 def _clean_web_text(raw: object, max_len: int) -> str:
     """网页摘要是**不可信的外部文本**:压成单行、去控制字符、截断。
@@ -57,11 +145,219 @@ def _clean_web_text(raw: object, max_len: int) -> str:
     return s[:max_len].strip()
 
 
+def build_request_hash(*, query: str, provider: str, max_results: int) -> str:
+    """缓存键(审查修订版 §4.5):provider+query+参数+语言+解析器+schema 版本。
+
+    只含请求语义,不含代理地址与任何凭据;同 query 换 Provider 必得不同 hash
+    (缓存必须比较它,防止"切了引擎仍命中旧 DDG 失败缓存")。
+    """
+    payload = "\x1f".join(
+        [
+            "v2",
+            provider,
+            str(query),
+            str(int(max_results)),
+            _PROVIDER_LOCALES.get(provider, ""),
+            _PARSER_VERSIONS.get(provider, "unknown"),
+            str(ARTIFACT_SCHEMA_VERSION),
+        ]
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _looks_blocked(text: str, markers: tuple[str, ...]) -> bool:
+    """页面/响应体是否命中挑战/拒绝特征(§5.4-3)。"""
+    low = str(text or "").lower()
+    return any(marker in low for marker in markers)
+
+
+def _write_debug_dump(
+    debug_dir: Optional[Path], diagnostics: dict[str, Any], body: str
+) -> None:
+    """受限诊断落盘(审查修订版 §5.5)。
+
+    仅当调用方显式传 ``debug_dir`` 才写;``.txt`` 纯文本(不给 Web 服务当
+    HTML 展示)、≤64KiB、临时文件+原子替换;任何落盘失败静默吞掉——诊断文件
+    绝不能改变检索/工作流状态,也不能覆盖原始错误。
+    """
+    if debug_dir is None:
+        return
+    try:
+        debug_dir = Path(debug_dir)
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        head = {
+            "captured_at": _dt.datetime.now(_dt.timezone.utc).isoformat(
+                timespec="seconds"
+            ),
+            "diagnostics": diagnostics,
+        }
+        payload = (
+            json.dumps(head, ensure_ascii=False, default=str)
+            + "\n\n"
+            + str(body or "")
+        )[:WEB_TOPIC_DEBUG_MAX_BYTES]
+        tmp = debug_dir / "search_web_topic_debug.txt.tmp"
+        tmp.write_text(payload, encoding="utf-8", errors="replace")
+        tmp.replace(debug_dir / "search_web_topic_debug.txt")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _normalize_google_result_url(raw: object) -> Optional[str]:
+    """结果链接归一化与安全校验(审查修订版 §5.4-5/P1-04)。
+
+    - 展开 Google 内部包装跳转 ``/url?q=<外链>``(仅识别 q/url 两个参数名);
+    - 只放行 http/https 外链;
+    - 丢弃 Google 系导航地址(g.co/goo.gl/googleusercontent、google 域名的
+      首页/搜索/图片/地图/偏好设置等站内路径)。
+    """
+    url = str(raw or "").strip()
+    if not url:
+        return None
+    if url.startswith("/url?"):
+        try:
+            parsed = urllib.parse.urlparse(url)
+            qs = urllib.parse.parse_qs(parsed.query)
+        except ValueError:
+            return None
+        real = (qs.get("q") or qs.get("url") or [None])[0]
+        if not real:
+            return None
+        url = str(real)
+    if url.startswith("//"):
+        url = "https:" + url
+    if url.startswith("/"):
+        return None  # 站内相对路径 = 导航,不是外链
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return None
+    if parsed.scheme.lower() not in _ALLOWED_URL_SCHEMES or not parsed.hostname:
+        return None
+    host = parsed.hostname.lower()
+    if host in ("g.co", "goo.gl") or host.endswith(
+        (".googleusercontent.com", ".g.doubleclick.net")
+    ):
+        return None
+    if host == "google.com" or host.endswith(".google.com"):
+        path = (parsed.path or "/").lower()
+        internal_paths = (
+            "/",
+            "/search",
+            "/url",
+            "/imgres",
+            "/maps",
+            "/preferences",
+            "/setprefs",
+            "/advanced_search",
+            "/webhp",
+            "/travel",
+        )
+        if path in internal_paths:
+            return None
+    return url
+
+
+class _SerpResultParser(HTMLParser):
+    """通用 SERP 结构化解析(Google/Bing 共用;审查修订版 §5.4-4:html.parser
+    + 有限回退)。
+
+    提取两类信号,退出后由调用方按文档序配对:
+    - 结果锚点:标题标签(h2/h3)与 ``<a href>`` **同时嵌套开放**时捕获标题
+      (Google: a>h3;Bing: h2>a,两种嵌套方向都支持)→ (seq, href, title);
+    - 摘要块:div/p class 命中 hints 之一 → 只捕获最外层匹配容器 → (seq, text)。
+    不把嵌套 HTML 当字符串模板;实体解码交给 ``convert_charrefs`` 与属性值
+    自动 unescape。
+    """
+
+    def __init__(self, *, snippet_hints: tuple[str, ...]) -> None:
+        super().__init__(convert_charrefs=True)
+        self._snippet_hints = snippet_hints
+        self._a_stack: list[Optional[str]] = []
+        self._heading_depth = 0
+        self._title_href: Optional[str] = None
+        self._title_buf: list[str] = []
+        self._in_snippet = False
+        self._snippet_depth = 0
+        self._snippet_buf: list[str] = []
+        self.seq = 0
+        self.anchors: list[tuple[int, str, str]] = []  # (seq, href, title)
+        self.snippets: list[tuple[int, str]] = []  # (seq, text)
+
+    def _nearest_href(self) -> Optional[str]:
+        return next((h for h in reversed(self._a_stack) if h), None)
+
+    def _maybe_start_title(self, href: Optional[str]) -> None:
+        # 标题标签与锚点同时开放 → 开始捕获标题(google: a>h3;bing: h2>a)
+        if href and self._heading_depth > 0 and self._title_href is None:
+            self._title_href = href
+            self._title_buf = []
+
+    def _flush_title(self) -> None:
+        if self._title_href is None:
+            return
+        title = " ".join("".join(self._title_buf).split())
+        if title:
+            self.anchors.append((self.seq, self._title_href, title))
+        self._title_href = None
+        self._title_buf = []
+
+    def handle_starttag(self, tag, attrs):
+        attrs_d = dict(attrs)
+        if tag == "a":
+            self._a_stack.append(attrs_d.get("href"))
+            self.seq += 1
+            self._maybe_start_title(attrs_d.get("href"))
+        elif tag in ("h2", "h3"):
+            self._heading_depth += 1
+            self._maybe_start_title(self._nearest_href())
+        elif tag in ("div", "p"):
+            if self._in_snippet:
+                self._snippet_depth += 1
+            else:
+                cls = attrs_d.get("class") or ""
+                if any(hint in cls for hint in self._snippet_hints):
+                    self._in_snippet = True
+                    self._snippet_depth = 1
+                    self._snippet_buf = []
+
+    def handle_endtag(self, tag):
+        if tag == "a":
+            if self._title_href is not None and len(self._a_stack) <= 1:
+                self._flush_title()  # bing(h2>a):标题锚点先闭合
+            if self._a_stack:
+                self._a_stack.pop()
+            if self._title_href is not None and self._nearest_href() != self._title_href:
+                self._flush_title()  # google(a>h3):持有标题的锚点已闭合时兜底刷新
+        elif tag in ("h2", "h3"):
+            if self._title_href is not None:
+                self._flush_title()  # google(a>h3):标题标签先闭合
+            self._heading_depth = max(0, self._heading_depth - 1)
+        elif tag in ("div", "p"):
+            if self._in_snippet:
+                self._snippet_depth -= 1
+                if self._snippet_depth <= 0:
+                    text = " ".join("".join(self._snippet_buf).split())
+                    if text:
+                        self.seq += 1
+                        self.snippets.append((self.seq, text))
+                    self._in_snippet = False
+                    self._snippet_buf = []
+
+    def handle_data(self, data):
+        if self._title_href is not None:
+            self._title_buf.append(data)
+        elif self._in_snippet:
+            self._snippet_buf.append(data)
+
+
 # ---------------------------------------------------------------------------
-# DuckDuckGo ``/html/`` 简易搜索
+# DuckDuckGo ``/html/`` 简易搜索(存量实现,回滚通道;行为不变)
 # ---------------------------------------------------------------------------
 def _ddg_html_search(
-    query: str, max_results: int = 10
+    query: str,
+    max_results: int = 10,
+    proxies: Optional[dict[str, str]] = None,
 ) -> tuple[list[dict[str, Any]], Optional[str]]:
     """从 DuckDuckGo html 端点取搜索结果列表(文本 + URL + 摘要)。
 
@@ -86,6 +382,7 @@ def _ddg_html_search(
             params={"q": query},
             headers={"User-Agent": DEFAULT_USER_AGENT},
             timeout=15,
+            **({"proxies": proxies} if proxies else {}),
         )
         r.raise_for_status()
         html = r.text
@@ -177,6 +474,376 @@ def _ddg_html_search(
 
 
 # ---------------------------------------------------------------------------
+# Google SERP(2026-11-19 审查修订版 §5:授权 Gate 已由用户拍板通过)
+# ---------------------------------------------------------------------------
+def _google_html_search(
+    *,
+    query: str,
+    max_results: int,
+    proxy_url: Optional[str],
+    debug_dir: Optional[Path],
+) -> tuple[list[dict[str, Any]], Optional[str], dict[str, Any]]:
+    """从 Google SERP 取搜索结果(强制 SOCKS5;挑战页即停,零规避)。
+
+    Returns:
+        ``(results, error_code, diagnostics)``。error_code ∈ {None,
+        PROXY_ERROR, NETWORK_ERROR, HTTP_ERROR, PROVIDER_BLOCKED, NO_RESULTS,
+        PARSE_ERROR};diagnostics 不含代理凭据/Cookie(§4.4)。
+    """
+    diagnostics: dict[str, Any] = {
+        "http_status": None,
+        "final_host": None,
+        "proxy_enabled": bool(proxy_url),
+        "parser_version": _PARSER_VERSIONS["google_html"],
+        "response_content_type": None,
+        "response_bytes": None,
+    }
+
+    # §5.1-2:google_html 必须显式给 socks5h:// 代理;否则 PROXY_ERROR,
+    # 不发请求、绝不静默回退直连。
+    if not proxy_url or not str(proxy_url).strip():
+        diagnostics["proxy_enabled"] = False
+        return [], "PROXY_ERROR", diagnostics
+    proxy = str(proxy_url).strip()
+    try:
+        proxy_scheme = urllib.parse.urlparse(proxy).scheme.lower()
+    except ValueError:
+        proxy_scheme = ""
+    if proxy_scheme != "socks5h":
+        return [], "PROXY_ERROR", diagnostics
+    if not _HAS_REQUESTS:
+        return [], "NETWORK_ERROR", diagnostics
+    proxies = {"http": proxy, "https": proxy}
+    diagnostics["proxy_enabled"] = True
+
+    try:
+        r = requests.get(
+            "https://www.google.com/search",
+            params={"q": query, "num": 10, "hl": "zh-CN"},
+            headers={
+                "User-Agent": DEFAULT_USER_AGENT,
+                "Accept-Language": "zh-CN,zh;q=0.9",
+            },
+            proxies=proxies,
+            timeout=(5, 15),
+        )
+        # HTTP 4xx/5xx → HTTPError(下方 except 分类为 HTTP_ERROR/PROVIDER_BLOCKED;
+        # 202/2xx 不抛,挑战页由特征识别兜底 —— 审查修订版 §5.4-1)
+        r.raise_for_status()
+        diagnostics["http_status"] = getattr(r, "status_code", None)
+        try:
+            diagnostics["final_host"] = urllib.parse.urlparse(
+                getattr(r, "url", "") or ""
+            ).hostname
+        except ValueError:
+            pass
+        try:
+            diagnostics["response_content_type"] = r.headers.get("content-type")
+        except Exception:  # noqa: BLE001
+            pass
+        html = r.text
+        diagnostics["response_bytes"] = len(html.encode("utf-8", errors="replace"))
+    except Exception as e:  # noqa: BLE001
+        if _requests_exceptions is not None and isinstance(
+            e, _requests_exceptions.HTTPError
+        ):
+            # HTTPError(4xx/5xx):响应体含挑战特征 → PROVIDER_BLOCKED,否则 HTTP_ERROR
+            resp = getattr(e, "response", None)
+            resp_text = ""
+            if resp is not None:
+                try:
+                    resp_text = resp.text or ""
+                    diagnostics["http_status"] = resp.status_code
+                except Exception:  # noqa: BLE001
+                    pass
+            code = (
+                "PROVIDER_BLOCKED"
+                if _looks_blocked(resp_text, _GOOGLE_BLOCKED_MARKERS)
+                else "HTTP_ERROR"
+            )
+            _write_debug_dump(debug_dir, diagnostics, resp_text)
+            return [], code, diagnostics
+        if _requests_exceptions is not None and isinstance(
+            e,
+            (
+                _requests_exceptions.ProxyError,
+                _requests_exceptions.InvalidSchema,
+                _requests_exceptions.MissingSchema,
+            ),
+        ):
+            # 代理层错误(SOCKS 依赖缺失/代理不可达/scheme 未知)→ PROXY_ERROR,
+            # 绝不回退直连(§5.3)。
+            _write_debug_dump(debug_dir, diagnostics, "")
+            return [], "PROXY_ERROR", diagnostics
+        _write_debug_dump(debug_dir, diagnostics, "")
+        return [], "NETWORK_ERROR", diagnostics
+
+    # 挑战/同意页识别优先于一切解析(§5.4-3):命中即停,本轮结束不重试。
+    if diagnostics.get("final_host") == _GOOGLE_CONSENT_HOST or _looks_blocked(
+        html, _GOOGLE_BLOCKED_MARKERS
+    ):
+        _write_debug_dump(debug_dir, diagnostics, html)
+        return [], "PROVIDER_BLOCKED", diagnostics
+
+    parser = _SerpResultParser(snippet_hints=_GOOGLE_SNIPPET_CLASS_HINTS)
+    try:
+        parser.feed(html)
+        parser.close()
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 配对:每个结果锚点取文档序其后第一条未消费摘要(§5.4-4 有限回退)。
+    results: list[dict[str, Any]] = []
+    snippet_budget = WEB_TOPIC_TOTAL_CONTEXT_MAX_CHARS
+    seen_urls: set[str] = set()
+    snippets = parser.snippets
+    scan_from = 0
+    for a_seq, href, title in parser.anchors:
+        if len(results) >= max_results:
+            break
+        url = _normalize_google_result_url(href)
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        snippet = ""
+        si = scan_from
+        while si < len(snippets) and snippets[si][0] <= a_seq:
+            si += 1
+        if si < len(snippets):
+            raw_snip = snippets[si][1]
+            scan_from = si + 1
+            if snippet_budget > 0:
+                snippet = _clean_web_text(
+                    raw_snip, min(WEB_TOPIC_SNIPPET_MAX_CHARS, snippet_budget)
+                )
+                snippet_budget -= len(snippet)
+        results.append(
+            {
+                "url": url,
+                "title": _clean_web_text(title, 300),
+                "snippet": snippet,
+                "source": "google_html",
+            }
+        )
+
+    if not results:
+        low = html.lower()
+        if any(marker in low for marker in _GOOGLE_NO_RESULTS_MARKERS):
+            return [], "NO_RESULTS", diagnostics
+        _write_debug_dump(debug_dir, diagnostics, html)
+        return [], "PARSE_ERROR", diagnostics
+    return results, None, diagnostics
+
+
+# ---------------------------------------------------------------------------
+# Bing SERP(2026-11-19:默认引擎 bing_html;b_algo 服务端渲染,无需 JS)
+# ---------------------------------------------------------------------------
+def _normalize_bing_result_url(raw: object) -> Optional[str]:
+    """结果链接归一化与安全校验(P1-04/§5.4-5)。
+
+    - 展开 Bing 加密跳转 ``bing.com/ck/a?...&u=a1<urlsafe_base64>``;
+    - 只放行 http/https 外链;
+    - 丢弃 Bing 站内导航路径(首页/搜索/图片/视频/地图等)。
+    """
+    url = str(raw or "").strip()
+    if not url:
+        return None
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").lower()
+    path = (parsed.path or "/").lower()
+    if host in ("bing.com", "www.bing.com", "cn.bing.com") and path.startswith("/ck/"):
+        qs = urllib.parse.parse_qs(parsed.query)
+        u = (qs.get("u") or [None])[0]
+        if not u:
+            return None
+        b64 = u[2:] if u.startswith("a1") else u
+        try:
+            b64 += "=" * (-len(b64) % 4)
+            url = base64.urlsafe_b64decode(b64.encode("ascii")).decode(
+                "utf-8", "replace"
+            )
+        except Exception:  # noqa: BLE001
+            return None
+        try:
+            parsed = urllib.parse.urlparse(url)
+        except ValueError:
+            return None
+    if url.startswith("//"):
+        url = "https:" + url
+        try:
+            parsed = urllib.parse.urlparse(url)
+        except ValueError:
+            return None
+    elif url.startswith("/"):
+        return None  # 站内相对路径 = 导航,不是外链
+    if parsed.scheme.lower() not in _ALLOWED_URL_SCHEMES or not parsed.hostname:
+        return None
+    host = parsed.hostname.lower()
+    if host == "bing.com" or host.endswith(".bing.com"):
+        bpath = (parsed.path or "/").lower()
+        bing_internal_paths = (
+            "/",
+            "/search",
+            "/ck/",
+            "/images",
+            "/videos",
+            "/news",
+            "/maps",
+            "/academic",
+            "/translator",
+            "/shop",
+        )
+        if bpath in bing_internal_paths:
+            return None
+    return url
+
+
+def _bing_html_search(
+    *,
+    query: str,
+    max_results: int,
+    proxy_url: Optional[str],
+    debug_dir: Optional[Path],
+) -> tuple[list[dict[str, Any]], Optional[str], dict[str, Any]]:
+    """从 Bing SERP 取搜索结果(b_algo 服务端渲染;代理可选,直连国内可达)。
+
+    Returns:
+        ``(results, error_code, diagnostics)``。错误码域与 google_html 一致
+        (PROXY_ERROR/NETWORK_ERROR/HTTP_ERROR/PROVIDER_BLOCKED/NO_RESULTS/
+        PARSE_ERROR);Bing 无 proxy 时直连(国内可达),有 proxy 时经代理出口。
+    """
+    diagnostics: dict[str, Any] = {
+        "http_status": None,
+        "final_host": None,
+        "proxy_enabled": False,
+        "parser_version": _PARSER_VERSIONS["bing_html"],
+        "response_content_type": None,
+        "response_bytes": None,
+    }
+    if not _HAS_REQUESTS:
+        return [], "NETWORK_ERROR", diagnostics
+    proxies: Optional[dict[str, str]] = None
+    if proxy_url and str(proxy_url).strip():
+        proxies = {"http": str(proxy_url).strip(), "https": str(proxy_url).strip()}
+        diagnostics["proxy_enabled"] = True
+
+    try:
+        r = requests.get(
+            "https://www.bing.com/search",
+            params={"q": query, "mkt": "zh-CN"},
+            headers={
+                "User-Agent": DEFAULT_USER_AGENT,
+                "Accept-Language": "zh-CN,zh;q=0.9",
+            },
+            **({"proxies": proxies} if proxies else {}),
+            timeout=(5, 15),
+        )
+        # HTTP 4xx/5xx → HTTPError(下方分类 HTTP_ERROR/PROVIDER_BLOCKED)
+        r.raise_for_status()
+        diagnostics["http_status"] = getattr(r, "status_code", None)
+        try:
+            diagnostics["final_host"] = urllib.parse.urlparse(
+                getattr(r, "url", "") or ""
+            ).hostname
+        except ValueError:
+            pass
+        try:
+            diagnostics["response_content_type"] = r.headers.get("content-type")
+        except Exception:  # noqa: BLE001
+            pass
+        html = r.text
+        diagnostics["response_bytes"] = len(html.encode("utf-8", errors="replace"))
+    except Exception as e:  # noqa: BLE001
+        if _requests_exceptions is not None and isinstance(
+            e, _requests_exceptions.HTTPError
+        ):
+            resp = getattr(e, "response", None)
+            resp_text = ""
+            if resp is not None:
+                try:
+                    resp_text = resp.text or ""
+                    diagnostics["http_status"] = resp.status_code
+                except Exception:  # noqa: BLE001
+                    pass
+            code = (
+                "PROVIDER_BLOCKED"
+                if _looks_blocked(resp_text, _BING_BLOCKED_MARKERS)
+                else "HTTP_ERROR"
+            )
+            _write_debug_dump(debug_dir, diagnostics, resp_text)
+            return [], code, diagnostics
+        if _requests_exceptions is not None and isinstance(
+            e,
+            (
+                _requests_exceptions.ProxyError,
+                _requests_exceptions.InvalidSchema,
+                _requests_exceptions.MissingSchema,
+            ),
+        ):
+            _write_debug_dump(debug_dir, diagnostics, "")
+            return [], "PROXY_ERROR", diagnostics
+        _write_debug_dump(debug_dir, diagnostics, "")
+        return [], "NETWORK_ERROR", diagnostics
+
+    # 挑战页识别优先于一切解析(§5.4-3):命中即停,不做任何规避。
+    if _looks_blocked(html, _BING_BLOCKED_MARKERS):
+        _write_debug_dump(debug_dir, diagnostics, html)
+        return [], "PROVIDER_BLOCKED", diagnostics
+
+    parser = _SerpResultParser(snippet_hints=_BING_SNIPPET_CLASS_HINTS)
+    try:
+        parser.feed(html)
+        parser.close()
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 配对:每个结果锚点取文档序其后第一条未消费摘要。
+    results: list[dict[str, Any]] = []
+    snippet_budget = WEB_TOPIC_TOTAL_CONTEXT_MAX_CHARS
+    seen_urls: set[str] = set()
+    snippets = parser.snippets
+    scan_from = 0
+    for a_seq, href, title in parser.anchors:
+        if len(results) >= max_results:
+            break
+        url = _normalize_bing_result_url(href)
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        snippet = ""
+        si = scan_from
+        while si < len(snippets) and snippets[si][0] <= a_seq:
+            si += 1
+        if si < len(snippets):
+            raw_snip = snippets[si][1]
+            scan_from = si + 1
+            if snippet_budget > 0:
+                snippet = _clean_web_text(
+                    raw_snip, min(WEB_TOPIC_SNIPPET_MAX_CHARS, snippet_budget)
+                )
+                snippet_budget -= len(snippet)
+        results.append(
+            {
+                "url": url,
+                "title": _clean_web_text(title, 300),
+                "snippet": snippet,
+                "source": "bing_html",
+            }
+        )
+
+    if not results:
+        low = html.lower()
+        if any(marker.lower() in low for marker in _BING_NO_RESULTS_MARKERS):
+            return [], "NO_RESULTS", diagnostics
+        _write_debug_dump(debug_dir, diagnostics, html)
+        return [], "PARSE_ERROR", diagnostics
+    return results, None, diagnostics
+
+
+# ---------------------------------------------------------------------------
 # 对外主入口(可注入 provider)
 # ---------------------------------------------------------------------------
 def search_web_topic(
@@ -185,6 +852,8 @@ def search_web_topic(
     max_results: int = 10,
     media_dir: Optional[Path] = None,
     provider: str = "duckduckgo_html",
+    proxy_url: Optional[str] = None,
+    debug_dir: Optional[Path] = None,
     download: bool = False,
 ) -> dict[str, Any]:
     """Web 主题搜索。
@@ -193,26 +862,41 @@ def search_web_topic(
         query: 搜索关键字。
         max_results: 最多取多少条。
         media_dir: 可选,若指定 + ``download=True`` 则抓取 HTML 到本地。
-        provider: ``"duckduckgo_html"`` / ``"stub"`` / 其它未来供应商。
+        provider: ``"duckduckgo_html"`` / ``"google_html"`` / ``"stub"``。
+        proxy_url: 传输层代理(google_html 强制 socks5h://;duckduckgo_html
+            可选)。只作为网络传输配置,不用于任何挑战绕过(§5.3)。
+        debug_dir: 诊断落盘目录(仅显式传入且解析失败时写受限 .txt,§5.5);
+            由节点层按 ``STORYLINE_WEB_TOPIC_DEBUG`` 开关决定是否传入。
 
     Returns:
         dict::
 
             {"status": "ok"|"no_results"|"failed",
+             "schema_version": 2,
+             "engine": UI 展示名, "provider": 适配器标识,
              "query": str(实际提交的检索词),
              "search_web_topic": [items],
              "preview_urls": [...],
-             "error_code": None|"NO_RESULTS"|"NETWORK_ERROR"|"PARSE_ERROR"|"UNKNOWN_PROVIDER",
+             "error_code": None|"NO_RESULTS"|"NETWORK_ERROR"|"HTTP_ERROR"
+                          |"PROXY_ERROR"|"PROVIDER_BLOCKED"|"PARSE_ERROR"
+                          |"UNKNOWN_PROVIDER",
              "message": str,
-             "query_hash": sha256(query), "searched_at": UTC isoformat}
+             "query_hash": sha256(query),
+             "request_hash": sha256(请求语义,§4.5),
+             "searched_at": UTC isoformat,
+             "diagnostics": {...}}
 
     2026-11-10 阶段2(前置化设计方案 §4.2):所有分支统一加
     ``status`` / ``query_hash`` / ``searched_at``;网络异常与解析失败从
-    ``NO_RESULTS`` 中分离。``cache_hit`` 只会由节点层复用同 query_hash 缓存时
-    改写(阶段3+),本函数不会返回它。
+    ``NO_RESULTS`` 中分离。``cache_hit`` 只会由节点层复用同 request_hash 缓存时
+    改写,本函数不会返回它。
     """
     query_hash = hashlib.sha256(str(query).encode("utf-8")).hexdigest()
     searched_at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+    request_hash = build_request_hash(
+        query=str(query), provider=provider, max_results=max_results
+    )
+    engine_label = _PROVIDER_ENGINE_LABELS.get(provider, provider)
 
     def _result(
         *,
@@ -220,6 +904,7 @@ def search_web_topic(
         error_code: Optional[str],
         message: str,
         preview_urls: Optional[list[str]] = None,
+        diagnostics: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         # NO_RESULTS 是错误码域里的软态,status 归 no_results 而非 failed
         if error_code == "NO_RESULTS":
@@ -228,21 +913,173 @@ def search_web_topic(
             status = "failed"
         else:
             status = "ok" if items else "no_results"
-        return {
+        doc: dict[str, Any] = {
             "status": status,
-            # 2026-11-10 真机验收补漏:§4.2 产物契约要求记录实际提交的检索词
+            # 2026-11-10 真机验收补漏:§4.2 契约要求记录实际提交的检索词
             # (审计/排障入口;此前只有 query_hash,人工无法直接读回检索内容)
             "query": str(query),
+            # 2026-11-19 审查修订版 §4.4:schema v2 契约(引擎展示名/适配器
+            # 标识/请求语义 hash/诊断摘要;旧字段全保留,读侧 .get 兼容)
+            "schema_version": ARTIFACT_SCHEMA_VERSION,
+            "engine": engine_label,
+            "provider": provider,
             "search_web_topic": items,
             "preview_urls": preview_urls if preview_urls is not None else [],
             "error_code": error_code,
             "message": message,
             "query_hash": query_hash,
+            "request_hash": request_hash,
             "searched_at": searched_at,
         }
+        if diagnostics is not None:
+            doc["diagnostics"] = diagnostics
+        return doc
 
     if provider == "stub":
         return _result(items=[], error_code=None, message="stub provider, no results")
+
+    ddg_diagnostics: dict[str, Any] = {
+        "http_status": None,
+        "final_host": "duckduckgo.com",
+        "proxy_enabled": bool(proxy_url),
+        "parser_version": _PARSER_VERSIONS["duckduckgo_html"],
+        "response_content_type": None,
+        "response_bytes": None,
+    }
+
+    if provider == "google_html":
+        items, error_code, diagnostics = _google_html_search(
+            query=query,
+            max_results=max_results,
+            proxy_url=proxy_url,
+            debug_dir=debug_dir,
+        )
+        if error_code:
+            return _result(
+                items=[],
+                error_code=error_code,
+                message={
+                    "NETWORK_ERROR": "Google request failed (network error).",
+                    "HTTP_ERROR": (
+                        "Google returned an HTTP error (see diagnostics)."
+                    ),
+                    "PROXY_ERROR": (
+                        "google_html requires a socks5h:// proxy (and PySocks "
+                        "installed); proxy missing/invalid or unreachable."
+                    ),
+                    "PROVIDER_BLOCKED": (
+                        "Google blocked this automated query (challenge/consent "
+                        "page detected); not retrying."
+                    ),
+                    "PARSE_ERROR": (
+                        "Google page fetched but no result blocks parsed "
+                        "(layout change?). See search_web_topic_debug.txt "
+                        "if debug enabled."
+                    ),
+                }.get(error_code, f"search failed: {error_code}"),
+                diagnostics=diagnostics,
+            )
+        if not items:
+            return _result(
+                items=[],
+                error_code="NO_RESULTS",
+                message="Google returned no results.",
+                diagnostics=diagnostics,
+            )
+        preview_urls = [it["url"] for it in items if it.get("url")]
+        saved_paths: list[str] = []
+        if download and media_dir is not None and _HAS_REQUESTS:
+            media_dir = Path(media_dir)
+            media_dir.mkdir(parents=True, exist_ok=True)
+            for idx, it in enumerate(items, start=1):
+                url = it.get("url")
+                if not url:
+                    continue
+                out = media_dir / f"web_topic_{idx:03d}.html"
+                try:
+                    r = requests.get(
+                        url,
+                        headers={"User-Agent": DEFAULT_USER_AGENT},
+                        timeout=15,
+                    )
+                    r.raise_for_status()
+                    out.write_text(r.text, encoding="utf-8", errors="replace")
+                    saved_paths.append(str(out))
+                except Exception:  # noqa: BLE001
+                    continue
+        return _result(
+            items=saved_paths or items,
+            preview_urls=preview_urls,
+            error_code=None,
+            message="",
+            diagnostics=diagnostics,
+        )
+
+    if provider == "bing_html":
+        items, error_code, diagnostics = _bing_html_search(
+            query=query,
+            max_results=max_results,
+            proxy_url=proxy_url,
+            debug_dir=debug_dir,
+        )
+        if error_code:
+            return _result(
+                items=[],
+                error_code=error_code,
+                message={
+                    "NETWORK_ERROR": "Bing request failed (network error).",
+                    "HTTP_ERROR": "Bing returned an HTTP error (see diagnostics).",
+                    "PROXY_ERROR": (
+                        "Bing proxy (if configured) is unreachable or PySocks "
+                        "is missing; request not sent."
+                    ),
+                    "PROVIDER_BLOCKED": (
+                        "Bing blocked this automated query (challenge page "
+                        "detected); not retrying."
+                    ),
+                    "PARSE_ERROR": (
+                        "Bing page fetched but no result blocks parsed "
+                        "(layout change?). See search_web_topic_debug.txt "
+                        "if debug enabled."
+                    ),
+                }.get(error_code, f"search failed: {error_code}"),
+                diagnostics=diagnostics,
+            )
+        if not items:
+            return _result(
+                items=[],
+                error_code="NO_RESULTS",
+                message="Bing returned no results.",
+                diagnostics=diagnostics,
+            )
+        preview_urls = [it["url"] for it in items if it.get("url")]
+        saved_paths = []
+        if download and media_dir is not None and _HAS_REQUESTS:
+            media_dir = Path(media_dir)
+            media_dir.mkdir(parents=True, exist_ok=True)
+            for idx, it in enumerate(items, start=1):
+                url = it.get("url")
+                if not url:
+                    continue
+                out = media_dir / f"web_topic_{idx:03d}.html"
+                try:
+                    r = requests.get(
+                        url,
+                        headers={"User-Agent": DEFAULT_USER_AGENT},
+                        timeout=15,
+                    )
+                    r.raise_for_status()
+                    out.write_text(r.text, encoding="utf-8", errors="replace")
+                    saved_paths.append(str(out))
+                except Exception:  # noqa: BLE001
+                    continue
+        return _result(
+            items=saved_paths or items,
+            preview_urls=preview_urls,
+            error_code=None,
+            message="",
+            diagnostics=diagnostics,
+        )
 
     if provider != "duckduckgo_html":
         return _result(
@@ -251,7 +1088,13 @@ def search_web_topic(
             message=f"unknown search provider: {provider!r}",
         )
 
-    items, error_code = _ddg_html_search(query=query, max_results=max_results)
+    items, error_code = _ddg_html_search(
+        query=query,
+        max_results=max_results,
+        proxies=(
+            {"http": proxy_url, "https": proxy_url} if proxy_url else None
+        ),
+    )
     if error_code:
         return _result(
             items=[],
@@ -263,16 +1106,18 @@ def search_web_topic(
                     "(provider layout change?)."
                 ),
             }.get(error_code, f"search failed: {error_code}"),
+            diagnostics=ddg_diagnostics,
         )
     if not items:
         return _result(
             items=[],
             error_code="NO_RESULTS",
             message="DuckDuckGo returned no results.",
+            diagnostics=ddg_diagnostics,
         )
 
     preview_urls = [it["url"] for it in items if it.get("url")]
-    saved_paths: list[str] = []
+    saved_paths = []
     if download and media_dir is not None and _HAS_REQUESTS:
         media_dir = Path(media_dir)
         media_dir.mkdir(parents=True, exist_ok=True)
@@ -298,7 +1143,8 @@ def search_web_topic(
         preview_urls=preview_urls,
         error_code=None,
         message="",
+        diagnostics=ddg_diagnostics,
     )
 
 
-__all__ = ["search_web_topic"]
+__all__ = ["search_web_topic", "build_request_hash", "ARTIFACT_SCHEMA_VERSION"]

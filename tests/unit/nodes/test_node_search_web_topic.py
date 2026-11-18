@@ -14,6 +14,22 @@ from typing import Any, Callable
 
 import nodes.storyline.node_search_web_topic as node_mod
 from nodes.storyline.node_search_web_topic import storyline_search_web_topic_node
+from storyline_capabilities.search_web_topic import build_request_hash
+
+# 审查修订版 P2-01/P2-03:节点从 config 读引擎/代理/调试开关,单测统一显式
+# 固定这三项(不依赖 config 模块默认值,防环境变量泄漏影响断言)。
+_TEST_ENGINE = "google_html"
+_TEST_PROXY = "socks5h://127.0.0.1:1088"
+
+
+def _patch_engine_config(
+    monkeypatch, engine: str = _TEST_ENGINE, debug: bool = False
+) -> None:
+    monkeypatch.setattr(node_mod.config, "STORYLINE_WEB_TOPIC_ENGINE", engine)
+    monkeypatch.setattr(
+        node_mod.config, "STORYLINE_WEB_TOPIC_SOCKS5_PROXY", _TEST_PROXY
+    )
+    monkeypatch.setattr(node_mod.config, "STORYLINE_WEB_TOPIC_DEBUG", debug)
 
 
 def _fake_cap_topic(captured: dict, items: list[dict] | None = None) -> Callable:
@@ -57,6 +73,7 @@ def test_node_builds_query_from_artifacts_when_manual_query_missing(
     )
     captured: dict = {}
     monkeypatch.setattr(node_mod, "cap_topic", _fake_cap_topic(captured))
+    _patch_engine_config(monkeypatch)
 
     out = storyline_search_web_topic_node(
         _state(
@@ -68,7 +85,10 @@ def test_node_builds_query_from_artifacts_when_manual_query_missing(
 
     assert captured["query"] == "夏季户外徒步，强日照。、户外防晒"
     assert captured["max_results"] == 10
-    assert captured["provider"] == "duckduckgo_html"
+    # 审查修订版 §8.2-1/2/3:provider/proxy/debug 均来自配置(不再写死 DDG)
+    assert captured["provider"] == "google_html"
+    assert captured["proxy_url"] == _TEST_PROXY
+    assert captured["debug_dir"] is None  # debug 默认关 → 不传诊断目录
     # 桩返回空结果(error_code=NO_RESULTS)→ 阶段2 起映射为 no_results 标签
     assert out["status_log"] == ["storyline_search_web_topic_no_results"]
     assert Path(out["storyline_web_topic_artifact"]).exists()
@@ -80,14 +100,123 @@ def test_node_manual_query_wins_and_stays_verbatim(
     """手动 query 存在且无产物时原样透传(与旧行为逐字节一致)。"""
     captured: dict = {}
     monkeypatch.setattr(node_mod, "cap_topic", _fake_cap_topic(captured))
+    _patch_engine_config(monkeypatch)
 
     out = storyline_search_web_topic_node(
         _state(tmp_path, storyline_targets={"query": "夏季防晒"})
     )
 
     assert captured["query"] == "夏季防晒"
+    assert captured["provider"] == "google_html"
     # 桩返回空结果(error_code=NO_RESULTS)→ 阶段2 起映射为 no_results 标签
     assert out["status_log"] == ["storyline_search_web_topic_no_results"]
+
+
+def test_node_passes_debug_dir_when_config_enabled(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """STORYLINE_WEB_TOPIC_DEBUG 开启 → 节点把任务 storyline 目录传给能力层(§5.5)。"""
+    captured: dict = {}
+    monkeypatch.setattr(node_mod, "cap_topic", _fake_cap_topic(captured))
+    _patch_engine_config(monkeypatch, debug=True)
+
+    storyline_search_web_topic_node(
+        _state(tmp_path, storyline_targets={"query": "夏季防晒"})
+    )
+
+    expected = Path(tmp_path / "out" / "storyline")
+    assert captured["debug_dir"] == expected
+
+
+# ---------------------------------------------------------------------------
+# 第八期阶段2:【检索】/【主题】标记接入(设计文档 §6.2,修订版 §5.3 优先级)
+# ---------------------------------------------------------------------------
+
+
+def test_node_query_prefers_search_directive_over_theme(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """【检索】优先于【主题】;手动 query 仍在最前;概述/主题顺延后移。"""
+    understanding = tmp_path / "understanding.json"
+    understanding.write_text(
+        json.dumps({"overall": "素材整体呈现了一段海滨建筑群游览。"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    captured: dict = {}
+    monkeypatch.setattr(node_mod, "cap_topic", _fake_cap_topic(captured))
+
+    out = storyline_search_web_topic_node(
+        _state(
+            tmp_path,
+            storyline_targets={
+                "user_request": (
+                    "【主题】马六甲海上清真寺旅行Vlog\n"
+                    "【检索】海上清真寺旅游攻略\n"
+                    "【标题】马六甲之旅"
+                )
+            },
+            storyline_understanding_artifact=str(understanding),
+        )
+    )
+
+    query = captured["query"]
+    assert query.startswith("海上清真寺旅游攻略")  # 【检索】优先于【主题】
+    assert "马六甲海上清真寺旅行Vlog" not in query  # 有【检索】时【主题】不再重复拼接
+    assert "素材整体呈现了一段海滨建筑群游览。" in query  # 概述首句顺延保留
+
+
+def test_node_query_falls_back_to_theme_when_search_missing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """【检索】缺省时回退【主题】;两者都无 → 旧组件链(概述首句先行)。"""
+    understanding = tmp_path / "understanding.json"
+    understanding.write_text(
+        json.dumps({"overall": "素材整体呈现了一段海滨建筑群游览。"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    captured: dict = {}
+    monkeypatch.setattr(node_mod, "cap_topic", _fake_cap_topic(captured))
+
+    storyline_search_web_topic_node(
+        _state(
+            tmp_path,
+            storyline_targets={"user_request": "【主题】马六甲海上清真寺旅行Vlog"},
+            storyline_understanding_artifact=str(understanding),
+        )
+    )
+    assert captured["query"].startswith("马六甲海上清真寺旅行Vlog")
+
+    captured2: dict = {}
+    monkeypatch.setattr(node_mod, "cap_topic", _fake_cap_topic(captured2))
+    storyline_search_web_topic_node(
+        _state(
+            tmp_path,
+            storyline_targets={"user_request": "自由文本,无任何标记"},
+            storyline_understanding_artifact=str(understanding),
+        )
+    )
+    # 无标记 = 严格旧行为(P1-06):自由文本不进入检索词
+    assert captured2["query"].startswith("素材整体呈现了一段海滨建筑群游览。")
+    assert "自由文本" not in captured2["query"]
+
+
+def test_node_query_manual_query_still_beats_directives(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """手动 query(创建台冻结契约位)保持最前,【检索】随后。"""
+    captured: dict = {}
+    monkeypatch.setattr(node_mod, "cap_topic", _fake_cap_topic(captured))
+
+    storyline_search_web_topic_node(
+        _state(
+            tmp_path,
+            storyline_targets={
+                "query": "手动检索词",
+                "user_request": "【检索】海上清真寺旅游攻略",
+            },
+        )
+    )
+    assert captured["query"] == "手动检索词、海上清真寺旅游攻略"
 
 
 # ---------------------------------------------------------------------------
@@ -247,8 +376,13 @@ def test_cache_hit_of_failed_artifact_reuses_without_network(
         raise AssertionError("cache_hit 路径不应请求互联网")
 
     monkeypatch.setattr(node_mod, "cap_topic", _no_network)
+    _patch_engine_config(monkeypatch)
     cached = _ok_result("夏季防晒")
     cached.update({"status": "failed", "error_code": "NETWORK_ERROR", "message": "down"})
+    # 手工构造产物必须带节点同款 request_hash 才算同语义缓存(§4.5)
+    cached["request_hash"] = build_request_hash(
+        query="夏季防晒", provider=_TEST_ENGINE, max_results=10
+    )
     p = tmp_path / "out" / "storyline" / "search_web_topic.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(cached, ensure_ascii=False), encoding="utf-8")
@@ -273,8 +407,12 @@ def test_cache_hit_of_no_results_keeps_soft_tag(tmp_path: Path, monkeypatch) -> 
         raise AssertionError("cache_hit 路径不应请求互联网")
 
     monkeypatch.setattr(node_mod, "cap_topic", _no_network)
+    _patch_engine_config(monkeypatch)
     cached = _ok_result("夏季防晒")
     cached.update({"status": "no_results", "error_code": "NO_RESULTS"})
+    cached["request_hash"] = build_request_hash(
+        query="夏季防晒", provider=_TEST_ENGINE, max_results=10
+    )
     p = tmp_path / "out" / "storyline" / "search_web_topic.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(cached, ensure_ascii=False), encoding="utf-8")
@@ -288,6 +426,110 @@ def test_cache_hit_of_no_results_keeps_soft_tag(tmp_path: Path, monkeypatch) -> 
     )
     assert out["status_log"] == ["storyline_search_web_topic_no_results"]
     assert "error_log" not in out
+
+
+def test_node_cache_miss_when_provider_changes(tmp_path: Path, monkeypatch) -> None:
+    """同 query 换引擎:request_hash 不同 → 缓存必须 miss 并重新检索(§4.5/P2-02)。"""
+    calls = {"n": 0}
+
+    def _counting(**kwargs: Any) -> dict:
+        calls["n"] += 1
+        return _ok_result(kwargs["query"])
+
+    monkeypatch.setattr(node_mod, "cap_topic", _counting)
+    _patch_engine_config(monkeypatch, engine="duckduckgo_html")
+    state = _state(tmp_path, storyline_targets={"query": "夏季防晒"})
+    out1 = storyline_search_web_topic_node(state)
+    assert calls["n"] == 1
+
+    # 切换引擎(DDG → Google):同 query 也必须重新检索
+    _patch_engine_config(monkeypatch, engine="google_html")
+    state2 = {
+        **state,
+        "storyline_web_topic_artifact": out1["storyline_web_topic_artifact"],
+    }
+    storyline_search_web_topic_node(state2)
+    assert calls["n"] == 2
+
+
+def test_node_cache_miss_for_artifact_without_request_hash(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """老产物有 query_hash 但没有 request_hash → 一律视为未命中(P2-06)。"""
+    calls = {"n": 0}
+
+    def _counting(**kwargs: Any) -> dict:
+        calls["n"] += 1
+        return _ok_result(kwargs["query"])
+
+    monkeypatch.setattr(node_mod, "cap_topic", _counting)
+    _patch_engine_config(monkeypatch)
+    cached = _ok_result("夏季防晒")
+    cached.pop("request_hash", None)  # 模拟老格式:只有 query_hash,没有 request_hash
+    p = tmp_path / "out" / "storyline" / "search_web_topic.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(cached, ensure_ascii=False), encoding="utf-8")
+
+    storyline_search_web_topic_node(
+        _state(
+            tmp_path,
+            storyline_targets={"query": "夏季防晒"},
+            storyline_web_topic_artifact=str(p),
+        )
+    )
+    assert calls["n"] == 1  # 未命中:重新检索
+
+
+def test_node_force_refresh_bypasses_cache(tmp_path: Path, monkeypatch) -> None:
+    """web_topic_force_refresh=true → 显式绕过缓存重新检索(§4.5 最后一行)。"""
+    calls = {"n": 0}
+
+    def _counting(**kwargs: Any) -> dict:
+        calls["n"] += 1
+        return _ok_result(kwargs["query"])
+
+    monkeypatch.setattr(node_mod, "cap_topic", _counting)
+    _patch_engine_config(monkeypatch)
+    state = _state(tmp_path, storyline_targets={"query": "夏季防晒"})
+    out1 = storyline_search_web_topic_node(state)
+    assert calls["n"] == 1
+
+    state2 = {
+        **state,
+        "storyline_web_topic_artifact": out1["storyline_web_topic_artifact"],
+        "web_topic_force_refresh": True,
+    }
+    storyline_search_web_topic_node(state2)
+    assert calls["n"] == 2  # 缓存被绕过
+
+
+def test_node_maps_blocked_and_proxy_errors_to_failed_tag(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """PROVIDER_BLOCKED / PROXY_ERROR / HTTP_ERROR → failed 标签 + error_log(P2-04)。"""
+
+    def _stub_error(error_code: str):
+        def _fake(**kwargs: Any) -> dict:
+            return {
+                "search_web_topic": [],
+                "preview_urls": [],
+                "error_code": error_code,
+                "message": f"stub {error_code}",
+            }
+
+        return _fake
+
+    _patch_engine_config(monkeypatch)
+    for error_code in ("PROVIDER_BLOCKED", "PROXY_ERROR", "HTTP_ERROR"):
+        monkeypatch.setattr(node_mod, "cap_topic", _stub_error(error_code))
+        out = storyline_search_web_topic_node(
+            _state(tmp_path, storyline_targets={"query": "夏季防晒"})
+        )
+        assert out["status_log"] == ["storyline_search_web_topic_failed"]
+        assert any(
+            f"[storyline:search_web_topic] {error_code}" in e
+            for e in out["error_log"]
+        )
 
 
 def test_cache_ignores_legacy_artifact_without_query_hash(

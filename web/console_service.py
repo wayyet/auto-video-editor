@@ -1021,6 +1021,40 @@ def _pending_or_missing(task_state: str) -> str:
     return "pending" if task_state in _PENDING_STATES else "missing"
 
 
+# 引擎展示名(审查修订版 §6.3):只认产物里的证据;历史产物**不得**伪造当前引擎。
+_WEB_TOPIC_UNKNOWN_ENGINE_LABEL = "未知引擎(历史记录)"
+_WEB_TOPIC_ENGINE_KEYWORDS: tuple[tuple[str, str], ...] = (
+    ("google", "Google"),
+    ("bing", "Bing"),
+    ("duckduckgo", "DuckDuckGo"),
+)
+
+
+def _web_topic_engine_label(doc: Any) -> str:
+    """引擎展示名推导:产物 engine 优先 → provider/条目 source 关键词 → 历史记录。
+
+    老产物(2026-11-19 schema v2 之前生成)没有 engine 字段:有结果条目时从
+    source 推导(duckduckgo_html → DuckDuckGo);失败无条目的老产物显示
+    「未知引擎(历史记录)」—— 绝不默认显示当前配置的引擎。
+    """
+    if isinstance(doc, dict):
+        engine = doc.get("engine")
+        if isinstance(engine, str) and engine.strip():
+            return engine.strip()
+        hay = " ".join(
+            [str(doc.get("provider") or "")]
+            + [
+                str((e or {}).get("source") or "")
+                for e in (doc.get("search_web_topic") or [])
+                if isinstance(e, dict)
+            ]
+        ).lower()
+        for keyword, label in _WEB_TOPIC_ENGINE_KEYWORDS:
+            if keyword in hay:
+                return label
+    return _WEB_TOPIC_UNKNOWN_ENGINE_LABEL
+
+
 def _web_topic_section(
     task_dir: Path, task_state: str, status_log: list[str], error_log: list[str]
 ) -> dict[str, Any]:
@@ -1031,7 +1065,7 @@ def _web_topic_section(
     """
     base: dict[str, Any] = {
         "status": None,
-        "engine": "DuckDuckGo",
+        "engine": _WEB_TOPIC_UNKNOWN_ENGINE_LABEL,
         "query": None,
         "searched_at": None,
         "entries": [],
@@ -1041,10 +1075,12 @@ def _web_topic_section(
     if err == "invalid":
         return {**base, "status": "invalid", "reason": "检索产物 JSON 无法解析(文件存在但格式损坏)"}
     if isinstance(doc, dict):
+        engine_label = _web_topic_engine_label(doc)
         status = doc.get("status")
         if status not in _WEB_TOPIC_STATUSES:
             return {
                 **base,
+                "engine": engine_label,
                 "status": "invalid",
                 "reason": f"检索产物状态无法识别: {status!r}",
             }
@@ -1055,6 +1091,7 @@ def _web_topic_section(
             reason = "检索完成,搜索引擎未返回结果"
         return {
             **base,
+            "engine": engine_label,
             "status": status,
             "query": _clamp_str(doc.get("query")),
             "searched_at": _clamp_str(doc.get("searched_at"), 64),

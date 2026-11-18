@@ -53,6 +53,38 @@ STORYLINE_ENABLE_WEB_TOPIC: bool = (
     os.environ.get("STORYLINE_ENABLE_WEB_TOPIC", "true").lower().strip() in ("1", "true", "yes")
 )
 
+# 1.1) 网页话题检索引擎 / SOCKS5 代理 / 调试开关(2026-11-19 审查修订版 §5.1):
+#   - 引擎只允许白名单值,未知值在导入期明确报错,不静默回退(§5.1-1);
+#   - 默认 bing_html(2026-11-19 实测定案:google_html 纯 HTTP 路线被 Google 关闭
+#     ——无 JS 桩页且 enablejs 重试也要求 JS;DDG 挑战 VPS 出口;Bing 结果页服务端
+#     渲染,隧道/直连均实测返回 10 条真实结果。google_html 代码保留,可随时切回);
+#   - google_html 强制 socks5h:// 代理(域名解析走代理端防本地 DNS 污染),
+#     缺失/格式不对由能力层返回 PROXY_ERROR(§5.1-2);bing_html/duckduckgo_html
+#     代理可选(有则经代理出口,无则直连);
+#   - 调试响应片段落盘默认关闭(§5.5);开启时能力层写任务目录受限 .txt(≤64KiB);
+#   - 三个值都是**进程启动时**读取的模块常量:修改后必须重启实际运行工作流的
+#     进程才生效(§5.1-5),运行中改 os.environ 不会刷新已导入的常量。
+_WEB_TOPIC_ENGINE_WHITELIST = ("bing_html", "google_html", "duckduckgo_html", "stub")
+_raw_web_topic_engine = os.environ.get(
+    "STORYLINE_WEB_TOPIC_ENGINE", "bing_html"
+).strip()
+if _raw_web_topic_engine not in _WEB_TOPIC_ENGINE_WHITELIST:
+    raise ValueError(
+        "STORYLINE_WEB_TOPIC_ENGINE="
+        f"{_raw_web_topic_engine!r} 不在白名单 {_WEB_TOPIC_ENGINE_WHITELIST}"
+        "(可选: google_html / duckduckgo_html / stub)"
+    )
+STORYLINE_WEB_TOPIC_ENGINE: str = _raw_web_topic_engine
+
+STORYLINE_WEB_TOPIC_SOCKS5_PROXY: str = os.environ.get(
+    "STORYLINE_WEB_TOPIC_SOCKS5_PROXY", "socks5h://127.0.0.1:1088"
+).strip()
+
+STORYLINE_WEB_TOPIC_DEBUG: bool = (
+    os.environ.get("STORYLINE_WEB_TOPIC_DEBUG", "0").lower().strip()
+    in ("1", "true", "yes")
+)
+
 # 2) auto 模式:与 plan_timeline_pro 并排生成 AI 转场,qa_gate 之前把清单写进时间线 ai_transitions
 #    (storyline_generate_ai_transition → storyline_plan_timeline_ai_transition)。建图时读取。
 #    ADR-005 原为默认关闭;2026-10 按用户决定改为默认开启(当前仅 stub 客户端,不改动 clips)。

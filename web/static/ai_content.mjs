@@ -115,7 +115,9 @@ export function normalizeContentDetails(payload) {
     webTopic: {
       status: wt.status || "missing",
       reason: wt.reason || null,
-      engine: wt.engine || "DuckDuckGo",
+      // 引擎展示名完全由后端产物推导(老产物无 engine → 未知引擎,不得伪造,
+      // 审查修订版 §6.3);后端 console_service 恒给字符串,这里只兜渲染缺省。
+      engine: wt.engine || "未知引擎",
       query: wt.query ?? null,
       searchedAt: wt.searched_at ?? null,
       entries: arr(wt.entries),

@@ -238,12 +238,12 @@
       webTopic(body, sec) {
         const rows = [];
         const grid = el("div", { class: "kv" });
-        grid.append(...kvRow("搜索引擎", sec.engine || "DuckDuckGo"));
+        grid.append(...kvRow("搜索引擎", sec.engine || "未知引擎"));
         if (sec.query != null) grid.append(...kvRow("检索词", sec.query));
         if (sec.searchedAt != null) grid.append(...kvRow("检索时间", sec.searchedAt));
         rows.push(grid);
         if (sec.entries.length) {
-          const head = el("div", { class: "hint", text: `来源网站(${sec.entries.length} 条,检索自 DuckDuckGo):` });
+          const head = el("div", { class: "hint", text: `来源网站(${sec.entries.length} 条,检索自 ${sec.engine || "未知引擎"}):` });
           rows.push(head);
           for (const item of sec.entries) {
             const domain = item.domain || domainOf(item.url) || "";

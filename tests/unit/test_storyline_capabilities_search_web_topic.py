@@ -4,31 +4,49 @@
 错误分类(NETWORK_ERROR、PARSE_ERROR 与 NO_RESULTS 分离) /
 status + query_hash + searched_at 统一留痕。
 
+2026-11-19 审查修订版 §8.1 扩展:google_html provider(强制 socks5h:// 代理、
+/url?q= 包装还原、挑战页 PROVIDER_BLOCKED、HTTP_ERROR/PROXY_ERROR 分离、
+URL 归一化去重、诊断与受限 debug 落盘、request_hash 稳定性)。
+
 mock 手法:monkeypatch 模块属性 ``requests`` 注入 FakeResponse(仓库无
 requests_mock 依赖,沿用注入式 fake 惯例);``_HAS_REQUESTS`` 标志同理。
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import urllib.parse
 from typing import Any, Union
+
+import requests
 
 import storyline_capabilities.search_web_topic as cap_mod
 from storyline_capabilities.search_web_topic import (
     WEB_TOPIC_SNIPPET_MAX_CHARS,
     WEB_TOPIC_TOTAL_CONTEXT_MAX_CHARS,
+    build_request_hash,
     search_web_topic,
 )
 
 
 class _FakeResponse:
-    def __init__(self, text: str, status: int = 200) -> None:
+    def __init__(
+        self,
+        text: str,
+        status: int = 200,
+        url: str = "https://www.google.com/search?q=x",
+    ) -> None:
         self.text = text
+        self.status_code = status
+        self.url = url
+        self.headers = {"content-type": "text/html; charset=utf-8"}
         self._status = status
 
     def raise_for_status(self) -> None:
         if self._status >= 400:
-            raise RuntimeError(f"HTTP {self._status}")
+            err = requests.exceptions.HTTPError(f"HTTP {self._status}")
+            err.response = self
+            raise err
 
 
 class _FakeRequests:
@@ -38,9 +56,15 @@ class _FakeRequests:
         self._resp = response_or_exc
         self.calls: list[dict[str, Any]] = []
 
-    def get(self, url: str, params=None, headers=None, timeout=None):
+    def get(self, url: str, params=None, headers=None, timeout=None, proxies=None):
         self.calls.append(
-            {"url": url, "params": params, "headers": headers, "timeout": timeout}
+            {
+                "url": url,
+                "params": params,
+                "headers": headers,
+                "timeout": timeout,
+                "proxies": proxies,
+            }
         )
         if isinstance(self._resp, Exception):
             raise self._resp
@@ -58,15 +82,31 @@ def _result_html(results: list[tuple[str, str, str]]) -> str:
     return "<html><body>" + "".join(blocks) + "</body></html>"
 
 
+def _google_result_html(results: list[tuple[str, str, str]]) -> str:
+    """(href, title, snippet) → 模拟 Google SERP 结果页(div.g + h3 + VwiC3b)。"""
+    blocks = []
+    for href, title, snippet in results:
+        blocks.append(
+            '<div class="g Ww4FFb vowF2b">'
+            f'<a href="{href}"><h3 class="LC20lb MBeuO">{title}</h3></a>'
+            f'<div class="VwiC3b MNbdRd">{snippet}</div>'
+            "</div>"
+        )
+    return "<html><body>" + "".join(blocks) + "</body></html>"
+
+
+_SOCKS = "socks5h://127.0.0.1:1088"
+
+
 # ---------------------------------------------------------------------------
-# 正常解析路径
+# 正常解析路径(DuckDuckGo 存量)
 # ---------------------------------------------------------------------------
 def test_results_include_snippet_and_decoded_uddg_url(monkeypatch) -> None:
     inner = urllib.parse.quote("https://example.com/article?x=1&y=2", safe="")
     html = _result_html(
         [(f"https://duckduckgo.com/l/?uddg={inner}", "防晒 &amp; 补水", "摘要 &lt;b&gt;文本&lt;/b&gt;")]
     )
-    fake = _FakeRequests(_FakeResponse(html))
+    fake = _FakeRequests(_FakeResponse(html, url="https://duckduckgo.com/html/?q=x"))
     monkeypatch.setattr(cap_mod, "requests", fake)
 
     res = search_web_topic(query="夏季防晒")
@@ -81,6 +121,14 @@ def test_results_include_snippet_and_decoded_uddg_url(monkeypatch) -> None:
     # 请求参数留痕:端点 / query / 超时
     assert fake.calls[0]["params"] == {"q": "夏季防晒"}
     assert fake.calls[0]["timeout"] == 15
+    # schema v2 契约:引擎展示名/适配器标识/请求语义 hash 全部落盘
+    assert res["engine"] == "DuckDuckGo"
+    assert res["provider"] == "duckduckgo_html"
+    assert res["schema_version"] == 2
+    assert res["request_hash"] == build_request_hash(
+        query="夏季防晒", provider="duckduckgo_html", max_results=10
+    )
+    assert res["diagnostics"]["parser_version"] == "ddg_html_v1"
 
 
 def test_status_query_hash_and_searched_at_are_stamped(monkeypatch) -> None:
@@ -136,7 +184,7 @@ def test_snippet_capped_per_item_and_in_total(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 错误分类
+# 错误分类(DuckDuckGo 存量)
 # ---------------------------------------------------------------------------
 def test_no_results_page_maps_to_no_results(monkeypatch) -> None:
     html = '<html><body><div class="no-results">No results for q</div></body></html>'
@@ -200,3 +248,404 @@ def test_empty_query_maps_to_no_results() -> None:
     res = search_web_topic(query="   ")
     assert res["error_code"] == "NO_RESULTS"
     assert res["status"] == "no_results"
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-19 审查修订版 §8.1:google_html 用例矩阵
+# ---------------------------------------------------------------------------
+def test_google_normal_results_parse_with_socks_proxy(monkeypatch) -> None:
+    """正常解析:直连外链 + /url?q= 包装混合;代理以 http/https 双 scheme 显式传入。"""
+    wrapped = "/url?q=" + urllib.parse.quote(
+        "https://b.com/2?k=1&lang=zh", safe=""
+    ) + "&sa=U"
+    html = _google_result_html(
+        [
+            ("https://a.com/1", "防晒指南", "户外防晒要点"),
+            (wrapped, "补水面霜", "保湿测评汇总"),
+        ]
+    )
+    fake = _FakeRequests(_FakeResponse(html))
+    monkeypatch.setattr(cap_mod, "requests", fake)
+
+    res = search_web_topic(
+        query="夏季防晒", provider="google_html", proxy_url=_SOCKS
+    )
+
+    assert res["error_code"] is None
+    assert res["status"] == "ok"
+    assert res["engine"] == "Google"
+    assert res["provider"] == "google_html"
+    assert res["schema_version"] == 2
+    assert res["request_hash"] == build_request_hash(
+        query="夏季防晒", provider="google_html", max_results=10
+    )
+    items = res["search_web_topic"]
+    assert [it["url"] for it in items] == ["https://a.com/1", "https://b.com/2?k=1&lang=zh"]
+    assert [it["title"] for it in items] == ["防晒指南", "补水面霜"]
+    assert [it["snippet"] for it in items] == ["户外防晒要点", "保湿测评汇总"]
+    assert all(it["source"] == "google_html" for it in items)
+    # 请求形态:代理双 scheme、参数 q/num/hl、超时元组(§5.3)
+    call = fake.calls[0]
+    assert call["proxies"] == {"http": _SOCKS, "https": _SOCKS}
+    assert call["params"]["q"] == "夏季防晒"
+    assert call["params"]["hl"] == "zh-CN"
+    assert call["timeout"] == (5, 15)
+    diag = res["diagnostics"]
+    assert diag["proxy_enabled"] is True
+    assert diag["parser_version"] == "google_html_v1"
+    assert diag["http_status"] == 200
+
+
+def test_google_entity_in_href_is_decoded(monkeypatch) -> None:
+    """href 里的 &amp; 实体与 URL 编码参数必须还原,不破坏 query(§8.1)。"""
+    html = _google_result_html(
+        [("https://a.com/p?x=1&amp;y=%E9%98%B2", "标题", "摘要")]
+    )
+    monkeypatch.setattr(
+        cap_mod, "requests", _FakeRequests(_FakeResponse(html))
+    )
+    res = search_web_topic(query="q", provider="google_html", proxy_url=_SOCKS)
+    assert res["search_web_topic"][0]["url"] == "https://a.com/p?x=1&y=%E9%98%B2"
+
+
+def test_google_drops_internal_and_bad_urls_and_dedupes(monkeypatch) -> None:
+    """javascript:/站内相对路径/Google 导航地址丢弃;重复 URL 去重(§5.4-6)。"""
+    html = _google_result_html(
+        [
+            ("javascript:alert(1)", "坏1", "摘要1"),
+            ("/search?q=x", "站内搜索", "摘要2"),
+            ("https://www.google.com/preferences", "Google偏好", "摘要3"),
+            ("https://c.com/1", "重复页", "摘要4"),
+            ("https://c.com/1", "重复页(again)", "摘要5"),
+            ("https://d.com/", "正常外链", "摘要6"),
+        ]
+    )
+    monkeypatch.setattr(cap_mod, "requests", _FakeRequests(_FakeResponse(html)))
+    res = search_web_topic(query="q", provider="google_html", proxy_url=_SOCKS)
+    assert [it["url"] for it in res["search_web_topic"]] == ["https://c.com/1", "https://d.com/"]
+
+
+def test_google_no_results_marker_maps_to_no_results(monkeypatch) -> None:
+    html = "<html><body><p>未找到和您查询相关的结果。</p></body></html>"
+    monkeypatch.setattr(cap_mod, "requests", _FakeRequests(_FakeResponse(html)))
+    res = search_web_topic(query="q", provider="google_html", proxy_url=_SOCKS)
+    assert res["error_code"] == "NO_RESULTS"
+    assert res["status"] == "no_results"
+
+
+def test_google_unknown_structure_maps_to_parse_error(monkeypatch) -> None:
+    """200 但既无结果结构也无无结果标记 → PARSE_ERROR(不误判 NO_RESULTS,§5.4-8)。"""
+    html = "<html><body>" + "x" * 5000 + "</body></html>"
+    monkeypatch.setattr(cap_mod, "requests", _FakeRequests(_FakeResponse(html)))
+    res = search_web_topic(query="q", provider="google_html", proxy_url=_SOCKS)
+    assert res["error_code"] == "PARSE_ERROR"
+    assert res["status"] == "failed"
+
+
+def test_google_challenge_page_maps_to_provider_blocked(monkeypatch) -> None:
+    """HTTP 202 + 异常流量挑战页 → PROVIDER_BLOCKED,不得当正常页解析(§5.4-3)。"""
+    html = "<html><body>Our systems have detected unusual traffic from your computer network. <div class=\"g-recaptcha\"></div></body></html>"
+    monkeypatch.setattr(
+        cap_mod, "requests", _FakeRequests(_FakeResponse(html, status=202))
+    )
+    res = search_web_topic(query="q", provider="google_html", proxy_url=_SOCKS)
+    assert res["error_code"] == "PROVIDER_BLOCKED"
+    assert res["status"] == "failed"
+    assert "blocked" in res["message"].lower()
+
+
+def test_google_consent_redirect_maps_to_provider_blocked(monkeypatch) -> None:
+    """最终 URL 落在 consent.google.com → PROVIDER_BLOCKED(§5.4-3)。"""
+    html = _google_result_html([("https://a.com/1", "t", "s")])
+    monkeypatch.setattr(
+        cap_mod,
+        "requests",
+        _FakeRequests(
+            _FakeResponse(html, url="https://consent.google.com/m?hl=zh-CN&continue=x")
+        ),
+    )
+    res = search_web_topic(query="q", provider="google_html", proxy_url=_SOCKS)
+    assert res["error_code"] == "PROVIDER_BLOCKED"
+
+
+def test_google_http_error_maps_to_http_error(monkeypatch) -> None:
+    """HTTP 503 且无挑战特征 → HTTP_ERROR(§4.4 错误码表)。"""
+    monkeypatch.setattr(
+        cap_mod, "requests", _FakeRequests(_FakeResponse("Service Unavailable", status=503))
+    )
+    res = search_web_topic(query="q", provider="google_html", proxy_url=_SOCKS)
+    assert res["error_code"] == "HTTP_ERROR"
+    assert res["status"] == "failed"
+    assert res["diagnostics"]["http_status"] == 503
+
+
+def test_google_http_403_with_challenge_maps_to_provider_blocked(monkeypatch) -> None:
+    """4xx/5xx 但响应体含挑战特征 → PROVIDER_BLOCKED 优先于 HTTP_ERROR。"""
+    monkeypatch.setattr(
+        cap_mod,
+        "requests",
+        _FakeRequests(
+            _FakeResponse("unusual traffic detected", status=403)
+        ),
+    )
+    res = search_web_topic(query="q", provider="google_html", proxy_url=_SOCKS)
+    assert res["error_code"] == "PROVIDER_BLOCKED"
+
+
+def test_google_network_exception_maps_to_network_error(monkeypatch) -> None:
+    monkeypatch.setattr(cap_mod, "requests", _FakeRequests(RuntimeError("dns fail")))
+    res = search_web_topic(query="q", provider="google_html", proxy_url=_SOCKS)
+    assert res["error_code"] == "NETWORK_ERROR"
+    assert res["status"] == "failed"
+
+
+def test_google_proxy_exception_maps_to_proxy_error(monkeypatch) -> None:
+    """ProxyError / SOCKS 依赖缺失(InvalidSchema)→ PROXY_ERROR,不回退直连(§5.3)。"""
+    for exc in (
+        requests.exceptions.ProxyError("proxy down"),
+        requests.exceptions.InvalidSchema(
+            "Missing dependencies for SOCKS support."
+        ),
+    ):
+        monkeypatch.setattr(cap_mod, "requests", _FakeRequests(exc))
+        res = search_web_topic(query="q", provider="google_html", proxy_url=_SOCKS)
+        assert res["error_code"] == "PROXY_ERROR"
+        assert res["status"] == "failed"
+
+
+def test_google_missing_proxy_maps_to_proxy_error_without_request(monkeypatch) -> None:
+    """google_html 强制代理:缺失 → PROXY_ERROR 且**不发请求**(§5.1-2/§5.3)。"""
+    fake = _FakeRequests(_FakeResponse(_google_result_html([("https://a.com/1", "t", "s")])))
+    monkeypatch.setattr(cap_mod, "requests", fake)
+    res = search_web_topic(query="q", provider="google_html", proxy_url=None)
+    assert res["error_code"] == "PROXY_ERROR"
+    assert fake.calls == []
+
+
+def test_google_wrong_proxy_scheme_maps_to_proxy_error(monkeypatch) -> None:
+    """代理 scheme 必须 socks5h(http:// 或空 scheme 拒绝),不发请求(§5.1-2)。"""
+    fake = _FakeRequests(_FakeResponse(_google_result_html([("https://a.com/1", "t", "s")])))
+    monkeypatch.setattr(cap_mod, "requests", fake)
+    res = search_web_topic(
+        query="q", provider="google_html", proxy_url="http://127.0.0.1:3067"
+    )
+    assert res["error_code"] == "PROXY_ERROR"
+    assert fake.calls == []
+
+
+def test_google_snippet_capped_per_item_and_in_total(monkeypatch) -> None:
+    long_snip = "摘" * 1000
+    html = _google_result_html(
+        [(f"https://e.com/{i}", f"标题{i}", long_snip) for i in range(10)]
+    )
+    monkeypatch.setattr(cap_mod, "requests", _FakeRequests(_FakeResponse(html)))
+    res = search_web_topic(query="q", provider="google_html", proxy_url=_SOCKS)
+    items = res["search_web_topic"]
+    assert len(items) == 10
+    assert len(items[0]["snippet"]) == WEB_TOPIC_SNIPPET_MAX_CHARS
+    assert sum(len(it["snippet"]) for it in items) <= WEB_TOPIC_TOTAL_CONTEXT_MAX_CHARS
+    assert items[-1]["snippet"] == ""
+    assert items[-1]["title"] == "标题9"
+
+
+def test_google_debug_dump_written_on_parse_error_only_when_enabled(
+    monkeypatch, tmp_path
+) -> None:
+    """debug 关:不落盘;debug 开(parse_error 时):≤64KiB 纯文本 + 头部诊断(§5.5)。"""
+    html = "<html><body>" + "x" * 5000 + "</body></html>"
+
+    # debug 关:不写文件
+    monkeypatch.setattr(cap_mod, "requests", _FakeRequests(_FakeResponse(html)))
+    res = search_web_topic(query="q", provider="google_html", proxy_url=_SOCKS)
+    assert res["error_code"] == "PARSE_ERROR"
+    assert not (tmp_path / "search_web_topic_debug.txt").exists()
+
+    # debug 开:写受限文本,头部带诊断 JSON
+    fake = _FakeRequests(_FakeResponse(html))
+    monkeypatch.setattr(cap_mod, "requests", fake)
+    res = search_web_topic(
+        query="q", provider="google_html", proxy_url=_SOCKS, debug_dir=tmp_path
+    )
+    assert res["error_code"] == "PARSE_ERROR"
+    dump = tmp_path / "search_web_topic_debug.txt"
+    assert dump.exists()
+    assert dump.stat().st_size <= cap_mod.WEB_TOPIC_DEBUG_MAX_BYTES
+    head = dump.read_text(encoding="utf-8", errors="replace")
+    assert head.startswith("{")
+    assert "google_html_v1" in head
+
+
+def test_google_debug_dump_failure_is_silent(monkeypatch, tmp_path) -> None:
+    """debug 目录不可写时:静默吞掉,检索错误分类不受影响(§5.5)。"""
+    blocker = tmp_path / "not_a_dir"
+    blocker.write_text("occupied", encoding="utf-8")
+    html = "<html><body>" + "x" * 5000 + "</body></html>"
+    monkeypatch.setattr(cap_mod, "requests", _FakeRequests(_FakeResponse(html)))
+    res = search_web_topic(
+        query="q", provider="google_html", proxy_url=_SOCKS, debug_dir=blocker
+    )
+    assert res["error_code"] == "PARSE_ERROR"
+
+
+def test_build_request_hash_differs_by_provider_query_and_params() -> None:
+    """request_hash:换 provider/改 query/改 max_results 必不同;同输入稳定(§4.5)。"""
+    base = build_request_hash(query="q", provider="duckduckgo_html", max_results=10)
+    assert base == build_request_hash(
+        query="q", provider="duckduckgo_html", max_results=10
+    )
+    assert base != build_request_hash(query="q", provider="google_html", max_results=10)
+    assert base != build_request_hash(query="q", provider="bing_html", max_results=10)
+    assert base != build_request_hash(query="其他", provider="duckduckgo_html", max_results=10)
+    assert base != build_request_hash(query="q", provider="duckduckgo_html", max_results=5)
+    # hash 不含代理地址与凭据(§4.5)
+    assert _SOCKS not in base and "127.0.0.1" not in base
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-19 定案:bing_html 默认引擎用例矩阵(h2>a 嵌套 + b_caption 摘要)
+# ---------------------------------------------------------------------------
+def _bing_result_html(results: list[tuple[str, str, str]]) -> str:
+    """(href, title, snippet) → 模拟 Bing SERP 结果页(li.b_algo + h2>a + b_caption)。"""
+    blocks = []
+    for href, title, snippet in results:
+        blocks.append(
+            '<li class="b_algo svx4">'
+            f'<h2><a href="{href}">{title}</a></h2>'
+            f'<div class="b_caption"><p class="b_lineclamp4">{snippet}</p></div>'
+            "</li>"
+        )
+    return "<html><body><ol id=\"b_results\">" + "".join(blocks) + "</ol></body></html>"
+
+
+def test_bing_normal_results_parse_direct_and_no_proxy(monkeypatch) -> None:
+    """正常解析(h2>a 嵌套 + b_caption 摘要);默认无代理 → 直连,proxies 不传。"""
+    html = _bing_result_html(
+        [("https://a.com/guide", "马六甲海上清真寺攻略", "清真寺门票与着装要求")]
+    )
+    fake = _FakeRequests(_FakeResponse(html, url="https://www.bing.com/search?q=x"))
+    monkeypatch.setattr(cap_mod, "requests", fake)
+
+    res = search_web_topic(query="马六甲清真寺", provider="bing_html")
+
+    assert res["error_code"] is None
+    assert res["status"] == "ok"
+    assert res["engine"] == "Bing"
+    assert res["provider"] == "bing_html"
+    assert res["schema_version"] == 2
+    assert res["request_hash"] == build_request_hash(
+        query="马六甲清真寺", provider="bing_html", max_results=10
+    )
+    (item,) = res["search_web_topic"]
+    assert item["url"] == "https://a.com/guide"
+    assert item["title"] == "马六甲海上清真寺攻略"
+    assert item["snippet"] == "清真寺门票与着装要求"
+    assert item["source"] == "bing_html"
+    call = fake.calls[0]
+    assert call["params"] == {"q": "马六甲清真寺", "mkt": "zh-CN"}
+    assert call["timeout"] == (5, 15)
+    assert call["proxies"] is None  # 未给代理 → 直连(bing_html 代理可选)
+    assert res["diagnostics"]["parser_version"] == "bing_html_v1"
+
+
+def test_bing_ck_a_wrapped_url_unwrapped(monkeypatch) -> None:
+    """Bing 加密跳转 /ck/a?u=a1<base64> 还原为真实外链。"""
+    enc = "a1" + base64.urlsafe_b64encode(b"https://real.com/page?a=1&b=2").decode().rstrip("=")
+    html = _bing_result_html([(f"https://www.bing.com/ck/a?!&&u={enc}", "标题", "摘要")])
+    monkeypatch.setattr(cap_mod, "requests", _FakeRequests(_FakeResponse(html)))
+    res = search_web_topic(query="q", provider="bing_html")
+    assert res["search_web_topic"][0]["url"] == "https://real.com/page?a=1&b=2"
+
+
+def test_bing_proxy_passthrough_when_configured(monkeypatch) -> None:
+    """配置了代理 → bing 请求以 http/https 双 scheme 经代理出口。"""
+    fake = _FakeRequests(
+        _FakeResponse(_bing_result_html([("https://a.com/1", "t", "s")]))
+    )
+    monkeypatch.setattr(cap_mod, "requests", fake)
+    res = search_web_topic(query="q", provider="bing_html", proxy_url=_SOCKS)
+    assert res["status"] == "ok"
+    assert fake.calls[0]["proxies"] == {"http": _SOCKS, "https": _SOCKS}
+    assert res["diagnostics"]["proxy_enabled"] is True
+
+
+def test_bing_drops_internal_and_bad_urls_and_dedupes(monkeypatch) -> None:
+    """javascript:/站内相对路径/Bing 导航地址丢弃;重复 URL 去重。"""
+    html = _bing_result_html(
+        [
+            ("javascript:alert(1)", "坏1", "摘要1"),
+            ("/search?q=x", "站内搜索", "摘要2"),
+            ("https://www.bing.com/images", "Bing图片", "摘要3"),
+            ("https://c.com/1", "重复页", "摘要4"),
+            ("https://c.com/1", "重复页2", "摘要5"),
+            ("https://d.com/", "正常外链", "摘要6"),
+        ]
+    )
+    monkeypatch.setattr(cap_mod, "requests", _FakeRequests(_FakeResponse(html)))
+    res = search_web_topic(query="q", provider="bing_html")
+    assert [it["url"] for it in res["search_web_topic"]] == ["https://c.com/1", "https://d.com/"]
+
+
+def test_bing_no_results_marker_maps_to_no_results(monkeypatch) -> None:
+    html = '<html><body><div class="b_no">没有找到与 q 相关的结果</div></body></html>'
+    monkeypatch.setattr(cap_mod, "requests", _FakeRequests(_FakeResponse(html)))
+    res = search_web_topic(query="q", provider="bing_html")
+    assert res["error_code"] == "NO_RESULTS"
+    assert res["status"] == "no_results"
+
+
+def test_bing_unknown_structure_maps_to_parse_error(monkeypatch) -> None:
+    html = "<html><body>" + "x" * 5000 + "</body></html>"
+    monkeypatch.setattr(cap_mod, "requests", _FakeRequests(_FakeResponse(html)))
+    res = search_web_topic(query="q", provider="bing_html")
+    assert res["error_code"] == "PARSE_ERROR"
+    assert res["status"] == "failed"
+
+
+def test_bing_challenge_page_maps_to_provider_blocked(monkeypatch) -> None:
+    html = "<html><body>please complete the captcha to continue</body></html>"
+    monkeypatch.setattr(cap_mod, "requests", _FakeRequests(_FakeResponse(html)))
+    res = search_web_topic(query="q", provider="bing_html")
+    assert res["error_code"] == "PROVIDER_BLOCKED"
+    assert res["status"] == "failed"
+
+
+def test_bing_http_error_maps_to_http_error(monkeypatch) -> None:
+    monkeypatch.setattr(
+        cap_mod, "requests", _FakeRequests(_FakeResponse("Unavailable", status=503))
+    )
+    res = search_web_topic(query="q", provider="bing_html")
+    assert res["error_code"] == "HTTP_ERROR"
+    assert res["diagnostics"]["http_status"] == 503
+
+
+def test_bing_network_exception_maps_to_network_error(monkeypatch) -> None:
+    monkeypatch.setattr(cap_mod, "requests", _FakeRequests(RuntimeError("conn fail")))
+    res = search_web_topic(query="q", provider="bing_html")
+    assert res["error_code"] == "NETWORK_ERROR"
+
+
+def test_bing_snippet_capped_per_item_and_in_total(monkeypatch) -> None:
+    long_snip = "摘" * 1000
+    html = _bing_result_html(
+        [(f"https://e.com/{i}", f"标题{i}", long_snip) for i in range(10)]
+    )
+    monkeypatch.setattr(cap_mod, "requests", _FakeRequests(_FakeResponse(html)))
+    res = search_web_topic(query="q", provider="bing_html")
+    items = res["search_web_topic"]
+    assert len(items) == 10
+    assert len(items[0]["snippet"]) == WEB_TOPIC_SNIPPET_MAX_CHARS
+    assert sum(len(it["snippet"]) for it in items) <= WEB_TOPIC_TOTAL_CONTEXT_MAX_CHARS
+    assert items[-1]["snippet"] == ""
+
+
+def test_bing_debug_dump_written_on_parse_error(monkeypatch, tmp_path) -> None:
+    html = "<html><body>" + "x" * 5000 + "</body></html>"
+    monkeypatch.setattr(cap_mod, "requests", _FakeRequests(_FakeResponse(html)))
+    res = search_web_topic(
+        query="q", provider="bing_html", debug_dir=tmp_path
+    )
+    assert res["error_code"] == "PARSE_ERROR"
+    dump = tmp_path / "search_web_topic_debug.txt"
+    assert dump.exists()
+    assert dump.stat().st_size <= cap_mod.WEB_TOPIC_DEBUG_MAX_BYTES
+    assert "bing_html_v1" in dump.read_text(encoding="utf-8", errors="replace")
