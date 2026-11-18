@@ -164,6 +164,16 @@ TEXT_FX_INTRO_ANIMATION: str = os.environ.get("TEXT_FX_INTRO_ANIMATION", "新年
 # fixed = 用上面的 TEXT_FX_INTRO_ANIMATION 固定名(旧行为)。非法值按 auto 处理。
 TEXT_FX_INTRO_POOL_MODE: str = os.environ.get("TEXT_FX_INTRO_POOL_MODE", "auto").strip().lower() or "auto"
 
+# 入场动画本地缓存可用性守卫(2026-11-19 动画丢失根因修复):池条目仅是 vendor
+# 元数据扫描,资源须已下载到剪映本地缓存才能渲染;剪映打开草稿才按需下载,
+# 下载不完整/失败即「动画丢失」。选取时只允许 verified(GUI 实证)且缓存目录
+# Cache/effect/<effect_id>/<md5> 存在的条目,否则按池序确定性回退,全不可用则
+# 降级不写。路径可用环境变量覆盖(测试/便携版自定义安装位置)。
+JIANYING_CACHE_ROOT: str = (
+    os.environ.get("JIANYING_CACHE_ROOT", "").strip()
+    or str(Path.home() / "AppData" / "Local" / "JianyingPro" / "User Data" / "Cache" / "effect")
+)
+
 # ---------------------------------------------------------------------------
 # 节点 13:adjust_volume(阶段 5,2026-11-09)—— 分角色音量与淡入淡出
 # ---------------------------------------------------------------------------

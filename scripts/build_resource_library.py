@@ -204,6 +204,28 @@ def _dedup_by_name(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], in
     return out, dropped
 
 
+def _carry_over_verified(
+    existing_rows: list[dict[str, Any]], fresh_rows: list[dict[str, Any]]
+) -> int:
+    """重生成时按 name 继承已有条目的 ``verified`` 标志,返回继承条数。
+
+    verified 只能由剪映 GUI 实证授予(全池收割/真机验收),AST 重扫不携带该
+    信息;不继承会让可用性守卫把已验证资源重新判为不可用(2026-11-19 动画
+    丢失根因修复的配套)。
+    """
+    verified = {
+        row.get("name")
+        for row in existing_rows
+        if isinstance(row, dict) and row.get("verified")
+    }
+    carried = 0
+    for row in fresh_rows:
+        if row.get("name") in verified:
+            row["verified"] = True
+            carried += 1
+    return carried
+
+
 def _diff_against_existing(out_dir: Path, fx_lib: dict, text_lib: dict) -> int:
     """与已有 JSON 比对,打印 + - 行;返回差异条目数(无差异返回 0)。"""
     diffs: list[str] = []
@@ -330,6 +352,23 @@ def main(argv: list[str] | None = None) -> int:
     generated_at = existing_generated_at or datetime.now(timezone.utc).replace(
         microsecond=0
     ).isoformat()
+
+    # verified 标志继承(2026-11-19 守卫配套):GUI 实证信息不随重扫丢失
+    verified_carried = 0
+    for probe, fresh_sections in (
+        (fx_path_probe, {"transitions": transitions, "video_effects": video_effects}),
+        (text_path_probe, {"intro": intro, "loop": loop, "outro": outro}),
+    ):
+        if not probe.exists():
+            continue
+        try:
+            existing_lib = json.loads(probe.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for section, fresh_rows in fresh_sections.items():
+            verified_carried += _carry_over_verified(
+                existing_lib.get(section) or [], fresh_rows
+            )
     source_desc = (
         "FireRed-OpenStoryline .claude/skills/jianying-editor/scripts/vendor/"
         "pyJianYingDraft/metadata"
@@ -395,7 +434,8 @@ def main(argv: list[str] | None = None) -> int:
         f"[counts] transitions_vip={len(transitions)} "
         f"video_effects_vip={len(video_effects)} "
         f"intro_vip={len(intro)} loop_vip={len(loop)} outro_vip={len(outro)} "
-        f"dropped_dup=tx:{tx_dropped}/vfx:{vfx_dropped}",
+        f"dropped_dup=tx:{tx_dropped}/vfx:{vfx_dropped} "
+        f"verified_carried={verified_carried}",
         file=sys.stderr,
     )
     return 0

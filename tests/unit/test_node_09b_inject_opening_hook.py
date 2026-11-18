@@ -132,6 +132,23 @@ class TestZhHookInjection:
         assert anims[0]["animations"][0]["name"] == "冲屏位移"
         assert anims[0]["animations"][0]["type"] == "in"
 
+    def test_title_animation_cache_missing_degrades_title_kept(
+        self, tmp_draft: Path, tmp_path: Path, monkeypatch
+    ) -> None:
+        """标题动画候选本地缓存全缺 → 动画降级不写,标题/特效保留(2026-11-19 守卫)。"""
+        empty_root = tmp_path / "empty-cache"
+        empty_root.mkdir()
+        monkeypatch.setattr(node_09b_mod.config, "JIANYING_CACHE_ROOT", str(empty_root))
+        out = inject_opening_hook(_state(str(tmp_draft)))
+        draft = _read(tmp_draft)
+
+        track = _hook_track(draft)
+        assert track is not None, "标题本身应保留"
+        assert "anim-hook-title-1" not in track["segments"][0]["extra_material_refs"]
+        assert not draft["materials"].get("material_animations")
+        # node_09b 的 warnings 走 error_log(与 node_10 的 status_log 通道不同)
+        assert any("标题入场动画本地缓存缺失" in t for t in out["error_log"])
+
     def test_title_cut_from_first_subtitle_before_halfwidth_comma(
         self, tmp_draft: Path
     ) -> None:

@@ -46,7 +46,8 @@
       "duration_s": 0.5,
       "resource_id": "7187785892382118461",
       "effect_id": "8398145",
-      "md5": "5d157129853f479ea15f75075c1ef070"
+      "md5": "5d157129853f479ea15f75075c1ef070",
+      "verified": true
     },
     {
       "name": "冰雪飘动",
@@ -518,7 +519,8 @@
       "duration_s": 1.5,
       "resource_id": "7229520427196879421",
       "effect_id": "13137035",
-      "md5": "9838c6772ddbd48126f30baf74200f99"
+      "md5": "9838c6772ddbd48126f30baf74200f99",
+      "verified": true
     },
     {
       "name": "金粉飘落",

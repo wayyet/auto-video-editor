@@ -38,6 +38,7 @@ from jy_common.hook_title import (
 from jy_common.native_fx import (
     build_native_text_animation_material,
     build_native_video_effect_material,
+    text_animation_cache_available,
 )
 from jy_common.native_text import text_display_text
 from nodes._draft_io import (
@@ -214,13 +215,29 @@ def _inject_hook_into(draft: dict, title: str | None, tag: str) -> tuple[list[st
             style=_HOOK_TITLE_STYLE,
             id_prefix="hook-title-seg",
         )
-        animation = build_native_text_animation_material(
-            material_id="anim-hook-title-1",
-            anim_meta=HOOK_ANIMATION_CANDIDATES[0],
-            kind="in",
+        # 入场动画守卫(2026-11-19 动画丢失根因修复):候选按序取第一个本地缓存
+        # 存在的;全缺则降级不写动画(标题保留,不伪装成功)。内置免费档同样可能
+        # 未下载 —— 目录存在性是写入前的唯一可查信号。
+        animation_meta = next(
+            (
+                cand
+                for cand in HOOK_ANIMATION_CANDIDATES
+                if text_animation_cache_available(cand, config.JIANYING_CACHE_ROOT)
+            ),
+            None,
         )
-        upsert_by_id(materials.setdefault("material_animations", []), animation)
-        _bind_ref(title_seg, "anim-hook-title-1")
+        if animation_meta is not None:
+            animation = build_native_text_animation_material(
+                material_id="anim-hook-title-1",
+                anim_meta=animation_meta,
+                kind="in",
+            )
+            upsert_by_id(materials.setdefault("material_animations", []), animation)
+            _bind_ref(title_seg, "anim-hook-title-1")
+        else:
+            warnings.append(
+                f"[{tag}] 标题入场动画本地缓存缺失,降级不写(标题保留)"
+            )
 
         # 自拼标题轨追加在 tracks 末尾(不用 sync_text_track/build_text_track,
         # 见模块 docstring 第 2 点)
@@ -236,7 +253,7 @@ def _inject_hook_into(draft: dict, title: str | None, tag: str) -> tuple[list[st
             }
         )
         summary["title_written"] = 1
-        summary["animation_written"] = 1
+        summary["animation_written"] = 0 if animation_meta is None else 1
 
     return warnings, summary
 

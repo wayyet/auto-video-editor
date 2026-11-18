@@ -19,6 +19,11 @@
 实证存在的 VIP 资源;旧默认列表四个名字全不在库内)未命中时回落库内第一个 VIP
 intro。资源库缺失 → 动画降级不写入(不伪装成功,degraded 计数)。
 
+缓存可用性守卫(2026-11-19 动画丢失根因修复):池条目只是 vendor 元数据扫描,
+资源须已下载到剪映本地缓存才能真正渲染(「螺旋上升」下载不完整即「动画丢失」
+实证)。选取只落在「verified(GUI 实证)+ 缓存目录存在」的条目上:seed 命中
+不可用条目时按池序向后回退,全不可用则降级不写 —— 宁可没有动画,不出丢失徽章。
+
 job_id 解析(2026-11-18 缺陷修复):两个入口统一走公共层
 ``jy_common.job_identity.resolve_job_id`` —— LangGraph config 的
 ``configurable.thread_id`` 为权威源,``state.session_id`` 兼容旧 checkpoint,
@@ -34,9 +39,13 @@ import hashlib
 from pathlib import Path
 from typing import Any, Optional
 
-from config import TEXT_FX_INTRO_ANIMATION, TEXT_FX_INTRO_POOL_MODE
+from config import JIANYING_CACHE_ROOT, TEXT_FX_INTRO_ANIMATION, TEXT_FX_INTRO_POOL_MODE
 from jy_common.job_identity import resolve_job_id
-from jy_common.native_fx import OUR_TEXT_ANIMATION_PREFIX, build_native_text_animation_material
+from jy_common.native_fx import (
+    OUR_TEXT_ANIMATION_PREFIX,
+    build_native_text_animation_material,
+    text_animation_cache_available,
+)
 from jy_common.template_library import TemplateLibrary, load_resource_libraries
 from langchain_core.runnables import RunnableConfig
 from nodes._draft_io import apply_and_write, find_text_segment_by_material_id, load_draft
@@ -54,27 +63,55 @@ def _is_our_text(text_obj: dict) -> bool:
     return any(text_id.startswith(p) for p in _OUR_TEXT_PREFIXES)
 
 
+def _intro_usable(anim_meta: dict) -> bool:
+    """池条目可用守卫(2026-11-19 动画丢失根因修复)。
+
+    双条件缺一不可:``verified=True``(只能由剪映 GUI 实证授予,元数据扫描
+    不携带)且本地缓存目录 ``Cache/effect/<effect_id>/<md5>`` 存在。目录存在
+    不代表可渲染(坏包占目录,「螺旋上升」实证),故以 verified 为主判据、
+    缓存存在为辅(防缓存被清理后的陈旧 verified)。
+    """
+    if not anim_meta.get("verified"):
+        return False
+    return text_animation_cache_available(anim_meta, JIANYING_CACHE_ROOT)
+
+
 def _pick_intro_animation(template_lib: TemplateLibrary, job_id: str = "") -> dict | None:
-    """入场动画选取(池化,2026-11-18)。
+    """入场动画选取(池化,2026-11-18;缓存可用性守卫,2026-11-19)。
 
     - auto(缺省):intro 段全部 VIP 动画按 ``sha256(job_id|"text_intro_pool")``
-      确定性选 1 个 —— 同任务同结果,zh/en 一致,跨任务多样化。
-    - fixed:config 名 → 旧默认名兜底 → 库内第一个 VIP intro。
+      定位全池起点,从该位置起**按池序轮转**,选取第一个可用条目(verified
+      且本地缓存存在)—— 同任务同结果,zh/en 一致,跨任务多样化;seed 命中
+      不可用条目时向后回退,不产生「动画丢失」草稿。
+    - fixed:config 名 → 旧默认名兜底(均须过守卫)→ 可用子集池序第一个。
+    - 无可用条目 → ``None``,调用方降级不写动画(degraded 计数,不伪装成功)。
     """
     if template_lib.is_empty or not template_lib.has_text_lib:
         return None
-    intro_list = template_lib.list_text_animations("intro", vip_only=True)
-    if not intro_list:
+    intro_rows = template_lib.list_text_animation_rows("intro", vip_only=True)
+    if not intro_rows:
+        return None
+    usable_ids = {id(row) for row in intro_rows if _intro_usable(row)}
+    if not usable_ids:
         return None
     if TEXT_FX_INTRO_POOL_MODE != "fixed":
         seed_input = f"{job_id}|text_intro_pool"
         seed = int(hashlib.sha256(seed_input.encode("utf-8")).hexdigest()[:8], 16)
-        return template_lib.pick_text_animation("intro", intro_list[seed % len(intro_list)])
+        start = seed % len(intro_rows)
+        for offset in range(len(intro_rows)):
+            candidate = intro_rows[(start + offset) % len(intro_rows)]
+            if id(candidate) in usable_ids:
+                return candidate
+        return None
     for name in (TEXT_FX_INTRO_ANIMATION, *_LEGACY_INTRO_NAMES):
         anim = template_lib.pick_text_animation("intro", name)
-        if anim is not None:
+        if anim is not None and _intro_usable(anim):
             return anim
-    return template_lib.pick_text_animation("intro", intro_list[0])
+    # fixed 兜底:可用子集按池序第一个(不再无条件回退 rows[0] —— 它可能不可用)
+    for row in intro_rows:
+        if id(row) in usable_ids:
+            return row
+    return None
 
 
 def _cleanup_stale_animations(draft: dict, kept_ids: set[str]) -> int:
@@ -124,6 +161,12 @@ def _apply_text_animations(
     }
     if anim_meta is None:
         warnings.append(f"[{tag}] 无可用入场动画资源,动画降级不写入")
+    else:
+        # 选中信息只进摘要与 status_log 标签(text_fx_summary 已在死键治理中移除)
+        summary["selected"] = {
+            "name": str(anim_meta.get("name") or ""),
+            "effect_id": str(anim_meta.get("effect_id") or ""),
+        }
 
     materials = draft.setdefault("materials", {})
     anim_bucket = materials.setdefault("material_animations", [])
@@ -187,6 +230,12 @@ def apply_text_fx(
     warnings, summary = _apply_text_animations(draft, template_lib, node_tag, job_id)
 
     log = list(status_log or [])
+    selected = summary.get("selected") or {}
+    if selected.get("name"):
+        # 审计标签:不打开草稿也能在事件流里看到选了哪个动画(降级时走 warnings)
+        log.append(
+            f"{node_tag}_text_anim_selected:{selected['name']}@{selected.get('effect_id')}"
+        )
     log.extend(warnings)
     log.extend(apply_and_write(draft_path, draft, node_tag, done_tag=done_tag))
     return log, summary

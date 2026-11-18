@@ -113,14 +113,21 @@ def test_inject_text_fx_writes_native_animations(tmp_draft_with_texts: Path) -> 
 def test_inject_text_fx_fixed_mode_uses_config_name(
     tmp_draft_with_texts: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """fixed 模式(旧行为):config 固定名"新年打字机"(旧默认四个名字全不在库内)。"""
+    """fixed 模式:config 固定名"新年打字机"未 verified(守卫)→ 回退可用子集池序第一个。
+
+    2026-11-19 守卫后 fixed 名也须过可用性闸;旧默认四个名字全不在库内,最终
+    兜底从"库内第一个 VIP intro(乱码故障)"收紧为"可用子集池序第一个"。
+    """
+    from nodes.node_10_inject_text_fx import JIANYING_CACHE_ROOT
+
     monkeypatch.setattr(
         "nodes.node_10_inject_text_fx.TEXT_FX_INTRO_POOL_MODE", "fixed"
     )
     inject_text_fx(_state(tmp_draft_with_texts))
     draft = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
     names = {a["animations"][0]["name"] for a in draft["materials"]["material_animations"]}
-    assert names == {"新年打字机"}
+    (first_usable,) = (_r["name"] for _r in _usable_intro_rows(JIANYING_CACHE_ROOT)[:1])
+    assert names == {first_usable}
 
 
 def _intro_library_names() -> set[str]:
@@ -130,16 +137,41 @@ def _intro_library_names() -> set[str]:
         return {row["name"] for row in json.load(f).get("intro", [])}
 
 
-def _expected_pool_member(job_id: str) -> dict:
-    """镜像 node_10 池选公式(锁定契约):sha256(job_id|text_intro_pool)[:8] % 78。
-
-    intro 段文件序即池序(list_text_animations 保序),条目全 VIP(2026-11-18 快照)。
-    """
+def _usable_intro_rows(cache_root: str | Path) -> list[dict]:
+    """真实池 JSON 里「verified 且缓存目录存在」的 intro 行(文件序即池序)。"""
     lib_path = Path(__file__).resolve().parents[2] / "templates" / "text_resource_library.json"
     with open(lib_path, "r", encoding="utf-8") as f:
         intro = list(json.load(f).get("intro", []))
+    root = Path(cache_root)
+    return [
+        row
+        for row in intro
+        if row.get("verified")
+        and (root / str(row["effect_id"]) / str(row["md5"])).is_dir()
+    ]
+
+
+def _expected_pool_member(job_id: str) -> dict:
+    """镜像 node_10 池选公式(锁定契约,2026-11-19 守卫版)。
+
+    sha256(job_id|text_intro_pool)[:8] 定位**全池**起点,按池序轮转到第一个
+    「verified 且本地缓存存在」的条目;缓存根读取节点模块当前值(conftest
+    封闭化 fixture 指到临时目录并伪造 verified 条目缓存)。
+    """
+    from nodes.node_10_inject_text_fx import JIANYING_CACHE_ROOT
+
+    lib_path = Path(__file__).resolve().parents[2] / "templates" / "text_resource_library.json"
+    with open(lib_path, "r", encoding="utf-8") as f:
+        intro = list(json.load(f).get("intro", []))
+    usable = _usable_intro_rows(JIANYING_CACHE_ROOT)
+    assert usable, "conftest 封闭化 fixture 应伪造至少一条 verified 条目缓存"
     seed = int(hashlib.sha256(f"{job_id}|text_intro_pool".encode("utf-8")).hexdigest()[:8], 16)
-    return intro[seed % len(intro)]
+    start = seed % len(intro)
+    for offset in range(len(intro)):
+        candidate = intro[(start + offset) % len(intro)]
+        if candidate in usable:
+            return candidate
+    raise AssertionError("unreachable: usable 子集非空必有命中")
 
 
 def _animation_fields(entry: dict) -> dict:
@@ -518,3 +550,120 @@ def test_graph_level_config_thread_id_reaches_both_entries(tmp_path: Path) -> No
     }
     expected = _expected_pool_member(tid)["name"]
     assert zh_names == en_names == {expected}
+
+
+# ------------------------------------------------ 可用性守卫(2026-11-19 动画丢失根因修复)
+
+
+def _fake_lib_with_intro(rows: list[dict]):
+    from jy_common.template_library import TemplateLibrary
+
+    return TemplateLibrary(
+        {"default_style": {"outline": True, "shadow": True, "entrance_animation": None}},
+        fx_lib={},
+        text_lib={"intro": rows},
+    )
+
+
+def _seed_position(job_id: str, pool_len: int) -> int:
+    seed = int(hashlib.sha256(f"{job_id}|text_intro_pool".encode("utf-8")).hexdigest()[:8], 16)
+    return seed % pool_len
+
+
+def test_auto_pool_walks_past_unverified_seed_member(
+    tmp_draft_with_texts: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """seed 命中未 verified 条目 → 按池序向后回退到第一条可用条目(不产生丢失草稿)。"""
+    from nodes.node_10_inject_text_fx import apply_text_fx
+
+    rows = [
+        {"name": "守卫甲", "is_vip": True, "duration_s": 1.0,
+         "resource_id": "1111111111111111111", "effect_id": "E1", "md5": "M1"},
+        {"name": "守卫乙", "is_vip": True, "duration_s": 1.0,
+         "resource_id": "2222222222222222222", "effect_id": "E2", "md5": "M2", "verified": True},
+        {"name": "守卫丙", "is_vip": True, "duration_s": 1.0,
+         "resource_id": "3333333333333333333", "effect_id": "E3", "md5": "M3", "verified": True},
+    ]
+    cache_root = tmp_path / "cache"
+    (cache_root / "E2" / "M2").mkdir(parents=True)
+    (cache_root / "E3" / "M3").mkdir(parents=True)
+    monkeypatch.setattr("nodes.node_10_inject_text_fx.JIANYING_CACHE_ROOT", str(cache_root))
+    monkeypatch.setattr(
+        "nodes.node_10_inject_text_fx.load_resource_libraries",
+        lambda **_kw: _fake_lib_with_intro(rows),
+    )
+    # 确定性搜索 seed 落在池序 0(未 verified 的「守卫甲」)的 job_id
+    job_id = next(
+        j for j in (f"guard-walk-{i}" for i in range(1000))
+        if _seed_position(j, len(rows)) == 0
+    )
+    apply_text_fx(tmp_draft_with_texts, [], node_tag="t", done_tag="t_done", job_id=job_id)
+    draft = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    names = {a["animations"][0]["name"] for a in draft["materials"]["material_animations"]}
+    assert names == {"守卫乙"}
+
+
+def test_verified_but_cache_missing_walks_to_next(
+    tmp_draft_with_texts: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """verified 但缓存目录不存在(被清理)→ 同样跳过,缓存存在是第二道闸。"""
+    from nodes.node_10_inject_text_fx import apply_text_fx
+
+    rows = [
+        {"name": "守卫甲", "is_vip": True, "duration_s": 1.0,
+         "resource_id": "1111111111111111111", "effect_id": "E1", "md5": "M1", "verified": True},
+        {"name": "守卫乙", "is_vip": True, "duration_s": 1.0,
+         "resource_id": "2222222222222222222", "effect_id": "E2", "md5": "M2", "verified": True},
+    ]
+    cache_root = tmp_path / "cache"
+    (cache_root / "E2" / "M2").mkdir(parents=True)  # 故意不伪造甲的 E1/M1
+    monkeypatch.setattr("nodes.node_10_inject_text_fx.JIANYING_CACHE_ROOT", str(cache_root))
+    monkeypatch.setattr(
+        "nodes.node_10_inject_text_fx.load_resource_libraries",
+        lambda **_kw: _fake_lib_with_intro(rows),
+    )
+    job_id = next(
+        j for j in (f"guard-cache-{i}" for i in range(1000))
+        if _seed_position(j, len(rows)) == 0
+    )
+    apply_text_fx(tmp_draft_with_texts, [], node_tag="t", done_tag="t_done", job_id=job_id)
+    draft = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    names = {a["animations"][0]["name"] for a in draft["materials"]["material_animations"]}
+    assert names == {"守卫乙"}
+
+
+def test_no_usable_animation_degrades(
+    tmp_draft_with_texts: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """全池无可用条目(有 verified 但缓存全缺)→ 降级不写动画,不伪装成功。"""
+    from nodes.node_10_inject_text_fx import apply_text_fx
+
+    rows = [
+        {"name": "守卫甲", "is_vip": True, "duration_s": 1.0,
+         "resource_id": "1111111111111111111", "effect_id": "E1", "md5": "M1", "verified": True},
+    ]
+    cache_root = tmp_path / "cache"  # 空缓存根
+    cache_root.mkdir()
+    monkeypatch.setattr("nodes.node_10_inject_text_fx.JIANYING_CACHE_ROOT", str(cache_root))
+    monkeypatch.setattr(
+        "nodes.node_10_inject_text_fx.load_resource_libraries",
+        lambda **_kw: _fake_lib_with_intro(rows),
+    )
+    log, _summary = apply_text_fx(
+        tmp_draft_with_texts, [], node_tag="t", done_tag="t_done", job_id="any"
+    )
+    draft = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    assert not draft["materials"].get("material_animations")
+    assert any("无可用入场动画资源" in t for t in log)
+    assert "t_done" in log
+    assert not any("_text_anim_selected:" in t for t in log)
+
+
+def test_selected_animation_audited_in_status_log(tmp_draft_with_texts: Path) -> None:
+    """选中动画以 status_log 标签审计(事件流可见,不复活 text_fx_summary 死键)。"""
+    out = inject_text_fx(_state(tmp_draft_with_texts))
+    expected = _expected_pool_member("draft")  # 无 config/state ID 时兜底=目录名
+    tags = [t for t in out["status_log"] if t.startswith("node_10_text_anim_selected:")]
+    assert len(tags) == 1
+    assert expected["name"] in tags[0]
+    assert expected["effect_id"] in tags[0]

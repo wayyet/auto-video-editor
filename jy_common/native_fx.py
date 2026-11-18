@@ -26,6 +26,7 @@ material id 由调用方显式传入(约定:工作流自产素材用可识别前
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 #: 我方写入的原生素材 id 前缀/模式(node_09/10/11/13 清理旧产物时只动这些,
@@ -104,6 +105,26 @@ def build_native_video_effect_material(
         "value": float(value),
         "version": "",
     }
+
+
+def text_animation_cache_available(
+    anim_meta: dict[str, Any],
+    cache_root: str | Path | None,
+) -> bool:
+    """动画元数据(effect_id+md5)对应的剪映本地缓存目录是否存在。
+
+    剪映按 ``Cache/effect/<effect_id>/<md5>`` 解析文字动画资源;目录缺失时剪映
+    会在**打开草稿时**按需下载,下载不完整/失败即「动画丢失」(2026-11-19
+    根因实证:螺旋上升只落 4 个不完整文件)。写入侧先查,查不到就不承诺动画。
+
+    注意:目录存在≠一定可渲染(坏包也占目录),所以本检查只是守卫的一半,
+    另一半是池条目的 ``verified`` 标志(只能由 GUI 实证授予)。
+    """
+    effect_id = str(anim_meta.get("effect_id") or "")
+    md5 = str(anim_meta.get("md5") or "")
+    if not effect_id or not md5 or not cache_root:
+        return False
+    return (Path(cache_root) / effect_id / md5).is_dir()
 
 
 def build_native_text_animation_material(

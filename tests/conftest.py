@@ -20,6 +20,48 @@ if str(ROOT) not in sys.path:
 os.environ.setdefault("JY_DRAFT_PUBLISH_ENABLED", "0")
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_anim_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """入场动画缓存守卫的封闭化(2026-11-19 动画丢失根因修复配套)。
+
+    守卫(node_10/09b)读取本机剪映缓存 ``Cache/effect/<effect_id>/<md5>``,
+    不封闭会让全套测试依赖操作机环境(有缓存=写动画,无缓存=降级,结果漂移)。
+    这里把缓存根统一指到临时目录,并按真实池 JSON 的 verified 条目 + 标题动画
+    候选[0] 伪造缓存目录 —— 行为等价于"资源已下载且可用"。
+    """
+    import json as _json
+
+    cache_root = tmp_path / "jy-cache-effect"
+    cache_root.mkdir(parents=True, exist_ok=True)
+
+    def _fabricate(effect_id: object, md5: object) -> None:
+        if effect_id and md5:
+            (cache_root / str(effect_id) / str(md5)).mkdir(parents=True, exist_ok=True)
+
+    lib_path = ROOT / "templates" / "text_resource_library.json"
+    try:
+        intro_rows = _json.loads(lib_path.read_text(encoding="utf-8")).get("intro", [])
+    except (OSError, ValueError):
+        intro_rows = []
+    for row in intro_rows:
+        if isinstance(row, dict) and row.get("verified"):
+            _fabricate(row.get("effect_id"), row.get("md5"))
+
+    from jy_common.hook_title import HOOK_ANIMATION_CANDIDATES
+
+    if HOOK_ANIMATION_CANDIDATES:
+        _fabricate(
+            HOOK_ANIMATION_CANDIDATES[0].get("effect_id"),
+            HOOK_ANIMATION_CANDIDATES[0].get("md5"),
+        )
+
+    monkeypatch.setattr(
+        "nodes.node_10_inject_text_fx.JIANYING_CACHE_ROOT", str(cache_root)
+    )
+    monkeypatch.setattr("config.JIANYING_CACHE_ROOT", str(cache_root))
+    return cache_root
+
+
 @pytest.fixture
 def workspace_root() -> Path:
     return ROOT

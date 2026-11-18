@@ -221,6 +221,15 @@ def build_render_plan(draft: dict) -> dict[str, Any]:
         for e in (materials.get("effects") or [])
         if isinstance(e, dict) and e.get("type") == "text_effect"
     )
+    # 我方字幕/标题入场动画(2026-11-19):客户端内动效,FFmpeg 导出不渲染
+    # (字幕文本本身已烧录,动画不随导出);只数我方 id 前缀,人工素材不动
+    n_text_anim = sum(
+        1
+        for a in (materials.get("material_animations") or [])
+        if isinstance(a, dict)
+        and str(a.get("id") or "").startswith(("text-anim-", "anim-hook-title"))
+        and a.get("animations")
+    )
     if n_trans:
         fidelity.append(f"{n_trans} 处转场按硬切近似渲染")
     if n_fx:
@@ -229,6 +238,8 @@ def build_render_plan(draft: dict) -> dict[str, Any]:
         fidelity.append(f"{n_sticker} 个贴纸未渲染进 MP4(剪映客户端内可见)")
     if n_flower:
         fidelity.append(f"{n_flower} 个原生花字未渲染进 MP4(剪映客户端内可见)")
+    if n_text_anim:
+        fidelity.append(f"{n_text_anim} 条字幕入场动画未渲染进 MP4(剪映客户端内可见)")
 
     return {
         "width": width,

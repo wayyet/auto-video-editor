@@ -258,6 +258,25 @@ class TemplateLibrary:
                 out.append(name)
         return out
 
+    def list_text_animation_rows(
+        self, kind: str, vip_only: bool = True
+    ) -> list[dict[str, Any]]:
+        """返回资源库里所有 VIP(或全部)文字动画**完整行**(保序复制)。
+
+        池选守卫(2026-11-19)需要 ``verified``/``effect_id``/``md5`` 字段做
+        可用性过滤,name 列表(``list_text_animations``)不够用;文件序即池序。
+        """
+        if kind not in ("intro", "loop", "outro"):
+            return []
+        if not self._text_lib:
+            return []
+        out: list[dict[str, Any]] = []
+        for row in self._text_lib.get(kind, []):
+            if vip_only and not row.get("is_vip", False):
+                continue
+            out.append(dict(row))
+        return out
+
 
 def load_template_library(path: str | Path) -> TemplateLibrary:
     """便捷构造器 — Week 3 各节点的统一入口(单文件模式)。"""
