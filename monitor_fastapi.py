@@ -41,6 +41,7 @@ from web.api_workflow import _REPO_ROOT, router
 _WEB_DIR = _REPO_ROOT / "web"
 _MONITOR_HTML = _WEB_DIR / "monitor.html"
 _CONSOLE_HTML = _WEB_DIR / "console.html"
+_AI_CONTENT_HTML = _WEB_DIR / "ai_content.html"
 _NODE_MAP_DIR = _WEB_DIR / "node_map"
 _NODE_MAP_HTML = _NODE_MAP_DIR / "node_map.html"
 _STATIC_DIR = _WEB_DIR / "static"
@@ -87,6 +88,18 @@ async def node_map():
             status_code=404,
         )
     return FileResponse(_NODE_MAP_HTML, media_type="text/html")
+
+
+@app.get("/ai-content", include_in_schema=False)
+async def ai_content_page():
+    """AI 内容明细页(2026-11-19;按 ?thread_id= 只读展示五区块产物,零工作流副作用)。"""
+    if not _AI_CONTENT_HTML.exists():
+        return Response(
+            "ai_content.html not found. Put it under ./web/ai_content.html",
+            media_type="text/plain",
+            status_code=404,
+        )
+    return FileResponse(_AI_CONTENT_HTML, media_type="text/html")
 
 
 app.include_router(router)

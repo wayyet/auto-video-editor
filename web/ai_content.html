@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI 内容明细</title>
+  <style>
+    /* AI 内容明细页(2026-11-19 第八期审查修订版)。
+       按 ?thread_id= 只读展示五区块产物:网页话题检索 / 文案模板推荐 /
+       生成文案 / 中文字幕 / 英文字幕。CSS 变量与 web/console.html 同一套
+       (含浅色主题记忆);零工作流副作用:刷新 = 重新 GET。 */
+    :root{
+      --bg:#0f0f0f; --panel:#171717; --text:#eaeaea; --muted:#b5b5b5;
+      --border:#2c2c2c; --st-run:#3b82f6; --st-done:#22c55e; --st-wait:#d97706;
+      --st-retry:#f97316; --st-fail:#ef4444;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --topbar-bg: linear-gradient(to bottom, #121212, #0f0f0f);
+      --input-bg:#0f0f0f;
+      --chip-bg:#141414;
+      --hover-border:#3a3a3a;
+      --hover-bg:#141414;
+      --table-row-border:#242424;
+      --link-text:#93c5fd;
+      --err-text:#fca5a5;
+      --ok-text:#86efac;
+      --chip-run-text:#93c5fd;
+      --chip-wait-text:#fcd34d;
+      --chip-done-text:#86efac;
+      --chip-fail-text:#fca5a5;
+    }
+    html[data-theme="light"]{
+      --bg:#ffffff; --panel:#ffffff; --text:#1a1a1a; --muted:#525252;
+      --border:#d4d4d4;
+      --topbar-bg: linear-gradient(to bottom, #ffffff, #fafafa);
+      --input-bg:#ffffff;
+      --chip-bg:#f5f5f5;
+      --hover-border:#a3a3a3;
+      --hover-bg:#f0f0f0;
+      --table-row-border:#e5e5e5;
+      --link-text:#1d4ed8;
+      --err-text:#b91c1c;
+      --ok-text:#15803d;
+      --chip-run-text:#1d4ed8;
+      --chip-wait-text:#92400e;
+      --chip-done-text:#15803d;
+      --chip-fail-text:#b91c1c;
+    }
+    *{ box-sizing:border-box; }
+    body{ margin:0; background:var(--bg); color:var(--text); font-family:var(--sans); font-size:13px; }
+    #topbar{
+      height:52px; display:flex; align-items:center; gap:10px; padding:0 14px;
+      border-bottom:1px solid var(--border); background:var(--topbar-bg);
+    }
+    #topbar h1{ font-size:14px; margin:0 10px 0 0; font-weight:650; white-space:nowrap; }
+    #topbar a{ color:var(--link-text); font-size:12px; text-decoration:none; border:1px solid var(--border); border-radius:8px; padding:5px 8px; }
+    #topbar a:hover{ border-color:var(--hover-border); background:var(--hover-bg); }
+    .btn{
+      appearance:none; background:transparent; color:var(--text); border:1px solid var(--border);
+      border-radius:8px; padding:6px 10px; font-size:12px; cursor:pointer;
+    }
+    .btn:hover:not(:disabled){ border-color:var(--hover-border); background:var(--hover-bg); }
+    .btn:disabled{ opacity:.45; cursor:not-allowed; }
+    #chip, .chip{
+      display:inline-block; padding:3px 9px; border-radius:999px; border:1px solid var(--border);
+      background:var(--chip-bg); font-family:var(--mono); font-size:11px; color:var(--muted);
+    }
+    #chip.s-running{ color:var(--chip-run-text); border-color:var(--st-run); }
+    #chip.s-waiting_human{ color:var(--chip-wait-text); border-color:var(--st-wait); }
+    #chip.s-completed{ color:var(--chip-done-text); border-color:var(--st-done); }
+    #chip.s-failed{ color:var(--chip-fail-text); border-color:var(--st-fail); }
+    #page{ max-width:960px; margin:0 auto; padding:6px 16px 40px; }
+    h2{ font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); margin:22px 0 8px; font-weight:650; display:flex; align-items:center; gap:8px; }
+    h2 .st{ text-transform:none; letter-spacing:0; }
+    .hint{ color:var(--muted); font-size:11px; margin:6px 0; }
+    .err-text{ color:var(--err-text); }
+    .ok-text{ color:var(--ok-text); }
+    #runNote{
+      display:none; border:1px solid var(--st-wait); border-radius:10px; padding:8px 12px;
+      margin:10px 0; font-size:12px; color:var(--chip-wait-text);
+    }
+    #runNote.active{ display:block; }
+    section{ border:1px solid var(--border); border-radius:10px; padding:12px 14px; margin:0 0 4px; background:var(--panel); }
+    table{ width:100%; margin:6px 0; border-collapse:collapse; font-family:var(--mono); font-size:11px; }
+    th{ text-align:left; color:var(--muted); border-bottom:1px solid var(--border); padding:5px 8px; }
+    td{ border-bottom:1px solid var(--table-row-border); padding:5px 8px; vertical-align:top; word-break:break-all; }
+    .st{ display:inline-block; padding:1px 7px; border-radius:999px; border:1px solid var(--border); font-size:10px; color:var(--muted); }
+    .st.done{ color:var(--chip-done-text); border-color:var(--st-done); }
+    .st.run{ color:var(--chip-run-text); border-color:var(--st-run); }
+    .st.waiting{ color:var(--chip-wait-text); border-color:var(--st-wait); }
+    .st.failed{ color:var(--chip-fail-text); border-color:var(--st-fail); }
+    .kv{ display:grid; grid-template-columns:96px 1fr; gap:4px 10px; font-size:12px; margin:6px 0; }
+    .kv .k{ color:var(--muted); font-size:11px; padding-top:1px; }
+    .kv .v{ font-family:var(--mono); word-break:break-all; }
+    .narr{
+      background:var(--input-bg); border:1px solid var(--border); border-radius:8px;
+      padding:8px 10px; font-size:12px; line-height:1.6; white-space:pre-wrap; word-break:break-all;
+      margin:6px 0; font-family:var(--sans);
+    }
+    .entry{ border-top:1px dashed var(--border); padding:8px 0; margin:6px 0 0; }
+    .entry:first-of-type{ border-top:none; }
+    .entry .title{ font-size:12px; font-weight:600; margin:0 0 2px; }
+    .entry .meta{ font-family:var(--mono); font-size:10px; color:var(--muted); margin:0 0 4px; word-break:break-all; }
+    .entry .snippet{ color:var(--muted); font-size:11px; line-height:1.5; margin:0; }
+    .entry a{ color:var(--link-text); text-decoration:none; word-break:break-all; }
+    .plain-url{ font-family:var(--mono); font-size:11px; word-break:break-all; }
+    details{ margin:8px 0; }
+    details summary{ cursor:pointer; color:var(--muted); font-size:11px; }
+    details pre{
+      background:var(--input-bg); border:1px solid var(--border); border-radius:8px;
+      padding:8px 10px; font-size:11px; white-space:pre-wrap; word-break:break-all;
+      max-height:320px; overflow:auto; margin:6px 0 0;
+    }
+    .groupCard{ border-top:1px solid var(--border); padding:10px 0 2px; margin-top:10px; }
+    .groupCard:first-of-type{ border-top:none; margin-top:0; }
+    .badge{ display:inline-block; padding:1px 7px; border-radius:999px; border:1px solid var(--border); font-size:10px; font-family:var(--mono); color:var(--muted); margin-left:6px; }
+    .badge.stub{ color:var(--chip-wait-text); border-color:var(--st-wait); }
+    .badge.real{ color:var(--chip-done-text); border-color:var(--st-done); }
+    #pageStatus{ font-family:var(--mono); font-size:12px; margin:10px 0; }
+    #pageStatus.err-text{ white-space:pre-wrap; }
+  </style>
+  <script>
+    // 与创建台/监控页共用 wf_monitor_theme 记忆,防首帧主题闪烁
+    try{
+      if(localStorage.getItem("wf_monitor_theme") === "light"){
+        document.documentElement.dataset.theme = "light";
+      }
+    }catch(e){}
+  </script>
+</head>
+<body>
+  <div id="topbar">
+    <h1>AI 内容明细</h1>
+    <span id="chip">—</span>
+    <span style="flex:1"></span>
+    <button id="btnRefresh" class="btn">刷新</button>
+    <a id="backLink" href="/console">← 返回创建台</a>
+  </div>
+  <div id="page">
+    <div id="pageStatus">加载中…</div>
+    <div id="runNote">任务正在执行,部分内容尚未生成。点击「刷新」获取最新内容。</div>
+
+    <section id="sec-web-topic">
+      <h2>01 · 网页话题检索 <span class="st" id="st-web-topic"></span></h2>
+      <div id="body-web-topic"></div>
+    </section>
+
+    <section id="sec-template">
+      <h2>02 · 文案模板推荐 <span class="st" id="st-template"></span></h2>
+      <div id="body-template"></div>
+    </section>
+
+    <section id="sec-script">
+      <h2>03 · 生成文案 <span class="st" id="st-script"></span></h2>
+      <div id="body-script"></div>
+    </section>
+
+    <section id="sec-subtitles-zh">
+      <h2>04 · 中文字幕 <span class="st" id="st-subtitles-zh"></span></h2>
+      <div id="body-subtitles-zh"></div>
+    </section>
+
+    <section id="sec-subtitles-en">
+      <h2>05 · 英文字幕 <span class="st" id="st-subtitles-en"></span></h2>
+      <div id="body-subtitles-en"></div>
+    </section>
+  </div>
+
+  <script type="module">
+    import {
+      CONSOLE_API_PATHS,
+    } from "/static/workflow_console.mjs";
+    import {
+      domainOf,
+      formatMs,
+      normalizeContentDetails,
+      safeExternalUrl,
+      statusClass,
+      statusLabel,
+      translationLabel,
+    } from "/static/ai_content.mjs";
+
+    // 安全 DOM 构造:动态文本一律走 textContent/createTextNode,禁止拼 innerHTML
+    function el(tag, attrs = {}, ...children) {
+      const node = document.createElement(tag);
+      for (const [k, v] of Object.entries(attrs)) {
+        if (v == null) continue;
+        if (k === "class") node.className = v;
+        else if (k === "text") node.textContent = v;
+        else node.setAttribute(k, v);
+      }
+      for (const c of children) {
+        if (c == null) continue;
+        node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+      }
+      return node;
+    }
+
+    // 外链:仅 http/https 可点;其余渲染纯文本(target=_blank 必带 noopener noreferrer)
+    function linkFor(url, text) {
+      const safe = safeExternalUrl(url);
+      if (!safe) return el("span", { class: "plain-url", text: url || "" });
+      return el("a", { href: safe, target: "_blank", rel: "noopener noreferrer", text: text || safe });
+    }
+
+    const $ = (id) => document.getElementById(id);
+    const params = new URLSearchParams(location.search);
+    const threadId = (params.get("thread_id") || "").trim();
+
+    function setStatusChip(state) {
+      const chip = $("chip");
+      const known = ["running", "starting", "waiting_human", "completed", "failed"];
+      chip.className = known.includes(state) ? `s-${state === "starting" ? "running" : state}` : "";
+      const label = {
+        running: "运行中", starting: "启动中", waiting_human: "等待人工",
+        completed: "已完成", failed: "失败", cancelled: "已取消",
+        prepared: "未启动", unknown: "状态未知",
+      }[state] || state;
+      chip.textContent = label;
+    }
+
+    function renderBadge(sectionId, status) {
+      const badge = $(`st-${sectionId}`);
+      badge.className = `st ${statusClass(status)}`;
+      badge.textContent = statusLabel(status);
+    }
+
+    function kvRow(key, value) {
+      return [el("div", { class: "k", text: key }), el("div", { class: "v", text: value })];
+    }
+
+    function reasonNote(reason) {
+      return reason ? el("div", { class: "hint", text: `说明:${reason}` }) : null;
+    }
+
+    // 五区块渲染器(每区固定存在;数据缺失也保留标题与状态说明)
+    const renderers = {
+      webTopic(body, sec) {
+        const rows = [];
+        const grid = el("div", { class: "kv" });
+        grid.append(...kvRow("搜索引擎", sec.engine || "DuckDuckGo"));
+        if (sec.query != null) grid.append(...kvRow("检索词", sec.query));
+        if (sec.searchedAt != null) grid.append(...kvRow("检索时间", sec.searchedAt));
+        rows.push(grid);
+        if (sec.entries.length) {
+          const head = el("div", { class: "hint", text: `来源网站(${sec.entries.length} 条,检索自 DuckDuckGo):` });
+          rows.push(head);
+          for (const item of sec.entries) {
+            const domain = item.domain || domainOf(item.url) || "";
+            rows.push(
+              el("div", { class: "entry" },
+                el("div", { class: "title" }, linkFor(item.url, item.title || "(无标题)")),
+                el("div", { class: "meta", text: domain ? `来源:${domain}` : "" }),
+                item.snippet ? el("p", { class: "snippet", text: item.snippet }) : null,
+              ),
+            );
+          }
+        } else if (sec.status === "ok" || sec.status === "cache_hit") {
+          rows.push(el("div", { class: "hint", text: "检索完成,未返回结果条目。" }));
+        }
+        rows.push(reasonNote(sec.reason));
+        body.append(...rows.filter(Boolean));
+      },
+
+      template(body, sec) {
+        const rows = [];
+        const grid = el("div", { class: "kv" });
+        if (sec.templateId != null) grid.append(...kvRow("模板 ID", sec.templateId));
+        if (sec.templateVersion != null) grid.append(...kvRow("版本", String(sec.templateVersion)));
+        if (sec.retrievalMethod != null) grid.append(...kvRow("召回方式", sec.retrievalMethod));
+        if (sec.selectionMethod != null) grid.append(...kvRow("选择方式", sec.selectionMethod));
+        rows.push(grid);
+        const sel = sec.selectedTemplate;
+        if (sel) {
+          const desc = [sel.description, sel.score != null ? `评分 ${sel.score}` : null]
+            .filter(Boolean).join(" · ");
+          rows.push(el("div", { class: "entry" },
+            el("div", { class: "title", text: `选中模板:${sel.template_id || sec.templateId || "—"}` }),
+            desc ? el("div", { class: "meta", text: desc }) : null,
+          ));
+        }
+        if (sec.candidates.length) {
+          const table = el("table");
+          table.append(el("tr", {},
+            el("th", { text: "候选模板 ID" }), el("th", { text: "描述" }),
+            el("th", { text: "评分" }), el("th", { text: "版本" }),
+          ));
+          for (const c of sec.candidates) {
+            table.append(el("tr", {},
+              el("td", { text: c.template_id || "—" }),
+              el("td", { text: c.description || "—" }),
+              el("td", { text: c.score != null ? String(c.score) : "—" }),
+              el("td", { text: c.version != null ? String(c.version) : "—" }),
+            ));
+          }
+          rows.push(table);
+        }
+        if (sec.selectedTemplateContent) {
+          const details = el("details", {},
+            el("summary", { text: "展开模板正文" }),
+            el("pre", { text: sec.selectedTemplateContent + (sec.contentTruncated ? "\n…(已截断)" : "") }),
+          );
+          rows.push(details);
+        }
+        rows.push(reasonNote(sec.reason));
+        body.append(...rows.filter(Boolean));
+      },
+
+      script(body, sec) {
+        const rows = [];
+        const grid = el("div", { class: "kv" });
+        if (sec.lang != null) grid.append(...kvRow("语言", sec.lang));
+        if (sec.voiceoverStyle != null) grid.append(...kvRow("配音风格", sec.voiceoverStyle));
+        rows.push(grid);
+        if (sec.groups.length) {
+          for (const g of sec.groups) {
+            const head = [g.group_id ? `分组 ${g.group_id}` : "分组", g.summary ? ` · ${g.summary}` : ""]
+              .join("");
+            rows.push(el("div", { class: "groupCard" },
+              el("div", { class: "hint", text: head }),
+              el("div", { class: "narr", text: g.narration ?? "(旁白为空)" }),
+            ));
+          }
+          if (sec.groups.every((g) => !g.narration)) {
+            rows.push(el("div", { class: "hint", text: "注:所有分组旁白为空(stub 后端属正常路径,不代表失败)。" }));
+          }
+        }
+        if (sec.references.length) {
+          rows.push(el("div", { class: "hint", text: "引用来源:" }));
+          for (const r of sec.references) {
+            rows.push(el("div", { class: "entry" },
+              el("div", { class: "title" }, linkFor(r.url, r.title || "(无标题)")),
+              r.domain ? el("div", { class: "meta", text: `来源:${r.domain}` }) : null,
+            ));
+          }
+        }
+        rows.push(reasonNote(sec.reason));
+        body.append(...rows.filter(Boolean));
+      },
+
+      subtitles(body, sec, withTranslation) {
+        const rows = [];
+        if (sec.cuesTruncated) {
+          rows.push(el("div", { class: "hint", text: `字幕超过 500 条,仅展示前 500 条(实际 ${sec.count} 条)。` }));
+        }
+        if (withTranslation) {
+          const label = translationLabel(sec.translationStatus);
+          if (label) {
+            const cls = sec.translationStatus === "real" ? "real" : sec.translationStatus === "stub" ? "stub" : "";
+            rows.push(el("div", { class: "hint" },
+              el("span", { class: `badge ${cls}`, text: `翻译状态:${label}` }),
+            ));
+          }
+        }
+        if (sec.cues.length) {
+          const table = el("table");
+          table.append(el("tr", {},
+            el("th", { text: "序号" }), el("th", { text: "开始" }),
+            el("th", { text: "结束" }), el("th", { text: withTranslation ? "英文文本" : "中文文本" }),
+          ));
+          for (const cue of sec.cues) {
+            table.append(el("tr", {},
+              el("td", { text: cue.index != null ? String(cue.index) : "—" }),
+              el("td", { text: formatMs(cue.start_ms) }),
+              el("td", { text: formatMs(cue.end_ms) }),
+              el("td", { text: cue.text ?? "—" }),
+            ));
+          }
+          rows.push(table);
+        }
+        rows.push(reasonNote(sec.reason));
+        body.append(...rows.filter(Boolean));
+      },
+    };
+
+    function render(vm) {
+      setStatusChip(vm.taskStatus);
+      $("backLink").href = `/console?thread_id=${encodeURIComponent(vm.threadId || threadId)}`;
+      const active = ["running", "starting", "waiting_human"].includes(vm.taskStatus);
+      $("runNote").classList.toggle("active", active);
+
+      const zhTitle = document.querySelector("#sec-subtitles-zh h2");
+      zhTitle.childNodes[0].textContent = `04 · 中文字幕(${vm.subtitlesZh.count} 条) `;
+      const enTitle = document.querySelector("#sec-subtitles-en h2");
+      enTitle.childNodes[0].textContent = `05 · 英文字幕(${vm.subtitlesEn.count} 条) `;
+
+      renderBadge("web-topic", vm.webTopic.status);
+      renderBadge("template", vm.template.status);
+      renderBadge("script", vm.script.status);
+      renderBadge("subtitles-zh", vm.subtitlesZh.status);
+      renderBadge("subtitles-en", vm.subtitlesEn.status);
+
+      const bodies = {
+        "web-topic": $("body-web-topic"), "template": $("body-template"),
+        "script": $("body-script"), "subtitles-zh": $("body-subtitles-zh"),
+        "subtitles-en": $("body-subtitles-en"),
+      };
+      for (const b of Object.values(bodies)) b.replaceChildren();
+      renderers.webTopic(bodies["web-topic"], vm.webTopic);
+      renderers.template(bodies["template"], vm.template);
+      renderers.script(bodies["script"], vm.script);
+      renderers.subtitles(bodies["subtitles-zh"], vm.subtitlesZh, false);
+      renderers.subtitles(bodies["subtitles-en"], vm.subtitlesEn, true);
+    }
+
+    // 全局失败:五区块保留但统一置灰为 unavailable(标题仍在,不藏区块)
+    function renderGlobalError(message) {
+      const badgeIds = ["web-topic", "template", "script", "subtitles-zh", "subtitles-en"];
+      for (const id of badgeIds) {
+        renderBadge(id, "unavailable");
+        $(`body-${id}`).replaceChildren(el("div", { class: "hint err-text", text: message }));
+      }
+    }
+
+    function showFatal(message) {
+      const ps = $("pageStatus");
+      ps.textContent = message;
+      ps.classList.add("err-text");
+      $("btnRefresh").disabled = true;
+      renderGlobalError(message);
+    }
+
+    async function load() {
+      if (!threadId) {
+        showFatal("URL 缺少 thread_id 参数,请从创建台「AI 内容明细 →」入口进入。");
+        return;
+      }
+      const chip = $("chip");
+      chip.textContent = threadId;
+      const ps = $("pageStatus");
+      ps.classList.remove("err-text");
+      ps.textContent = "加载中…";
+      $("btnRefresh").disabled = true;
+      try {
+        const resp = await fetch(CONSOLE_API_PATHS.contentDetails(threadId), {
+          headers: { Accept: "application/json" },
+        });
+        let data = null;
+        try {
+          data = await resp.json();
+        } catch {
+          throw new Error(`响应不是 JSON(HTTP ${resp.status}),请确认服务版本已更新并重启。`);
+        }
+        if (resp.status === 404) {
+          throw new Error(`任务不存在(404):${data && data.detail ? data.detail : threadId}`);
+        }
+        if (resp.status === 400) {
+          throw new Error(`参数不合法(400):${(data && data.detail) || threadId}`);
+        }
+        if (!resp.ok) {
+          const detail = data && data.detail ? `:${data.detail}` : "";
+          throw new Error(`服务返回错误(HTTP ${resp.status})${detail}`);
+        }
+        const vm = normalizeContentDetails(data);
+        render(vm);
+        ps.textContent = `已加载(生成时间 ${vm.generatedAt || "—"});刷新只重新读取,不触发工作流。`;
+      } catch (err) {
+        ps.textContent = "";
+        ps.classList.add("err-text");
+        ps.textContent = `加载失败:${err && err.message ? err.message : err}`;
+        renderGlobalError(`加载失败:${err && err.message ? err.message : err}`);
+      } finally {
+        $("btnRefresh").disabled = false;
+      }
+    }
+
+    $("btnRefresh").addEventListener("click", load);
+    load();
+  </script>
+</body>
+</html>
