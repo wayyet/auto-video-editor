@@ -221,14 +221,35 @@ def build_render_plan(draft: dict) -> dict[str, Any]:
         for e in (materials.get("effects") or [])
         if isinstance(e, dict) and e.get("type") == "text_effect"
     )
-    # 我方字幕/标题入场动画(2026-11-19):客户端内动效,FFmpeg 导出不渲染
-    # (字幕文本本身已烧录,动画不随导出);只数我方 id 前缀,人工素材不动
-    n_text_anim = sum(
-        1
+    # 我方字幕/标题入场动画(2026-11-19 审查 P2-02):客户端内动效,FFmpeg 导出
+    # 不渲染(字幕文本本身已烧录,动画不随导出)。只统计**实际绑定到轨段**
+    # (extra_material_refs 引用)的素材,孤立素材不计;字幕(text-anim-*)与
+    # 标题(anim-hook-title*)分开计数,口径不混淆。
+    bound_anim_ids: set[str] = set()
+    for track in draft.get("tracks") or []:
+        if not isinstance(track, dict):
+            continue
+        for seg in track.get("segments") or []:
+            if not isinstance(seg, dict):
+                continue
+            refs = seg.get("extra_material_refs")
+            if isinstance(refs, list):
+                bound_anim_ids.update(str(r) for r in refs)
+
+    bound_anim_items = [
+        a
         for a in (materials.get("material_animations") or [])
         if isinstance(a, dict)
-        and str(a.get("id") or "").startswith(("text-anim-", "anim-hook-title"))
         and a.get("animations")
+        and str(a.get("id") or "") in bound_anim_ids
+    ]
+    n_subtitle_anim = sum(
+        1 for a in bound_anim_items if str(a.get("id") or "").startswith("text-anim-")
+    )
+    n_title_anim = sum(
+        1
+        for a in bound_anim_items
+        if str(a.get("id") or "").startswith("anim-hook-title")
     )
     if n_trans:
         fidelity.append(f"{n_trans} 处转场按硬切近似渲染")
@@ -238,8 +259,10 @@ def build_render_plan(draft: dict) -> dict[str, Any]:
         fidelity.append(f"{n_sticker} 个贴纸未渲染进 MP4(剪映客户端内可见)")
     if n_flower:
         fidelity.append(f"{n_flower} 个原生花字未渲染进 MP4(剪映客户端内可见)")
-    if n_text_anim:
-        fidelity.append(f"{n_text_anim} 条字幕入场动画未渲染进 MP4(剪映客户端内可见)")
+    if n_subtitle_anim:
+        fidelity.append(f"{n_subtitle_anim} 条字幕入场动画未渲染进 MP4(剪映客户端内可见)")
+    if n_title_anim:
+        fidelity.append(f"{n_title_anim} 条标题入场动画未渲染进 MP4(剪映客户端内可见)")
 
     return {
         "width": width,

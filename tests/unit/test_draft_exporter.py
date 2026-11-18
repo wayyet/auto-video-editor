@@ -112,6 +112,40 @@ def test_build_render_plan_no_flower_no_fidelity_line() -> None:
     assert not any("原生花字" in w for w in plan["fidelity_warnings"])
 
 
+def test_build_render_plan_splits_subtitle_and_title_anim_fidelity() -> None:
+    """P2-02:字幕与标题入场动画分开计数,且只统计实际绑定到轨段的素材。"""
+    draft = _draft()
+    draft["materials"]["material_animations"] = [
+        {"id": "text-anim-text-zh-1", "animations": [{"id": "a:in"}]},
+        {"id": "text-anim-text-zh-2", "animations": [{"id": "b:in"}]},
+        {"id": "text-anim-orphan", "animations": [{"id": "c:in"}]},  # 未绑定 → 不计
+        {"id": "anim-hook-title-1", "animations": [{"id": "d:in"}]},
+    ]
+    draft.setdefault("tracks", []).append({
+        "type": "text",
+        "segments": [
+            {"id": "s-zh-1", "material_id": "text-1",
+             "extra_material_refs": ["text-anim-text-zh-1"], "target_timerange": {"start": 0, "duration": 400_000}},
+            {"id": "s-zh-2", "material_id": "text-1",
+             "extra_material_refs": ["text-anim-text-zh-2"], "target_timerange": {"start": 400_000, "duration": 400_000}},
+            {"id": "s-title", "material_id": "text-1",
+             "extra_material_refs": ["anim-hook-title-1"], "target_timerange": {"start": 0, "duration": 300_000}},
+        ],
+    })
+
+    plan = build_render_plan(draft)
+
+    assert any("2 条字幕入场动画未渲染" in w for w in plan["fidelity_warnings"])
+    assert any("1 条标题入场动画未渲染" in w for w in plan["fidelity_warnings"])
+    assert all("3 条字幕入场动画" not in w for w in plan["fidelity_warnings"])
+
+
+def test_build_render_plan_no_anim_no_anim_fidelity_line() -> None:
+    """无入场动画草稿不应出现动画明细行。"""
+    plan = build_render_plan(_draft())
+    assert not any("入场动画未渲染" in w for w in plan["fidelity_warnings"])
+
+
 def test_build_render_plan_mapper_style_audio_range() -> None:
     """mapper 风格音轨段(target_start_us/target_end_us)也能解析。"""
     draft = _draft()
