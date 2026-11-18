@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import copy
 import json
 import sys
 from datetime import datetime, timezone
@@ -204,26 +205,81 @@ def _dedup_by_name(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], in
     return out, dropped
 
 
+def _resource_identity(row: dict[str, Any]) -> tuple[str, str, str, str] | None:
+    """资源稳定身份四元组 ``(name, resource_id, effect_id, md5)``;字段缺失返回 None。"""
+    name = row.get("name")
+    resource_id = row.get("resource_id")
+    effect_id = row.get("effect_id")
+    md5 = row.get("md5")
+    if not (name and resource_id and effect_id and md5):
+        return None
+    return (str(name), str(resource_id), str(effect_id), str(md5))
+
+
 def _carry_over_verified(
     existing_rows: list[dict[str, Any]], fresh_rows: list[dict[str, Any]]
-) -> int:
-    """重生成时按 name 继承已有条目的 ``verified`` 标志,返回继承条数。
+) -> tuple[int, int]:
+    """重生成时按**资源身份**继承 GUI 实证记录,返回 (继承数, 失效标stale数)。
 
-    verified 只能由剪映 GUI 实证授予(全池收割/真机验收),AST 重扫不携带该
-    信息;不继承会让可用性守卫把已验证资源重新判为不可用(2026-11-19 动画
-    丢失根因修复的配套)。
+    继承条件(2026-11-19 审查 P1-03,收紧自按 name 继承):
+    1. 同名旧条目存在且身份四元组 ``(name, resource_id, effect_id, md5)`` 完全
+       一致 —— vendor 同名换资源(升级/换源)时,旧 GUI 实证对新二进制不成立;
+    2. 旧条目带合法 ``verification`` 记录且 ``status == "verified"`` —— 无来源
+       的布尔 verified 不可审计,记录缺失/损坏一律失效。
+
+    分支:
+    - 匹配且记录合法 → 继承 ``verified + verification``(审计信息跟随);
+    - 同名但身份变化 / 记录缺失或损坏 → 新条目标 ``verification.status=stale``
+      (待重新 GUI 实证),**不**继承 verified;
+    - 旧库无同名条目 → 不动(纯 metadata_only)。
     """
-    verified = {
-        row.get("name")
-        for row in existing_rows
-        if isinstance(row, dict) and row.get("verified")
-    }
+    prior_by_name: dict[str, dict[str, Any]] = {}
+    for row in existing_rows:
+        if isinstance(row, dict) and row.get("name"):
+            prior_by_name.setdefault(str(row["name"]), row)
+
     carried = 0
+    staled = 0
     for row in fresh_rows:
-        if row.get("name") in verified:
-            row["verified"] = True
-            carried += 1
-    return carried
+        name = row.get("name")
+        prior = prior_by_name.get(str(name)) if name else None
+        if prior is None or not prior.get("verified"):
+            # 无同名旧条目 / 旧条目从未 verified(metadata_only)→ 不动。
+            # stale 只标给「曾有 GUI 实证但现已不可信」的条目,否则会污染
+            # 纯元数据条目并破坏生成器幂等(第一次生成的库第二次重跑被改写)。
+            continue
+        prior_identity = _resource_identity(prior)
+        fresh_identity = _resource_identity(row)
+        if prior_identity is None or fresh_identity is None:
+            # 身份字段不全:无法判定是否同一资源,保守起见不继承也不标 stale
+            continue
+        if prior_identity != fresh_identity:
+            row["verification"] = {
+                "status": "stale",
+                "note": "resource identity changed vs previous record; GUI re-verification required",
+                "previous_identity": {
+                    "name": prior_identity[0],
+                    "resource_id": prior_identity[1],
+                    "effect_id": prior_identity[2],
+                    "md5": prior_identity[3],
+                },
+            }
+            staled += 1
+            continue
+        verification = prior.get("verification")
+        if not (
+            isinstance(verification, dict) and verification.get("status") == "verified"
+        ):
+            row["verification"] = {
+                "status": "stale",
+                "note": "previous verified flag lacks a valid verification record; GUI re-verification required",
+            }
+            staled += 1
+            continue
+        row["verified"] = True
+        row["verification"] = copy.deepcopy(verification)
+        carried += 1
+    return carried, staled
 
 
 def _diff_against_existing(out_dir: Path, fx_lib: dict, text_lib: dict) -> int:
@@ -353,8 +409,10 @@ def main(argv: list[str] | None = None) -> int:
         microsecond=0
     ).isoformat()
 
-    # verified 标志继承(2026-11-19 守卫配套):GUI 实证信息不随重扫丢失
+    # verified 验证记录继承(2026-11-19 守卫配套):GUI 实证信息不随重扫丢失;
+    # 按 (name, resource_id, effect_id, md5) 身份匹配,身份变化/记录损坏转 stale
     verified_carried = 0
+    verified_staled = 0
     for probe, fresh_sections in (
         (fx_path_probe, {"transitions": transitions, "video_effects": video_effects}),
         (text_path_probe, {"intro": intro, "loop": loop, "outro": outro}),
@@ -366,9 +424,11 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, json.JSONDecodeError):
             continue
         for section, fresh_rows in fresh_sections.items():
-            verified_carried += _carry_over_verified(
+            carried, staled = _carry_over_verified(
                 existing_lib.get(section) or [], fresh_rows
             )
+            verified_carried += carried
+            verified_staled += staled
     source_desc = (
         "FireRed-OpenStoryline .claude/skills/jianying-editor/scripts/vendor/"
         "pyJianYingDraft/metadata"
@@ -435,7 +495,7 @@ def main(argv: list[str] | None = None) -> int:
         f"video_effects_vip={len(video_effects)} "
         f"intro_vip={len(intro)} loop_vip={len(loop)} outro_vip={len(outro)} "
         f"dropped_dup=tx:{tx_dropped}/vfx:{vfx_dropped} "
-        f"verified_carried={verified_carried}",
+        f"verified_carried={verified_carried} verified_staled={verified_staled}",
         file=sys.stderr,
     )
     return 0

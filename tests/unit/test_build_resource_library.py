@@ -122,3 +122,141 @@ def test_main_missing_source_returns_nonzero(tmp_path: Path) -> None:
     """源目录不存在 → 退出码 2。"""
     rc = main(["--source", str(tmp_path / "no_such_dir"), "--out-dir", str(tmp_path)])
     assert rc == 2
+
+
+# -------------------------------- verified 身份继承(2026-11-19 审查 P1-03)
+
+
+def _row(name: str, resource_id: str, effect_id: str, md5: str, **extra: object) -> dict:
+    row = {
+        "name": name,
+        "is_vip": True,
+        "duration_s": 1.0,
+        "resource_id": resource_id,
+        "effect_id": effect_id,
+        "md5": md5,
+    }
+    row.update(extra)
+    return row
+
+
+def _verified_record() -> dict:
+    return {
+        "status": "verified",
+        "verified_at": "2026-11-18",
+        "jianying_version": "5.9.0.11632",
+        "resource_identity": {
+            "resource_id": "1111111111111111111",
+            "effect_id": "E1",
+            "md5": "M1",
+        },
+        "evidence_path": "docs/x.md",
+        "note": "GUI 实证",
+    }
+
+
+def test_carry_over_verified_same_identity_inherits() -> None:
+    """同名且 resource_id/effect_id/md5 全相同 + 记录合法 → 继承 verified 与验证记录。"""
+    from scripts.build_resource_library import _carry_over_verified
+
+    old = [_row("A", "1111111111111111111", "E1", "M1",
+                verified=True, verification=_verified_record())]
+    new = [_row("A", "1111111111111111111", "E1", "M1")]
+
+    carried, staled = _carry_over_verified(old, new)
+
+    assert carried == 1 and staled == 0
+    assert new[0]["verified"] is True
+    assert new[0]["verification"]["status"] == "verified"
+    assert new[0]["verification"]["verified_at"] == "2026-11-18", "审计信息随记录继承"
+
+
+def test_carry_over_verified_same_name_different_effect_id_stales() -> None:
+    """同名但 effect_id 变化 → 不继承,标 stale 并记录旧身份。"""
+    from scripts.build_resource_library import _carry_over_verified
+
+    old = [_row("A", "1111111111111111111", "E1", "M1",
+                verified=True, verification=_verified_record())]
+    new = [_row("A", "1111111111111111111", "E9", "M1")]
+
+    carried, staled = _carry_over_verified(old, new)
+
+    assert carried == 0 and staled == 1
+    assert "verified" not in new[0]
+    assert new[0]["verification"]["status"] == "stale"
+    assert new[0]["verification"]["previous_identity"]["effect_id"] == "E1"
+
+
+def test_carry_over_verified_same_name_different_md5_stales() -> None:
+    """同名但 md5 变化 → 不继承,标 stale。"""
+    from scripts.build_resource_library import _carry_over_verified
+
+    old = [_row("A", "1111111111111111111", "E1", "M1",
+                verified=True, verification=_verified_record())]
+    new = [_row("A", "1111111111111111111", "E1", "M9")]
+
+    carried, staled = _carry_over_verified(old, new)
+
+    assert carried == 0 and staled == 1
+    assert "verified" not in new[0]
+    assert new[0]["verification"]["status"] == "stale"
+
+
+def test_carry_over_verified_no_prior_keeps_metadata_only() -> None:
+    """旧库无同名条目(旧资源被删后新资源复用其他名字)→ 不动,不转移验证。"""
+    from scripts.build_resource_library import _carry_over_verified
+
+    old = [_row("OLD", "1111111111111111111", "E1", "M1",
+                verified=True, verification=_verified_record())]
+    new = [_row("B", "2222222222222222222", "E2", "M2")]
+
+    carried, staled = _carry_over_verified(old, new)
+
+    assert carried == 0 and staled == 0
+    assert "verified" not in new[0] and "verification" not in new[0]
+
+
+def test_carry_over_verified_corrupted_record_stales() -> None:
+    """verified=True 但 verification 缺失/状态非法 → 安全降级为 stale,不继承。"""
+    from scripts.build_resource_library import _carry_over_verified
+
+    old_missing = [_row("A", "1111111111111111111", "E1", "M1", verified=True)]
+    old_bad_status = [_row("A", "1111111111111111111", "E1", "M1",
+                           verified=True, verification={"status": "bogus"})]
+    new = [_row("A", "1111111111111111111", "E1", "M1")]
+
+    carried1, staled1 = _carry_over_verified(old_missing, [_row("A", "1111111111111111111", "E1", "M1")])
+    carried2, staled2 = _carry_over_verified(old_bad_status, [_row("A", "1111111111111111111", "E1", "M1")])
+
+    assert (carried1, staled1) == (0, 1)
+    assert (carried2, staled2) == (0, 1)
+    assert "verified" not in new[0]
+
+
+def test_main_verified_carry_over_byte_stable(tmp_path: Path) -> None:
+    """端到端:预置带验证记录的旧 JSON → 两次生成字节级一致且验证记录保留。"""
+    import copy as _copy
+
+    main(["--source", str(FIXTURE_SRC), "--out-dir", str(tmp_path)])
+    text_path = tmp_path / "text_resource_library.json"
+    lib = json.loads(text_path.read_text(encoding="utf-8"))
+    # 给 intro 条目人工盖 GUI 实证记录(模拟收割回填后的库)
+    for row in lib.get("intro", []):
+        record = _copy.deepcopy(_verified_record())
+        record["resource_identity"] = {
+            "resource_id": row["resource_id"],
+            "effect_id": row["effect_id"],
+            "md5": row["md5"],
+        }
+        row["verified"] = True
+        row["verification"] = record
+    text_path.write_text(json.dumps(lib, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    first = text_path.read_bytes()
+    main(["--source", str(FIXTURE_SRC), "--out-dir", str(tmp_path)])
+    second = text_path.read_bytes()
+
+    assert first == second, "同源同验证记录重复生成应字节级稳定"
+    after = json.loads(text_path.read_text(encoding="utf-8"))
+    intro_rows = after.get("intro", [])
+    assert intro_rows and all(r.get("verified") is True for r in intro_rows), "身份未变时验证记录应保留"

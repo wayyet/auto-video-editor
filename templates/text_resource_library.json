@@ -47,7 +47,19 @@
       "resource_id": "7187785892382118461",
       "effect_id": "8398145",
       "md5": "5d157129853f479ea15f75075c1ef070",
-      "verified": true
+      "verified": true,
+      "verification": {
+        "status": "verified",
+        "verified_at": "2026-11-18",
+        "jianying_version": "5.9.0.11632",
+        "resource_identity": {
+          "resource_id": "7187785892382118461",
+          "effect_id": "8398145",
+          "md5": "5d157129853f479ea15f75075c1ef070"
+        },
+        "evidence_path": "docs/第七期开发/auto-video-editor_字幕动画丢失根因分析与修复计划_20261119.md",
+        "note": "草稿52373c6f9e11中文稿GUI应用:动画面板VIP徽标+本地缓存8398145下载就位(核验文档20261118)"
+      }
     },
     {
       "name": "冰雪飘动",
@@ -520,7 +532,19 @@
       "resource_id": "7229520427196879421",
       "effect_id": "13137035",
       "md5": "9838c6772ddbd48126f30baf74200f99",
-      "verified": true
+      "verified": true,
+      "verification": {
+        "status": "verified",
+        "verified_at": "2026-11-18",
+        "jianying_version": "5.9.0.11632",
+        "resource_identity": {
+          "resource_id": "7229520427196879421",
+          "effect_id": "13137035",
+          "md5": "9838c6772ddbd48126f30baf74200f99"
+        },
+        "evidence_path": "docs/第七期开发/auto-video-editor_字幕动画丢失根因分析与修复计划_20261119.md",
+        "note": "草稿52373c6f9e11英文稿GUI应用+AutoVideo_pool-smoke-20261118冒烟存活:动画正常显示并经剪映保存"
+      }
     },
     {
       "name": "金粉飘落",
