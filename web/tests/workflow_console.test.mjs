@@ -279,6 +279,18 @@ test("CONSOLE_API_PATHS 阶段 5 路径与后端路由契约一致", () => {
   );
 });
 
+test("CONSOLE_API_PATHS AI 内容明细路径与后端路由契约一致(2026-11-19)", () => {
+  const tid = "console-abcdef123456";
+  assert.equal(
+    CONSOLE_API_PATHS.contentDetails(tid),
+    "/api/console/runs/console-abcdef123456/content-details",
+  );
+  assert.equal(
+    CONSOLE_API_PATHS.aiContentPage(tid),
+    "/ai-content?thread_id=console-abcdef123456",
+  );
+});
+
 test("canResume / canCancel 状态门禁(waiting_human 是唯一可恢复态)", () => {
   assert.equal(canResume("waiting_human"), true);
   for (const s of ["prepared", "starting", "running", "completed", "failed", "cancelled", "unknown"]) {

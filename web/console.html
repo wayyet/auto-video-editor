@@ -147,6 +147,7 @@
     <h1>工作流创建台</h1>
     <span id="chip">等待创建</span>
     <span style="flex:1"></span>
+    <a id="aiContentLink" href="/ai-content" target="_blank" rel="noopener noreferrer" style="display:none">AI 内容明细 →</a>
     <a href="/" target="_blank" rel="noopener">监控首页 →</a>
     <a href="/node-map" target="_blank" rel="noopener">节点拓扑 →</a>
   </div>
@@ -304,6 +305,9 @@
     const btnResume = $("btnResume"), resumeErr = $("resumeErr");
     const gateCards = $("gateCards"), resumeNote = $("resumeNote"), checkpointField = $("checkpointField");
     const evTable = $("evTable"), evBody = $("evBody"), evEmpty = $("evEmpty"), monitorLink = $("monitorLink");
+    // 2026-11-19 AI 内容明细入口:无 thread_id 时隐藏(查看模式/创建成功后经
+    // subscribeToThread 显示,审查文档 D13)
+    const aiContentLink = $("aiContentLink");
     const deliveryBody = $("deliveryBody"), deliveryIssues = $("deliveryIssues");
 
     let limits = { ...DEFAULT_LIMITS };
@@ -836,6 +840,11 @@
       agentLine.style.display = "";
       monitorLink.href = CONSOLE_API_PATHS.monitorPage(tid);
       monitorLink.style.display = "";
+      // AI 内容明细入口(查看模式与创建成功共用本函数;无 tid 不显示)
+      if (tid) {
+        aiContentLink.href = CONSOLE_API_PATHS.aiContentPage(tid);
+        aiContentLink.style.display = "";
+      }
       try { localStorage.setItem("wf_monitor_thread", tid); } catch (e) {}
       // 契约冻结:202 必含 events_url;兜底构造与 /api/workflow 契约一致
       startLive(tid, eventsUrl || `/api/workflow/runs/${encodeURIComponent(tid)}/events`);

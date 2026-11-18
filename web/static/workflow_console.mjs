@@ -48,6 +48,9 @@ export const CONSOLE_API_PATHS = Object.freeze({
   // 2026-11-06 阶段 2(人工关卡与剪映草稿导入):真实 payload 展示 + 打开草稿目录
   gates: (threadId) => `/api/console/runs/${encodeURIComponent(threadId)}/gates`,
   openDraftDir: (threadId) => `/api/console/runs/${encodeURIComponent(threadId)}/open-draft-dir`,
+  // 2026-11-19 AI 内容明细(第八期审查修订版):五区块只读展示 + 独立页面入口
+  contentDetails: (threadId) => `/api/console/runs/${encodeURIComponent(threadId)}/content-details`,
+  aiContentPage: (threadId) => `/ai-content?thread_id=${encodeURIComponent(threadId)}`,
   // 监控页跳转(创建成功后"查看完整监控")
   monitorPage: (threadId) => `/?thread_id=${encodeURIComponent(threadId)}`,
 });
