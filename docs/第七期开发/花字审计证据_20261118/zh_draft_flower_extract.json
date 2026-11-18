@@ -1,0 +1,138 @@
+{
+  "materials_effects_total": 2,
+  "text_effect_entries": [
+    {
+      "adjust_params": [],
+      "algorithm_artifact_path": "",
+      "apply_target_type": 0,
+      "bloom_params": null,
+      "category_id": "panel-text-flower",
+      "category_name": "花字",
+      "color_match_info": {
+        "source_feature_path": "",
+        "target_feature_path": "",
+        "target_image_path": ""
+      },
+      "effect_id": "7407340226189757733",
+      "enable_skin_tone_correction": false,
+      "exclusion_group": [],
+      "face_adjust_params": [],
+      "formula_id": "",
+      "id": "1D5E66AA-119A-416a-A828-3157E60EDDD3",
+      "intensity_key": "",
+      "multi_language_current": "",
+      "name": "互动立体",
+      "panel_id": "",
+      "path": "C:/Users/wayyet/AppData/Local/JianyingPro/User Data/Cache/artistEffect/7407340226189757733/c093f229a5b9529beab4d27c00bc0c4f",
+      "platform": "all",
+      "request_id": "2026111806531856A5EEE3B47E9DCBAC2F",
+      "resource_id": "7407340226189757733",
+      "source_platform": 1,
+      "sub_type": "none",
+      "time_range": null,
+      "type": "text_effect",
+      "value": 1.0,
+      "version": ""
+    },
+    {
+      "adjust_params": [],
+      "algorithm_artifact_path": "",
+      "apply_target_type": 0,
+      "bloom_params": null,
+      "category_id": "panel-text-flower",
+      "category_name": "花字",
+      "color_match_info": {
+        "source_feature_path": "",
+        "target_feature_path": "",
+        "target_image_path": ""
+      },
+      "effect_id": "7407340226189757733",
+      "enable_skin_tone_correction": false,
+      "exclusion_group": [],
+      "face_adjust_params": [],
+      "formula_id": "",
+      "id": "1D5E66AA-119A-416a-A828-3157E60EDDD3",
+      "intensity_key": "",
+      "multi_language_current": "",
+      "name": "互动立体",
+      "panel_id": "",
+      "path": "C:/Users/wayyet/AppData/Local/JianyingPro/User Data/Cache/artistEffect/7407340226189757733/c093f229a5b9529beab4d27c00bc0c4f",
+      "platform": "all",
+      "request_id": "2026111806531856A5EEE3B47E9DCBAC2F",
+      "resource_id": "7407340226189757733",
+      "source_platform": 1,
+      "sub_type": "none",
+      "time_range": null,
+      "type": "text_effect",
+      "value": 1.0,
+      "version": ""
+    }
+  ],
+  "texts_ids": [
+    "text-zh-1",
+    "text-zh-2",
+    "text-zh-3",
+    "text-zh-4",
+    "text-zh-5",
+    "hook-title-1"
+  ],
+  "text_segments": [
+    {
+      "segment_id": "text-seg-1",
+      "material_id": "text-zh-1",
+      "target_timerange": {
+        "duration": 5300000,
+        "start": 0
+      },
+      "extra_material_refs": [
+        "text-anim-text-zh-1"
+      ]
+    },
+    {
+      "segment_id": "text-seg-2",
+      "material_id": "text-zh-2",
+      "target_timerange": {
+        "duration": 6033333,
+        "start": 5300000
+      },
+      "extra_material_refs": [
+        "text-anim-text-zh-2"
+      ]
+    },
+    {
+      "segment_id": "text-seg-3",
+      "material_id": "text-zh-3",
+      "target_timerange": {
+        "duration": 6800000,
+        "start": 11333333
+      },
+      "extra_material_refs": [
+        "text-anim-text-zh-3"
+      ]
+    },
+    {
+      "segment_id": "text-seg-4",
+      "material_id": "text-zh-4",
+      "target_timerange": {
+        "duration": 5733333,
+        "start": 18133333
+      },
+      "extra_material_refs": [
+        "text-anim-text-zh-4",
+        "1D5E66AA-119A-416a-A828-3157E60EDDD3",
+        "1D5E66AA-119A-416a-A828-3157E60EDDD3"
+      ]
+    },
+    {
+      "segment_id": "text-seg-5",
+      "material_id": "text-zh-5",
+      "target_timerange": {
+        "duration": 3500000,
+        "start": 23866666
+      },
+      "extra_material_refs": [
+        "text-anim-text-zh-5"
+      ]
+    }
+  ]
+}

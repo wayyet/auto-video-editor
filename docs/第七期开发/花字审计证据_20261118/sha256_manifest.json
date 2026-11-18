@@ -1,0 +1,51 @@
+[
+  {
+    "file": "zh_draft_content.json",
+    "sha256": "c5162379a2e8ce5598f17ab8e90a8ca0342c8dcec8a325bfd4f9b72f3f93c0d4",
+    "bytes": 58667
+  },
+  {
+    "file": "zh_draft_info.json",
+    "sha256": "5f520cd4ff11ce6c39a45b702a2313b318779205bd8b925e1b577a7f5f4962fe",
+    "bytes": 69816
+  },
+  {
+    "file": "en_draft_content.json",
+    "sha256": "05ddd3779622cdab3f1013056d0429b181ae9385013a071b66c6710091757d73",
+    "bytes": 63276
+  },
+  {
+    "file": "en_draft_info.json",
+    "sha256": "05ddd3779622cdab3f1013056d0429b181ae9385013a071b66c6710091757d73",
+    "bytes": 63276
+  },
+  {
+    "file": "zh_autovideo_draft_mutations.jsonl",
+    "sha256": "e684eb90768072a5be69e4079f0be3e1c5aaf842ead0b439470197317b437feb",
+    "bytes": 5107
+  },
+  {
+    "file": "原件:C:\\Users\\wayyet\\AppData\\Local\\JianyingPro\\User Data\\Projects\\com.lveditor.draft\\AutoVideo_console-52373c6f9e11\\draft_content.json",
+    "sha256": "c5162379a2e8ce5598f17ab8e90a8ca0342c8dcec8a325bfd4f9b72f3f93c0d4",
+    "bytes": 58667,
+    "mtime": "2026-11-18 08:01:29"
+  },
+  {
+    "file": "原件:C:\\Users\\wayyet\\AppData\\Local\\JianyingPro\\User Data\\Projects\\com.lveditor.draft\\AutoVideo_console-52373c6f9e11\\draft_info.json",
+    "sha256": "5f520cd4ff11ce6c39a45b702a2313b318779205bd8b925e1b577a7f5f4962fe",
+    "bytes": 69816,
+    "mtime": "2026-11-18 06:50:11"
+  },
+  {
+    "file": "原件:C:\\Users\\wayyet\\AppData\\Local\\JianyingPro\\User Data\\Projects\\com.lveditor.draft\\en_branch_console-52373c6f9e11_20261118_064813_970710\\draft_content.json",
+    "sha256": "05ddd3779622cdab3f1013056d0429b181ae9385013a071b66c6710091757d73",
+    "bytes": 63276,
+    "mtime": "2026-11-18 06:50:12"
+  },
+  {
+    "file": "原件:C:\\Users\\wayyet\\AppData\\Local\\JianyingPro\\User Data\\Projects\\com.lveditor.draft\\en_branch_console-52373c6f9e11_20261118_064813_970710\\draft_info.json",
+    "sha256": "05ddd3779622cdab3f1013056d0429b181ae9385013a071b66c6710091757d73",
+    "bytes": 63276,
+    "mtime": "2026-11-18 06:50:12"
+  }
+]

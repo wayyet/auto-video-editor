@@ -1,0 +1,23 @@
+{
+  "raw_hits": {
+    "花字": 0,
+    "panel-text-flower": 0,
+    "text_effect_type": 0,
+    "互动立体": 0
+  },
+  "materials_effects_len": 0,
+  "texts_ids": [
+    "text-en-1",
+    "text-en-2",
+    "text-en-3",
+    "text-en-4",
+    "text-en-5"
+  ],
+  "text_anim_ref_ids": [
+    "text-anim-text-en-1",
+    "text-anim-text-en-2",
+    "text-anim-text-en-3",
+    "text-anim-text-en-4",
+    "text-anim-text-en-5"
+  ]
+}

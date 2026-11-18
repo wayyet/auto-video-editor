@@ -1,0 +1,35 @@
+{
+  "root": "C:\\Users\\wayyet\\AppData\\Local\\JianyingPro\\User Data\\Cache\\artistEffect\\7407340226189757733",
+  "items": [
+    {
+      "file": "c093f229a5b9529beab4d27c00bc0c4f\\6beec301c45eb373fd7008aa59a3ec74",
+      "bytes": 286684,
+      "md5": "b546efed9995f2966a669c483c879d32",
+      "mtime": "2026-11-18 08:00:17"
+    },
+    {
+      "file": "c093f229a5b9529beab4d27c00bc0c4f\\986143b7e72c71be103b4d54deb08a87",
+      "bytes": 718642,
+      "md5": "16634ea5d724ff4d04a84085560373bc",
+      "mtime": "2026-11-18 08:00:17"
+    },
+    {
+      "file": "c093f229a5b9529beab4d27c00bc0c4f\\config.json",
+      "bytes": 143,
+      "md5": "c6b6adf79c6749a0e2650f59e74c64d2",
+      "mtime": "2026-11-18 08:00:17"
+    },
+    {
+      "file": "c093f229a5b9529beab4d27c00bc0c4f\\cover_icon.png",
+      "bytes": 17889,
+      "md5": "c8823cb8fff580e605249db4e13c8630",
+      "mtime": "2026-11-18 08:00:17"
+    },
+    {
+      "file": "c093f229a5b9529beab4d27c00bc0c4f\\effectStyle.json",
+      "bytes": 5070,
+      "md5": "6586b584d5ad05f05254962a476f6a25",
+      "mtime": "2026-11-18 08:00:17"
+    }
+  ]
+}

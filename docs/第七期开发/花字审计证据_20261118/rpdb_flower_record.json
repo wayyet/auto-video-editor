@@ -1,0 +1,1131 @@
+{
+  "tables": [
+    {
+      "table": "panel_info",
+      "columns": [
+        "name",
+        "version",
+        "panel_source",
+        "_need_update",
+        "status",
+        "_request_time",
+        "_empty_categories"
+      ]
+    },
+    {
+      "table": "panel_category",
+      "columns": [
+        "panel",
+        "category_id",
+        "category_key",
+        "status",
+        "category_index"
+      ]
+    },
+    {
+      "table": "category_data",
+      "columns": [
+        "category_id",
+        "category_name",
+        "category_key",
+        "category_icon",
+        "category_source",
+        "category_is_top",
+        "category_is_vip",
+        "sub_categories",
+        "category_extra",
+        "category_selected_icon",
+        "_check_update_time"
+      ]
+    },
+    {
+      "table": "category_status",
+      "columns": [
+        "category_id",
+        "category_key",
+        "filter_key",
+        "_has_more",
+        "_effect_count",
+        "_intel_refresh_time",
+        "_intel_refresh",
+        "_intel_refresh_params",
+        "_last_version"
+      ]
+    },
+    {
+      "table": "category_effect",
+      "columns": [
+        "category_id",
+        "category_key",
+        "filter_key",
+        "artists_id",
+        "effect_index",
+        "_request_id",
+        "_category_version"
+      ]
+    },
+    {
+      "table": "artists_forbid_delete_info",
+      "columns": [
+        "id",
+        "source"
+      ]
+    },
+    {
+      "table": "effect",
+      "columns": [
+        "id",
+        "category_id",
+        "category_name",
+        "artis_sdk_extra",
+        "effect_type",
+        "source",
+        "title",
+        "description",
+        "md5",
+        "effect_id",
+        "third_resource_id",
+        "publish_source",
+        "aspect_ratio",
+        "extra",
+        "is_business",
+        "business_scope",
+        "commercial_scope",
+        "copyright_text",
+        "copyright_logo",
+        "copyright_artists_name",
+        "create_time",
+        "sdk_extra",
+        "sdk_model",
+        "item_urls",
+        "category_ids",
+        "tags",
+        "collection_ids",
+        "has_favorite",
+        "favorite_time",
+        "device_platform",
+        "is_vip",
+        "vip_name",
+        "support_platforms",
+        "effect_selected_icon",
+        "requirements",
+        "model_names",
+        "is_enterprise_business",
+        "json_str",
+        "sign",
+        "small",
+        "static_img",
+        "name",
+        "avatar_url",
+        "author_id",
+        "author_create_time",
+        "author_description",
+        "default_avatar_url",
+        "preview_cover",
+        "track_thumbnail",
+        "status",
+        "album",
+        "song_item_duration",
+        "pgc_author_name",
+        "beat_url",
+        "melody_url",
+        "default_type",
+        "level",
+        "percent",
+        "tab_icon_url",
+        "collection_width",
+        "collection_height",
+        "collection_resource_id_list",
+        "collection_resource_effect_type",
+        "script_template_version",
+        "video_size_type",
+        "video_duration",
+        "video_duration_ms",
+        "recipe_effects",
+        "doc_id",
+        "selected_icon",
+        "background_color",
+        "emoticon_effects",
+        "emoticon_type",
+        "emoticon_count",
+        "text_anim_duration",
+        "text_anim_type",
+        "video_anim_duration",
+        "order_id",
+        "order_source",
+        "image_format",
+        "_request_time",
+        "_pack_flag",
+        "_image_flag"
+      ]
+    },
+    {
+      "table": "effect_origin_video",
+      "columns": [
+        "id",
+        "artists_id",
+        "definition",
+        "format",
+        "width",
+        "height",
+        "size",
+        "video_url",
+        "transcode_key"
+      ]
+    },
+    {
+      "table": "sqlite_sequence",
+      "columns": [
+        "name",
+        "seq"
+      ]
+    },
+    {
+      "table": "effect_txt_template_resource",
+      "columns": [
+        "id",
+        "artists_id",
+        "resource_id",
+        "source",
+        "type"
+      ]
+    },
+    {
+      "table": "effect_collection_resources",
+      "columns": [
+        "artists_id",
+        "id",
+        "effect_type",
+        "source"
+      ]
+    },
+    {
+      "table": "effect_large_image",
+      "columns": [
+        "artists_id",
+        "image_url",
+        "static_image_url",
+        "width",
+        "height"
+      ]
+    },
+    {
+      "table": "favorite_effect",
+      "columns": [
+        "_query_key",
+        "mid",
+        "m_index",
+        "effect_type",
+        "forbid_remove",
+        "_server_time"
+      ]
+    },
+    {
+      "table": "favorite_list_status",
+      "columns": [
+        "_query_key",
+        "_has_more",
+        "_effect_count"
+      ]
+    },
+    {
+      "table": "search_recommend_info",
+      "columns": [
+        "effect_type",
+        "default_word",
+        "task_id",
+        "_request_time"
+      ]
+    },
+    {
+      "table": "search_recommend_words",
+      "columns": [
+        "effect_type",
+        "word",
+        "source"
+      ]
+    },
+    {
+      "table": "search_suggest_query",
+      "columns": [
+        "id",
+        "effect_type",
+        "query",
+        "sticker_type",
+        "access_time",
+        "_request_time"
+      ]
+    },
+    {
+      "table": "search_suggest_words",
+      "columns": [
+        "id",
+        "query_id",
+        "word",
+        "group_id"
+      ]
+    },
+    {
+      "table": "search_suggest_word_highlight",
+      "columns": [
+        "id",
+        "word_id",
+        "start",
+        "end"
+      ]
+    },
+    {
+      "table": "search_effect",
+      "columns": [
+        "_query_key",
+        "mid",
+        "m_index",
+        "effect_type",
+        "_request_id",
+        "_server_time"
+      ]
+    },
+    {
+      "table": "search_list_status",
+      "columns": [
+        "_query_key",
+        "search_id",
+        "is_search_result",
+        "empty_search_reason",
+        "_has_more",
+        "_effect_count",
+        "_request_time"
+      ]
+    },
+    {
+      "table": "loki_effect",
+      "columns": [
+        "effect_id",
+        "name",
+        "hint",
+        "md5",
+        "file_uri",
+        "icon_uri",
+        "hint_icon_uri",
+        "hint_file_uri",
+        "hint_file_format",
+        "tags_updated_at",
+        "parent",
+        "effect_type",
+        "source",
+        "designer_id",
+        "designer_encrypted_id",
+        "device_platform",
+        "schema",
+        "extra",
+        "sdk_extra",
+        "ad_raw_data",
+        "composer_params",
+        "is_busi",
+        "iop_id",
+        "is_iop",
+        "resource_id",
+        "ptime",
+        "grade_key",
+        "use_number",
+        "extra_tag",
+        "panel",
+        "search_type",
+        "platform_version",
+        "rec_id",
+        "_model_names",
+        "model_names_sec",
+        "original_effect_id",
+        "nickname",
+        "avatar_uri",
+        "avatar_thumb_width",
+        "avatar_thumb_height"
+      ]
+    },
+    {
+      "table": "loki_effect_texts",
+      "columns": [
+        "effect_id",
+        "text",
+        "type"
+      ]
+    },
+    {
+      "table": "loki_arithmetic_model",
+      "columns": [
+        "name",
+        "name_sec",
+        "file_uri",
+        "version",
+        "total_size",
+        "type",
+        "status"
+      ]
+    },
+    {
+      "table": "loki_arithmetic_model_texts",
+      "columns": [
+        "key",
+        "url",
+        "type"
+      ]
+    },
+    {
+      "table": "loki_panel_info",
+      "columns": [
+        "version",
+        "text",
+        "id",
+        "icon_uri",
+        "tags_updated_at",
+        "extra",
+        "front_effect_id",
+        "rear_effect_id",
+        "rec_id",
+        "has_update"
+      ]
+    },
+    {
+      "table": "loki_panel_texts",
+      "columns": [
+        "panel_id",
+        "text",
+        "type"
+      ]
+    },
+    {
+      "table": "loki_category",
+      "columns": [
+        "id",
+        "name",
+        "key",
+        "icon_uri",
+        "icon_selected_uri",
+        "tags_updated_at",
+        "is_default",
+        "extra",
+        "version",
+        "sorting_position",
+        "has_more",
+        "has_update"
+      ]
+    },
+    {
+      "table": "loki_category_texts",
+      "columns": [
+        "category_id",
+        "text",
+        "type"
+      ]
+    },
+    {
+      "table": "loki_panel_category",
+      "columns": [
+        "panel_id",
+        "category_id"
+      ]
+    },
+    {
+      "table": "loki_category_effect",
+      "columns": [
+        "category_id",
+        "effect_index",
+        "effect_id",
+        "type"
+      ]
+    },
+    {
+      "table": "http_cache",
+      "columns": [
+        "id",
+        "url",
+        "response_body",
+        "version",
+        "timestamp"
+      ]
+    },
+    {
+      "table": "playlist",
+      "columns": [
+        "id",
+        "name",
+        "cover_url_hd",
+        "cover_url_large",
+        "cover_url_medium",
+        "cover_url_thumb",
+        "create_time",
+        "update_time",
+        "type",
+        "scene",
+        "query_type",
+        "_request_time"
+      ]
+    },
+    {
+      "table": "music",
+      "columns": [
+        "id",
+        "status",
+        "title",
+        "author",
+        "album",
+        "duration",
+        "cover_url_hd",
+        "cover_url_large",
+        "cover_url_medium",
+        "cover_url_thumb",
+        "preview_url",
+        "beats_url",
+        "melody_url",
+        "beats_default_type",
+        "beats_level",
+        "beats_percent",
+        "create_time",
+        "update_time",
+        "has_favorited",
+        "is_commerce",
+        "commercial_scope",
+        "paid_type",
+        "web_id",
+        "doc_id",
+        "origin",
+        "is_enterprise_commerce",
+        "_request_time"
+      ]
+    },
+    {
+      "table": "playlist_status",
+      "columns": [
+        "id",
+        "scene",
+        "query_type",
+        "filter",
+        "_has_more",
+        "_effect_count"
+      ]
+    },
+    {
+      "table": "playlist_music",
+      "columns": [
+        "pid",
+        "mid",
+        "scene",
+        "query_type",
+        "filter",
+        "m_index",
+        "_request_id"
+      ]
+    },
+    {
+      "table": "recommend_music",
+      "columns": [
+        "query_type",
+        "scene",
+        "filter",
+        "mid",
+        "m_index",
+        "_request_id"
+      ]
+    },
+    {
+      "table": "recommend_playlist",
+      "columns": [
+        "query_type",
+        "scene",
+        "filter",
+        "_has_more",
+        "_effect_count"
+      ]
+    },
+    {
+      "table": "search_music",
+      "columns": [
+        "_query_key",
+        "mid",
+        "m_index",
+        "_request_id",
+        "_server_time"
+      ]
+    },
+    {
+      "table": "search_music_status",
+      "columns": [
+        "_query_key",
+        "search_id",
+        "_has_more",
+        "_effect_count",
+        "_request_time"
+      ]
+    },
+    {
+      "table": "third_party_favorite_music",
+      "columns": [
+        "_query_key",
+        "mid",
+        "m_index",
+        "_server_time",
+        "new_cursor"
+      ]
+    },
+    {
+      "table": "third_party_favorite_music_status",
+      "columns": [
+        "_query_key",
+        "_has_more",
+        "_effect_count",
+        "_request_time",
+        "is_public"
+      ]
+    }
+  ],
+  "matched": [
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3445,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_005C66FA5BE10E63C6CD39C9C088FC5F_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3464,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_00EF3F0F12A26AA584B8AB5FFEF7872F_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3454,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_01BE7256370E8401A5715340434E9DE0_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3455,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_02330508230E1B978BD60D83A5DFDE5D_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3495,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_05C9F378EACF2685D475C3CC9D7D6F17_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3463,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_13CDFD1F6871DC45A7C7245123CAA3A6_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3489,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_1A5203AD972E6DBE8956CD70EEA33082_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3458,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_1AB4E4894A186F1A5D7844E7786D9F53_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3482,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_26089CEEF4886658EB3062D4B86DBC49_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3491,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_26133A97D5EE4E5557F9527F80E089D8_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3499,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_2620614FE82D1A0053A321F23FF57221_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3477,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_29395745C364839E6CCAB5920DE3CB65_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3461,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_29AA4ED0F3D070F7F65EC2B19A432497_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3496,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_2D2D57DB950F5D38703B89EDF0641EE7_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3492,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_317FADCDB618A8317A67DC563F9C4B07_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3498,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_33D00C59A7F757A65B00776F6B12E623_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3452,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_3499B6D811AA10D46AEEA73969769437_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3449,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_371E8B03E795E816E68A30B6CA1471EE_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3466,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_3C294AB5C97F1226517EDE4F808FA665_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3484,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_3DF1748EF22ABDD663C91CAEA44407A2_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3468,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_4217DC8958045C8E2BC08A1EEC302E9C_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3451,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_4A31A2A6D51473DED96D0AD89A6B0EE8_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3459,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_51C5DFB1061F320A3207188EE823BBD2_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3467,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_63C5AF845344D37FE604E59BAFFE525D_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3446,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_6AD5423CFB23D53E41EE7E6C49EB252E_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3457,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_6F7BA6E74C7830EB22A96AD91E372D42_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3479,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_739D4F6B02CF23A53FF2184C9731D82B_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3460,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_852874267D8CD5F409657267B09B82F0_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3450,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_97BB9201BFC3480B7FE1F022139218F2_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3481,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_996FD118AB87006BE057DB2AB4C9CBA2_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3494,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_9D78EBEB058BF823F4AD5FA97FA6080C_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3475,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_AB5D7ADFC8D130B03EAEFDF56EEBEE51_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3476,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_B19DE974FCA2AFFFCC34C601DC883FAE_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3469,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_B6ECD1FDED4E47A74B385DFF9012F7B0_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3478,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_BB361300502967EE4449968FBB1B199A_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3500,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_BD310B4222C789A0B36433730CB0202E_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3485,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_BD75FB4A129E01512B7F86AF0D39D01F_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3483,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_C4BC32D7517E280CFFF3DA5D96FFF698_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3497,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_C55A49A965B1456C0F2043C681F0ACDE_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3486,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_C5B420BBC2E6B5CB1E28DAD27CB964D0_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3473,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_C7D5408C07DD632231D53C8C24425F84_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3453,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_C917B9D19711A92DBF01B70D5DD970DF_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3474,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_CAFC476EFC7CFDD46BA9AF08C264B07B_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3487,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_D0C037F3D0149150EDFCE862310DE1F2_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3447,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_D800460D3F827F62175847F4C8280F4D_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3488,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_D97A33F225D5A7585C692FAA1F6178B1_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3490,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_DA5ED64E03A32900C559028E636E0FF8_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3462,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_DBF51B9B3F4C72DE84125E1CE83EC1C1_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3448,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_DE409CFFB919586CA24D03DBA2A02F0B_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3470,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_E0AF6434A69C77A6148774033B764D9B_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3465,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_E1946DED343384B74A6FC5F74C754903_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3493,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_E229B6226307D0FDDA1E5254A951695C_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3480,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_E9CD98DC69D348164E1B9B408322B178_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3456,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_F015FAC62DC209A7622F13FCF6D7874C_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3472,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_F474908A946BAEEC77C8CA3BC153E749_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "url",
+      "rowid": 3471,
+      "value_head": "/artist/v1/effect/get_resources_by_category_id_F51F882B3263454B3108F25C8B764BA4_flower_jianyingpro_0"
+    },
+    {
+      "table": "http_cache",
+      "column": "response_body",
+      "rowid": 3449,
+      "value_head": "{\"ret\":\"0\",\"errmsg\":\"success\",\"systime\":\"1794960024\",\"logid\":\"2026111808002470655B5195DD44DD14A3\",\"sign\":\"\",\"response\":\"",
+      "parsed_flower": {
+        "source_table": "http_cache",
+        "source_key_head": "{\"ret\":\"0\",\"errmsg\":\"success\",\"systime\":\"1794960024\",\"logid\":\"2026111808002470655B5195DD44DD14A3\",\"sign\":\"\",\"response\":\"\",\"svr_time\":1794960024,\"data\":{\"has_mor",
+        "response_logid": "70655B5195DD44DD14A3",
+        "systime": "1794960024",
+        "common_attr": {
+          "id": "7407340226189757733",
+          "effect_id": "7407340226189757733",
+          "effect_type": 1,
+          "source": 1,
+          "title": "互动立体",
+          "description": "(已脱敏)",
+          "cover_url": "(url已脱敏)",
+          "item_urls": "(url已脱敏)",
+          "md5": "c093f229a5b9529beab4d27c00bc0c4f",
+          "has_favorited": false,
+          "create_time": 1724655932,
+          "is_original": true,
+          "status": 102,
+          "review_info": {
+            "review_status": 1,
+            "review_code_list": [],
+            "extra_reason": null,
+            "review_reason_list": []
+          },
+          "aspect_ratio": 1,
+          "download_info": {
+            "url": "",
+            "format": ""
+          },
+          "publish_source": "user_post_pc_in_text_template",
+          "is_business": false,
+          "business_info": {
+            "json_str": "{\"is_vip\":true,\"is_expired\":false,\"paid_type\":\"subscribe\",\"commercial_strategy\":{\"resource_export\":{\"paid_strategy_list\":[{\"paid_mode\":\"subscribe\",\"subscribe_package\":\"Pro\"}]}}}",
+            "sign": "Cz6dRIFcs62WYn9sZEgyS5EupAevbZZ/sEoX5pPqTVlUcBN1u7hTFaG3PtEZ+NSyROei4ZRHxcAb4ane6dA9S1POI46o591vu1FqtnIWU1ZeEaFGRJoby0TPmhc86QpT/5VlMzePAXVCNa/Vst/fYru918Qg7u/KP41xmGIswVE="
+          },
+          "category_ids": [
+            11754,
+            10727,
+            5914324
+          ],
+          "extra": "{\"ip_image_detect_result\":{\"hit\":false},\"is_vip\":true,\"is_business\":false,\"item_effect_type\":1}"
+        },
+        "publish_source": null,
+        "is_business": null,
+        "business_info_json": null,
+        "extra": null,
+        "category_ids": null,
+        "author_name_len": 5
+      }
+    },
+    {
+      "table": "http_cache",
+      "column": "response_body",
+      "rowid": 3458,
+      "value_head": "{\"ret\":\"0\",\"errmsg\":\"success\",\"systime\":\"1794960024\",\"logid\":\"2026111808002418CC7F7D05F889DDB8A2\",\"sign\":\"\",\"response\":\"",
+      "parsed_flower": {
+        "source_table": "http_cache",
+        "source_key_head": "{\"ret\":\"0\",\"errmsg\":\"success\",\"systime\":\"1794960024\",\"logid\":\"2026111808002418CC7F7D05F889DDB8A2\",\"sign\":\"\",\"response\":\"\",\"svr_time\":1794960024,\"data\":{\"has_mor",
+        "response_logid": "18CC7F7D05F889DDB8A2",
+        "systime": "1794960024",
+        "common_attr": {
+          "id": "7407340226189757733",
+          "effect_id": "7407340226189757733",
+          "effect_type": 1,
+          "source": 1,
+          "title": "互动立体",
+          "description": "(已脱敏)",
+          "cover_url": "(url已脱敏)",
+          "item_urls": "(url已脱敏)",
+          "md5": "c093f229a5b9529beab4d27c00bc0c4f",
+          "has_favorited": false,
+          "create_time": 1724655932,
+          "is_original": true,
+          "status": 102,
+          "review_info": {
+            "review_status": 1,
+            "review_code_list": [],
+            "extra_reason": null,
+            "review_reason_list": []
+          },
+          "aspect_ratio": 1,
+          "download_info": {
+            "url": "",
+            "format": ""
+          },
+          "publish_source": "user_post_pc_in_text_template",
+          "is_business": false,
+          "business_info": {
+            "json_str": "{\"is_vip\":true,\"is_expired\":false,\"paid_type\":\"subscribe\",\"commercial_strategy\":{\"resource_export\":{\"paid_strategy_list\":[{\"paid_mode\":\"subscribe\",\"subscribe_package\":\"Pro\"}]}}}",
+            "sign": "Cz6dRIFcs62WYn9sZEgyS5EupAevbZZ/sEoX5pPqTVlUcBN1u7hTFaG3PtEZ+NSyROei4ZRHxcAb4ane6dA9S1POI46o591vu1FqtnIWU1ZeEaFGRJoby0TPmhc86QpT/5VlMzePAXVCNa/Vst/fYru918Qg7u/KP41xmGIswVE="
+          },
+          "category_ids": [
+            11754,
+            10727,
+            5914324
+          ],
+          "extra": "{\"ip_image_detect_result\":{\"hit\":false},\"is_vip\":true,\"is_business\":false,\"item_effect_type\":1}"
+        },
+        "publish_source": null,
+        "is_business": null,
+        "business_info_json": null,
+        "extra": null,
+        "category_ids": null,
+        "author_name_len": 5
+      }
+    }
+  ],
+  "authoritative_own_item_records": [
+    {
+      "rowid": 3449,
+      "url_head": "/artist/v1/effect/get_resources_by_category_id_371E8B03E795E816E68A30B6CA1471EE_flower_jianyingpro_0",
+      "cache_timestamp": "2026-11-18 00:00:23",
+      "systime": "1794960024",
+      "logid_tail": "5B5195DD44DD14A3",
+      "common_attr": {
+        "id": "7407340226189757733",
+        "effect_id": "7407340226189757733",
+        "effect_type": 1,
+        "source": 1,
+        "title": "互动立体",
+        "cover_url": "(url已脱敏)",
+        "item_urls": "(url已脱敏)",
+        "md5": "c093f229a5b9529beab4d27c00bc0c4f",
+        "has_favorited": false,
+        "create_time": 1724655932,
+        "is_original": true,
+        "status": 102,
+        "review_info": {
+          "review_status": 1,
+          "review_code_list": [],
+          "extra_reason": null,
+          "review_reason_list": []
+        },
+        "aspect_ratio": 1,
+        "download_info": {
+          "url": "",
+          "format": ""
+        },
+        "publish_source": "user_post_pc_in_text_template",
+        "is_business": false,
+        "business_info": {
+          "json_str": "{\"is_vip\":true,\"is_expired\":false,\"paid_type\":\"subscribe\",\"commercial_strategy\":{\"resource_export\":{\"paid_strategy_list\":[{\"paid_mode\":\"subscribe\",\"subscribe_package\":\"Pro\"}]}}}",
+          "sign": "Cz6dRIFcs62WYn9sZEgyS5EupAevbZZ/sEoX5pPqTVlUcBN1u7hTFaG3PtEZ+NSyROei4ZRHxcAb4ane6dA9S1POI46o591vu1FqtnIWU1ZeEaFGRJoby0TPmhc86QpT/5VlMzePAXVCNa/Vst/fYru918Qg7u/KP41xmGIswVE="
+        },
+        "category_ids": [
+          11754,
+          10727,
+          5914324
+        ],
+        "extra": "{\"ip_image_detect_result\":{\"hit\":false},\"is_vip\":true,\"is_business\":false,\"item_effect_type\":1}"
+      },
+      "publish_source": null,
+      "is_business": null,
+      "business_info_json": null,
+      "extra": null,
+      "category_ids": null
+    },
+    {
+      "rowid": 3458,
+      "url_head": "/artist/v1/effect/get_resources_by_category_id_1AB4E4894A186F1A5D7844E7786D9F53_flower_jianyingpro_0",
+      "cache_timestamp": "2026-11-18 00:00:23",
+      "systime": "1794960024",
+      "logid_tail": "7F7D05F889DDB8A2",
+      "common_attr": {
+        "id": "7407340226189757733",
+        "effect_id": "7407340226189757733",
+        "effect_type": 1,
+        "source": 1,
+        "title": "互动立体",
+        "cover_url": "(url已脱敏)",
+        "item_urls": "(url已脱敏)",
+        "md5": "c093f229a5b9529beab4d27c00bc0c4f",
+        "has_favorited": false,
+        "create_time": 1724655932,
+        "is_original": true,
+        "status": 102,
+        "review_info": {
+          "review_status": 1,
+          "review_code_list": [],
+          "extra_reason": null,
+          "review_reason_list": []
+        },
+        "aspect_ratio": 1,
+        "download_info": {
+          "url": "",
+          "format": ""
+        },
+        "publish_source": "user_post_pc_in_text_template",
+        "is_business": false,
+        "business_info": {
+          "json_str": "{\"is_vip\":true,\"is_expired\":false,\"paid_type\":\"subscribe\",\"commercial_strategy\":{\"resource_export\":{\"paid_strategy_list\":[{\"paid_mode\":\"subscribe\",\"subscribe_package\":\"Pro\"}]}}}",
+          "sign": "Cz6dRIFcs62WYn9sZEgyS5EupAevbZZ/sEoX5pPqTVlUcBN1u7hTFaG3PtEZ+NSyROei4ZRHxcAb4ane6dA9S1POI46o591vu1FqtnIWU1ZeEaFGRJoby0TPmhc86QpT/5VlMzePAXVCNa/Vst/fYru918Qg7u/KP41xmGIswVE="
+        },
+        "category_ids": [
+          11754,
+          10727,
+          5914324
+        ],
+        "extra": "{\"ip_image_detect_result\":{\"hit\":false},\"is_vip\":true,\"is_business\":false,\"item_effect_type\":1}"
+      },
+      "publish_source": null,
+      "is_business": null,
+      "business_info_json": null,
+      "extra": null,
+      "category_ids": null
+    }
+  ]
+}
