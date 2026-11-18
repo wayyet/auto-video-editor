@@ -136,3 +136,31 @@ def test_our_id_prefixes_are_stable() -> None:
     assert anim["id"].startswith(OUR_TEXT_ANIMATION_PREFIX)
     fade = build_native_audio_fade_material(material_id="audio-fade-b", fade_in_us=0, fade_out_us=0)
     assert fade["id"].startswith(OUR_AUDIO_FADE_PREFIX)
+
+
+# ------------------------------------ 缓存可用性判定边界(2026-11-19 审查 P2-04)
+
+
+def test_text_animation_cache_available_boundaries(tmp_path) -> None:
+    """缓存判定:目录不存在/是文件而非目录/空 effect_id/空 md5/空根 → 一律 False。"""
+    from jy_common.native_fx import text_animation_cache_available
+
+    root = tmp_path / "cache"
+    root.mkdir()
+    meta_ok = {"effect_id": "E1", "md5": "M1"}
+    assert text_animation_cache_available(meta_ok, root) is False, "缓存目录不存在"
+
+    (root / "E1" / "M1").mkdir(parents=True)
+    assert text_animation_cache_available(meta_ok, root) is True, "目录存在且为目录"
+
+    (root / "E2").mkdir()
+    (root / "E2" / "M2").write_text("not a dir")
+    assert text_animation_cache_available({"effect_id": "E2", "md5": "M2"}, root) is False, "md5 路径是文件而非目录"
+
+    assert text_animation_cache_available({"effect_id": "", "md5": "M1"}, root) is False
+    assert text_animation_cache_available({"effect_id": "E1", "md5": ""}, root) is False
+    assert text_animation_cache_available({"effect_id": None, "md5": None}, root) is False
+    assert text_animation_cache_available({}, root) is False
+    assert text_animation_cache_available(meta_ok, "") is False, "缓存根为空串"
+    assert text_animation_cache_available(meta_ok, None) is False, "缓存根为 None"
+    assert text_animation_cache_available(meta_ok, tmp_path / "no-such-root") is False, "缓存根不存在"
