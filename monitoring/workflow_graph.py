@@ -177,12 +177,12 @@ _NODE_META: dict[str, dict[str, Any]] = {
         "description": "英文字幕写入英文分支草稿",
     },
     "node_10_inject_text_fx": {
-        "name": "注入中文花字",
+        "name": "注入中文字幕入场动画",
         "group": "subtitles_covers",
         "description": "中文字幕入场动画原生落草稿(material_animations+轨段引用,只动我方字幕)",
     },
     "node_10b_inject_text_fx_en": {
-        "name": "注入英文花字",
+        "name": "注入英文字幕入场动画",
         "group": "subtitles_covers",
         "description": "英文字幕入场动画原生落草稿;先于关卡③落地,人工校对看到最终效果(K3=B)",
     },
