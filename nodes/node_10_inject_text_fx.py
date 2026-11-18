@@ -18,17 +18,27 @@
 = fixed 时走旧行为:``config.TEXT_FX_INTRO_ANIMATION``(缺省"新年打字机",库内
 实证存在的 VIP 资源;旧默认列表四个名字全不在库内)未命中时回落库内第一个 VIP
 intro。资源库缺失 → 动画降级不写入(不伪装成功,degraded 计数)。
+
+job_id 解析(2026-11-18 缺陷修复):两个入口统一走公共层
+``jy_common.job_identity.resolve_job_id`` —— LangGraph config 的
+``configurable.thread_id`` 为权威源,``state.session_id`` 兼容旧 checkpoint,
+末级兜底剥 ``AutoVideo_`` 前缀的中文草稿目录名;解析失败显式降级
+(记 error_log 并跳过注入),禁止静默退化为共享根目录名(如
+``com.lveditor.draft``)或固定伪 ID(此前 en 兜底 ``Path(draft_dir).parent.name``
+正是该缺陷,zh/en 动画因此分裂)。
 """
 
 from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from config import TEXT_FX_INTRO_ANIMATION, TEXT_FX_INTRO_POOL_MODE
+from jy_common.job_identity import resolve_job_id
 from jy_common.native_fx import OUR_TEXT_ANIMATION_PREFIX, build_native_text_animation_material
 from jy_common.template_library import TemplateLibrary, load_resource_libraries
+from langchain_core.runnables import RunnableConfig
 from nodes._draft_io import apply_and_write, find_text_segment_by_material_id, load_draft
 from state import WorkflowState
 
@@ -182,11 +192,16 @@ def apply_text_fx(
     return log, summary
 
 
-def inject_text_fx(state: WorkflowState) -> dict:
+def inject_text_fx(state: WorkflowState, config: Optional[RunnableConfig] = None) -> dict:
     """中文主线节点 10:对中文草稿(``state["draft_path"]``)的字幕写原生入场动画。
 
     返回整份 state + 新 status_log(2026-11-12 阶段5批2 移除无人消费的
     ``text_fx_summary`` 审计摘要;注入结果以草稿内原生动画与 status_log 为准)。
+
+    ``config`` 由 LangGraph 注入(``Optional[RunnableConfig]`` 在其节点签名
+    白名单内);job_id 经公共 ``resolve_job_id`` 解析(config.thread_id 权威,
+    session_id 兼容旧 checkpoint)。draft_path 已前置校验,末级兜底必命中
+    中文草稿目录名,``ValueError`` 分支仅为防御性显式降级。
     """
     raw_draft_path = state.get("draft_path")
     if not raw_draft_path:
@@ -197,10 +212,14 @@ def inject_text_fx(state: WorkflowState) -> dict:
         status_log = list(state.get("status_log", []) or [])
         status_log.append("node_10_inject_text_fx_skipped")
         return {**state, "status_log": status_log}
-    # job_id 与 node_09 同款解析(thread_id,兜底草稿目录名)—— zh/en 池轮换一致
-    job_id = str(state.get("thread_id") or "").strip()
-    if not job_id:
-        job_id = Path(str(raw_draft_path)).parent.name
+    # job_id 与 node_09/node_10b 同源解析(公共 resolver)—— zh/en 池轮换一致
+    try:
+        job_id = resolve_job_id(state, config)
+    except ValueError as exc:
+        state.setdefault("error_log", []).append(f"[node_10] {exc},跳过字幕动画注入")
+        status_log = list(state.get("status_log", []) or [])
+        status_log.append("node_10_inject_text_fx_skipped")
+        return {**state, "status_log": status_log}
     log, _ = apply_text_fx(
         Path(raw_draft_path),
         state.get("status_log"),
@@ -211,13 +230,17 @@ def inject_text_fx(state: WorkflowState) -> dict:
     return {**state, "status_log": log}
 
 
-def inject_text_fx_en(state: WorkflowState) -> dict:
+def inject_text_fx_en(state: WorkflowState, config: Optional[RunnableConfig] = None) -> dict:
     """英文分支节点 10b:对英文分支草稿的字幕写原生入场动画(与中文共用同一核心)。
 
     - 目标草稿:``state["draft_dir_en_branch"]/draft_content.json``。
     - **只返回 delta**:与中文主线节点同一超步并行,不能返回整份 state
       (摘要走 status_log 标签,避免新增同超步键冲突)。
     - done_tag 用独立名字,避免被 status_log 的去重 reducer 与中文 node_10 合并成一条。
+    - job_id 与中文主线 node_10 同源(公共 ``resolve_job_id``:config.thread_id →
+      state.thread_id → state.session_id → 中文草稿目录名)—— **禁止**用英文
+      草稿目录的上级名兜底(那会把草稿库根名当成任务 ID,seed 恒定、轮换失效);
+      四级全空时显式降级跳过注入。
     """
     draft_dir_raw = state.get("draft_dir_en_branch")
     if not draft_dir_raw:
@@ -225,8 +248,13 @@ def inject_text_fx_en(state: WorkflowState) -> dict:
     draft_file = Path(draft_dir_raw) / "draft_content.json"
     if not draft_file.exists():
         return {"error_log": [f"[node_10b] 英文分支草稿不存在,跳过: {draft_file}"]}
-    # job_id 与中文主线同源(thread_id;兜底英文草稿目录的上级名),保证 zh/en 池轮换一致
-    job_id = str(state.get("thread_id") or "").strip() or Path(str(draft_dir_raw)).parent.name
+    try:
+        job_id = resolve_job_id(state, config)
+    except ValueError as exc:
+        return {
+            "error_log": [f"[node_10b] {exc},跳过英文字幕动画注入(降级,不伪装成功)"],
+            "status_log": ["node_10b_inject_text_fx_en_skipped"],
+        }
     log, summary = apply_text_fx(
         draft_file,
         [],

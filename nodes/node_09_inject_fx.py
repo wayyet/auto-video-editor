@@ -37,9 +37,10 @@ from __future__ import annotations
 import hashlib
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from draft_ops.draft_integrity import resolve_required_features
+from jy_common.job_identity import resolve_job_id
 from jy_common.native_fx import (
     OUR_TRANSITION_PATTERN,
     OUR_VIDEO_EFFECT_PATTERN,
@@ -48,6 +49,7 @@ from jy_common.native_fx import (
     is_19_digit_resource_id,
 )
 from jy_common.template_library import TemplateLibrary, load_resource_libraries
+from langchain_core.runnables import RunnableConfig
 from nodes._draft_io import apply_and_write, find_video_track, load_draft, upsert_by_id
 from nodes._dual_draft import ZH, dual_draft_targets, missing_en_note
 from nodes.storyline._common import (
@@ -379,14 +381,17 @@ def _inject_fx_into(
     return warnings, summary
 
 
-def inject_fx(state: WorkflowState) -> dict:
+def inject_fx(state: WorkflowState, config: Optional[RunnableConfig] = None) -> dict:
     """读取草稿 → 消费转场计划 → 在剪辑边界原生绑定转场/特效 → 原子写回。
 
     K2=B(2026-10):对**中文主草稿 + 英文分支草稿**各注入一次(见 ``nodes/_dual_draft.py``)。
     两份草稿在同一节点内顺序处理,不跨超步,返回值契约不变(整份 state)。
 
-    轮换 seed 用 ``job_id``(thread_id,兜底中文草稿目录名)—— 对 zh/en 完全
-    相同,保证双语草稿逐边界转场名一致(核验报告 §4.9)。
+    轮换 seed 用 ``job_id``,经公共 ``jy_common.job_identity.resolve_job_id``
+    解析(LangGraph config.thread_id 权威 → state.session_id 兼容旧 checkpoint →
+    剥 ``AutoVideo_`` 前缀的中文草稿目录名兜底)—— 对 zh/en 完全相同,保证双语
+    草稿逐边界转场名一致(核验报告 §4.9;与 node_10/10b 字幕动画同一套解析规则,
+    2026-11-18 缺陷修复收敛)。
     """
     status_log = list(state.get("status_log", []) or [])
     error_log = list(state.get("error_log", []) or [])
@@ -410,10 +415,9 @@ def inject_fx(state: WorkflowState) -> dict:
         status_log.append("node_09_inject_fx_skipped")
         return {**state, "status_log": status_log, "error_log": error_log}
 
-    job_id = str(state.get("thread_id") or "").strip()
-    if not job_id:
-        draft_path = state.get("draft_path")
-        job_id = Path(str(draft_path)).parent.name if draft_path else "unknown"
+    # targets 非空 ⇒ draft_path 必存在 ⇒ resolver 不会触发 ValueError;
+    # 与 node_10/10b 共用同一套任务 ID 解析(config.thread_id 权威)
+    job_id = resolve_job_id(state, config)
 
     required_transitions = bool(resolve_required_features(state).get("transitions"))
 

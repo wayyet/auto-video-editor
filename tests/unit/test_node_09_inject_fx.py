@@ -270,6 +270,62 @@ def test_inject_fx_deterministic_across_pythonhashseed(tmp_draft: Path) -> None:
     assert outputs[0]  # 非空:确有产出
 
 
+# ------------------------------------------------ job_id 链路修复(2026-11-18,审查阶段 2)
+
+
+def test_inject_fx_dual_draft_same_seed_via_config(tmp_path: Path) -> None:
+    """2.10 一次 inject_fx 处理 zh+en 双草稿:config.thread_id 作 seed,两稿逐边界同名。
+
+    zh 目录名故意与 thread_id 不同 —— 若 resolver 误用目录名兜底,公式断言即失败。
+    """
+    zh_draft = _write_draft(
+        tmp_path / "AutoVideo_folder-not-tid" / "draft_content.json",
+        _draft([_seg("s1", 0), _seg("s2", 10_000_000), _seg("s3", 20_000_000)]),
+    )
+    en_draft = _write_draft(
+        tmp_path / "en_branch" / "draft_content.json",
+        _draft([_seg("e1", 0), _seg("e2", 10_000_000), _seg("e3", 20_000_000)]),
+    )
+    tid = "console-dual-n09"
+    state = _state(draft_path=str(zh_draft), draft_dir_en_branch=str(en_draft.parent))
+    out = inject_fx(state, {"configurable": {"thread_id": tid}})
+
+    zh_names = [
+        t["name"]
+        for t in json.loads(zh_draft.read_text(encoding="utf-8"))["materials"]["transitions"]
+    ]
+    en_names = [
+        t["name"]
+        for t in json.loads(en_draft.read_text(encoding="utf-8"))["materials"]["transitions"]
+    ]
+    assert len(zh_names) == len(en_names) == 2
+    assert zh_names == en_names
+    # seed 来自 resolver 解析出的 thread_id(公式镜像,boundary 0-based)
+    for i, name in enumerate(zh_names):
+        seed = _stable_pool_seed(tid, i, "pool_gentle")
+        assert name == POOL_GENTLE[(i + seed) % len(POOL_GENTLE)]
+    assert "node_09_inject_fx_done" in out["status_log"]
+    assert "node_09_inject_fx_en_done" in out["status_log"]
+
+
+def test_inject_fx_session_id_fallback_matches_formula(tmp_path: Path) -> None:
+    """旧 checkpoint 兼容:无 config 只有 state.session_id → seed = session_id(非目录名)。"""
+    zh_draft = _write_draft(
+        tmp_path / "AutoVideo_folder-not-sid" / "draft_content.json",
+        _draft([_seg("s1", 0), _seg("s2", 10_000_000), _seg("s3", 20_000_000)]),
+    )
+    sid = "console-via-session"
+    state = _state(draft_path=str(zh_draft), session_id=sid)
+    inject_fx(state)  # 不传 config
+    names = [
+        t["name"]
+        for t in json.loads(zh_draft.read_text(encoding="utf-8"))["materials"]["transitions"]
+    ]
+    for i, name in enumerate(names):
+        seed = _stable_pool_seed(sid, i, "pool_gentle")
+        assert name == POOL_GENTLE[(i + seed) % len(POOL_GENTLE)]
+
+
 # ---------------------------------------------------------------- 硬切与 all-cut 保底
 
 

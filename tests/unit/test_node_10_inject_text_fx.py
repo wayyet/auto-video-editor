@@ -1,7 +1,13 @@
-"""节点 10 字幕入场动画单测(阶段 4:原生 material_animations 通道)。"""
+"""节点 10 字幕入场动画单测(阶段 4:原生 material_animations 通道)。
+
+2026-11-18 job_id 链路缺陷修复增补:真实节点入口级 + LangGraph 图级测试
+(审查文档阶段 2 用例 2.6-2.9)—— config.thread_id 权威 seed、session_id 兼容、
+zh/en 节点入口动画一致、无 ID 显式降级。核心公式锁定见 ``_expected_pool_member``。
+"""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -9,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from nodes.node_10_inject_text_fx import inject_text_fx, inject_text_fx_en
+from state import WorkflowState
 
 
 _VIP_ID_PATTERN = re.compile(r"^\d{19}$")
@@ -123,6 +130,29 @@ def _intro_library_names() -> set[str]:
         return {row["name"] for row in json.load(f).get("intro", [])}
 
 
+def _expected_pool_member(job_id: str) -> dict:
+    """镜像 node_10 池选公式(锁定契约):sha256(job_id|text_intro_pool)[:8] % 78。
+
+    intro 段文件序即池序(list_text_animations 保序),条目全 VIP(2026-11-18 快照)。
+    """
+    lib_path = Path(__file__).resolve().parents[2] / "templates" / "text_resource_library.json"
+    with open(lib_path, "r", encoding="utf-8") as f:
+        intro = list(json.load(f).get("intro", []))
+    seed = int(hashlib.sha256(f"{job_id}|text_intro_pool".encode("utf-8")).hexdigest()[:8], 16)
+    return intro[seed % len(intro)]
+
+
+def _animation_fields(entry: dict) -> dict:
+    """抽取动画对象的双语一致性比对字段(审查 2.7:五项逐项一致)。"""
+    return {
+        "name": entry["name"],
+        "resource_id": entry["resource_id"],
+        "effect_id": entry["effect_id"],
+        "md5": entry["md5"],
+        "duration": entry["duration"],
+    }
+
+
 def test_inject_text_fx_auto_pool_picks_valid_member_deterministically(
     tmp_draft_with_texts: Path,
 ) -> None:
@@ -134,7 +164,7 @@ def test_inject_text_fx_auto_pool_picks_valid_member_deterministically(
     (name,) = names
     assert name in _intro_library_names()
 
-    # 同 job_id(thread_id 缺省兜底草稿目录名)重跑 → 同一动画(确定性轮换)
+    # 同兜底 job_id(无 config/state ID 时解析为中文草稿目录名,此处即 "draft")重跑 → 同一动画(确定性轮换)
     inject_text_fx(_state(tmp_draft_with_texts))
     draft2 = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
     names2 = {a["animations"][0]["name"] for a in draft2["materials"]["material_animations"]}
@@ -291,8 +321,200 @@ def test_inject_text_fx_en_returns_delta_with_count_tag(tmp_path: Path) -> None:
     en_dir.mkdir()
     (en_dir / "draft_content.json").write_text(json.dumps(draft), encoding="utf-8")
 
-    out = inject_text_fx_en({"draft_dir_en_branch": str(en_dir)})
+    # 2026-11-18 适配:job_id 链路修复后 en 入口经公共 resolver 解析任务 ID,
+    # 直接调用必须显式携带(生产环境 session_id 恒由入口写入;config 由图注入)
+    out = inject_text_fx_en({"draft_dir_en_branch": str(en_dir), "session_id": "console-en-delta"})
     en_draft = json.loads((en_dir / "draft_content.json").read_text(encoding="utf-8"))
     assert len(en_draft["materials"]["material_animations"]) == 1
     assert "node_10b_text_animations_written:1" in out["status_log"]
     assert "node_10b_inject_text_fx_en_done" in out["status_log"]
+
+
+# ------------------------------------------------ job_id 链路修复(2026-11-18,审查阶段 2)
+
+
+def test_inject_text_fx_uses_config_thread_id_as_seed(tmp_draft_with_texts: Path) -> None:
+    """2.6 真实节点入口:config.thread_id 为权威 seed → 动画名 == 池公式预期条目。"""
+    tid = "console-pooltest1"
+    out = inject_text_fx(_state(tmp_draft_with_texts), {"configurable": {"thread_id": tid}})
+    draft = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    names = {a["animations"][0]["name"] for a in draft["materials"]["material_animations"]}
+    assert names == {_expected_pool_member(tid)["name"]}
+    assert "node_10_inject_text_fx_done" in out["status_log"]
+
+
+def test_inject_text_fx_falls_back_to_session_id(tmp_draft_with_texts: Path) -> None:
+    """旧 checkpoint 兼容:state 无 thread_id 只有 session_id → seed = session_id。"""
+    sid = "console-pooltest2"
+    state = {**_state(tmp_draft_with_texts), "session_id": sid}
+    inject_text_fx(state)
+    draft = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))
+    names = {a["animations"][0]["name"] for a in draft["materials"]["material_animations"]}
+    assert names == {_expected_pool_member(sid)["name"]}
+
+
+def test_inject_text_fx_en_node_matches_zh_with_same_config(
+    tmp_draft_with_texts: Path, tmp_path: Path
+) -> None:
+    """2.7 zh(node_10)与 en(node_10b)真实入口同 config → 动画五字段逐项一致。"""
+    tid = "console-dualtest"
+    config = {"configurable": {"thread_id": tid}}
+    inject_text_fx(_state(tmp_draft_with_texts), config)
+
+    en_draft = {
+        "canvas_config": {"width": 1080, "height": 1920},
+        "duration": 10_000_000,
+        "materials": {"texts": [
+            _text_material("text-en-1", "hello", 0, 1_500_000),
+            _text_material("text-en-2", "world", 1_500_000, 1_500_000),
+        ]},
+        "tracks": [{"type": "text", "id": "t1", "segments": [
+            {"id": "s1", "material_id": "text-en-1", "target_timerange": {"start": 0, "duration": 1_500_000}},
+            {"id": "s2", "material_id": "text-en-2", "target_timerange": {"start": 1_500_000, "duration": 1_500_000}},
+        ]}],
+    }
+    en_dir = tmp_path / "en_branch"
+    en_dir.mkdir()
+    en_file = en_dir / "draft_content.json"
+    en_file.write_text(json.dumps(en_draft, ensure_ascii=False), encoding="utf-8")
+
+    inject_text_fx_en(
+        {"draft_dir_en_branch": str(en_dir), "status_log": [], "error_log": []}, config
+    )
+
+    zh_anims = json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))["materials"]["material_animations"]
+    en_anims = json.loads(en_file.read_text(encoding="utf-8"))["materials"]["material_animations"]
+    assert len(zh_anims) == len(en_anims) == 2
+    zh_fields = [_animation_fields(a["animations"][0]) for a in zh_anims]
+    en_fields = [_animation_fields(a["animations"][0]) for a in en_anims]
+    assert zh_fields == en_fields
+    expected = _expected_pool_member(tid)
+    assert zh_fields[0]["name"] == expected["name"]
+    assert zh_fields[0]["resource_id"] == expected["resource_id"]
+
+
+def test_inject_text_fx_en_without_any_job_id_degrades(tmp_path: Path) -> None:
+    """2.5 en 无任何任务 ID(config/state 全空)→ 显式降级:不写动画 + 告警 + skipped 标签。"""
+    draft = {
+        "canvas_config": {"width": 1080, "height": 1920},
+        "duration": 5_000_000,
+        "materials": {"texts": [_text_material("text-en-1", "hello", 0, 1_000_000)]},
+        "tracks": [],
+    }
+    en_dir = tmp_path / "en_branch"
+    en_dir.mkdir()
+    en_file = en_dir / "draft_content.json"
+    en_file.write_text(json.dumps(draft), encoding="utf-8")
+
+    out = inject_text_fx_en({"draft_dir_en_branch": str(en_dir), "status_log": [], "error_log": []})
+
+    after = json.loads(en_file.read_text(encoding="utf-8"))
+    assert not after["materials"].get("material_animations")
+    assert any("无法解析当前任务 ID" in m for m in out.get("error_log", []))
+    assert "node_10b_inject_text_fx_en_skipped" in out.get("status_log", [])
+    assert "node_10b_inject_text_fx_en_done" not in out.get("status_log", [])
+
+
+def test_inject_text_fx_cross_task_rotation(tmp_draft_with_texts: Path) -> None:
+    """2.9 跨任务轮换:不同 thread_id 各按池公式取值;预期不同则动画不同(允许自然碰撞)。"""
+    tid_a = "console-rot-a"
+    inject_text_fx(_state(tmp_draft_with_texts), {"configurable": {"thread_id": tid_a}})
+    names_a = {
+        a["animations"][0]["name"]
+        for a in json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))["materials"]["material_animations"]
+    }
+    expected_a = _expected_pool_member(tid_a)["name"]
+    assert names_a == {expected_a}
+
+    # 确定性搜索一个池公式预期与 tid_a 不同的 thread_id(不依赖随机/碰撞概率)
+    tid_b = None
+    for i in range(1000):
+        cand = f"console-rot-b{i}"
+        if _expected_pool_member(cand)["name"] != expected_a:
+            tid_b = cand
+            break
+    assert tid_b is not None
+
+    inject_text_fx(_state(tmp_draft_with_texts), {"configurable": {"thread_id": tid_b}})
+    names_b = {
+        a["animations"][0]["name"]
+        for a in json.loads(tmp_draft_with_texts.read_text(encoding="utf-8"))["materials"]["material_animations"]
+    }
+    assert names_b == {_expected_pool_member(tid_b)["name"]}
+    assert names_a != names_b
+
+
+def test_graph_level_config_thread_id_reaches_both_entries(tmp_path: Path) -> None:
+    """2.8 图级:LangGraph 编译图注入 configurable.thread_id → zh/en 动画一致。
+
+    用真实节点函数组建最小图(START → node_10 → node_10b → END),实证
+    langgraph 1.2.9 按 ``Optional[RunnableConfig]`` 签名白名单注入 config。
+    state 故意不带任何任务 ID,且 zh 目录名与 thread_id 故意不同 —— 若注入
+    失效,zh/en 都会兜底到目录名(与预期池条目不符),断言即失败。
+    图 schema 用 WorkflowState 本尊:langgraph 1.x 会从节点函数注解推断输入
+    schema,自定义小 TypedDict 会与 WorkflowState 的 reducer 通道冲突。
+    """
+    from langgraph.graph import END, START, StateGraph
+
+    zh_draft = {
+        "canvas_config": {"width": 1080, "height": 1920},
+        "duration": 10_000_000,
+        "materials": {"texts": [
+            _text_material("text-zh-1", "你好", 0, 1_500_000),
+            _text_material("text-zh-2", "世界", 1_500_000, 1_500_000),
+        ]},
+        "tracks": [{"type": "text", "id": "t1", "segments": [
+            {"id": "text-seg-1", "material_id": "text-zh-1", "target_timerange": {"start": 0, "duration": 1_500_000}},
+            {"id": "text-seg-2", "material_id": "text-zh-2", "target_timerange": {"start": 1_500_000, "duration": 1_500_000}},
+        ]}],
+    }
+    zh_file = tmp_path / "AutoVideo_folder-doesnt-match" / "draft_content.json"
+    zh_file.parent.mkdir(parents=True, exist_ok=True)
+    zh_file.write_text(json.dumps(zh_draft, ensure_ascii=False), encoding="utf-8")
+
+    en_draft = {
+        "canvas_config": {"width": 1080, "height": 1920},
+        "duration": 10_000_000,
+        "materials": {"texts": [
+            _text_material("text-en-1", "hello", 0, 1_500_000),
+            _text_material("text-en-2", "world", 1_500_000, 1_500_000),
+        ]},
+        "tracks": [{"type": "text", "id": "t1", "segments": [
+            {"id": "text-seg-1", "material_id": "text-en-1", "target_timerange": {"start": 0, "duration": 1_500_000}},
+            {"id": "text-seg-2", "material_id": "text-en-2", "target_timerange": {"start": 1_500_000, "duration": 1_500_000}},
+        ]}],
+    }
+    en_dir = tmp_path / "en_branch"
+    en_dir.mkdir()
+    en_file = en_dir / "draft_content.json"
+    en_file.write_text(json.dumps(en_draft, ensure_ascii=False), encoding="utf-8")
+
+    g = StateGraph(WorkflowState)
+    g.add_node("node_10", inject_text_fx)
+    g.add_node("node_10b", inject_text_fx_en)
+    g.add_edge(START, "node_10")
+    g.add_edge("node_10", "node_10b")
+    g.add_edge("node_10b", END)
+    app = g.compile()
+
+    tid = "console-graphtest"
+    app.invoke(
+        {
+            "draft_path": str(zh_file),
+            "draft_dir_en_branch": str(en_dir),
+            "status_log": [],
+            "error_log": [],
+        },
+        config={"configurable": {"thread_id": tid}},
+    )
+
+    zh_names = {
+        a["animations"][0]["name"]
+        for a in json.loads(zh_file.read_text(encoding="utf-8"))["materials"]["material_animations"]
+    }
+    en_names = {
+        a["animations"][0]["name"]
+        for a in json.loads(en_file.read_text(encoding="utf-8"))["materials"]["material_animations"]
+    }
+    expected = _expected_pool_member(tid)["name"]
+    assert zh_names == en_names == {expected}
