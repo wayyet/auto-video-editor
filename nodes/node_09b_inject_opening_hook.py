@@ -167,9 +167,21 @@ def _inject_hook_into(draft: dict, title: str | None, tag: str) -> tuple[list[st
         "effect_written": 0,
         "title_written": 0,
         "animation_written": 0,
+        "animation_restored": 0,
         "no_video": False,
         "cleaned_stale": 0,
     }
+
+    # 非破坏降级(2026-11-19 审查 P1-02):cleanup 会先删上一轮 hook 动画;
+    # 若本轮候选不可用而标题仍会重建,需要恢复上一轮动画条目 —— 清理前先留存引用。
+    previous_title_anim = next(
+        (
+            item
+            for item in draft.setdefault("materials", {}).get("material_animations") or []
+            if str(item.get("id") or "").startswith(HOOK_ANIM_PREFIX)
+        ),
+        None,
+    )
 
     summary["cleaned_stale"] = _cleanup_stale_hook_products(draft)
 
@@ -215,14 +227,17 @@ def _inject_hook_into(draft: dict, title: str | None, tag: str) -> tuple[list[st
             style=_HOOK_TITLE_STYLE,
             id_prefix="hook-title-seg",
         )
-        # 入场动画守卫(2026-11-19 动画丢失根因修复):候选按序取第一个本地缓存
-        # 存在的;全缺则降级不写动画(标题保留,不伪装成功)。内置免费档同样可能
-        # 未下载 —— 目录存在性是写入前的唯一可查信号。
+        # 入场动画守卫(2026-11-19 审查 P1-02):与字幕池同一套标准 —— verified
+        # (GUI 实证)+ 本地缓存存在双闸,候选按序取第一个双闸通过的;不允许仅凭
+        # 「目录存在」写入未验证候选(坏包目录同样存在,螺旋上升实证)。
+        # 全缺时非破坏降级:上一轮动画已留存则恢复绑定(标题仍在),无旧动画才
+        # 降级纯标题 —— 不伪装成功。
         animation_meta = next(
             (
                 cand
                 for cand in HOOK_ANIMATION_CANDIDATES
-                if text_animation_cache_available(cand, config.JIANYING_CACHE_ROOT)
+                if cand.get("verified")
+                and text_animation_cache_available(cand, config.JIANYING_CACHE_ROOT)
             ),
             None,
         )
@@ -234,9 +249,15 @@ def _inject_hook_into(draft: dict, title: str | None, tag: str) -> tuple[list[st
             )
             upsert_by_id(materials.setdefault("material_animations", []), animation)
             _bind_ref(title_seg, "anim-hook-title-1")
+        elif previous_title_anim is not None:
+            materials.setdefault("material_animations", []).append(previous_title_anim)
+            _bind_ref(title_seg, str(previous_title_anim.get("id") or ""))
+            warnings.append(
+                f"[{tag}] 标题动画候选不可用(verified+缓存双闸),恢复上一轮标题动画"
+            )
         else:
             warnings.append(
-                f"[{tag}] 标题入场动画本地缓存缺失,降级不写(标题保留)"
+                f"[{tag}] 标题入场动画候选不可用(verified+缓存双闸),降级纯标题"
             )
 
         # 自拼标题轨追加在 tracks 末尾(不用 sync_text_track/build_text_track,
@@ -253,7 +274,10 @@ def _inject_hook_into(draft: dict, title: str | None, tag: str) -> tuple[list[st
             }
         )
         summary["title_written"] = 1
-        summary["animation_written"] = 0 if animation_meta is None else 1
+        if animation_meta is not None:
+            summary["animation_written"] = 1
+        elif previous_title_anim is not None:
+            summary["animation_restored"] = 1
 
     return warnings, summary
 

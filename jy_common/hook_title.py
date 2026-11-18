@@ -45,6 +45,11 @@ HOOK_EFFECT_CANDIDATES: tuple[dict[str, Any], ...] = (
 #: 标题入场动画候选(免费档):默认「冲屏位移」,备选「放大」「渐显」。
 #: 来源:vendor/pyJianYingDraft/metadata/text_intro.py:9 / :49 / :58,
 #: AnimationMeta(name, is_vip=False, duration_s, resource_id, effect_id, md5)。
+#:
+#: verified / verification(2026-11-19 审查 P1-02):目录存在 ≠ 可渲染,标题
+#: 候选与字幕池用同一套 GUI 实证标准 —— 只有在目标剪映版本实际应用、预览、
+#: 保存后仍正常显示才标 verified;node_09b 写入前做 verified + 缓存双闸。
+#: 「放大」「渐显」无 GUI 实证记录,保持未标记(不可选),待收割验证。
 HOOK_ANIMATION_CANDIDATES: tuple[dict[str, Any], ...] = (
     {
         "name": "冲屏位移",
@@ -53,6 +58,24 @@ HOOK_ANIMATION_CANDIDATES: tuple[dict[str, Any], ...] = (
         "resource_id": "7078181271393800711",
         "effect_id": "1643884",
         "md5": "fd73ffc26a3f02fa6d957a94b590623a",
+        "verified": True,
+        "verification": {
+            "status": "verified",
+            "verified_at": "2026-11-19",
+            "jianying_version": "5.9.0.11632",
+            "resource_identity": {
+                "resource_id": "7078181271393800711",
+                "effect_id": "1643884",
+                "md5": "fd73ffc26a3f02fa6d957a94b590623a",
+            },
+            "evidence_path": (
+                "docs/第七期开发/auto-video-editor_字幕动画丢失根因分析与修复计划_20261119.md"
+            ),
+            "note": (
+                "草稿31a8a8e9edd2真机验收与console-b0b2a64a78c6截图(2026-11-19):"
+                "标题动画正常加载,无丢失徽章"
+            ),
+        },
     },
     {
         "name": "放大",

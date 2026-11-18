@@ -135,7 +135,7 @@ class TestZhHookInjection:
     def test_title_animation_cache_missing_degrades_title_kept(
         self, tmp_draft: Path, tmp_path: Path, monkeypatch
     ) -> None:
-        """标题动画候选本地缓存全缺 → 动画降级不写,标题/特效保留(2026-11-19 守卫)。"""
+        """verified 为真但缓存目录全缺 → 动画降级不写,标题文字保留(P1-02 双闸)。"""
         empty_root = tmp_path / "empty-cache"
         empty_root.mkdir()
         monkeypatch.setattr(node_09b_mod.config, "JIANYING_CACHE_ROOT", str(empty_root))
@@ -144,10 +144,63 @@ class TestZhHookInjection:
 
         track = _hook_track(draft)
         assert track is not None, "标题本身应保留"
+        title_mat = next(
+            (t for t in draft["materials"]["texts"] if t["id"] == "hook-title-1"), None
+        )
+        assert title_mat is not None, "标题文字素材应保留"
         assert "anim-hook-title-1" not in track["segments"][0]["extra_material_refs"]
         assert not draft["materials"].get("material_animations")
         # node_09b 的 warnings 走 error_log(与 node_10 的 status_log 通道不同)
-        assert any("标题入场动画本地缓存缺失" in t for t in out["error_log"])
+        assert any("标题入场动画候选不可用" in t for t in out["error_log"])
+
+    def test_unverified_candidates_not_written_even_if_cached(
+        self, tmp_draft: Path, tmp_path: Path, monkeypatch
+    ) -> None:
+        """缓存目录存在但候选未 verified → 不写标题动画(仅目录存在不是充分条件)。"""
+        unverified = tuple(
+            {k: v for k, v in cand.items() if k not in ("verified", "verification")}
+            for cand in node_09b_mod.HOOK_ANIMATION_CANDIDATES
+        )
+        monkeypatch.setattr(node_09b_mod, "HOOK_ANIMATION_CANDIDATES", unverified)
+        out = inject_opening_hook(_state(str(tmp_draft)))
+        draft = _read(tmp_draft)
+
+        assert not draft["materials"].get("material_animations")
+        assert any("标题入场动画候选不可用" in t for t in out["error_log"])
+
+    def test_previous_title_anim_restored_when_candidates_unusable(
+        self, tmp_draft: Path, tmp_path: Path, monkeypatch
+    ) -> None:
+        """原草稿已有我方标题动画而本轮候选全不可用 → 旧动画恢复并重新绑定(非破坏)。"""
+        from jy_common.native_fx import build_native_text_animation_material
+
+        prior = build_native_text_animation_material(
+            material_id="anim-hook-title-1",
+            anim_meta={
+                "name": "冲屏位移",
+                "duration_s": 0.5,
+                "resource_id": "7078181271393800711",
+                "effect_id": "1643884",
+                "md5": "fd73ffc26a3f02fa6d957a94b590623a",
+            },
+            kind="in",
+        )
+        draft = _read(tmp_draft)
+        draft["materials"]["material_animations"] = [prior]
+        tmp_draft.write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
+
+        empty_root = tmp_path / "empty-cache-restore"
+        empty_root.mkdir()
+        monkeypatch.setattr(node_09b_mod.config, "JIANYING_CACHE_ROOT", str(empty_root))
+        out = inject_opening_hook(_state(str(tmp_draft)))
+        after = _read(tmp_draft)
+
+        track = _hook_track(after)
+        assert track is not None
+        anims = after["materials"]["material_animations"]
+        assert [a["id"] for a in anims] == ["anim-hook-title-1"], "上一轮标题动画应被恢复"
+        assert "anim-hook-title-1" in track["segments"][0]["extra_material_refs"]
+        assert any("恢复上一轮标题动画" in t for t in out["error_log"])
 
     def test_title_cut_from_first_subtitle_before_halfwidth_comma(
         self, tmp_draft: Path
