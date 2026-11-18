@@ -90,6 +90,28 @@ def test_build_render_plan_orders_and_fields() -> None:
     assert any("贴纸" in w for w in plan["fidelity_warnings"])
 
 
+def test_build_render_plan_counts_text_effects_fidelity() -> None:
+    """TF-16:materials.effects 中 type=text_effect 计入「原生花字未渲染」明细。
+
+    只计 text_effect(花字标记,真机样本实证);桶内其他类型不冒充花字。
+    """
+    draft = _draft()
+    draft["materials"]["effects"] = [
+        {"id": "flower-1", "type": "text_effect"},
+        {"id": "flower-2", "type": "text_effect"},
+        {"id": "other-1", "type": "not_a_flower"},
+    ]
+    plan = build_render_plan(draft)
+    assert any("2 个原生花字未渲染" in w for w in plan["fidelity_warnings"])
+    assert all("3 个原生花字" not in w for w in plan["fidelity_warnings"])
+
+
+def test_build_render_plan_no_flower_no_fidelity_line() -> None:
+    """无花字草稿不应出现花字明细行(避免报告噪声)。"""
+    plan = build_render_plan(_draft())
+    assert not any("原生花字" in w for w in plan["fidelity_warnings"])
+
+
 def test_build_render_plan_mapper_style_audio_range() -> None:
     """mapper 风格音轨段(target_start_us/target_end_us)也能解析。"""
     draft = _draft()

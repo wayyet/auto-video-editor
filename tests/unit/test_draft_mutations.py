@@ -64,6 +64,23 @@ def test_build_record_counts_bucket_changes() -> None:
     assert "status" in record and record["status"] == "succeeded"
 
 
+def test_build_record_counts_effects_bucket() -> None:
+    """TF-15:effects 桶(剪映原生花字 type=text_effect)增删必须进 changed_counts。
+
+    2026-11-18 审查计划 P5:花字此前不在 _AUDIT_BUCKETS,审计日志对花字
+    增删不可见(sha 只能证明整稿变化,定位不到桶)。
+    """
+    before = _base_draft()
+    after = json.loads(json.dumps(before, ensure_ascii=False))
+    after["materials"]["effects"] = [{"id": "flower-1", "type": "text_effect"}]
+    record = build_draft_mutation_record(
+        "node_10", "/x/drafts/a/draft_content.json", before, after,
+        sha_before={"draft_content.json": "aaa"}, sha_after={"draft_content.json": "bbb"},
+    )
+    assert record["changed"] is True
+    assert record["changed_counts"]["materials.effects"] == {"before": 0, "after": 1}
+
+
 def test_build_record_unchanged_replay() -> None:
     """幂等重放:内容一致 → changed=False,changed_counts 空。"""
     draft = _base_draft()

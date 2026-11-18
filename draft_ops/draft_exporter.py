@@ -17,7 +17,8 @@
 中英字幕(materials.texts)               drawtext 烧录;剪映相对字号按画布高
                                         3.5% 近似,位置按 ``transform_y`` 近似
 转场                                    按硬切近似(fidelity 明细)
-贴纸 / 视频特效 / 花字样式                不渲染(fidelity 明细)
+贴纸 / 视频特效 / 原生花字(text_effect)   不渲染(fidelity 明细;2026-11-18 起花字
+                                        按桶内 type=text_effect 计数入明细)
 ======================================  ======================================
 
 流程(计划 §8 阶段 6 任务):
@@ -207,18 +208,27 @@ def build_render_plan(draft: dict) -> dict[str, Any]:
             }
         )
 
-    # 4) 保真度明细(转场/贴纸/特效不渲染;记给报告与创建台)
+    # 4) 保真度明细(转场/贴纸/特效/花字不渲染;记给报告与创建台)
     materials = draft.get("materials") or {}
     fidelity: list[str] = []
     n_trans = len(materials.get("transitions") or [])
     n_fx = len(materials.get("video_effects") or [])
     n_sticker = len(materials.get("stickers") or [])
+    # 原生花字(materials.effects 中 type=text_effect,2026-11-18 真机样本实证)
+    # 此前整个 effects 桶不进保真度明细,花字存在但导出报告不提(审查计划 P5)。
+    n_flower = sum(
+        1
+        for e in (materials.get("effects") or [])
+        if isinstance(e, dict) and e.get("type") == "text_effect"
+    )
     if n_trans:
         fidelity.append(f"{n_trans} 处转场按硬切近似渲染")
     if n_fx:
         fidelity.append(f"{n_fx} 个视频特效未渲染进 MP4(剪映客户端内可见)")
     if n_sticker:
         fidelity.append(f"{n_sticker} 个贴纸未渲染进 MP4(剪映客户端内可见)")
+    if n_flower:
+        fidelity.append(f"{n_flower} 个原生花字未渲染进 MP4(剪映客户端内可见)")
 
     return {
         "width": width,

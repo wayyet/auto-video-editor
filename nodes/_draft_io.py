@@ -37,10 +37,13 @@ from draft_ops.draft_lock import hash_draft_files
 #: 节点级草稿修改审计文件(阶段 6b;点前缀,剪映不读;每次写入 append 一行)
 AUDIT_FILE_NAME = ".autovideo_draft_mutations.jsonl"
 
-#: 审计分桶的 materials 桶名(其余桶不 diff,防止计数噪声)
+#: 审计分桶的 materials 桶名(其余桶不 diff,防止计数噪声)。
+#: ``effects`` 2026-11-18 补入:剪映原生花字(text_effect)就落在这个桶
+#: (真机 UI 写入样本 AutoVideo_console-52373c6f9e11 实证),此前不在清单内
+#: 导致花字增删在审计日志里不可见(审查计划 P5)。
 _AUDIT_BUCKETS: tuple[str, ...] = (
     "videos", "audios", "texts", "transitions", "video_effects",
-    "stickers", "material_animations", "audio_fades", "speeds",
+    "stickers", "material_animations", "audio_fades", "speeds", "effects",
 )
 
 
