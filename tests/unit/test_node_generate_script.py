@@ -251,3 +251,163 @@ def test_trace_records_user_prompt_head_with_web_research(
     assert trace["ok"] is True
     assert "https://example.com/a" in trace.get("user_prompt_head", "")
     assert "【网页话题参考" in trace.get("user_prompt_head", "")
+
+
+# ---------------------------------------------------------------------------
+# 第八期阶段4:标题来源链(设计文档 §6.5)——【标题】 > LLM title > 字幕切句
+# ---------------------------------------------------------------------------
+
+
+def test_node_writes_hook_title_from_llm(tmp_path: Path, monkeypatch) -> None:
+    """LLM 返回 title → 能力层带出 → 节点写入 state["hook_title"] + script.json 留痕。"""
+    monkeypatch.setattr(
+        "storyline_capabilities.vlm_client._ACTIVE_CLIENT",
+        StubLLMClient(
+            default_json={
+                "group_scripts": [
+                    {"group_id": "group_0001", "raw_text": "第一段旁白"},
+                    {"group_id": "group_0002", "raw_text": "第二段旁白"},
+                ],
+                "title": "马六甲之旅",
+            }
+        ),
+    )
+    out = storyline_generate_script_node(_state(tmp_path))
+
+    assert out["hook_title"] == "马六甲之旅"
+    script = json.loads(Path(out["storyline_script_artifact"]).read_text(encoding="utf-8"))
+    assert script["title"] == "马六甲之旅"
+    assert script["title_source"] == "llm"
+    assert script["title_truncated"] is False
+
+
+def test_node_template_title_beats_llm_title(tmp_path: Path, monkeypatch) -> None:
+    """【标题】模板标记 > LLM title(§6.5 优先级)。"""
+    monkeypatch.setattr(
+        "storyline_capabilities.vlm_client._ACTIVE_CLIENT",
+        StubLLMClient(
+            default_json={
+                "group_scripts": [
+                    {"group_id": "group_0001", "raw_text": "第一段旁白"},
+                    {"group_id": "group_0002", "raw_text": "第二段旁白"},
+                ],
+                "title": "LLM 起的标题",
+            }
+        ),
+    )
+    out = storyline_generate_script_node(
+        _state(tmp_path, storyline_targets={"user_request": "【标题】用户定制标题"})
+    )
+
+    assert out["hook_title"] == "用户定制标题"
+    script = json.loads(Path(out["storyline_script_artifact"]).read_text(encoding="utf-8"))
+    assert script["title"] == "用户定制标题"
+    assert script["title_source"] == "template"
+
+
+def test_node_llm_title_truncated_with_flag(tmp_path: Path, monkeypatch) -> None:
+    """LLM 标题超 12 字 → 写入端截断 + title_truncated=true 留痕(P1-05 不静默)。"""
+    monkeypatch.setattr(
+        "storyline_capabilities.vlm_client._ACTIVE_CLIENT",
+        StubLLMClient(
+            default_json={
+                "group_scripts": [
+                    {"group_id": "group_0001", "raw_text": "第一段旁白"},
+                    {"group_id": "group_0002", "raw_text": "第二段旁白"},
+                ],
+                "title": "马六甲海峡的海上清真寺日落航行记录",  # 16 字
+            }
+        ),
+    )
+    out = storyline_generate_script_node(_state(tmp_path))
+
+    assert out["hook_title"] == "马六甲海峡的海上清真寺日落"[:12]
+    assert len(out["hook_title"]) == 12
+    script = json.loads(Path(out["storyline_script_artifact"]).read_text(encoding="utf-8"))
+    assert script["title_truncated"] is True
+    assert script["title_source"] == "llm"
+
+
+def test_node_no_titles_writes_no_hook_title(tmp_path: Path, monkeypatch) -> None:
+    """两级都空 → 不写 hook_title,回退字幕切句由 node_09b 承担(§6.5)。"""
+    monkeypatch.setattr(
+        "storyline_capabilities.vlm_client._ACTIVE_CLIENT",
+        StubLLMClient(
+            default_json={
+                "group_scripts": [
+                    {"group_id": "group_0001", "raw_text": "第一段旁白"},
+                    {"group_id": "group_0002", "raw_text": "第二段旁白"},
+                ],
+                "title": "",
+            }
+        ),
+    )
+    out = storyline_generate_script_node(_state(tmp_path))
+
+    assert "hook_title" not in out
+    script = json.loads(Path(out["storyline_script_artifact"]).read_text(encoding="utf-8"))
+    assert script["title"] == ""
+    assert script["title_source"] == "subtitle_fallback"
+
+
+def test_node_en_run_skips_llm_title_but_keeps_template_title(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """英文运行:LLM 标题不写入中文标题轨;【标题】为用户显式意图仍生效(§6.5)。"""
+    monkeypatch.setattr(
+        "storyline_capabilities.vlm_client._ACTIVE_CLIENT",
+        StubLLMClient(
+            default_json={
+                "group_scripts": [
+                    {"group_id": "group_0001", "raw_text": "n1"},
+                    {"group_id": "group_0002", "raw_text": "n2"},
+                ],
+                "title": "English Title Here",
+            }
+        ),
+    )
+    # 英文运行 + 无模板标题 → 不写 hook_title
+    out = storyline_generate_script_node(
+        _state(tmp_path, storyline_targets={"lang": "en"})
+    )
+    assert "hook_title" not in out
+
+    # 英文运行 + 有【标题】 → 模板标题仍写入
+    out2 = storyline_generate_script_node(
+        _state(
+            tmp_path,
+            storyline_targets={"lang": "en", "user_request": "【标题】用户定制标题"},
+        )
+    )
+    assert out2["hook_title"] == "用户定制标题"
+
+
+def test_node_duplicate_title_directive_fails_closed_to_llm(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """重复【标题】→ 该字段 fail-closed,回退 LLM 标题;诊断只进 script.json。"""
+    monkeypatch.setattr(
+        "storyline_capabilities.vlm_client._ACTIVE_CLIENT",
+        StubLLMClient(
+            default_json={
+                "group_scripts": [
+                    {"group_id": "group_0001", "raw_text": "第一段旁白"},
+                    {"group_id": "group_0002", "raw_text": "第二段旁白"},
+                ],
+                "title": "LLM 起的标题",
+            }
+        ),
+    )
+    out = storyline_generate_script_node(
+        _state(
+            tmp_path,
+            storyline_targets={"user_request": "【标题】第一个\n【检索】攻略\n【标题】第二个"},
+        )
+    )
+
+    assert out["hook_title"] == "LLM 起的标题"  # 模板字段作废 → LLM 兜底
+    script = json.loads(Path(out["storyline_script_artifact"]).read_text(encoding="utf-8"))
+    assert script["title_source"] == "llm"
+    assert script["user_directives_warnings"] == ["duplicate_directive:title"]
+    # 解析诊断不进 status_log(「提示词不进监控事件」契约)
+    assert not any("duplicate" in tag for tag in out["status_log"])

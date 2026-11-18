@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from config import DEFAULT_TARGET_DURATION_MS
+from jy_common.user_directives import parse_user_directives
 from state import WorkflowState
 
 
@@ -468,11 +469,15 @@ def _first_overall_sentence(overall: str, max_len: int) -> str:
 
 
 def build_web_topic_query(state: WorkflowState) -> str:
-    """检索词自动构造:手动 query + 画面概述首句 + 分组主题(设计方案 §4.1)。
+    """检索词自动构造:手动 query + 【检索】/【主题】标记 + 画面概述首句 + 分组主题。
 
     纯函数:只读 state,不发网络请求、不写文件。
 
-    - 手动检索词(``storyline_targets.query``)排最前,作为可选提示而非前置条件;
+    - 手动检索词(``storyline_targets.query``)排最前,作为可选提示而非前置条件
+      (创建台冻结契约仍不写该键,第八期不改);
+    - 第八期阶段2:用户【】标记接入 —— ``【检索】`` 优先、缺省回退
+      ``【主题】``(设计文档 §6.2,修订版 §5.3 优先级 2/3);标记未提供时
+      此层跳过,行为与旧版一致;
     - ``storyline_understanding_artifact.overall`` 取首句;
     - ``storyline_groups_artifact.groups[].theme`` 取前 3 个;
     - 去重后用「、」拼接,总长截断;所有来源全空返回空串,调用方据此跳过检索。
@@ -484,6 +489,14 @@ def build_web_topic_query(state: WorkflowState) -> str:
     manual = web_topic_query(state)
     if manual:
         parts.append(_collapse_ws(manual)[:WEB_TOPIC_QUERY_PART_MAX_CHARS].strip())
+    # 第八期阶段2:【检索】/【主题】接入(设计文档 §6.2)。解析 fail-closed:
+    # 未提供/空值 → None → 跳过,检索词构造退回旧组件链。
+    directives = parse_user_directives(extract_user_request(state))
+    directive_query = directives.get("search") or directives.get("theme")
+    if isinstance(directive_query, str) and directive_query.strip():
+        parts.append(
+            _collapse_ws(directive_query)[:WEB_TOPIC_QUERY_PART_MAX_CHARS].strip()
+        )
     understanding = _read_json_artifact(state, "storyline_understanding_artifact")
     if isinstance(understanding, dict):
         overall = _collapse_ws(understanding.get("overall"))

@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 
 from draft_ops.draft_integrity import resolve_required_features
+from jy_common.user_directives import normalize_hook_title, parse_user_directives
 from state import WorkflowState
 from storyline_capabilities.generate_script import generate_script
 from storyline_capabilities.vlm_client import StubLLMClient, get_default_client
@@ -138,6 +139,25 @@ def storyline_generate_script_node(state: WorkflowState) -> dict:
     # 2026-11-12 阶段1:template_ref 随 script.json 落盘(模板 ID/版本/hash/是否
     # 实际应用),script 可追溯模板来源(设计文档 §1.3 任务9)。
     result["template_ref"] = template_ref
+    # 第八期阶段4:标题来源链(设计文档 §6.5)——【标题】 > LLM title > 第 1 条
+    # 字幕切句(最后一级由 node_09b/pick_hook_title 既有回退承担,两级都空时
+    # 本节点不写 hook_title)。LLM 标题仅中文运行写入(英文标题不进中文标题轨);
+    # 新链路标题在写入端统一规范化(P1-05:截断留痕 title_truncated,不改
+    # pick_hook_title 对既有显式标题仅 strip 不截断的兼容语义)。
+    directives = parse_user_directives(extract_user_request(state))
+    template_title, template_truncated = normalize_hook_title(directives.get("title"))
+    llm_title, llm_truncated = normalize_hook_title(result.get("title"))
+    if resolve_lang(state) != "zh":
+        llm_title, llm_truncated = "", False
+    resolved_title = template_title or llm_title or None
+    result["title"] = resolved_title or ""
+    result["title_source"] = (
+        "template" if template_title else ("llm" if llm_title else "subtitle_fallback")
+    )
+    result["title_truncated"] = bool(template_truncated or llm_truncated)
+    if directives.get("warnings"):
+        # 解析诊断只进产物文件,不进 status_log(「提示词不进监控事件」契约)
+        result["user_directives_warnings"] = list(directives.get("warnings") or [])
     out_path.write_text(
         json.dumps(result, ensure_ascii=False, default=str), encoding="utf-8"
     )
@@ -153,7 +173,12 @@ def storyline_generate_script_node(state: WorkflowState) -> dict:
             f"{trace_path}; raw_head={str(trace.get('raw_head') or '')[:200]!r}"
         )
 
-    return {
+    update = {
         "storyline_script_artifact": str(out_path),
         "status_log": append_status_tag(state, "storyline_generate_script_done"),
     }
+    if resolved_title:
+        # state["hook_title"] 键在 state.py 早已声明(NotRequired);node_09b 的
+        # pick_hook_title 优先消费显式键,由此打通「模板/LLM 标题 → 开场大字」。
+        update["hook_title"] = resolved_title
+    return update

@@ -54,12 +54,13 @@ def golden() -> dict:
 
 def test_golden_manifest_shape(golden: dict) -> None:
     # 2026-11-08 B1 ASR 移除:prompts/tasks/speech_rough_cut/ 2 份模板删除,48 → 46
-    assert golden["meta"]["file_count"] == 46
-    assert len(golden["files"]) == 46
+    # 2026-11-19 第八期:重录 golden(6→4 份此前新增模板未重录的存量滞后一并
+    # 收口,46 → 50);count 改为与 golden 自描述一致,防再次漂移
+    assert golden["meta"]["file_count"] == len(golden["files"]) == 50
 
 
 def test_shared_resource_files_unchanged(golden: dict) -> None:
-    """prompts/tasks 的 46 份模板与 golden 逐字节一致。"""
+    """prompts/tasks 的全部模板与 golden 逐字节一致。"""
     for entry in golden["files"]:
         raw = (REPO_ROOT / entry["rel"]).read_bytes()
         assert hashlib.sha256(raw).hexdigest() == entry["sha_template"], entry["rel"]

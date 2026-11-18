@@ -25,6 +25,10 @@
 5. **状态拆分**:``ok``(写出并绑定)/ ``cut``(语义=硬切)/ ``degraded``
    (池缺失/资源未命中,不写)/ ``not_applicable``(无边界);模板库缺失 →
    failed(error_log)。执行结果以草稿原生条目 + status_log 为准。
+6. **开场转场加强**(第八期阶段3,设计文档 §6.3):用户【开场】标记正向要求
+   时,边界 0 语义强制 ``whip`` → pool_whip(强动势/甩镜风格,非"全库最强"
+   承诺);按**真实草稿边界数**生效(语义计划空/短先补 None 占位),单镜头
+   not_applicable,资源解析失败不记 applied;覆盖先于 all-cut 判定。
 
 幂等与守卫(对齐 node_08 配音轨删除守卫):我方素材 id 用确定性模式
 ``transition-{k}`` / ``vfx-{k}``(k 从 1 起);重放先剥离我方旧 refs、清理
@@ -49,12 +53,14 @@ from jy_common.native_fx import (
     is_19_digit_resource_id,
 )
 from jy_common.template_library import TemplateLibrary, load_resource_libraries
+from jy_common.user_directives import opening_boost_requested, parse_user_directives
 from langchain_core.runnables import RunnableConfig
 from nodes._draft_io import apply_and_write, find_video_track, load_draft, upsert_by_id
 from nodes._dual_draft import ZH, dual_draft_targets, missing_en_note
 from nodes.storyline._common import (
     PLAN_SOURCE_FINAL_INVALID,
     effective_canonical_plan,
+    extract_user_request,
 )
 from state import WorkflowState
 
@@ -255,12 +261,21 @@ def _inject_fx_into(
     tag: str,
     job_id: str,
     required_transitions: bool,
+    opening_boost: bool = False,
 ) -> tuple[list[str], dict]:
     """把转场 + 视频特效**原生绑定**进一份草稿(就地改 ``draft``)。
 
     中英两份草稿共用这一个实现(``tag`` 只用于日志前缀,**不进**轮换 seed)。
     两份草稿 fork 自同一份快照②,视频时间轴一致,所以两边得到的条数、绑定
     与转场名一致。
+
+    ``opening_boost``(第八期阶段3,设计文档 §6.3):【开场】标记正向要求时,
+    边界 0 语义强制 ``whip`` → pool_whip(强动势/甩镜风格池;P1-01/P1-02:
+    这是第一处镜头切点的风格覆盖,不承诺 0-3s,不代表全库最强)。按**真实
+    草稿边界数**生效(P1-03):语义计划为空/偏短时先补 ``None`` 占位(缺失
+    语义走既有 pool_gentle 回退),单镜头无边界 → not_applicable;覆盖发生在
+    all-cut 判定**之前**,边界 0=whip 后不再判「全硬切」。zh/en 共享同一
+    ``opening_boost`` 与 ``job_id``,双稿边界 0 转场名一致。
 
     Returns:
         (告警列表, 汇总 dict)。
@@ -287,12 +302,30 @@ def _inject_fx_into(
         "video_effects_empty_whitelist": False,
         "not_applicable": n_boundaries == 0,
         "cleaned_stale": 0,
+        # 第八期阶段3:开场加强诊断(资源名/池只进 summary/产物,不进监控事件)
+        "opening_boost_requested": bool(opening_boost),
+        "opening_boost_applied": False,
+        "opening_boost_not_applicable": False,
+        "opening_transition_pool": None,
+        "opening_transition_name": None,
     }
     if n_boundaries == 0:
         warnings.append(f"[{tag}] 只有 {len(segments)} 个视频段,无剪辑边界,转场 not_applicable")
 
-    # all-cut 保底(核验报告 §6.7):全部边界硬切 + 交付要求转场 → 边界 0 回退 fade
     working_semantics = list(semantics)
+    # 第八期阶段3:【开场】正向要求 → 边界 0 强制 whip。按真实边界数生效
+    # (P1-03):语义列表为空/偏短先补 None 占位,再覆盖边界 0 —— 不得因
+    # 语义计划为空而跳过(否则合法草稿静默漏执行用户要求)。
+    opening_boost_effective = bool(opening_boost) and n_boundaries > 0
+    if opening_boost and n_boundaries == 0:
+        summary["opening_boost_not_applicable"] = True
+    if opening_boost_effective:
+        if len(working_semantics) < n_boundaries:
+            working_semantics.extend([None] * (n_boundaries - len(working_semantics)))
+        working_semantics[0] = "whip"
+
+    # all-cut 保底(核验报告 §6.7):全部边界硬切 + 交付要求转场 → 边界 0 回退 fade。
+    # 开场覆盖成 whip 后边界 0 不再是硬切,保底通常不应触发。
     if (
         required_transitions
         and _all_boundaries_cut(working_semantics, template_lib.transition_semantic_map(), n_boundaries)
@@ -306,6 +339,13 @@ def _inject_fx_into(
         status, meta, pool_key = _resolve_transition_meta(
             template_lib, semantic, i, job_id
         )
+        if i == 0 and opening_boost_effective:
+            summary["opening_transition_pool"] = pool_key
+            summary["opening_transition_name"] = (
+                str(meta.get("name"))
+                if isinstance(meta, dict) and meta.get("name")
+                else None
+            )
         if status == "cut":
             summary["transitions_cut"] += 1
             continue
@@ -315,6 +355,11 @@ def _inject_fx_into(
                 f"[{tag}] boundary {i + 1} 转场资源未解析"
                 f"(semantic={semantic!r}, pool={pool_key!r}),degraded 不写入"
             )
+            if i == 0 and opening_boost_effective:
+                warnings.append(
+                    f"[{tag}] opening boost 边界 0 资源未解析(pool={pool_key!r}),"
+                    "degraded —— 不记 applied"
+                )
             continue
 
         # 时长钳制:不超过相邻两段的较短者(不足时退资源默认时长)
@@ -333,6 +378,9 @@ def _inject_fx_into(
         kept_transition_ids.add(material_id)
         _bind_ref(segments[i + 1], material_id)
         summary["transitions_written"] += 1
+        if i == 0 and opening_boost_effective:
+            # 只有真实解析并写入草稿后才记 applied(P1-03/§6.3:不得假成功)
+            summary["opening_boost_applied"] = True
 
     # 视频特效克制点缀:只挂首/尾/中间每第 3 段,按挂载序号轮换白名单
     whitelist_rows = template_lib.video_effect_candidates()
@@ -422,12 +470,25 @@ def inject_fx(state: WorkflowState, config: Optional[RunnableConfig] = None) -> 
     required_transitions = bool(resolve_required_features(state).get("transitions"))
 
     semantics = _boundary_semantics_plan(state)
+    # 第八期阶段3:【开场】标记解析(设计文档 §6.3;fail-closed,未提供 → False)。
+    # 状态标签只含固定短语,不含用户文本(「提示词不进监控事件」契约)。
+    opening_boost = opening_boost_requested(
+        parse_user_directives(extract_user_request(state))
+    )
+    if opening_boost:
+        status_log.append("node_09_inject_fx_opening_boost_requested")
     en_file = Path(state["draft_dir_en_branch"]) / "draft_content.json" if state.get("draft_dir_en_branch") else None
 
     for tag, draft_file in targets:
         draft = load_draft(draft_file)
         warnings, summary = _inject_fx_into(
-            draft, template_lib, semantics, f"node_09_{tag}", job_id, required_transitions
+            draft,
+            template_lib,
+            semantics,
+            f"node_09_{tag}",
+            job_id,
+            required_transitions,
+            opening_boost=opening_boost,
         )
         error_log.extend(warnings)
         if summary.get("not_applicable"):
@@ -436,6 +497,13 @@ def inject_fx(state: WorkflowState, config: Optional[RunnableConfig] = None) -> 
             status_log.append(f"node_09_inject_fx_{tag}_all_cut_fallback")
         if summary.get("video_effects_empty_whitelist"):
             status_log.append(f"node_09_inject_fx_{tag}_vfx_whitelist_empty")
+        # 第八期阶段3:开场加强结果标签(三态,§6.3 —— requested 已在上方记过)
+        if summary.get("opening_boost_applied"):
+            status_log.append(f"node_09_inject_fx_{tag}_opening_boost_applied")
+        elif summary.get("opening_boost_not_applicable"):
+            status_log.append(f"node_09_inject_fx_{tag}_opening_boost_not_applicable")
+        elif opening_boost:
+            status_log.append(f"node_09_inject_fx_{tag}_opening_boost_degraded")
         # Week 5:参数从 draft_path 提升为 draft_path.parent,safe_write_draft 双写
         status_log.extend(
             apply_and_write(

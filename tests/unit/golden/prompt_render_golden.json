@@ -1,9 +1,9 @@
 {
   "meta": {
     "note": "单 Loader golden 基线(2026-11-04 阶段2 重录):旧聊天运行时 open_storyline.utils.prompts 已删除,唯一 Loader 为 storyline_capabilities.prompts,数据目录 prompts/tasks/。sha_* 字段供后续重构逐文件复算比对。",
-    "base_commit": "853423a7ada23ed9e6696439ba6a6e2f8a919379",
-    "generated_at": "2026-11-12T03:24:27",
-    "file_count": 46
+    "base_commit": "0f7c649f9fc82426b04bc347ef97bf1ab29307ee",
+    "generated_at": "2026-11-19T04:14:20",
+    "file_count": 50
   },
   "files": [
     {
@@ -191,9 +191,9 @@
       "kind": "generate_script",
       "lang": "zh",
       "part": "system",
-      "sha_template": "3e12dbb85cba7c83edddeb78766c97d40ed9837598e76210ae885697ec05b4f7",
-      "sha_load_prompt": "3e12dbb85cba7c83edddeb78766c97d40ed9837598e76210ae885697ec05b4f7",
-      "sha_render_prompt": "3e12dbb85cba7c83edddeb78766c97d40ed9837598e76210ae885697ec05b4f7",
+      "sha_template": "ce025e0dfbfb17f4356c3ae3e0f0cbb93a1900093ed623122ffff545b6ef426a",
+      "sha_load_prompt": "ce025e0dfbfb17f4356c3ae3e0f0cbb93a1900093ed623122ffff545b6ef426a",
+      "sha_render_prompt": "ce025e0dfbfb17f4356c3ae3e0f0cbb93a1900093ed623122ffff545b6ef426a",
       "variable_count": 0,
       "variables": {}
     },
@@ -391,6 +391,58 @@
       "sha_render_prompt": "661f5778bfbfbe5163b5d50b7dd65c75d690eb04ecfd56523b053d93addb9469",
       "variable_count": 0,
       "variables": {}
+    },
+    {
+      "rel": "prompts/tasks/recommend_transition/en/system.md",
+      "kind": "recommend_transition",
+      "lang": "en",
+      "part": "system",
+      "sha_template": "eac8e51d1603ac8c549c059f45ae64ef91871eb2b1428c6008695e788822b6f9",
+      "sha_load_prompt": "eac8e51d1603ac8c549c059f45ae64ef91871eb2b1428c6008695e788822b6f9",
+      "sha_render_prompt": "eac8e51d1603ac8c549c059f45ae64ef91871eb2b1428c6008695e788822b6f9",
+      "variable_count": 0,
+      "variables": {}
+    },
+    {
+      "rel": "prompts/tasks/recommend_transition/en/user.md",
+      "kind": "recommend_transition",
+      "lang": "en",
+      "part": "user",
+      "sha_template": "2e21d15b3a510969ebeba7503ced048c3c906d6b3fe8b3dfce1671a312ab3410",
+      "sha_load_prompt": "2e21d15b3a510969ebeba7503ced048c3c906d6b3fe8b3dfce1671a312ab3410",
+      "sha_render_prompt": "6a6090b66a1f6a45415bf0d0ef194298c7c02d70b9087275dfd9da6fc907fb4d",
+      "variable_count": 3,
+      "variables": {
+        "user_request": "<user_request>",
+        "bgm": "<bgm>",
+        "groups": "<groups>"
+      }
+    },
+    {
+      "rel": "prompts/tasks/recommend_transition/zh/system.md",
+      "kind": "recommend_transition",
+      "lang": "zh",
+      "part": "system",
+      "sha_template": "444a6246b36dcbdeb74b7b4146d65c3b67c4d7523540d4e4a973fb8db1cff2d4",
+      "sha_load_prompt": "444a6246b36dcbdeb74b7b4146d65c3b67c4d7523540d4e4a973fb8db1cff2d4",
+      "sha_render_prompt": "444a6246b36dcbdeb74b7b4146d65c3b67c4d7523540d4e4a973fb8db1cff2d4",
+      "variable_count": 0,
+      "variables": {}
+    },
+    {
+      "rel": "prompts/tasks/recommend_transition/zh/user.md",
+      "kind": "recommend_transition",
+      "lang": "zh",
+      "part": "user",
+      "sha_template": "ba63e795bbccac556dc55e9a1fc9658bdd4fce7f29b2fb9818f9531dfbe10b46",
+      "sha_load_prompt": "ba63e795bbccac556dc55e9a1fc9658bdd4fce7f29b2fb9818f9531dfbe10b46",
+      "sha_render_prompt": "c3801477fe029670057ada049ab9417559523f935d544b4334c2d611ab2772f3",
+      "variable_count": 3,
+      "variables": {
+        "user_request": "<user_request>",
+        "bgm": "<bgm>",
+        "groups": "<groups>"
+      }
     },
     {
       "rel": "prompts/tasks/scripts/en/omni_bgm_label.md",

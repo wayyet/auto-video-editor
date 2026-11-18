@@ -40,6 +40,7 @@ with open(REPO / "templates" / "fx_template.json", "r", encoding="utf-8") as _f:
     _FX_TEMPLATE = json.load(_f)
 POOL_GENTLE: tuple[str, ...] = tuple(_FX_TEMPLATE["transition_pools"]["pool_gentle"])
 POOL_ZOOM: tuple[str, ...] = tuple(_FX_TEMPLATE["transition_pools"]["pool_zoom"])
+POOL_WHIP: tuple[str, ...] = tuple(_FX_TEMPLATE["transition_pools"]["pool_whip"])
 EFFECT_WHITELIST: tuple[str, ...] = tuple(row["name"] for row in _FX_TEMPLATE["video_effects"])
 
 
@@ -666,3 +667,231 @@ def test_inject_fx_degrades_when_en_draft_missing(tmp_draft: Path, tmp_path: Pat
     assert "node_09_inject_fx_en_done" not in out["status_log"]
     assert any("英文草稿不存在" in e for e in out["error_log"])
     assert len(json.loads(zh.read_text(encoding="utf-8"))["materials"]["transitions"]) > 0
+
+
+# ---------------------------------------------------------------- 开场转场加强(第八期阶段3,设计文档 §6.3)
+
+
+def _boost_request() -> dict:
+    return {"user_request": "【开场】开头使用最炸的转场，配大字标题"}
+
+
+def test_inject_fx_opening_boost_real_lib_boundary0_whip(tmp_draft: Path) -> None:
+    """真实库:【开场】正向 → 边界 0 语义 whip → pool_whip;后续边界不受影响。"""
+    state = _state(
+        draft_path=str(tmp_draft),
+        storyline_targets=_boost_request(),
+        storyline_plan={
+            "clips": [
+                {"clip_id": "c1", "transition_out": "fade_in"},
+                {"clip_id": "c2", "transition_out": "fade_in"},
+                {"clip_id": "c3"},
+            ],
+        },
+    )
+    out = inject_fx(state)
+    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
+    transitions = draft["materials"]["transitions"]
+
+    assert len(transitions) == 2
+    assert transitions[0]["name"] in POOL_WHIP  # 边界 0 = 强动势池
+    assert transitions[1]["name"] in POOL_GENTLE  # 边界 1 = 原 fade 语义
+    assert "transition-1" in draft["tracks"][0]["segments"][1]["extra_material_refs"]
+    assert "node_09_inject_fx_opening_boost_requested" in out["status_log"]
+    assert "node_09_inject_fx_zh_opening_boost_applied" in out["status_log"]
+    assert "node_09_inject_fx_zh_all_cut_fallback" not in out["status_log"]
+
+
+def test_inject_fx_opening_boost_empty_semantics_still_applies(
+    tmp_draft: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1-03 核心:语义计划为空但草稿有多段 → 仍覆盖边界 0,不静默漏执行。"""
+    lib = _stub_lib(
+        pools={
+            "pool_gentle": ["柔切一", "柔切二"],
+            "pool_whip": ["甩镜一", "甩镜二"],
+        },
+        sem_map={"whip": "pool_whip", "fade": "pool_gentle", "cut": None},
+    )
+    _use_stub_lib(monkeypatch, lib)
+    state = _state(
+        draft_path=str(tmp_draft),
+        storyline_targets={"user_request": "【开场】开场用甩镜转场"},
+    )
+    out = inject_fx(state)
+
+    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
+    transitions = draft["materials"]["transitions"]
+    assert len(transitions) == 2
+    assert transitions[0]["name"] in ("甩镜一", "甩镜二")  # 边界 0 = whip
+    assert transitions[1]["name"] in ("柔切一", "柔切二")  # 边界 1 缺省语义 → gentle 回退
+    assert "node_09_inject_fx_zh_opening_boost_applied" in out["status_log"]
+
+
+def test_inject_fx_opening_boost_not_applicable_single_segment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """单镜头无边界 → not_applicable,不得记 applied(P1-03/§6.3)。"""
+    single = _write_draft(
+        tmp_path / "draft" / "draft_content.json", _draft([_seg("s1", 0)])
+    )
+    lib = _stub_lib(
+        pools={"pool_gentle": ["柔切一"], "pool_whip": ["甩镜一"]},
+        sem_map={"whip": "pool_whip", "fade": "pool_gentle", "cut": None},
+    )
+    _use_stub_lib(monkeypatch, lib)
+    state = _state(draft_path=str(single), storyline_targets=_boost_request())
+    out = inject_fx(state)
+
+    assert json.loads(single.read_text(encoding="utf-8"))["materials"]["transitions"] == []
+    assert "node_09_inject_fx_opening_boost_requested" in out["status_log"]
+    assert "node_09_inject_fx_zh_opening_boost_not_applicable" in out["status_log"]
+    assert "node_09_inject_fx_zh_opening_boost_applied" not in out["status_log"]
+
+
+def test_inject_fx_opening_boost_negation_does_not_trigger(tmp_draft: Path) -> None:
+    """否定表述 → 不触发;转场全按原语义(§8.1)。"""
+    state = _state(
+        draft_path=str(tmp_draft),
+        storyline_targets={"user_request": "【开场】开头不要使用强转场"},
+        storyline_plan={
+            "clips": [
+                {"clip_id": "c1", "transition_out": "fade_in"},
+                {"clip_id": "c2", "transition_out": "fade_in"},
+                {"clip_id": "c3"},
+            ],
+        },
+    )
+    out = inject_fx(state)
+    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
+    transitions = draft["materials"]["transitions"]
+    assert len(transitions) == 2
+    assert all(t["name"] in POOL_GENTLE for t in transitions)
+    assert "node_09_inject_fx_opening_boost_requested" not in out["status_log"]
+    assert "node_09_inject_fx_zh_opening_boost_applied" not in out["status_log"]
+
+
+def test_inject_fx_no_markers_keeps_legacy_behavior(tmp_draft: Path) -> None:
+    """P1-06:无任何【】标记(含「开头/最炸/转场」自由文本)→ 行为与旧版一致。"""
+    raw = (
+        "#1、附件上传的这些视频是关于：马来西亚海上清真寺的旅游素材。"
+        "#2、要求是制作一个「开头 3 秒用最炸的转场 + 大字标题」的视频。"
+    )
+    state = _state(
+        draft_path=str(tmp_draft),
+        storyline_targets={"user_request": raw},
+        storyline_plan={
+            "clips": [
+                {"clip_id": "c1", "transition_out": "fade_in"},
+                {"clip_id": "c2", "transition_out": "fade_in"},
+                {"clip_id": "c3"},
+            ],
+        },
+    )
+    out = inject_fx(state)
+    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
+    transitions = draft["materials"]["transitions"]
+    assert len(transitions) == 2
+    assert all(t["name"] in POOL_GENTLE for t in transitions)
+    assert "node_09_inject_fx_opening_boost_requested" not in out["status_log"]
+
+
+def test_inject_fx_opening_boost_overrides_all_cut_plan(tmp_draft: Path) -> None:
+    """全硬切计划 + 开场加强:边界 0 变 whip,其余边界仍硬切;不触发 all-cut 保底。"""
+    state = _state(
+        draft_path=str(tmp_draft),
+        storyline_targets=_boost_request(),
+        storyline_plan={
+            "clips": [
+                {"clip_id": "c1", "transition_out": "cut"},
+                {"clip_id": "c2", "transition_out": "cut"},
+                {"clip_id": "c3"},
+            ],
+        },
+    )
+    out = inject_fx(state)
+    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
+    transitions = draft["materials"]["transitions"]
+
+    assert len(transitions) == 1
+    assert transitions[0]["name"] in POOL_WHIP
+    assert "transition-1" in draft["tracks"][0]["segments"][1]["extra_material_refs"]
+    assert not any(
+        str(r).startswith("transition-")
+        for r in draft["tracks"][0]["segments"][2].get("extra_material_refs", [])
+    )
+    assert "node_09_inject_fx_zh_all_cut_fallback" not in out["status_log"]
+    assert "node_09_inject_fx_zh_opening_boost_applied" in out["status_log"]
+
+
+def test_inject_fx_opening_boost_degraded_when_whip_pool_missing(
+    tmp_draft: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """pool_whip 缺失 → 边界 0 degraded 不写入;不得记 applied(§6.3 不假成功)。"""
+    lib = _stub_lib(
+        pools={"pool_gentle": ["柔切一", "柔切二"]},
+        sem_map={"whip": "pool_whip", "fade": "pool_gentle", "cut": None},
+    )
+    _use_stub_lib(monkeypatch, lib)
+    state = _state(
+        draft_path=str(tmp_draft),
+        storyline_targets=_boost_request(),
+        storyline_plan={
+            "clips": [
+                {"clip_id": "c1", "transition_out": "fade_in"},
+                {"clip_id": "c2", "transition_out": "fade_in"},
+                {"clip_id": "c3"},
+            ],
+        },
+    )
+    out = inject_fx(state)
+
+    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
+    transitions = draft["materials"]["transitions"]
+    # 边界 0 degraded 不写;边界 1 fade 语义正常写
+    assert len(transitions) == 1
+    assert transitions[0]["name"] in ("柔切一", "柔切二")
+    assert "node_09_inject_fx_zh_opening_boost_applied" not in out["status_log"]
+    assert "node_09_inject_fx_zh_opening_boost_degraded" in out["status_log"]
+    assert any("opening boost" in w for w in out["error_log"])
+
+
+def test_inject_fx_opening_boost_zh_en_same_boundary0_name(
+    tmp_draft: Path, tmp_path: Path
+) -> None:
+    """zh/en 共享同一 opening_boost 与 job_id → 双稿边界 0 转场名一致(§4.9)。"""
+    zh = tmp_draft
+    en_file = tmp_path / "en_branch" / "draft_content.json"
+    en_file.parent.mkdir(parents=True, exist_ok=True)
+    en_file.write_text(zh.read_text(encoding="utf-8"), encoding="utf-8")
+
+    state = _state(
+        draft_path=str(zh),
+        draft_dir_en_branch=str(en_file.parent),
+        storyline_targets=_boost_request(),
+    )
+    out = inject_fx(state)
+
+    zh_name = json.loads(zh.read_text(encoding="utf-8"))["materials"]["transitions"][0]["name"]
+    en_name = json.loads(en_file.read_text(encoding="utf-8"))["materials"]["transitions"][0]["name"]
+    assert zh_name == en_name
+    assert zh_name in POOL_WHIP
+    assert "node_09_inject_fx_zh_opening_boost_applied" in out["status_log"]
+    assert "node_09_inject_fx_en_opening_boost_applied" in out["status_log"]
+
+
+def test_inject_fx_opening_boost_replay_byte_identical(
+    tmp_draft: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """重放幂等:同一任务二次注入,草稿字节级一致(确定性轮换不被 boost 破坏)。"""
+    lib = _stub_lib(
+        pools={"pool_gentle": ["柔切一", "柔切二"], "pool_whip": ["甩镜一", "甩镜二"]},
+        sem_map={"whip": "pool_whip", "fade": "pool_gentle", "cut": None},
+    )
+    _use_stub_lib(monkeypatch, lib)
+    state = _state(draft_path=str(tmp_draft), storyline_targets=_boost_request())
+
+    inject_fx(state)
+    first = tmp_draft.read_text(encoding="utf-8")
+    inject_fx({**state, "status_log": [], "error_log": []})
+    assert tmp_draft.read_text(encoding="utf-8") == first

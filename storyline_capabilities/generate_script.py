@@ -63,7 +63,8 @@ def generate_script(
             prompt(system ``[script_template]`` 段 + user 模板块)。
 
     输出 ``{"group_scripts": [{group_id, narration, summary, ...}, ...],
-    "lang": ..., "llm_trace": {...}}``;``llm_trace`` 记录 LLM 调用与解析
+    "title": <LLM 标题原值或空串>, "lang": ..., "llm_trace": {...}}``;
+    ``llm_trace`` 记录 LLM 调用与解析
     留痕(节点层落盘 + 依此裁决空 narration 是否 fail-fast),
     并带 ``script_template_injected`` 证明模板正文是否真实进入 LLM 请求。
     """
@@ -104,6 +105,11 @@ def generate_script(
             "group_scripts": {
                 "type": "array",
             },
+            # 第八期阶段4(P1-04):prompt 早已要求输出 title,但 Schema 未声明、
+            # 能力层未提取、返回值未携带 —— 三处必须同时接通,标题才可达。
+            "title": {
+                "type": "string",
+            },
         },
     }
 
@@ -128,6 +134,9 @@ def generate_script(
             break
 
     raw_scripts = _extract_scripts(obj)
+    # 第八期阶段4(P1-04):接住 LLM 标题。strip 后交节点层做规范化/截断留痕;
+    # 模型未返回时为空串,不影响 narration 主链路,也不抛异常。
+    llm_title_raw = str(obj.get("title") or "").strip()
 
     out: list[dict[str, Any]] = []
     for g_idx, g in enumerate(groups):
@@ -155,6 +164,7 @@ def generate_script(
 
     return {
         "group_scripts": out,
+        "title": llm_title_raw,
         "lang": lang,
         "voiceover_style": voiceover_style,
         "llm_trace": trace,
