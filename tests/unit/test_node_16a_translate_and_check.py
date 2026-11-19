@@ -287,6 +287,119 @@ def test_node_16a_translation_failure_without_outputs_root_still_raises(
         node_16a_translate_and_check(_state(_normal_asr(), draft_dir))
 
 
+class _CliLikeError(Exception):
+    """模拟 CLIBackendInvalid:CLI 内部 2 次纠错耗尽,携带逐次尝试摘要。"""
+
+    def __init__(self) -> None:
+        super().__init__("mcode-cli:2 次答案都不合格")
+        self.attempts = [
+            {"cli_attempt": 1, "status": "invalid_structured_output",
+             "validation_error": "data must have required property 'translations'",
+             "raw_head": '{"segments":[{"index":0,"text_en":"drift"}'},
+            {"cli_attempt": 2, "status": "invalid_structured_output",
+             "validation_error": "data must have required property 'translations'",
+             "raw_head": '{"translations":[{"index":0,"text":"drift"}'},
+        ]
+
+
+class _CliFailLLM:
+    """chat 直接抛 CLI 形异常(mcode 内部重试耗尽的等价物,无正常返回)。"""
+
+    def chat(self, **kwargs):
+        raise _CliLikeError()
+
+
+class _NotJsonLLM:
+    """chat 正常返回非法 JSON 文本(可留 raw_head 的失败形态)。"""
+
+    def chat(self, **kwargs):
+        return "not-json-at-all"
+
+
+def test_node_16a_diagnostics_preserve_cli_internal_attempts(tmp_path: Path) -> None:
+    """审查 §5.1 事故路径:CLI 内部重试耗尽(chat 异常、无正常返回)时,
+    diagnostics JSON 必须保留逐次尝试摘要 —— 之前这条路径 raw_head 恒空。"""
+    draft_dir = _seed_en_branch(tmp_path)
+    outputs_root = tmp_path / "outputs"
+    outputs_root.mkdir()
+
+    set_default_client(LLMTranslateClient(_CliFailLLM(), max_retries=1))
+    state = _state(_normal_asr(), draft_dir)
+    state["storyline_outputs_root"] = str(outputs_root)
+    with pytest.raises(TranslationError):
+        node_16a_translate_and_check(state)
+
+    dumps = list((outputs_root / "diagnostics").glob("translation-failure-*.json"))
+    assert len(dumps) == 1
+    evidence = json.loads(dumps[0].read_text(encoding="utf-8"))
+    trace = evidence["trace"]
+    # 每个外层尝试 = 2 条 CLI 内层记录 + 1 条业务校验失败记录,共 6 条
+    attempts = trace["attempts"]
+    assert [a["outer_attempt"] for a in attempts] == [1, 1, 1, 2, 2, 2]
+    assert attempts[0]["raw_head"].startswith('{"segments"')
+    assert attempts[3]["raw_head"].startswith('{"segments"')
+    assert trace["raw_available"] is True  # raw_head 在 attempts 里,不算空取证
+
+
+def test_node_16a_two_rapid_failures_produce_two_dump_files(tmp_path: Path) -> None:
+    """审查 §5.6:文件名含微秒 —— 同一秒内两次快速失败不互相覆盖。"""
+    draft_dir = _seed_en_branch(tmp_path)
+    outputs_root = tmp_path / "outputs"
+    outputs_root.mkdir()
+
+    set_default_client(LLMTranslateClient(_NotJsonLLM(), max_retries=1))
+    for _ in range(2):
+        state = _state(_normal_asr(), draft_dir)
+        state["storyline_outputs_root"] = str(outputs_root)
+        with pytest.raises(TranslationError):
+            node_16a_translate_and_check(state)
+
+    dumps = list((outputs_root / "diagnostics").glob("translation-failure-*.json"))
+    assert len(dumps) == 2
+
+
+def test_node_16a_unwritable_diagnostics_still_raises(tmp_path: Path) -> None:
+    """审查 §5.1 验收:取证写盘失败(diagnostics 被同名文件占位)→
+    原始 TranslationError 照常上抛,fail-closed 语义不变。"""
+    draft_dir = _seed_en_branch(tmp_path)
+    outputs_root = tmp_path / "outputs"
+    outputs_root.mkdir()
+    # 用同名普通文件占位 → mkdir(parents=True, exist_ok=True) 必然失败
+    (outputs_root / "diagnostics").write_text("not a dir", encoding="utf-8")
+
+    set_default_client(LLMTranslateClient(_NotJsonLLM(), max_retries=1))
+    state = _state(_normal_asr(), draft_dir)
+    state["storyline_outputs_root"] = str(outputs_root)
+    with pytest.raises(TranslationError):
+        node_16a_translate_and_check(state)
+
+
+def test_node_16a_failure_then_fixed_model_recovers(tmp_path: Path) -> None:
+    """审查阶段 4:失败(不落 marker)→ 修复模型后同输入重跑 → 正常翻译成功,
+    marker 补写。对应真机"失败节点重试"的恢复路径。"""
+    draft_dir = _seed_en_branch(tmp_path)
+
+    set_default_client(LLMTranslateClient(_NotJsonLLM(), max_retries=1))
+    with pytest.raises(TranslationError):
+        node_16a_translate_and_check(_state(_normal_asr(), draft_dir))
+    assert not (draft_dir / "subtitle_en.json").exists()  # 失败未留 marker
+
+    class _OkLLM:
+        def chat(self, **kwargs):
+            return json.dumps({"translations": [
+                {"index": 0, "text_en": "Hello"},
+                {"index": 1, "text_en": "World"},
+            ]}, ensure_ascii=False)
+
+    set_default_client(LLMTranslateClient(_OkLLM(), max_retries=1))
+    out = node_16a_translate_and_check(_state(_normal_asr(), draft_dir))
+    assert out["subtitle_translation_status"] == "real"
+    assert [s["text_en"] for s in out["subtitle_segments_en"]] == ["Hello", "World"]
+    assert (draft_dir / "subtitle_en.json").exists()  # 恢复后 marker 补写
+    marker = json.loads((draft_dir / "subtitle_en.json").read_text(encoding="utf-8"))
+    assert marker["prompt_version"] == TRANSLATION_PROMPT_VERSION
+
+
 def test_node_16a_no_asr_segments_skips(tmp_path: Path) -> None:
     """asr_segments_zh 缺失/为空 → 正常跳过(无源字幕是预期场景),不写 error_log。
 

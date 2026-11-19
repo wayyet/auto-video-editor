@@ -16,6 +16,7 @@ from jy_common.translate_client import (
     MockTranslateClient,
     TranslationError,
     _SYSTEM_PROMPT,
+    _TRANSLATION_SCHEMA,
     translate_segments,
     set_default_client,
     get_default_client,
@@ -159,6 +160,77 @@ def test_system_prompt_embeds_output_shape_example() -> None:
     assert '"index"' in _SYSTEM_PROMPT
     assert "segments" in _SYSTEM_PROMPT  # 显式禁止照抄输入顶层键
     assert TRANSLATION_PROMPT_VERSION == "subtitle-translate-v2"  # 改示例必须换版本
+
+
+def test_translation_schema_strict_about_extra_keys() -> None:
+    """审查 §5.4:prompt 承诺"元素只含 index 与 text_en 两个键",schema 必须同步
+    声明 additionalProperties=false(顶层与元素两层),消除契约漂移。"""
+    assert _TRANSLATION_SCHEMA["additionalProperties"] is False
+    items = _TRANSLATION_SCHEMA["properties"]["translations"]["items"]
+    assert items["additionalProperties"] is False
+
+
+# ---------------------------------------------------------------------------
+# 事故形状回归(2026-11-20 审查 §5.3):console-011419d9ceec 四种漂移逐一固化
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"segments": [{"index": 0, "text_en": "A"}]},         # 顶层键照抄输入
+        {"translations": [{"index": 0, "text": "A"}]},        # 条目键 text ≠ text_en
+        {"translations": ["A"]},                              # 元素退化成纯字符串
+        {"translations": [{"index": 7, "text_en": "A"}]},     # index 集合与期望不符
+    ],
+    ids=["segments-top-key", "text-item-key", "string-items", "index-mismatch"],
+)
+def test_incident_shapes_retry_once_then_raise(bad) -> None:
+    """每种事故形状:外层恰好重试一次(共 2 次调用),耗尽后抛 TranslationError;
+    trace.attempts 每个外层尝试各有一条 validation_failed 记录(带 raw_head)。"""
+    bad_text = json.dumps(bad, ensure_ascii=False)
+    llm = _FakeLLM([bad_text, bad_text])
+    with pytest.raises(TranslationError, match="重试 1 次后仍失败") as exc_info:
+        LLMTranslateClient(llm).translate(_segs("你好"))
+    assert llm.calls == 2
+    attempts = exc_info.value.trace.get("attempts")
+    assert [a["outer_attempt"] for a in attempts] == [1, 2]
+    assert all(a["status"] == "validation_failed" for a in attempts)
+    assert all(a["raw_head"] == bad_text for a in attempts)
+
+
+def test_trace_attempts_accumulate_cli_internal_failures() -> None:
+    """审查 §5.1:CLI 内部重试耗尽(attempts 随异常携带)时,外层两次尝试的
+    逐次摘要都进入最终 trace —— 不再只保留最后一轮的证据。"""
+
+    class _CliLikeError(Exception):
+        """模拟 CLIBackendInvalid:携带 CLI 内部逐次尝试摘要。"""
+
+        def __init__(self) -> None:
+            super().__init__("mcode-cli:2 次答案都不合格")
+            self.attempts = [
+                {"cli_attempt": 1, "status": "invalid_structured_output",
+                 "validation_error": "data must have required property 'translations'",
+                 "raw_head": '{"segments":[{"index":0}'},
+                {"cli_attempt": 2, "status": "invalid_structured_output",
+                 "validation_error": "data must have required property 'translations'",
+                 "raw_head": '{"translations":[{"index":0,"text"}'},
+            ]
+
+    class _CliLLM:
+        def chat(self, **kwargs):
+            raise _CliLikeError()
+
+    with pytest.raises(TranslationError, match="重试 1 次后仍失败") as exc_info:
+        LLMTranslateClient(_CliLLM(), max_retries=1).translate(_segs("你好", "世界"))
+    attempts = exc_info.value.trace["attempts"]
+    # 每个外层尝试 = 2 条 CLI 内层记录 + 1 条业务校验失败记录,共 6 条
+    assert [a["outer_attempt"] for a in attempts] == [1, 1, 1, 2, 2, 2]
+    assert [a["cli_attempt"] for a in attempts] == [1, 2, None, 1, 2, None]
+    assert [a["status"] for a in attempts] == [
+        "invalid_structured_output", "invalid_structured_output", "validation_failed",
+        "invalid_structured_output", "invalid_structured_output", "validation_failed",
+    ]
+    assert attempts[0]["raw_head"].startswith('{"segments"')
+    assert attempts[3]["raw_head"].startswith('{"segments"')  # 外层重试又漂回 segments
 
 
 # ---------------------------------------------------------------------------

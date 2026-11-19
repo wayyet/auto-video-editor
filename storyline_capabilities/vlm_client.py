@@ -189,10 +189,14 @@ def chat_json_with_trace(
 
     trace 结构::
 
-        {"ok": bool,      # chat 调用未抛异常
-         "error": str,    # 异常 repr(ok=False 时非空)
-         "raw_head": str, # 原始返回前 4000 字符(证据)
-         "parsed": bool}  # parse_json_loose 是否解析出非空 dict
+        {"ok": bool,          # chat 调用未抛异常
+         "error": str,        # 异常 repr(ok=False 时非空)
+         "raw_head": str,     # 原始返回前 4000 字符(证据;ok=False 时恒空)
+         "parsed": bool,      # parse_json_loose 是否解析出非空 dict
+         "raw_available": bool,  # 本次调用是否拿到了任何模型原始输出(§5.1)
+         "attempts": list}    # 仅 ok=False 且异常携带时存在:CLI 逐次尝试摘要
+                              # (cli_attempt/status/validation_error/raw_head,
+                              # 截断留证;凭据/环境变量/命令行不入记录)
     """
     trace: dict[str, Any] = {
         "ok": False,
@@ -211,9 +215,21 @@ def chat_json_with_trace(
         )
     except Exception as exc:  # noqa: BLE001
         trace["error"] = repr(exc)
+        # 2026-11-20 形状漂移审查 §5.1:CLI 适配器(CLIBackendInvalid/Failed 等)
+        # 现在携带逐次尝试摘要(attempts,含有限长度 raw_head);没有原始输出时
+        # 显式 raw_available=False,不用空字符串伪装成模型输出。
+        attempts = getattr(exc, "attempts", None)
+        if isinstance(attempts, list) and attempts:
+            trace["attempts"] = attempts
+            trace["raw_available"] = any(
+                bool(a.get("raw_head")) for a in attempts if isinstance(a, dict)
+            )
+        else:
+            trace["raw_available"] = False
         return {}, trace
     trace["ok"] = True
     trace["raw_head"] = str(raw or "")[:4000]
+    trace["raw_available"] = bool(trace["raw_head"])
     obj = parse_json_loose(raw)
     trace["parsed"] = bool(obj)
     return obj, trace

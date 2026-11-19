@@ -42,11 +42,47 @@ class CLIBackendFailed(CLIBackendError):
 
 
 class CLIBackendInvalid(CLIBackendError):
-    """答案多次都不合 JSON Schema。"""
+    """答案多次都不合 JSON Schema。
+
+    ``attempts``(可选)携带逐次尝试的结构化摘要(cli_attempt/status/
+    validation_error/raw_head),供上层(chat_json_with_trace / 翻译客户端)
+    在失败取证里还原"每次尝试到底返回了什么"—— 2026-11-20 形状漂移事故
+    (console-011419d9ceec)的实证:CLI 内部重试耗尽时,外层原本只能拿到
+    拼接后的异常字符串,四次模型原始输出全部丢失。
+    """
+
+    def __init__(self, msg: str, *, attempts: Optional[list[dict[str, Any]]] = None) -> None:
+        super().__init__(msg)
+        self.attempts: list[dict[str, Any]] = list(attempts or [])
 
 
 class _BadAnswer(Exception):
-    """内部用:这一次的答案不合格,可以带着提示再问一次。"""
+    """内部用:这一次的答案不合格,可以带着提示再问一次。
+
+    ``raw_head``(可选)携带本次原始输出的有限摘要(mcode stdout 尾部),
+    供 ``chat()`` 的尝试记录在 STRUCTURED_OUTPUT_INVALID 路径上留证。
+    """
+
+    def __init__(self, msg: str, *, raw_head: str = "") -> None:
+        super().__init__(msg)
+        self.raw_head = raw_head
+
+
+#: 逐次尝试取证的字段上限(2026-11-20 第九期审查 §5.1/§5.5:留痕但不留凭据、
+#: 不留完整 payload —— 只取原始输出/错误文本的头部有限字符)
+_ATTEMPT_RAW_HEAD_CHARS = 600
+_ATTEMPT_ERROR_CHARS = 800
+
+
+def _clip_raw(out: Any) -> str:
+    """单次模型输出的取证摘要:截断到 :data:`_ATTEMPT_RAW_HEAD_CHARS`。"""
+    text = out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
+    return (text or "")[:_ATTEMPT_RAW_HEAD_CHARS]
+
+
+def _clip_error(text: str) -> str:
+    """错误文本取证摘要:截断到 :data:`_ATTEMPT_ERROR_CHARS`。"""
+    return (text or "")[:_ATTEMPT_ERROR_CHARS]
 
 
 def _kill_tree(p: "subprocess.Popen[bytes]") -> None:
@@ -160,9 +196,17 @@ class _CLIClient:
             images = self._collect_images(media or [], tmp / "frames")
             hint = ""
             last = ""
-            for _ in range(self.max_attempts):
+            # 逐次尝试取证(2026-11-20 审查 §5.1):每次循环记一条
+            # {cli_attempt, status, validation_error, raw_head} —— 模型输出/错误
+            # 文本截断留证;凭据、环境变量、完整命令行一律不入记录。
+            attempts: list[dict[str, Any]] = []
+            for i in range(self.max_attempts):
+                rec: dict[str, Any] = {"cli_attempt": i + 1}
+                attempts.append(rec)
                 try:
                     out = self._invoke(system_prompt, user_prompt + hint, images, json_schema, tmp)
+                    rec["status"] = "returned"
+                    rec["raw_head"] = _clip_raw(out)
                     if not json_schema:
                         return out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
                     value = parse_json_value(out) if isinstance(out, str) else out
@@ -170,12 +214,32 @@ class _CLIClient:
                     if not errors:
                         return json.dumps(value, ensure_ascii=False)
                     last = "; ".join(errors)
+                    rec["status"] = "schema_invalid"
+                    rec["validation_error"] = _clip_error(last)
                 except NotJSON as e:
+                    # _invoke 已成功返回(out 已捕获),解析阶段失败 → raw_head 已留证
                     last = str(e)
+                    rec["status"] = "not_json"
+                    rec["validation_error"] = _clip_error(last)
                 except _BadAnswer as e:
                     last = str(e)
+                    rec["status"] = "invalid_structured_output"
+                    rec["validation_error"] = _clip_error(last)
+                    raw = getattr(e, "raw_head", "") or ""
+                    if raw:
+                        rec["raw_head"] = raw[:_ATTEMPT_RAW_HEAD_CHARS]
+                except CLIBackendError as e:
+                    # 传播路径(mcode transport 失败 / claude 结构化重试耗尽等):
+                    # 记录本次尝试后原样上抛 —— 控制流与历史行为一致,只是多了取证。
+                    rec["status"] = "backend_error"
+                    rec["validation_error"] = _clip_error(str(e))
+                    e.attempts = attempts  # type: ignore[attr-defined]
+                    raise
                 hint = f"\n\n【上一次的答案不合格:{last}。请只输出符合 JSON Schema 的 JSON。】"
-            raise CLIBackendInvalid(f"{self.backend_name}:{self.max_attempts} 次答案都不合格:{last}")
+            raise CLIBackendInvalid(
+                f"{self.backend_name}:{self.max_attempts} 次答案都不合格:{last}",
+                attempts=attempts,
+            )
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -364,7 +428,13 @@ class McodeCLIClient(_CLIClient):
             return res.get("output")
         error = res.get("error") or {}
         if error.get("code") == "STRUCTURED_OUTPUT_INVALID":
-            raise _BadAnswer(str(error.get("message") or "结构化输出不合格"))
+            # 2026-11-20 审查 §5.1:结构化输出被拒时把 stdout 尾部随 _BadAnswer
+            # 带回,chat() 的尝试记录才能留到"模型这次到底输出了什么"的证据
+            out_flat = out.strip()
+            raise _BadAnswer(
+                str(error.get("message") or "结构化输出不合格"),
+                raw_head=(out_flat[-_ATTEMPT_RAW_HEAD_CHARS:] if out_flat else ""),
+            )
         # 2026-11-13 留痕:exit=0 但 status 解析不到时 stderr 常为空,stdout 尾部是区分
         # 「真空返回」与「payload 在但无可解析状态行」的唯一证据(console-d7e06b50ca98
         # 复盘:当时 stdout 整个被丢弃,raw_head='' 无法定因;20261115 stdout_tail

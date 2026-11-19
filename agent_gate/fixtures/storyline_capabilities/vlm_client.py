@@ -211,9 +211,21 @@ def chat_json_with_trace(
         )
     except Exception as exc:  # noqa: BLE001
         trace["error"] = repr(exc)
+        # 2026-11-20 形状漂移审查 §5.1:CLI 适配器(CLIBackendInvalid/Failed 等)
+        # 现在携带逐次尝试摘要(attempts,含有限长度 raw_head);没有原始输出时
+        # 显式 raw_available=False,不用空字符串伪装成模型输出。
+        attempts = getattr(exc, "attempts", None)
+        if isinstance(attempts, list) and attempts:
+            trace["attempts"] = attempts
+            trace["raw_available"] = any(
+                bool(a.get("raw_head")) for a in attempts if isinstance(a, dict)
+            )
+        else:
+            trace["raw_available"] = False
         return {}, trace
     trace["ok"] = True
     trace["raw_head"] = str(raw or "")[:4000]
+    trace["raw_available"] = bool(trace["raw_head"])
     obj = parse_json_loose(raw)
     trace["parsed"] = bool(obj)
     return obj, trace

@@ -33,7 +33,10 @@ TRANSLATION_MAX_RETRIES = 1
 #: 单批输入字符预算(超预算切段分批,批间按原始 index 对齐)
 TRANSLATION_BATCH_CHAR_BUDGET = 3000
 
-#: 结构化输出 schema(chat_json_with_trace 的 json_schema 参数)
+#: 结构化输出 schema(chat_json_with_trace 的 json_schema 参数)。
+#: additionalProperties=false(2026-11-20 审查 §5.4):prompt 承诺"元素只含
+#: index 与 text_en 两个键",schema 同步收紧,mcode/本地 jsonschema 双层都
+#: 拒绝额外键,消除 prompt 与 schema 的契约漂移。
 _TRANSLATION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -46,10 +49,12 @@ _TRANSLATION_SCHEMA: dict[str, Any] = {
                     "text_en": {"type": "string"},
                 },
                 "required": ["index", "text_en"],
+                "additionalProperties": False,
             },
         }
     },
     "required": ["translations"],
+    "additionalProperties": False,
 }
 
 _SYSTEM_PROMPT = (
@@ -189,14 +194,32 @@ class LLMTranslateClient:
         )
         last_error: TranslationError | None = None
         last_trace: dict[str, Any] = {}
+        # 2026-11-20 审查 §5.1/§6.2:跨外层重试累积逐次尝试摘要 —— 最终异常的
+        # trace.attempts 覆盖全部模型调用(默认 2 外层 × 2 CLI 内层 = 4 条),
+        # 不再只保留最后一次外层尝试的证据。
+        all_attempts: list[dict[str, Any]] = []
         for attempt in range(self._max_retries + 1):
             obj, trace = self._call_llm(payload)
+            for rec in trace.get("attempts") or []:
+                if isinstance(rec, dict):
+                    all_attempts.append({**rec, "outer_attempt": attempt + 1})
             try:
                 return self._validate_and_merge(obj, batch, expected_indexes)
             except TranslationError as exc:
                 last_error, last_trace = exc, trace
+                # 业务校验失败(chat 已成功返回)也记一条:每个外层尝试都有据可查
+                all_attempts.append({
+                    "outer_attempt": attempt + 1,
+                    "cli_attempt": None,
+                    "status": "validation_failed",
+                    "validation_error": str(exc)[:800],
+                    "raw_head": str(trace.get("raw_head") or "")[:600],
+                })
+        final_trace = dict(last_trace)
+        if all_attempts:
+            final_trace["attempts"] = all_attempts
         raise TranslationError(
-            f"翻译重试 {self._max_retries} 次后仍失败: {last_error}", trace=last_trace
+            f"翻译重试 {self._max_retries} 次后仍失败: {last_error}", trace=final_trace
         )
 
     def _call_llm(self, payload: str) -> tuple[dict[str, Any], dict[str, Any]]:

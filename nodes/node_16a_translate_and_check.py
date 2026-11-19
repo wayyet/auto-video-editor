@@ -76,7 +76,8 @@ def _dump_translation_failure(
     if not outputs_root:
         return
     try:
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        # 文件名含微秒(审查 §5.6):同一秒内两次快速失败不互相覆盖
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         diag_dir = Path(outputs_root) / "diagnostics"
         diag_dir.mkdir(parents=True, exist_ok=True)
         payload = {
