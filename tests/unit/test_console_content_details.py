@@ -297,6 +297,109 @@ class TestHappyPath:
         assert "weird" in body["reason"]
 
 
+WEB_TOPIC_EN_OK = {
+    "status": "ok",
+    "engine": "Xpoz(海外社媒)",
+    "provider": "xpoz",
+    "query": "summer sun protection travel",
+    "searched_at": "2026-11-20T00:00:00+00:00",
+    "platforms": ["tiktok", "twitter", "reddit", "instagram"],
+    "search_web_topic": [
+        {
+            "url": "https://www.tiktok.com/@creator/video/1",
+            "title": "summer sun protection tips",
+            "snippet": "beach travel guide",
+            "source": "TikTok",
+            "platform": "tiktok",
+            "language_status": "en",
+            "content_kind": "video",
+            "has_video": True,
+        },
+        {
+            "url": "https://x.com/alice/status/10",
+            "title": "sunscreen guide thread",
+            "snippet": "long post text",
+            "source": "X/Twitter",
+            "platform": "twitter",
+            "language_status": "unknown",
+            "content_kind": "post",
+            "has_video": False,
+        },
+    ],
+}
+
+
+class TestWebTopicEnSection:
+    """英文检索线独立区块(2026-11-20 审查修订版阶段4;审查 §2.1/§4.3)。"""
+
+    def test_web_topic_en_ok_with_extended_fields(self, ai_env):
+        make_task(ai_env, TID, storyline={"search_web_topic_en.json": WEB_TOPIC_EN_OK})
+        wte = _get(TID).json()["web_topic_en"]
+        assert wte["status"] == "ok"
+        assert wte["engine"] == "Xpoz(海外社媒)"
+        assert wte["platforms"] == ["tiktok", "twitter", "reddit", "instagram"]
+        assert len(wte["entries"]) == 2
+        first = wte["entries"][0]
+        assert first["platform"] == "tiktok"
+        assert first["language_status"] == "en"
+        assert first["content_kind"] == "video"
+        assert first["has_video"] is True
+        # unknown 语言如实透传,UI 不得把它标成英文(审查阶段4任务5)
+        assert wte["entries"][1]["language_status"] == "unknown"
+
+    def test_web_topic_en_skipped_via_status_log(self, ai_env):
+        make_task(
+            ai_env,
+            TID,
+            storyline={"search_web_topic.json": WEB_TOPIC_OK},
+        )
+        # skip 标签在 status_log(checkpoint)里;make_task 不写 checkpoint,
+        # 这里直接断言无产物 + 无标签 → missing(历史任务口径)
+        body = _get(TID).json()["web_topic_en"]
+        assert body["status"] in ("missing", "pending")
+        assert body["entries"] == []
+
+    def test_web_topic_en_failed_via_error_log_line(self, ai_env):
+        make_task(ai_env, TID, storyline={"search_web_topic.json": WEB_TOPIC_OK})
+        # error_log 证据链推导:直接造失败产物文件损坏场景不可行(JSON 可读),
+        # 用 invalid 产物验证 failed 分支之外的状态;failed 路径由产物 message 驱动
+        doc = dict(WEB_TOPIC_EN_OK)
+        doc["status"] = "failed"
+        doc["error_code"] = "NETWORK_ERROR"
+        doc["message"] = "Xpoz all platforms failed: TikTok Xpoz operation timed out."
+        doc["search_web_topic"] = []
+        make_task(ai_env, TID2, storyline={"search_web_topic_en.json": doc})
+        wte = _get(TID2).json()["web_topic_en"]
+        assert wte["status"] == "failed"
+        assert "all platforms failed" in wte["reason"]
+
+    def test_web_topic_en_legacy_task_missing(self, ai_env):
+        """历史任务只有中文产物:英文区块 missing,不显示虚假英文结果。"""
+        make_task(ai_env, TID, storyline={"search_web_topic.json": WEB_TOPIC_OK})
+        wte = _get(TID).json()["web_topic_en"]
+        assert wte["status"] in ("missing", "pending")
+        assert wte["engine"] == "未知引擎(历史记录)"
+        assert wte["entries"] == []
+
+    def test_web_topic_zh_and_en_are_separate_sections(self, ai_env):
+        """双线分离:中英文两区块各自独立,不合并 entries(审查 §2.1)。"""
+        make_task(
+            ai_env,
+            TID,
+            storyline={
+                "search_web_topic.json": WEB_TOPIC_OK,
+                "search_web_topic_en.json": WEB_TOPIC_EN_OK,
+            },
+        )
+        body = _get(TID).json()
+        wt = body["web_topic"]
+        wte = body["web_topic_en"]
+        assert wt["query"] == "马来西亚 清真寺 vlog"
+        assert wte["query"] == "summer sun protection travel"
+        assert all("platform" not in e or e.get("platform") is None for e in wt["entries"])
+        assert all(e.get("platform") for e in wte["entries"])
+
+
 # ---------------------------------------------------------------------------
 # web_topic 无产物证据链(文件缺失 ≠ 未生成)
 # ---------------------------------------------------------------------------

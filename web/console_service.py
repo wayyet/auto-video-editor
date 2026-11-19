@@ -903,6 +903,9 @@ _TEMPLATE_STATUSES = ("ok", "no_match", "unavailable")
 #: 网页检索/字幕节点写进 status_log 的固定标签(证据链;标签名与节点源码一致)
 _WEB_TOPIC_SKIPPED_TAG = "storyline_search_web_topic_skipped"
 _WEB_TOPIC_FAILED_TAG = "storyline_search_web_topic_failed"
+#: 英文检索线标签(2026-11-20 审查修订版阶段4;双线中英分离,独立产物/独立标签)
+_WEB_TOPIC_EN_SKIPPED_TAG = "storyline_search_web_topic_en_skipped"
+_WEB_TOPIC_EN_FAILED_MARKER = "storyline:search_web_topic_en"
 _GENERATE_SCRIPT_DONE_TAG = "storyline_generate_script_done"
 _ZH_SUBTITLE_NODE_TAGS = ("node_08_add_subtitles_done", "node_08_add_subtitles_skipped")
 _EN_TRANSLATE_DONE_TAG = "node_16a_translate_done"
@@ -975,6 +978,35 @@ def _normalize_topic_entries(entries: Any) -> list[dict[str, Any]]:
                 "url": url,
                 "domain": _safe_domain(url),
                 "snippet": _clamp_str(item.get("snippet"), 500),
+            }
+        )
+    return out
+
+
+def _normalize_topic_entries_en(entries: Any) -> list[dict[str, Any]]:
+    """英文检索线条目归一化(2026-11-20 审查修订版阶段4,审查 §4.3 契约)。
+
+    在中文条目四字段基础上补 platform / language_status / content_kind /
+    has_video —— 语言与媒体类型在 UI 可见,unknown 不得标成英文(审查
+    阶段4任务5);旧英文产物缺扩展字段时归 None/False。
+    """
+    out: list[dict[str, Any]] = []
+    if not isinstance(entries, list):
+        return out
+    for item in entries[:_AI_CONTENT_MAX_CUES]:
+        if not isinstance(item, dict):
+            continue
+        url = _clamp_str(item.get("url"))
+        out.append(
+            {
+                "title": _clamp_str(item.get("title"), 300),
+                "url": url,
+                "domain": _safe_domain(url),
+                "snippet": _clamp_str(item.get("snippet"), 500),
+                "platform": _clamp_str(item.get("platform"), 32) or None,
+                "language_status": _clamp_str(item.get("language_status"), 16) or None,
+                "content_kind": _clamp_str(item.get("content_kind"), 16) or None,
+                "has_video": bool(item.get("has_video")),
             }
         )
     return out
@@ -1131,6 +1163,86 @@ def _web_topic_section(
         **base,
         "status": status,
         "reason": "等待网页检索节点生成" if status == "pending" else "任务已结束但无检索产物与状态证据",
+    }
+
+
+def _web_topic_en_section(
+    task_dir: Path, task_state: str, status_log: list[str], error_log: list[str]
+) -> dict[str, Any]:
+    """01b 英文检索线(xpoz):独立产物/独立证据链(2026-11-20 审查修订版阶段4)。
+
+    与中文线 ``_web_topic_section`` 同构但完全独立:读
+    ``storyline/search_web_topic_en.json``,skip/failed 从英文线专属标签与
+    error_log 推导(双线互不掺杂,审查 §2.1);历史任务无英文产物 → missing
+    (英文线上线前的任务只有中文产物,不得显示虚假英文结果)。
+    """
+    base: dict[str, Any] = {
+        "status": None,
+        "engine": _WEB_TOPIC_UNKNOWN_ENGINE_LABEL,
+        "query": None,
+        "searched_at": None,
+        "platforms": [],
+        "entries": [],
+        "reason": None,
+    }
+    doc, err = _read_json_file(task_dir / "storyline" / "search_web_topic_en.json")
+    if err == "invalid":
+        return {**base, "status": "invalid", "reason": "英文检索产物 JSON 无法解析(文件存在但格式损坏)"}
+    if isinstance(doc, dict):
+        engine_label = _web_topic_engine_label(doc)
+        status = doc.get("status")
+        if status not in _WEB_TOPIC_STATUSES:
+            return {
+                **base,
+                "engine": engine_label,
+                "status": "invalid",
+                "reason": f"英文检索产物状态无法识别: {status!r}",
+            }
+        reason = None
+        if status == "failed":
+            reason = _clamp_str(doc.get("message"), 300) or "英文检索执行失败"
+        elif status == "no_results":
+            reason = "英文检索完成,未返回结果条目(含语言过滤后为空)"
+        platforms_raw = doc.get("platforms")
+        platforms = (
+            [_clamp_str(p, 32) for p in platforms_raw if str(p).strip()]
+            if isinstance(platforms_raw, list)
+            else []
+        )
+        return {
+            **base,
+            "engine": engine_label,
+            "status": status,
+            "query": _clamp_str(doc.get("query")),
+            "searched_at": _clamp_str(doc.get("searched_at"), 64),
+            "platforms": platforms,
+            "entries": _normalize_topic_entries_en(doc.get("search_web_topic")),
+            "reason": reason,
+        }
+    if _WEB_TOPIC_EN_SKIPPED_TAG in status_log:
+        return {
+            **base,
+            "status": "skipped",
+            "reason": "本次任务跳过英文检索(开关关闭/未配置 XPOZ_API_KEY/检索词不可用)",
+        }
+    if any(_WEB_TOPIC_EN_FAILED_MARKER in line for line in error_log):
+        detail = next(
+            (line for line in error_log if _WEB_TOPIC_EN_FAILED_MARKER in line), None
+        )
+        return {
+            **base,
+            "status": "failed",
+            "reason": _clamp_str(detail, 300) or "英文检索节点执行失败(无产物落盘)",
+        }
+    status = _pending_or_missing(task_state)
+    return {
+        **base,
+        "status": status,
+        "reason": (
+            "等待英文检索(本任务运行中)"
+            if status == "pending"
+            else "无英文检索产物(英文线上线前的历史任务,或英文线未启用)"
+        ),
     }
 
 
@@ -1393,6 +1505,11 @@ def get_ai_content_details(
         "task_status": task_state,
         "generated_at": _now_iso(),
         "web_topic": _web_topic_section(task_dir, task_state, status_log, error_log),
+        # 英文检索线独立区块(2026-11-20 审查修订版阶段4;审查 §2.1 双线分离,
+        # 不得把两个 provider 的结果混进一个 entries)
+        "web_topic_en": _web_topic_en_section(
+            task_dir, task_state, status_log, error_log
+        ),
         "template": _template_section(task_dir, task_state),
         "script": _script_section(task_dir, task_state, status_log, checkpoint_error),
     }

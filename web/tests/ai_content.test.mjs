@@ -199,3 +199,59 @@ test("normalizeContentDetails:webTopic fallback 状态映射与缺省", () => {
   });
   assert.equal(vmNoFallback.webTopic.fallback, null, "无 fallback 时为 null");
 });
+
+// 2026-11-20 审查修订版阶段4:英文检索线独立区块(web_topic_en)
+test("normalizeContentDetails:webTopicEn 双线独立归一化", () => {
+  const vm = normalizeContentDetails({
+    web_topic: { status: "ok", engine: "MediaCrawler(小红书)", query: "夏季防晒" },
+    web_topic_en: {
+      status: "ok",
+      engine: "Xpoz(海外社媒)",
+      query: "summer sun protection travel",
+      platforms: ["tiktok", "twitter", "reddit", "instagram"],
+      entries: [
+        {
+          url: "https://www.tiktok.com/@creator/video/1",
+          title: "summer tips",
+          domain: "www.tiktok.com",
+          snippet: "beach guide",
+          platform: "tiktok",
+          language_status: "en",
+          content_kind: "video",
+          has_video: true,
+        },
+        {
+          url: "https://x.com/a/status/1",
+          title: "thread",
+          platform: "twitter",
+          language_status: "unknown",
+          content_kind: "post",
+        },
+      ],
+    },
+  });
+  // 双线互不掺杂:两区块 query 独立(审查 §2.1)
+  assert.equal(vm.webTopic.query, "夏季防晒");
+  assert.equal(vm.webTopicEn.query, "summer sun protection travel");
+  assert.equal(vm.webTopicEn.engine, "Xpoz(海外社媒)");
+  assert.deepEqual(vm.webTopicEn.platforms, ["tiktok", "twitter", "reddit", "instagram"]);
+  assert.equal(vm.webTopicEn.entries.length, 2);
+  assert.equal(vm.webTopicEn.entries[0].language_status, "en");
+  assert.equal(vm.webTopicEn.entries[0].content_kind, "video");
+  // unknown 语言如实透传,不冒充英文(审查阶段4任务5)
+  assert.equal(vm.webTopicEn.entries[1].language_status, "unknown");
+});
+
+test("normalizeContentDetails:webTopicEn 缺区块/异常输入容错", () => {
+  const vm = normalizeContentDetails({});
+  assert.equal(vm.webTopicEn.status, "missing");
+  assert.deepEqual(vm.webTopicEn.platforms, []);
+  assert.deepEqual(vm.webTopicEn.entries, []);
+
+  const vm2 = normalizeContentDetails({
+    web_topic_en: { status: "skipped", platforms: "not-a-list", entries: 42 },
+  });
+  assert.equal(vm2.webTopicEn.status, "skipped");
+  assert.deepEqual(vm2.webTopicEn.platforms, [], "非数组 platforms 归一为空");
+  assert.deepEqual(vm2.webTopicEn.entries, [], "非数组 entries 归一为空");
+});
