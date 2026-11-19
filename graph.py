@@ -12,7 +12,8 @@
             ├─→ assembly_repair_loop       (未达标且 retry < MAX)
             │     ↻ assembly_validate_render_qc
             └─→ assembly_write_report      (达标 / retry 达上限 → 软降级)
-        → node_06_human_reorder            ⏸ interrupt("①")
+        → node_06_human_reorder            ⏸ interrupt("①") 仅 QC 降级(escalated)时挂起;
+                                              QC 正常/关闭自动通过(2026-11-20 条件挂起)
       [ASSEMBLY_QC_GATE_ENABLED=False 时:generate_draft 直接到 node_06_human_reorder]
     → node_07_speed_fit                🔁 条件边(route_after_speed_fit):
       ├─→ node_08_add_subtitles  (达标;节点本体已产出 snapshot2 并写 state)
@@ -52,7 +53,9 @@
 - 保留:关卡①②(interrupt + resume,``agent_gate resume`` / 直接 CLI
   ``scripts/resume_workflow.py`` 放行)、assembly QC 六节点、speed-fit
   guardrail、中英双语线、列表 fan-in 汇合、交付前 QA。
-  (历史注:当时为关卡①②③;关卡③已于 2026-11-15 整体删除,见文末。)
+  (历史注:当时为关卡①②③;关卡③已于 2026-11-15 整体删除,见文末;
+  关卡①自 2026-11-20 起改为条件挂起 —— 仅 assembly QC 降级时挂起复核,
+  编号与恢复契约不变,见文末。)
 
 2026-10 调序(保留,见《auto-video-editor节点调序与全量工作流设计执行计划》):
 - 英文线补 ``node_08b_add_subtitles_en`` / ``node_10b_inject_text_fx_en``;
@@ -590,6 +593,8 @@ def _build_state_graph():
     # 出口 ``assembly_write_report`` 交棒 ``generate_draft`` —— assembly 在草稿
     # 生成**之前**完成候选编辑计划的 QC/修复;``generate_draft`` 仍是唯一正式
     # 草稿写入者,生成后直连 ``node_06_human_reorder``(两态均保留)。
+    # 2026-11-20 关卡①条件挂起:node_06 节点内部按 QC 状态自动通过或挂起
+    # 复核(仅 escalated 挂起),本图拓扑不变。
     # ``ASSEMBLY_QC_GATE_ENABLED=False``(应急关闭):``storyline_join`` 条件路由
     # 直接 → ``generate_draft``,add_node 注册的 6 个 assembly 节点不接边,
     # 不参与执行(plan §11 验收项"应急关闭生效")。
@@ -617,8 +622,9 @@ def _build_state_graph():
         g.add_edge("assembly_repair_loop", "assembly_validate_render_qc")
         g.add_edge("assembly_write_report", "generate_draft")
 
-    # generate_draft → node_06_human_reorder 两态均直连
-    # (QC 开:由 assembly_write_report 交棒进来;QC 关:storyline_join 直连进来)
+    # generate_draft → node_06_human_reorder 两态均直连(普通边;节点内部按
+    # QC 状态自动通过或挂起复核。QC 开:由 assembly_write_report 交棒进来;
+    # QC 关:storyline_join 直连进来)
     g.add_edge("generate_draft", "node_06_human_reorder")
 
     g.add_edge("node_06_human_reorder", "node_07_speed_fit")

@@ -77,6 +77,16 @@ def _add_manual_bgm(draft_file: Path) -> None:
 REQUIRED_FEATURES_NONE = {key: False for key in REQUIRED_FEATURE_KEYS}
 
 
+@pytest.fixture(autouse=True)
+def _qc_channel_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """跨实例恢复契约测试族:关闭 assembly QC 通道(2026-11-20 关卡①条件挂起
+    改造后的用例分类)—— seed state 直接构造关卡①降级状态,① 仍挂起,
+    恢复链路覆盖不变。"""
+    import config as _config
+
+    monkeypatch.setattr(_config, "ASSEMBLY_QC_GATE_ENABLED", False)
+
+
 def _seed_state(draft_path: str, *, asr_segments_zh: list[dict] | None = None) -> WorkflowState:
     return {
         "session_id": "w5-int",
@@ -90,6 +100,10 @@ def _seed_state(draft_path: str, *, asr_segments_zh: list[dict] | None = None) -
             {"index": 1, "start_ms": 2_000, "end_ms": 4_000, "text_zh": "世界"},
         ],
         "asr_segments_zh_written": True,
+        # 2026-11-20 条件挂起:QC 已关(见 _qc_channel_off),直接构造关卡①
+        # 降级状态 → ① 按 escalated 挂起
+        "assembly_qc_gate_enabled": False,
+        "assembly_qc_status": "escalated",
         "error_log": [],
         "status_log": ["node_05_generate_draft_done"],
         "required_features": REQUIRED_FEATURES_NONE,

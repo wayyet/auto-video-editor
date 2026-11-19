@@ -26,6 +26,16 @@ from draft_ops.draft_integrity import REQUIRED_FEATURE_KEYS
 REQUIRED_FEATURES_NONE = {key: False for key in REQUIRED_FEATURE_KEYS}
 
 
+@pytest.fixture(autouse=True)
+def _qc_channel_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """拓扑/恢复顺序测试族:关闭 assembly QC 通道(2026-11-20 关卡①条件挂起
+    改造后的用例分类)—— seed state 直接构造关卡①降级状态,①→② 挂起顺序
+    覆盖不变。"""
+    import config as _config
+
+    monkeypatch.setattr(_config, "ASSEMBLY_QC_GATE_ENABLED", False)
+
+
 def _seed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -67,6 +77,10 @@ def _seed(
         "shot_plan": {"video_path": "", "shots": [{"id": "sh1", "start_s": 0.0, "end_s": 5.0}]},
         "error_log": [],
         "status_log": ["node_05_generate_draft_done"],
+        # 2026-11-20 条件挂起:QC 已关(见 _qc_channel_off),直接构造关卡①
+        # 降级状态 → ① 按 escalated 挂起(①→② 顺序断言不变)
+        "assembly_qc_gate_enabled": False,
+        "assembly_qc_status": "escalated",
         # 阶段 6:拓扑/恢复/效果落点测试不声明必需效果,gate 永不阻断
         "required_features": REQUIRED_FEATURES_NONE,
     }

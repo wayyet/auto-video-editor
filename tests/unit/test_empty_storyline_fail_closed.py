@@ -1,7 +1,8 @@
 """空 storyline fail-closed + 相关诊断(2026-11-07 实机回归)。
 
 背景:切镜超时 0 镜头时,旧链路一路级联出空 storyline,node_05 照常发布
-00:00 空草稿并挂关卡① —— 人工面对"调整空时间轴镜头顺序"的死局。回归点:
+00:00 空草稿(历史:曾挂关卡①死局;2026-11-20 关卡①改条件挂起后空草稿会
+自动通过,这道 fail-closed 是唯一拦截点)。回归点:
 1. node_05:canonical clips=0 → ContractInvalid 终止运行,不发布不挂关卡;
 2. node_05:1 个 clip 的正常 canonical 不受守卫影响(照常产草稿);
 3. node_split_shots:0 镜头时 error_log 带 SPLIT_SHOTS_EMPTY 诊断标记;

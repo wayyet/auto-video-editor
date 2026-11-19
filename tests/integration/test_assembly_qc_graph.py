@@ -396,6 +396,14 @@ def test_qc_gate_true_wires_full_assembly_chain(monkeypatch: pytest.MonkeyPatch)
     }
     assert route_after_assembly_qc(state_pass) == "assembly_write_report"
     assert route_after_assembly_qc(state_escalated_low) == "assembly_repair_loop"
+    # P1-6 fail-closed:结构性错误达上限 → assembly_failed → END(2026-11-20
+    # 关卡①条件挂起改造后,结构性错误也不允许从关卡①人工放行)
+    state_structural_exhausted = {
+        "assembly_qc_status": "escalated",
+        "assembly_qc_retry_count": 2,
+        "assembly_structural_error": True,
+    }
+    assert route_after_assembly_qc(state_structural_exhausted) == "assembly_failed"
 
 
 # ---------------------------------------------------------------------------
@@ -504,6 +512,98 @@ def test_assembly_chain_qc_blocking_then_repair_soft_degrade(
     assert "fake blocking issue" in report_md
     # 状态 log 含 repair_loop_done(证明确实跑了修复循环)
     assert any("assembly_repair_loop_done" in tag for tag in out.get("status_log", []))
+
+
+# ---------------------------------------------------------------------------
+# 测试 6b(2026-11-20 关卡①条件挂起):真实节点执行行为(审查修订版 §4.2)
+# ---------------------------------------------------------------------------
+def test_nonstructural_escalated_reaches_real_interrupt_at_gate1(
+    monkeypatch: pytest.MonkeyPatch,
+    patched_assembly_tools,
+    base_state: dict,
+) -> None:
+    """非结构性 escalated 软降级 → **节点本体真实调用 interrupt()** 挂在关卡①。
+
+    审查修订版 §4.2:既有用例用 ``interrupt_before=["node_06_human_reorder"]``
+    截停,只能证明图**到达**了节点,不能证明节点自己会挂起。本用例不设
+    ``interrupt_before``,让 node_06 真实执行:非结构性降级(escalated 且无
+    structural 标记)必须产生 checkpoint "①" 的真实 interrupt。"""
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.types import Command
+
+    from assembly_capabilities import qc_preview as qc_preview_mod
+    from assembly_capabilities.result import ToolResult
+    from nodes.assembly import node_validate_render_qc
+
+    def _qc_blocking(args, ctx):
+        output_json = args.get("output_json")
+        report = {
+            "status": "fail",
+            "video_path": args.get("video_path"),
+            "has_video_stream": True,
+            "media": {"duration_seconds": 10.0},
+            "issues": [
+                {"severity": "error", "message": "fake blocking issue for repair_loop"},
+            ],
+            "elapsed_seconds": 0.1,
+        }
+        if output_json:
+            Path(output_json).parent.mkdir(parents=True, exist_ok=True)
+            Path(output_json).write_text(json.dumps(report), encoding="utf-8")
+        return ToolResult(text="QC fail", data=report, artifacts=[output_json] if output_json else [])
+
+    monkeypatch.setattr(qc_preview_mod, "qc_preview", _qc_blocking)
+    monkeypatch.setattr(node_validate_render_qc, "qc_preview", _qc_blocking)
+    monkeypatch.setattr(config, "ASSEMBLY_QC_GATE_ENABLED", True)
+    monkeypatch.setattr(config, "ASSEMBLY_QC_MAX_RETRY", 1)
+
+    # 不加 interrupt_before:node_06 按新逻辑(escalated → interrupt)真实挂起
+    g = _build_state_graph().compile(checkpointer=InMemorySaver())
+    config_dict = {"configurable": {"thread_id": "assembly-gate1-real-interrupt"}}
+    g.invoke(base_state, config=config_dict)
+
+    snap = g.get_state(config_dict)
+    assert snap.interrupts, "非结构性 escalated 应在关卡① 真实挂起(节点本体 interrupt)"
+    assert tuple(snap.next) == ("node_06_human_reorder",)
+    payload = snap.interrupts[0].value
+    assert payload["checkpoint"] == "①"
+    assert payload["legacy_id"] == "checkpoint1_reorder"
+    assert payload["assembly_qc_status"] == "escalated"
+    assert payload["assembly_report_path"], "挂起 payload 应携带 assembly 报告路径"
+
+    # resume=True → 人工放行,穿过 node_07…11 尾链,推进到关卡②(BGM 缺失挂起)
+    g.invoke(Command(resume=True), config=config_dict)
+    snap2 = g.get_state(config_dict)
+    assert snap2.interrupts, "放行后应推进到关卡② 挂起"
+    assert snap2.interrupts[0].value["checkpoint"] == "②"
+
+
+def test_qc_pass_auto_passes_gate1_and_reaches_node_07(
+    monkeypatch: pytest.MonkeyPatch,
+    patched_assembly_tools,
+    base_state: dict,
+) -> None:
+    """QC pass → 关卡① 自动通过(无 ① interrupt),直接进入 node_07。
+
+    用 ``interrupt_after=["node_07_speed_fit"]`` 在 node_07 完成后截停:
+    既证明 ① 未产生 interrupt(自动通过),又证明流程已推进过 node_07。"""
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    monkeypatch.setattr(config, "ASSEMBLY_QC_GATE_ENABLED", True)
+    monkeypatch.setattr(config, "ASSEMBLY_QC_MAX_RETRY", 1)
+    g = _build_state_graph().compile(
+        checkpointer=InMemorySaver(),
+        interrupt_after=["node_07_speed_fit"],
+    )
+    config_dict = {"configurable": {"thread_id": "assembly-gate1-auto-pass"}}
+    out = g.invoke(base_state, config=config_dict)
+
+    snap = g.get_state(config_dict)
+    assert not snap.interrupts, "QC pass 不应在关卡① 挂起"
+    assert tuple(snap.next) == ("node_08_add_subtitles",), "node_07 应已完成"
+    # 自动通过审计标签(不冒充人工确认)
+    assert "checkpoint1_auto_passed" in list(out.get("status_log") or [])
+    assert "checkpoint1_resumed" not in list(out.get("status_log") or [])
 
 
 # ---------------------------------------------------------------------------

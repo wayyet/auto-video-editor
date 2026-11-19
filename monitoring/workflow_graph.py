@@ -81,9 +81,13 @@ WORKFLOW_ID = "auto_video_editor_main"
 #: 2026-11-15 第六期 P1-1(assembly 前移,设计文档 §2.1):六节点入口从
 #: generate_draft 之后改挂 storyline_join 成功条件路由、出口
 #: assembly_write_report 改接 generate_draft(拓扑变更)→ bump 10。
-SCHEMA_VERSION = 10
+#: 2026-11-20 关卡①条件挂起:node_06 展示名/描述/入边标签改写(QC 降级才
+#: 挂起复核),拓扑零变更(先例 bump4:仅元数据文案也 bump,使浏览器布局
+#: 缓存里的旧显示信息失效)→ bump 11。
+SCHEMA_VERSION = 11
 
-#: 关卡编号全集(阶段3 删除关卡⓪后剩 ①②③;2026-11-15 关卡③删除 → ①②)
+#: 关卡编号全集(阶段3 删除关卡⓪后剩 ①②③;2026-11-15 关卡③删除 → ①②;
+#: 2026-11-20 起关卡① 仅 QC 降级时挂起复核,编号与恢复契约不变)
 CHECKPOINT_MARKS = ("①", "②")
 
 QC_FLAG = "ASSEMBLY_QC_GATE_ENABLED"
@@ -145,9 +149,9 @@ _NODE_META: dict[str, dict[str, Any]] = {
     },
     # ---- 人工关卡与护栏 ----
     "node_06_human_reorder": {
-        "name": "人工调整镜头顺序①",
+        "name": "QC降级复核①",
         "group": "edit_review",
-        "description": "interrupt:关卡①,人工在剪映里调整镜头顺序",
+        "description": "interrupt:关卡①,仅 assembly QC 降级时挂起复核,QC 正常/关闭自动通过",
         "checkpoint": "①",
     },
     "node_07_speed_fit": {
@@ -366,7 +370,7 @@ _EDGE_LABELS: dict[tuple[str, str], str] = {
     ("assembly_validate_render_qc", "END"): "结构性错误达上限,fail-closed(P1-6)",
     ("assembly_repair_loop", "assembly_validate_render_qc"): "修复后复检",
     ("assembly_write_report", "generate_draft"): "QC 完成,交棒草稿生成",
-    ("generate_draft", "node_06_human_reorder"): "初始草稿就绪,进入关卡①",
+    ("generate_draft", "node_06_human_reorder"): "初始草稿就绪;节点内按 QC 状态自动通过或挂起复核",
     ("node_07_speed_fit", "bridge_snapshot2"): "时长达标",
     ("node_07_speed_fit", "node_07_speed_fit"): "未达标且可重试",
     ("node_07_speed_fit", "escalate_guardrail_failure"): "重试超限",

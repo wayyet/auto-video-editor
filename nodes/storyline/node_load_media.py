@@ -2,12 +2,20 @@
 
 阶段 0 时是 _mcp_passthrough 壳子;**阶段 1 起**改为调本地化的
 ``storyline_capabilities.load_media.load_media``(无 torch)。
+
+2026-11-20 关卡①条件挂起:本节点是 START 后第一个节点且 QC 开/关两态
+都会执行,在此写入运行来源标记 ``assembly_qc_gate_enabled``(建图进程内
+读 config,随 checkpoint 持久化)——关卡① 据此区分「QC 关闭 → QC 状态
+缺失属预期」与「QC 启用 → 状态缺失属异常」,恢复时不依赖恢复进程的 env。
+放本节点而非各启动入口(创建台 / CLI / agent_gate),是取"单一收口点、
+未来新增入口自动覆盖"。
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
+import config
 from state import WorkflowState
 from storyline_capabilities.load_media import load_media as cap_load_media
 from nodes.storyline._common import append_status_tag, resolve_video_input_paths
@@ -59,5 +67,7 @@ def storyline_load_media_node(state: WorkflowState) -> dict:
 
     return {
         "storyline_media_artifact": str(artifact_path),
+        # 运行来源标记(见模块 docstring):建图时 QC 通道开关,供关卡①判定
+        "assembly_qc_gate_enabled": bool(config.ASSEMBLY_QC_GATE_ENABLED),
         "status_log": append_status_tag(state, "storyline_load_media_done"),
     }

@@ -8,6 +8,8 @@
 差异只有 4 个参数:``checkpoint`` 标识(①/②)、``legacy_id``、``step``、
 以及 resume 后要写的通知/标记。本模块把前两段里真正重复的部分抽成两个纯函数,
 节点侧只保留"自己的一行 interrupt 调用 + 各自的薄封装"。
+(2026-11-20 起关卡① 在三段式之外增加了 QC 条件分支 —— QC 正常/关闭自动
+通过、不调 interrupt;关卡② 仍为无条件每轮挂起。payload 契约两关卡一致。)
 
 ⚠️ **payload 字段不能改** — ``resume_utils.py::resume_all_pending`` 用
 ``i.value["checkpoint"]`` 做自动匹配(``values_by_checkpoint`` 表的键是

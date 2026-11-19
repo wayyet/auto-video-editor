@@ -1,25 +1,32 @@
 """节点 6:human_reorder — 关卡①(对应原文档 4.1 节)。
 
-设计:副作用挪后方案。
+2026-11-20 条件挂起改造(审查修订版执行计划 §3.1/§3.2):关卡① 不再每轮
+挂起要求人工调序 —— **仅 assembly QC 降级(escalated)时挂起人工复核**;
+QC 正常(pass / pass_with_warnings)与 QC 关闭(状态缺失)自动通过。
+
+设计:副作用挪后方案(不变)。
 - ``interrupt()`` 之前**不**调用 ``send_notification``(避免重放时重复发送)
 - resume 后第一个 task 才发通知
 - 幂等不依赖任何"已通知"状态位(由 LangGraph resume 语义保证;
   2026-11-12 阶段5批1 移除无人消费的 ``reorder_notified`` 审计位)
 
-调用栈(Week 3 集成图):
-    节点 5 (generate_draft) → 节点 6 (interrupt) ⏸
-    → 用户在剪映客户端手动调整 → Command(resume=True)
-    → 节点 6 继续执行(发通知 + 写 status_log) → 节点 7
+调用栈(2026-11-20 改造后):
+    节点 5 (generate_draft) → 节点 6
+    → QC 正常 / QC 关闭:自动通过(写 checkpoint1_auto_passed* 审计标签)→ 节点 7
+    → QC 降级(escalated):interrupt ⏸ → 人工看报告后 Command(resume=True|reject)
+      → 节点 6 继续执行(发通知 + 写 status_log)→ 节点 7
 
-Week 5 改动(对齐第 5 周计划 §1.1):
+Week 5 改动(对齐第 5 周计划 §1.1,不变):
 - interrupt payload ``checkpoint`` 字段统一为 ``"①"``,便于
   ``resume_all_pending`` 自动匹配多个 interrupt。旧值
   ``"checkpoint1_reorder"`` 保留在 ``legacy_id`` 字段,保证向后兼容。
 - 通知文案带 ``"checkpoint1"`` 标记,与 status_log ``checkpoint1_resumed`` 对齐。
 
 测试策略:
-- ``_build_interrupt_payload`` / ``_post_resume`` 抽成纯函数,单测直接覆盖
-- ``human_reorder`` 仅做编排,集成测试通过完整 graph + ``InMemorySaver`` 覆盖
+- ``_build_interrupt_payload`` / ``_post_resume`` / ``_mark_auto_pass`` 抽成
+  纯函数,单测直接覆盖
+- ``human_reorder`` 的控制分支单测经 monkeypatch ``interrupt`` 覆盖,
+  集成测试通过完整 graph + ``InMemorySaver`` 覆盖
 """
 
 from __future__ import annotations
@@ -108,8 +115,9 @@ def _build_interrupt_payload(state: WorkflowState) -> dict:
             "assembly_qc_warnings": _qc_issue_messages(state),
         },
         instructions=(
-            "请在剪映客户端手动调整分镜顺序,完成后确认继续"
-            "(assembly QC 降级时如需拒绝继续,可输入恢复值 reject 终止流程)"
+            "assembly QC 修复重试后仍未达标(escalated,非结构性降级);"
+            "请打开 QC 报告与预览确认,可接受则放行(恢复值 true),"
+            "需要终止则输入恢复值 reject"
         ),
     )
 
@@ -117,9 +125,11 @@ def _build_interrupt_payload(state: WorkflowState) -> dict:
 def _post_resume(
     state: WorkflowState,
     resume_value: Any = None,
-    notifier=_send_notification,
+    notifier=None,
 ) -> dict:
-    """resume 后逻辑 — 纯函数,便于单测(notifier 保持可注入,单测直接传假函数)。
+    """resume 后逻辑 — 纯函数,便于单测(notifier 保持可注入,单测直接传假函数;
+    缺省时调用时解析模块级 ``_send_notification`` —— 2026-11-20 改为惰性绑定,
+    使 ``monkeypatch(n06, "_send_notification")`` 对 ``human_reorder`` 路径生效)。
 
     P1-7:assembly QC 降级(escalated)时,人工可用恢复值 ``reject`` 显式
     拒绝降级结果 → fail-closed 终止运行(而不是把有质量问题的草稿继续剪下去)。
@@ -137,11 +147,76 @@ def _post_resume(
     return post_resume(
         state,
         log_tag="checkpoint1_resumed",
-        notifier=notifier,
+        notifier=notifier or _send_notification,
     )
 
 
+def _mark_auto_pass(state: WorkflowState, *, qc_status: str | None) -> dict:
+    """QC 正常 / QC 关闭 → 自动通过的审计收尾(2026-11-20 条件挂起改造)。
+
+    - 不发人工通知、不写 ``checkpoint1_resumed``(那是人工确认专用标记,
+      自动通过不得冒充"用户已人工确认");
+    - 自动通过原因用独立 status_log 标签留痕,QC 关闭与 QC 正常可区分,
+      便于运行轨迹排查。
+
+    纯函数(不读盘、无副作用之外的输出);status_log 由 ``_append_unique``
+    reducer 合并,直接返回增量即可。
+    """
+    tag = (
+        "checkpoint1_auto_passed"
+        if qc_status is not None
+        else "checkpoint1_auto_passed_qc_disabled"
+    )
+    print(
+        f"[notify] checkpoint1 auto-pass thread={state.get('session_id')} "
+        f"qc_status={qc_status!r} tag={tag}"
+    )
+    return {"status_log": [tag]}
+
+
 def human_reorder(state: WorkflowState) -> dict:
-    """关卡①:挂起等待用户确认,resume 后发通知并通过(reject 显式拒绝)。"""
-    resume_value = interrupt(_build_interrupt_payload(state))
-    return _post_resume(state, resume_value=resume_value)
+    """关卡①:仅 assembly QC 降级(escalated)时挂起人工复核,其余自动通过。
+
+    判定矩阵(2026-11-20 审查修订版执行计划 §3.1/§3.2,按序判定):
+
+    1. ``assembly_structural_error=True`` → fail-closed(结构性错误绝不允许
+       人工放行;上游正常路由本就 assembly_failed → END,此处兜底保护旧
+       checkpoint / 异常状态)。
+    2. ``assembly_qc_gate_enabled`` 缺失(None)= 标记引入前的旧 checkpoint
+       (storyline_load_media 2026-11-20 起写入该标记):完整保留旧版无条件
+       挂起行为 —— resume 重放时 ``interrupt()`` 直接返回已存恢复值,存量
+       任务兼容性不受影响。
+    3. QC 状态 pass / pass_with_warnings → 自动通过(独立审计标签)。
+    4. QC 状态 escalated → 挂起人工复核(放行 true / reject 终止)。
+    5. 状态缺失:QC 关闭(标记 False)→ 自动通过(qc_disabled 审计);
+       QC 启用(标记 True)→ fail-closed(异常状态,不得静默放行)。
+    6. 未知状态值 → fail-closed。
+    """
+    if state.get("assembly_structural_error") is True:
+        raise RuntimeError(
+            "[node_06] 检测到 assembly 结构性 QC 错误(assembly_structural_error"
+            "=True),禁止人工放行;请检查 QC 报告修复后重试"
+        )
+
+    qc_enabled = state.get("assembly_qc_gate_enabled")
+    qc_status = state.get("assembly_qc_status")
+
+    if qc_enabled is None:
+        # 旧 checkpoint(标记引入前的运行):无条件挂起 = 旧版行为原样保留
+        resume_value = interrupt(_build_interrupt_payload(state))
+        return _post_resume(state, resume_value=resume_value)
+
+    if qc_status in ("pass", "pass_with_warnings"):
+        return _mark_auto_pass(state, qc_status=qc_status)
+    if qc_status == "escalated":
+        resume_value = interrupt(_build_interrupt_payload(state))
+        return _post_resume(state, resume_value=resume_value)
+    if qc_status is None:
+        if qc_enabled is False:
+            # QC 通道关闭:状态缺失属预期形态 → 自动通过
+            return _mark_auto_pass(state, qc_status=None)
+        raise RuntimeError(
+            "[node_06] assembly QC 已启用但缺少 assembly_qc_status(异常状态,"
+            "不自动放行);请检查 assembly 六节点是否完整执行"
+        )
+    raise RuntimeError(f"[node_06] 未知 assembly_qc_status: {qc_status!r},不自动放行")

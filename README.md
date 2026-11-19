@@ -20,7 +20,7 @@ auto-video-editor/
 │                                       节点/边统计以编译图为准,见 docs/remove-chat-loop-20261104/schema-snapshots)
 ├── nodes/
 │   ├── node_05_generate_draft.py       草稿生成(storyline_plan 优先,shot_plan 兜底)
-│   ├── node_06_human_reorder.py        关卡① interrupt
+│   ├── node_06_human_reorder.py        关卡①(仅 QC 降级时挂起复核,QC 正常/关闭自动通过)
 │   ├── node_07_speed_fit.py            护栏节点 + 帧对齐分配公式
 │   ├── node_08_add_subtitles.py        字幕主干兼容节点(样式注入;B1 ASR 移除后不再转写语音)
 │   ├── node_08b_add_subtitles_en.py    英文字幕
@@ -566,6 +566,8 @@ Week 5 把各关卡的 interrupt payload `checkpoint` 字段统一为 Unicode �
 | ① | `node_06_human_reorder` | `"①"` | `"checkpoint1_reorder"` |
 | ② | `node_12_human_add_bgm` | `"②"` | `"checkpoint2_add_bgm"` |
 
+> 2026-11-20 条件挂起:关卡① 仅在 assembly QC 降级(escalated,非结构性)时挂起人工复核;QC 正常(pass / pass_with_warnings)与 QC 关闭自动通过(status_log 标签 `checkpoint1_auto_passed*`),旧 checkpoint(无 `assembly_qc_gate_enabled` 标记)完整保留旧的无条件挂起行为。
+>
 > 历史:关卡③(`node_checkpoint3_layout_review`,legacy_id `"checkpoint3_layout_review"`)已随 2026-11-15 第六期整体删除;存量挂③任务不可恢复(创建台恢复入口对③明确 409),请取消/删除后新建任务。
 
 `resume_all_pending` 据此自动匹配多个挂起。Week 3 单测 `test_interrupt_resume.py` 已更新以匹配新字段。

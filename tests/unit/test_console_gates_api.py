@@ -39,28 +39,30 @@ class TestBuildGateView:
     def test_gate1_uses_payload_draft_path(self) -> None:
         interrupts = [{
             "id": "i-1", "checkpoint": "①", "legacy_id": "checkpoint1_reorder",
-            "step": 6, "instructions": "请在剪映客户端手动调整分镜顺序,完成后确认继续",
+            "step": 6,
+            "instructions": "assembly QC 修复重试后仍未达标(escalated,非结构性降级)",
             "payload": {"checkpoint": "①", "legacy_id": "checkpoint1_reorder", "step": 6,
                         "draft_path": "X:/t/drafts/draft_content.json",
-                        "instructions": "请在剪映客户端手动调整分镜顺序,完成后确认继续"},
+                        "instructions": "assembly QC 修复重试后仍未达标(escalated,非结构性降级)"},
         }]
         gates = build_gate_views(interrupts, {"draft_path": "X:/t/drafts/draft_content.json"})
         assert len(gates) == 1
         g = gates[0]
         assert g["checkpoint"] == "①"
         assert g["node"] == "node_06_human_reorder"
-        assert "分镜顺序" in g["title"]
+        # 2026-11-20 条件挂起:关卡① 展示名改为 QC 降级复核
+        assert "QC 降级复核" in g["title"]
         assert g["draft_paths"] == ["X:/t/drafts/draft_content.json"]
         assert g["draft_dirs"] == [str(Path("X:/t/drafts"))]
         # 2026-11-15 关卡③删除:issues 展示字段不再输出
         assert "issues" not in g
-        assert g["instructions"].startswith("请在剪映客户端")
+        assert "escalated" in g["instructions"]
 
     def test_gate1_assembly_artifacts_from_payload(self) -> None:
         """P1-7:① payload 携带 assembly 报告/预览/QC → gate view 透出。"""
         interrupts = [{
             "id": "i-1", "checkpoint": "①", "legacy_id": "checkpoint1_reorder",
-            "step": 6, "instructions": "请在剪映客户端手动调整分镜顺序",
+            "step": 6, "instructions": "assembly QC 修复重试后仍未达标",
             "payload": {
                 "checkpoint": "①", "legacy_id": "checkpoint1_reorder", "step": 6,
                 "draft_path": "X:/t/drafts/draft_content.json",
@@ -68,7 +70,7 @@ class TestBuildGateView:
                 "assembly_preview_path": "X:/t/outputs/j1/assembly/preview.mp4",
                 "assembly_qc_status": "pass_with_warnings",
                 "assembly_qc_warnings": ["黑帧警告 A", "轨道错位 B"],
-                "instructions": "请在剪映客户端手动调整分镜顺序",
+                "instructions": "assembly QC 修复重试后仍未达标",
             },
         }]
         g = build_gate_views(interrupts, {})[0]
@@ -82,9 +84,9 @@ class TestBuildGateView:
         """旧 checkpoint payload 缺 assembly 字段 → state 值兜底(缺 warnings → 空列表)。"""
         interrupts = [{
             "id": "i-1", "checkpoint": "①", "legacy_id": "checkpoint1_reorder",
-            "step": 6, "instructions": "请在剪映客户端手动调整分镜顺序",
+            "step": 6, "instructions": "assembly QC 修复重试后仍未达标",
             "payload": {"checkpoint": "①", "step": 6, "draft_path": "X:/d/d.json",
-                        "instructions": "请在剪映客户端手动调整分镜顺序"},
+                        "instructions": "assembly QC 修复重试后仍未达标"},
         }]
         g = build_gate_views(interrupts, {
             "assembly_report_path": "Y:/o/j2/assembly/report.md",
@@ -172,7 +174,7 @@ class TestBuildGateView:
 # ---------------------------------------------------------------------------
 class TestGatesEndpoint:
     def test_gates_ok(self, monkeypatch):
-        sample = [{"checkpoint": "①", "node": "node_06_human_reorder", "title": "① 分镜顺序调整",
+        sample = [{"checkpoint": "①", "node": "node_06_human_reorder", "title": "① QC 降级复核",
                    "draft_paths": ["X:/d"], "draft_dirs": ["X:/d"], "issues": []}]
         monkeypatch.setattr(api_console, "_fetch_gate_views_sync", lambda tid: sample)
         resp = client.get(f"/api/console/runs/{TID}/gates")
@@ -180,7 +182,7 @@ class TestGatesEndpoint:
         data = resp.json()
         assert data["ok"] is True and data["gate_count"] == 1
         assert data["gates"][0]["checkpoint"] == "①"
-        assert "不会替你完成" in data["common_note"]
+        assert "只负责继续工作流" in data["common_note"]
 
     def test_gates_invalid_thread_id_400(self, monkeypatch):
         resp = client.get("/api/console/runs/console-zzzzzzzzzzzz/gates")

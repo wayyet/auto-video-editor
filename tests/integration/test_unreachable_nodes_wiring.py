@@ -27,7 +27,8 @@ START 直连 ``storyline_load_media``。)
    ——不允许把它们聚到同一个地方。
 3. 开关全关 ⇒ 执行轨迹与接入前逐步一致(黄金轨迹);AI 开关关 ⇒ 屏障与接入前一致。
 4. 默认全开 ⇒ 各节点都被执行,且走向 / 并行关系符合设计。
-5. 每条旁支失败都被隔离:图仍走到关卡①(node_06_human_reorder)。
+5. 每条旁支失败都被隔离:图仍走到挂起关卡(2026-11-20 关卡①条件挂起后,
+   QC 关闭的测试环境挂起点 = 关卡② node_12_human_add_bgm)。
 6. qa 重试 3 次的回路里,plan_timeline_pro 仍会被重新触发(D10 回归);AI 转场两节点与它同频
    (每轮各 1 次);重试回路里分组数变化也不会让 qa 路由悄悄跳过重试(状态标签固定)。
 """
@@ -93,6 +94,10 @@ CONDITIONAL_NODES: set[str] = set()  # (storyline_search_web_topic 已随 2026-1
 #   阶段3 的逐片段速度护栏(7ad573d)落地后,planner 不再注水拉长,actual_ms=7200
 #   ≤ 目标 → qa 一轮即过、重试回路不再自触发 —— 这正是本文件 5 个存量失败用例的
 #   共同根因。需要覆盖重试回路的用例改用 ``run_auto(qa_target_ms=...)`` 强制触发。
+# - 2026-11-20 关卡①条件挂起(审查修订版执行计划 §4.3):QC 关闭(本文件
+#   run_auto 顶部 monkeypatch + seed 无 QC 状态)→ 关卡① 走"QC 关闭自动通过"
+#   分支不再挂起,轨迹从 ① 之后**延伸到关卡②**(node_12 BGM 缺失成为真实
+#   挂起点);node_06 本身仍每轮执行(自动通过也是一次真实节点执行)。
 # ---------------------------------------------------------------------------
 _PREFIX = [
     ["storyline_load_media"],
@@ -113,7 +118,18 @@ _CYCLE = [
 _SUFFIX = [
     ["storyline_join"],
     ["generate_draft"],
-    ["node_06_human_reorder"],
+    ["node_06_human_reorder"],  # 自动通过(QC 关闭),不再挂起
+    ["node_07_speed_fit"],
+    ["node_08_add_subtitles"],
+    ["fork_draft_for_english_branch", "node_10_inject_text_fx"],
+    ["node_14_make_covers", "node_16a_translate_and_check"],
+    ["node_08b_add_subtitles_en", "node_15_localize_covers_en"],
+    ["node_10b_inject_text_fx_en"],
+    ["node_17_inject_english_tts"],
+    ["node_09_inject_fx"],
+    ["node_09b_inject_opening_hook"],
+    ["node_11_inject_sticker"],
+    ["node_12_human_add_bgm"],  # 关卡② 挂起(BGM 缺失)
 ]
 GOLDEN_STEPS = _PREFIX + _CYCLE + _SUFFIX
 
@@ -469,7 +485,8 @@ def run_auto(
     ai_provider: bool = False,
     ai_provider_fails: bool = False,
 ) -> Run:
-    """在真实图上跑一遍 auto 模式,直到关卡①(node_06_human_reorder)挂起。
+    """在真实图上跑一遍 auto 模式,直到第一个挂起关卡(2026-11-20 关卡①
+    条件挂起改造后为关卡② node_12_human_add_bgm;关卡① QC 关闭自动通过)。
 
     ``qa_target_ms``:给定值时把 qa 的目标时长解析 patch 成该值,强制触发 qa 重试
     回路(模糊修复阶段3 速度护栏落地后,stub 跑 qa 一轮即过、重试不再自触发 ——
@@ -756,6 +773,10 @@ def run_auto(
         "draft_version_strategy": "strategy_a_version_lock",
         "storyline_outputs_root": str(out_root),
         "storyline_targets": targets,
+        # 2026-11-20 关卡①条件挂起:QC 已关(run_auto 顶部 monkeypatch)+ 无
+        # QC 状态 → 关卡① 走"QC 关闭自动通过"分支,不再挂起;真实 load_media
+        # 被本文件 fake 替换(fake 不写来源标记),故 seed 显式携带标记
+        "assembly_qc_gate_enabled": False,
     }
 
     saver = saver if saver is not None else InMemorySaver()
@@ -803,7 +824,7 @@ def test_all_flags_off_matches_pre_wiring_golden_trace(
     )
     assert run.grouped() == GOLDEN_STEPS
     assert not (WIRED_NODES & set(run.names()))
-    assert run.next_nodes == ("node_06_human_reorder",)
+    assert run.next_nodes == ("node_12_human_add_bgm",)
     assert run.timeline is not None
     assert "ai_transitions" not in run.timeline or run.timeline["ai_transitions"] == []
 
@@ -822,7 +843,7 @@ def test_defaults_run_all_wired_nodes_with_expected_shape(
     )
     names = run.names()
     assert WIRED_NODES <= set(names), f"没执行到:{sorted(WIRED_NODES - set(names))}"
-    assert run.next_nodes == ("node_06_human_reorder",)
+    assert run.next_nodes == ("node_12_human_add_bgm",)
 
     # 阶段3 auto-only:第一个任务就是 storyline_load_media(START 直连)
     assert run.order[0][1] == "storyline_load_media"
@@ -907,7 +928,7 @@ def test_qa_retry_loop_still_retriggers_plan_timeline_pro(
     # 缓存命中,互联网请求只发 1 次(设计方案 §4.6)
     assert run.count("storyline_search_web_topic") == 4
     assert len(run.web_queries) == 1
-    assert run.next_nodes == ("node_06_human_reorder",), "图提前 END 了(D10 症状)"
+    assert run.next_nodes == ("node_12_human_add_bgm",), "图提前 END 了(D10 症状)"
 
 
 def test_qa_passes_first_time_runs_ai_pair_once(
@@ -918,7 +939,7 @@ def test_qa_passes_first_time_runs_ai_pair_once(
     assert run.count("storyline_plan_timeline_pro") == 1
     assert run.count("storyline_generate_ai_transition") == 1
     assert run.count("storyline_plan_timeline_ai_transition") == 1
-    assert run.next_nodes == ("node_06_human_reorder",)
+    assert run.next_nodes == ("node_12_human_add_bgm",)
 
 
 # ---------------------------------------------------------------------------
@@ -1050,7 +1071,7 @@ def test_web_topic_skipped_when_no_retrievable_input(
     assert run.web_queries == [], "skipped 不得发起网络请求"
     assert "storyline_search_web_topic_skipped" in run.status_log
     assert all(r == "" for r in run.seen_web_research)
-    assert run.next_nodes == ("node_06_human_reorder",)
+    assert run.next_nodes == ("node_12_human_add_bgm",)
 
 
 def test_web_topic_not_run_when_flag_off(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -1076,7 +1097,7 @@ def test_web_topic_failure_is_isolated(monkeypatch: pytest.MonkeyPatch, tmp_path
     # 阶段4:失败无产物 → web_research 为空串,overall 保持纯视频概述,文案照常
     assert all(r == "" for r in run.seen_web_research)
     assert all(o == "整体概述" for o in run.seen_overall)
-    assert run.next_nodes == ("node_06_human_reorder",)
+    assert run.next_nodes == ("node_12_human_add_bgm",)
 
 
 def test_web_topic_runs_on_theme_only_auto_query(
@@ -1135,7 +1156,7 @@ def test_web_topic_no_results_is_soft(
     # 无结果是软态:不进 error_log(阶段2 起的映射契约)
     assert not any("[storyline:search_web_topic]" in e for e in run.error_log)
     assert all(r == "" for r in run.seen_web_research)
-    assert run.next_nodes == ("node_06_human_reorder",)
+    assert run.next_nodes == ("node_12_human_add_bgm",)
 
 
 def test_web_topic_network_failure_is_soft_with_failed_artifact(
@@ -1153,7 +1174,7 @@ def test_web_topic_network_failure_is_soft_with_failed_artifact(
         run.web_queries[0].encode("utf-8")
     ).hexdigest()
     assert all(r == "" for r in run.seen_web_research)
-    assert run.next_nodes == ("node_06_human_reorder",)
+    assert run.next_nodes == ("node_12_human_add_bgm",)
 
 
 # ---------------------------------------------------------------------------
@@ -1175,7 +1196,7 @@ def test_ai_transition_awaiting_approval_keeps_base_timeline_and_zero_calls(
     assert not (artifact.parent / "ai_transitions").exists()
     # PTAT 无可挂条目 → 指针保持基础时间线
     assert Path(run.values["storyline_timeline_plan"]).name == "timeline_plan.json"
-    assert run.next_nodes == ("node_06_human_reorder",)
+    assert run.next_nodes == ("node_12_human_add_bgm",)
 
 
 def test_ai_transition_real_generation_materializes_into_timeline(
@@ -1259,7 +1280,7 @@ def test_ai_provider_failure_degrades_and_keeps_base_timeline(
     assert run.timeline["options"]["enable_ai_transition"] is False
     CanonicalTimeline.model_validate(run.timeline)
     assert run.count("storyline_qa_gate") == 4  # 重试回路没被打断
-    assert run.next_nodes == ("node_06_human_reorder",)
+    assert run.next_nodes == ("node_12_human_add_bgm",)
 
 
 def test_ai_node_body_failure_is_isolated(
@@ -1273,7 +1294,7 @@ def test_ai_node_body_failure_is_isolated(
     assert "storyline_generate_ai_transition_failed" in run.status_log
     assert any("[storyline:generate_ai_transition]" in e for e in run.error_log)
     assert Path(run.values["storyline_timeline_plan"]).name == "timeline_plan.json"
-    assert run.next_nodes == ("node_06_human_reorder",)
+    assert run.next_nodes == ("node_12_human_add_bgm",)
 
 
 def test_ai_status_tags_are_fixed_so_retry_survives_changing_group_count(
@@ -1291,7 +1312,7 @@ def test_ai_status_tags_are_fixed_so_retry_survives_changing_group_count(
     run = run_auto(monkeypatch, tmp_path, group_counts=[2, 3, 2, 3], qa_target_ms=1000)
     assert run.count("storyline_group_clips") == 4, "qa 重试被悄悄跳过了(状态标签不固定的症状)"
     assert run.count("storyline_generate_ai_transition") == 4
-    assert run.next_nodes == ("node_06_human_reorder",)
+    assert run.next_nodes == ("node_12_human_add_bgm",)
     # 重试回路里的 AI 节点只留下固定标签
     ai_tags = [s for s in run.status_log if "ai_transition" in s]
     assert ai_tags == [
@@ -1325,28 +1346,59 @@ def test_ai_pair_attaches_only_junctions_that_exist_in_the_final_timeline(
 # ---------------------------------------------------------------------------
 # 6. 存档:接入后的图能在同一个 checkpointer 上挂起并恢复
 # ---------------------------------------------------------------------------
+def _add_manual_bgm(path: Path) -> None:
+    """模拟操作员在关卡② 于剪映里人工拖入 BGM(20261114 阶段6 起过门必需)。
+
+    2026-11-20 关卡①条件挂起后,run_auto 的挂起点前移到关卡②;恢复时
+    node_12 重读磁盘草稿,仍无 BGM 会再次挂起 —— 恢复前必须先补轨
+    (与 ``test_interrupt_resume._add_manual_bgm`` 同款)。"""
+    draft = json.loads(path.read_text(encoding="utf-8"))
+    tracks = draft.setdefault("tracks", [])
+    if not any(t.get("type") == "audio" and t.get("name") == "manual_bgm" for t in tracks):
+        tracks.append({
+            "type": "audio",
+            "id": "track-audio-manual-bgm",
+            "name": "manual_bgm",
+            "segments": [{
+                "id": "seg-manual-bgm",
+                "material_id": "audio-manual-bgm",
+                "target_timerange": {"start": 0, "duration": draft.get("duration") or 35_000_000},
+            }],
+        })
+        mats = draft.setdefault("materials", {})
+        mats.setdefault("audios", []).append({"id": "audio-manual-bgm", "name": "manual_bgm"})
+    path.write_text(json.dumps(draft, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def test_checkpoint_roundtrip_on_shared_checkpointer(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """跑到关卡①挂起 → 重新 build 一张新图 → 从同一个存档恢复到 node_07。
+    """跑到关卡②挂起(① QC 关闭自动通过)→ 重新 build 新图 → 补 BGM 后恢复进尾链。
 
     2026-10(阶段 C):SQLite 后端已删除,这里用共享的 ``InMemorySaver``;
     "新数据库连接"级别的恢复语义(等价于旧的跨进程 SQLite 语义)
     见 ``tests/integration/test_postgres_resume.py``。
+
+    2026-11-20 关卡①条件挂起(审查修订版执行计划 §4.3):挂起点从 ① 前移到
+    ②;恢复前必须先往磁盘草稿补 BGM(关卡② 恢复时重读磁盘,仍无 BGM 会
+    再次挂起,与真实操作员"先补轨、再点继续"的行为一致)。
     """
     from langgraph.types import Command
 
     saver = InMemorySaver()
     run = run_auto(monkeypatch, tmp_path, saver=saver)
-    assert run.next_nodes == ("node_06_human_reorder",)
+    assert run.next_nodes == ("node_12_human_add_bgm",)
 
     g2 = graph_module.build_graph(checkpointer=saver, thread_id="wiring", start_heartbeat_thread=False)
     cfg = {"configurable": {"thread_id": "wiring"}, "recursion_limit": 100}
-    assert tuple(g2.get_state(cfg).next) == ("node_06_human_reorder",)
+    assert tuple(g2.get_state(cfg).next) == ("node_12_human_add_bgm",)
+
+    # 关卡② 恢复前补 BGM(重读磁盘,过门必需)
+    _add_manual_bgm(Path(run.values["draft_path"]))
     names: list[str] = []
     for ev in g2.stream(Command(resume=True), cfg, stream_mode="debug"):
         if ev["type"] == "task":
             names.append(ev["payload"]["name"])
-            if ev["payload"]["name"] == "node_07_speed_fit":
+            if ev["payload"]["name"] == "node_13_adjust_volume":
                 break
-    assert names[:2] == ["node_06_human_reorder", "node_07_speed_fit"]
+    assert names[:2] == ["node_12_human_add_bgm", "node_13_adjust_volume"]

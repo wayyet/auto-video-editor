@@ -450,14 +450,19 @@ EN_FONT_NAME: str = "Roboto-Bold.ttf"
 # ---------------------------------------------------------------------------
 # ``ASSEMBLY_QC_GATE_ENABLED``:默认 true —— 每条视频强制走 6 节点 QC 通道
 # (plan ADR-3:用户已确认接受"默认开启,每条视频强制过 QC")。设为 false 时
-# ``generate_draft`` 直接接 ``node_06_human_reorder``,等价于改动前行为。
+# ``storyline_join`` 条件路由直接接 ``generate_draft``,6 个 assembly 节点不
+# 参与执行;2026-11-20 关卡①条件挂起改造后,QC 关闭的任务在关卡① 按
+# ``assembly_qc_gate_enabled=False`` 自动通过(状态缺失属预期,不挂起)。
 ASSEMBLY_QC_GATE_ENABLED: bool = (
     os.environ.get("ASSEMBLY_QC_GATE_ENABLED", "true").lower().strip()
     in ("1", "true", "yes")
 )
 
-# 修复循环最大重试次数(plan §7.5 / ADR-3:重试到上限后**不硬性中断**,
-# 把未解决的问题如实写进 report.md,照常进入关卡①)。
+# 修复循环最大重试次数(plan §7.5 / ADR-3 + P1-6 fail-closed 修订):
+# - 结构性错误(STRUCTURAL_CODES)达上限 → ``assembly_failed`` → END,绝不
+#   交给 generate_draft / 关卡①;
+# - 非结构性降级(预览级问题)达上限 → ``assembly_write_report`` 软降级,
+#   问题如实写进 report.md,交由关卡①(QC 降级复核)人工决定放行或 reject。
 ASSEMBLY_QC_MAX_RETRY: int = int(os.environ.get("ASSEMBLY_QC_MAX_RETRY", "2"))
 
 # ---------------------------------------------------------------------------

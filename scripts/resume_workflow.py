@@ -31,6 +31,9 @@
   但不共享控制状态,跨入口恢复不受支持。
 - resume value 传给 ``interrupt()`` 的值:关卡 ①/② 均按布尔语义消费
   (节点 docstring:``Command(resume=True)``);默认 ``true``。
+  关卡① 自 2026-11-20 起仅在 assembly QC 降级(escalated)时挂起 —— QC
+  正常/关闭自动通过,不产生可恢复的 ① 挂起;``reject`` 仅在 ① 的降级挂起
+  上生效(终止运行)。
 - **--continue 续跑(2026-11-17 创建台失败重试)**:无挂起关卡时不再直接拒绝,
   而是以 ``None`` 输入续跑(``run_with_events(g, None, config)``)—— LangGraph
   从最后 checkpoint 恢复,失败 superstep 的写入未提交,失败节点会被重新执行
@@ -102,7 +105,8 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "要恢复的关卡标识:interrupt payload 的 checkpoint(①/②)或 "
-            "legacy_id(如 checkpoint2_add_bgm)。唯一挂起时可省略;多重挂起时必填"
+            "legacy_id(如 checkpoint2_add_bgm)。唯一挂起时可省略;多重挂起时必填。"
+            "关卡① 自 2026-11-20 起仅 QC 降级(escalated)时挂起,平时不产生 ① 挂起"
         ),
     )
     p.add_argument(

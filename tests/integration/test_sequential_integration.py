@@ -27,6 +27,16 @@ from graph import build_graph
 from state import WorkflowState
 
 
+@pytest.fixture(autouse=True)
+def _qc_channel_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """关卡顺序契约测试族:关闭 assembly QC 通道(2026-11-20 关卡①条件挂起
+    改造后的用例分类)—— seed state 直接构造关卡①降级状态,① 仍挂起,
+    顺序/无重跑断言不变。"""
+    import config as _config
+
+    monkeypatch.setattr(_config, "ASSEMBLY_QC_GATE_ENABLED", False)
+
+
 def _seed_draft(draft_dir: Path, duration_us: int = 60_000_000) -> Path:
     """预置一份带 segments 的 draft_content.json(模拟节点 5 写完的状态)。"""
     draft_dir.mkdir(parents=True, exist_ok=True)
@@ -103,6 +113,10 @@ def seeded_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Workf
                 {"id": "sh6", "video_ref": "v1", "start_s": 50.0, "end_s": 60.0, "style_tag": "default"},
             ],
         },
+        # 2026-11-20 条件挂起:QC 已关(见 _qc_channel_off),直接构造关卡①
+        # 降级状态 → ① 按 escalated 挂起(顺序/无重跑断言不变)
+        "assembly_qc_gate_enabled": False,
+        "assembly_qc_status": "escalated",
         "error_log": [],
         "status_log": ["node_05_generate_draft_done"],
     }

@@ -58,6 +58,17 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
 
+@pytest.fixture(autouse=True)
+def _qc_channel_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """gate 恢复契约测试族:关闭 assembly QC 通道(2026-11-20 关卡①条件挂起
+    改造后的用例分类,审查修订版执行计划 §4.1/§4.4)—— 本文件不测 assembly
+    六节点,关卡①状态由 seed 直接构造;真实工作流用例因此不受 assembly
+    运行结果影响,① 挂起点确定。"""
+    import config as _config
+
+    monkeypatch.setattr(_config, "ASSEMBLY_QC_GATE_ENABLED", False)
+
+
 # ---------------------------------------------------------------------------
 # Postgres 连通性约定(与 test_postgres_checkpointer.py 一致)
 # ---------------------------------------------------------------------------
@@ -222,8 +233,15 @@ def _seed_draft(draft_dir: Path, duration_us: int = 35_000_000) -> Path:
     return draft_file
 
 
-def _seed_state(draft_path: str) -> dict[str, Any]:
-    return {
+def _seed_state(draft_path: str, *, legacy_no_marker: bool = False) -> dict[str, Any]:
+    """构造到达关卡①前的 state。
+
+    默认(新任务形态):``assembly_qc_gate_enabled=False`` + QC 状态 escalated
+    (QC 已关的 gate 契约测试,直接构造①降级状态 → ① 挂起)。
+    ``legacy_no_marker=True``:不写来源标记 —— 模拟 2026-11-20 标记引入**之前**
+    的旧 checkpoint(旧版节点无条件挂起,checkpoint 里没有该键)。
+    """
+    state: dict[str, Any] = {
         "session_id": "pg-resume",
         "video_input_path": "C:/tmp/fake.mp4",
         "draft_path": draft_path,
@@ -238,6 +256,14 @@ def _seed_state(draft_path: str) -> dict[str, Any]:
         "error_log": [],
         "status_log": ["node_05_generate_draft_done"],
     }
+    if not legacy_no_marker:
+        state["assembly_qc_gate_enabled"] = False
+        state["assembly_qc_status"] = "escalated"
+    else:
+        # 旧任务形态:QC 状态存在但值由旧运行产生(此处取真机存量任务同款
+        # pass_with_warnings);无来源标记 → 新代码走旧版无条件挂起兼容分支
+        state["assembly_qc_status"] = "pass_with_warnings"
+    return state
 
 
 def test_postgres_workflow_resume_after_new_saver(
@@ -303,6 +329,87 @@ def test_postgres_workflow_resume_after_new_saver(
             log = list(out.get("status_log") or [])
             assert log.count("node_05_generate_draft_done") == 1
             assert log.count("checkpoint1_resumed") == 1
+
+    _run_async(_body())
+
+
+# ---------------------------------------------------------------------------
+# 场景 2b:旧版本 checkpoint(无 assembly_qc_gate_enabled 标记)跨版本恢复
+# (2026-11-20 关卡①条件挂起改造,审查修订版执行计划 §4.4)
+# ---------------------------------------------------------------------------
+def test_postgres_legacy_checkpoint_resume_on_new_code(
+    postgres_uri: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """旧 checkpoint + 新代码:恢复不卡死、resume 值被消费、node_05 不重跑。
+
+    用旧代码形态构造挂起态:把 load_media 换成"不写 ``assembly_qc_gate_enabled``
+    标记"的旧版行为(2026-11-20 之前的节点不写该键 → checkpoint 里没有标记),
+    QC 状态取真机存量任务同款 ``pass_with_warnings``。新代码对无标记的任务走
+    "无条件挂起"兼容分支:挂起行为与旧版一致,checkpoint 里留下同一形态的
+    ① interrupt。然后用**新连接** + 新图实例恢复,验证审查 §4.4 五项:
+    ① interrupts 可读;② resume 不因新代码卡死;③ ``_post_resume`` 照常执行
+    (写 checkpoint1_resumed);④ node_05 不重跑;⑤ 推进到关卡②。
+    """
+    import graph as graph_module
+    from graph import build_graph, get_checkpointer
+    from jy_common.translate_client import MockTranslateClient, set_default_client
+
+    monkeypatch.setenv("POSTGRES_URI", postgres_uri)
+    set_default_client(MockTranslateClient())
+
+    # 模拟旧版 load_media:跑真实逻辑但剥掉来源标记(旧节点不写该键)
+    _real_load_media = graph_module.storyline_load_media_node
+
+    def _legacy_load_media(state: dict) -> dict:
+        out = _real_load_media(state)
+        out.pop("assembly_qc_gate_enabled", None)
+        return out
+
+    monkeypatch.setattr(graph_module, "storyline_load_media_node", _legacy_load_media)
+
+    draft_dir = tmp_path / "drafts" / "legacy"
+    draft_file = _seed_draft(draft_dir)
+    monkeypatch.setenv("AUTO_VIDEO_EDITOR_DRAFT_DIR", str(draft_dir))
+
+    state = _seed_state(str(draft_file), legacy_no_marker=True)
+    thread_id = f"pg-legacy-{uuid4().hex}"
+    config = {"configurable": {"thread_id": thread_id}}
+
+    async def _body() -> None:
+        # ---- 第一段:旧任务形态跑到关卡① 挂起(兼容分支 = 无条件 interrupt)----
+        async with get_checkpointer() as saver:
+            g1 = build_graph(
+                checkpointer=saver,
+                thread_id=thread_id,
+                start_heartbeat_thread=False,
+            )
+            await g1.ainvoke(state, config=config)
+            snap1 = await g1.aget_state(config)
+            assert snap1.interrupts, "旧任务形态应在关卡① 挂起"
+            assert snap1.interrupts[0].value["checkpoint"] == "①"
+
+        # ---- 第二段:新连接 + 新图实例,模拟"升级后恢复旧任务" ----
+        async with get_checkpointer() as saver2:
+            g2 = build_graph(
+                checkpointer=saver2,
+                thread_id=thread_id,
+                start_heartbeat_thread=False,
+            )
+            snap2 = await g2.aget_state(config)
+            # ① interrupts 可读
+            assert snap2.interrupts, "新代码应仍能读到旧 checkpoint 的 ① 中断态"
+            assert tuple(snap2.next) == ("node_06_human_reorder",)
+
+            # resume:兼容分支 interrupt() 返回已存恢复值 → 不卡死,推进到②
+            out = await g2.ainvoke(Command(resume=True), config=config)
+            interrupts = out.get("__interrupt__") or []
+            assert interrupts, "恢复旧任务后应在关卡② 挂起"
+            assert interrupts[0].value["checkpoint"] == "②"
+
+            # ③ resume 值被消费(_post_resume 照常执行);④ node_05 不重跑
+            log = list(out.get("status_log") or [])
+            assert log.count("checkpoint1_resumed") == 1
+            assert log.count("node_05_generate_draft_done") == 1
 
     _run_async(_body())
 

@@ -353,7 +353,9 @@ def test_checkpoint3_node_removed_and_10b_17_direct(monkeypatch):
     assert ("node_15_localize_covers_en", "node_09_inject_fx") in pairs
     assert ("node_17_inject_english_tts", "node_09_inject_fx") in pairs
 
-    assert SCHEMA_VERSION == 10
+    # 2026-11-20 关卡①条件挂起:node_06 展示元数据改写(QC 降级复核),拓扑
+    # 零变更,按 bump4 先例仅元数据文案也 bump(布局缓存失效)→ 11
+    assert SCHEMA_VERSION == 11
     assert CHECKPOINT_MARKS == ("①", "②")
 
 

@@ -84,7 +84,7 @@ def test_node_names_endpoint_returns_registry_names():
     )
     # 抽查与节点图视图展示一致的中文名
     assert names["storyline_load_media"] == "载入媒体"
-    assert names["node_06_human_reorder"] == "人工调整镜头顺序①"
+    assert names["node_06_human_reorder"] == "QC降级复核①"
     assert names["storyline_recommend_transition"] == "推荐转场"
 
 

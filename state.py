@@ -351,6 +351,13 @@ class WorkflowState(TypedDict, total=False):
     assembly_report_path: Annotated[Optional[str], _last_wins]               # 最终 report.md
     assembly_qc_status: Annotated[Optional[str], _last_wins]                 # "pass" | "pass_with_warnings" | "escalated"
     assembly_qc_retry_count: NotRequired[int]                                # 修复循环重试计数
+    # 2026-11-20 关卡①条件挂起:运行来源标记 —— 本次运行建图时
+    # ASSEMBLY_QC_GATE_ENABLED 是否开启。由 storyline_load_media(START 后
+    # 第一个节点,且 QC 开/关两态都会执行)写入,随 checkpoint 持久化;关卡①
+    # 据此区分「QC 关闭 → 状态缺失属预期」与「QC 启用 → 状态缺失属异常」,
+    # 恢复时不必依赖恢复进程当前的环境变量。None = 旧 checkpoint(标记引入
+    # 前的运行),关卡① 对其完整保留旧的无条件挂起行为。
+    assembly_qc_gate_enabled: NotRequired[Optional[bool]]
 
     # ===== 第六期 P1(assembly 前移为草稿内容生产链)新增 =====
     # 原始 storyline_plan 的规范化 JSON sha256(canonical_json_sha256 统一口径),

@@ -2,7 +2,8 @@
 
 背景:69s 4K HEVC 10bit 源在 ``_run_ffmpeg_extract_frames`` 旧实现下
 (全分辨率 PNG + timeout=60)抽帧超时 → **静默返回空列表** → 0 镜头 →
-下游 storyline 全部级联为空 → 发布 00:00 空草稿挂关卡①。
+下游 storyline 全部级联为空 → 发布 00:00 空草稿(node_05 已 fail-closed
+拦截,2026-11-20 起是空草稿唯一拦截点,见 test_empty_storyline_fail_closed)。
 
 回归点:
 1. 抽帧命令必须降分辨率(scale),且默认超时 300s;

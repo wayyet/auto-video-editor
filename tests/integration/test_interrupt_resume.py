@@ -35,6 +35,17 @@ from draft_ops.draft_integrity import REQUIRED_FEATURE_KEYS
 REQUIRED_FEATURES_NONE = {key: False for key in REQUIRED_FEATURE_KEYS}
 
 
+@pytest.fixture(autouse=True)
+def _qc_channel_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """gate/resume 契约测试族:关闭 assembly QC 通道(2026-11-20 关卡①条件
+    挂起改造后的用例分类,审查修订版执行计划 §4.1)—— 本文件不测 assembly
+    六节点,只测关卡 interrupt/resume 契约;seed state 直接构造关卡①降级
+    状态(escalated),① 仍无条件测试路径中挂起,恢复链路覆盖不变。"""
+    import config as _config
+
+    monkeypatch.setattr(_config, "ASSEMBLY_QC_GATE_ENABLED", False)
+
+
 def _seed_state(draft_path: str) -> WorkflowState:
     return {
         "session_id": "int-test",
@@ -43,6 +54,10 @@ def _seed_state(draft_path: str) -> WorkflowState:
         "draft_encryption_status": "plaintext",
         "draft_version_strategy": "strategy_a_version_lock",
         "shot_plan": {"video_path": "", "shots": [{"id": "sh1", "start_s": 0.0, "end_s": 5.0}]},
+        # 2026-11-20 条件挂起:QC 已关(见 _qc_channel_off),直接构造关卡①
+        # 降级状态 → ① 按 escalated 挂起,gate 契约覆盖不变
+        "assembly_qc_gate_enabled": False,
+        "assembly_qc_status": "escalated",
         "error_log": [],
         "status_log": ["node_05_generate_draft_done"],
         "required_features": REQUIRED_FEATURES_NONE,

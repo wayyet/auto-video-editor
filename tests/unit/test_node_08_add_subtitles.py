@@ -785,8 +785,9 @@ def test_zh_subtitles_without_plan_leaves_draft_untouched(tmp_path: Path) -> Non
     assert any("无法把当前草稿视频段映射到分组" in x for x in out["status_log"])
 
 
-def test_zh_subtitles_survive_human_reorder(tmp_path: Path) -> None:
-    """关卡①人工调序后:target 位置互换、源范围不变 → 组区间跟随新位置。"""
+def test_zh_subtitles_survive_segment_reorder(tmp_path: Path) -> None:
+    """草稿段被调序后(历史:曾由关卡①人工调整,2026-11-20 改条件挂起):
+    target 位置互换、源范围不变 → 组区间跟随新位置。"""
     draft = _zh_draft()
     segs = draft["tracks"][0]["segments"]
     segs[0], segs[1] = segs[1], segs[0]
