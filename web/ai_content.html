@@ -145,11 +145,6 @@
       <div id="body-web-topic"></div>
     </section>
 
-    <section id="sec-web-topic-en">
-      <h2>01b · 英文检索(海外社媒) <span class="st" id="st-web-topic-en"></span></h2>
-      <div id="body-web-topic-en"></div>
-    </section>
-
     <section id="sec-template">
       <h2>02 · 文案模板推荐 <span class="st" id="st-template"></span></h2>
       <div id="body-template"></div>
@@ -267,46 +262,6 @@
         // 「Bing(MediaCrawler 回退)」而隐藏失败细节;数据来自后端已脱敏限长)
         if (sec.fallback && sec.fallback.reason) {
           rows.push(el("div", { class: "hint", text: `回退说明:${sec.fallback.reason}` }));
-        }
-        rows.push(reasonNote(sec.reason));
-        body.append(...rows.filter(Boolean));
-      },
-
-      // 英文检索线(2026-11-20 审查修订版阶段4):独立区块渲染,平台集合与
-      // 语言/内容类型逐条可见;unknown 语言如实标注,不冒充英文(审查阶段4任务5)
-      webTopicEn(body, sec) {
-        const rows = [];
-        const grid = el("div", { class: "kv" });
-        grid.append(...kvRow("搜索引擎", sec.engine || "未知引擎"));
-        if (sec.platforms.length) {
-          grid.append(...kvRow("检索平台", sec.platforms.join(" / ")));
-        }
-        if (sec.query != null) grid.append(...kvRow("检索词", sec.query));
-        if (sec.searchedAt != null) grid.append(...kvRow("检索时间", sec.searchedAt));
-        rows.push(grid);
-        const langLabel = { en: "英文", non_en: "非英文", unknown: "语言未知" };
-        const kindLabel = { video: "视频", image: "图片", media: "媒体", post: "帖子" };
-        if (sec.entries.length) {
-          const head = el("div", { class: "hint", text: `来源网站(${sec.entries.length} 条,检索自 ${sec.engine || "未知引擎"}):` });
-          rows.push(head);
-          for (const item of sec.entries) {
-            const domain = item.domain || domainOf(item.url) || "";
-            const metaParts = [
-              domain ? `来源:${domain}` : "",
-              item.platform ? `平台:${item.platform}` : "",
-              item.language_status ? `语言:${langLabel[item.language_status] || item.language_status}` : "",
-              item.content_kind ? `类型:${kindLabel[item.content_kind] || item.content_kind}` : "",
-            ].filter(Boolean);
-            rows.push(
-              el("div", { class: "entry" },
-                el("div", { class: "title" }, linkFor(item.url, item.title || "(无标题)")),
-                metaParts.length ? el("div", { class: "meta", text: metaParts.join(" · ") }) : null,
-                item.snippet ? el("p", { class: "snippet", text: item.snippet }) : null,
-              ),
-            );
-          }
-        } else if (sec.status === "ok" || sec.status === "cache_hit") {
-          rows.push(el("div", { class: "hint", text: "英文检索完成,未返回结果条目。" }));
         }
         rows.push(reasonNote(sec.reason));
         body.append(...rows.filter(Boolean));
@@ -435,21 +390,18 @@
       enTitle.childNodes[0].textContent = `05 · 英文字幕(${vm.subtitlesEn.count} 条) `;
 
       renderBadge("web-topic", vm.webTopic.status);
-      renderBadge("web-topic-en", vm.webTopicEn.status);
       renderBadge("template", vm.template.status);
       renderBadge("script", vm.script.status);
       renderBadge("subtitles-zh", vm.subtitlesZh.status);
       renderBadge("subtitles-en", vm.subtitlesEn.status);
 
       const bodies = {
-        "web-topic": $("body-web-topic"), "web-topic-en": $("body-web-topic-en"),
-        "template": $("body-template"),
+        "web-topic": $("body-web-topic"), "template": $("body-template"),
         "script": $("body-script"), "subtitles-zh": $("body-subtitles-zh"),
         "subtitles-en": $("body-subtitles-en"),
       };
       for (const b of Object.values(bodies)) b.replaceChildren();
       renderers.webTopic(bodies["web-topic"], vm.webTopic);
-      renderers.webTopicEn(bodies["web-topic-en"], vm.webTopicEn);
       renderers.template(bodies["template"], vm.template);
       renderers.script(bodies["script"], vm.script);
       renderers.subtitles(bodies["subtitles-zh"], vm.subtitlesZh, false);
@@ -458,7 +410,7 @@
 
     // 全局失败:五区块保留但统一置灰为 unavailable(标题仍在,不藏区块)
     function renderGlobalError(message) {
-      const badgeIds = ["web-topic", "web-topic-en", "template", "script", "subtitles-zh", "subtitles-en"];
+      const badgeIds = ["web-topic", "template", "script", "subtitles-zh", "subtitles-en"];
       for (const id of badgeIds) {
         renderBadge(id, "unavailable");
         $(`body-${id}`).replaceChildren(el("div", { class: "hint err-text", text: message }));

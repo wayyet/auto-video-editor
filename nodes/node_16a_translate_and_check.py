@@ -38,15 +38,9 @@ from nodes.node_16_translate_subtitles import (
     _compute_source_fingerprint,
     _marker_exists,
     _read_segments_from_draft,
-    _reference_digest,
     _save_marker,
     _write_marker,
     write_srt_from_segments,
-)
-from nodes.storyline._common import (
-    _read_json_artifact,
-    extract_web_topic_references,
-    format_web_topic_reference,
 )
 from state import WorkflowState
 
@@ -98,31 +92,13 @@ def node_16a_translate_and_check(state: WorkflowState) -> dict:
 
     draft_dir_p = Path(draft_dir)
 
-    # ----- 英文参考资料(2026-11-20 审查修订版阶段3;审查 §3.4/§3.14)-----
-    # 英文检索线产物(解析后的 dict)→ 清洗后的参考文本 + 来源审计列表。
-    # 产物缺失/failed/无有效条目 → reference=""(与"无参考"同 hash,行为与
-    # 旧版一致);参考资料 hash 进指纹:检索资料变化 → marker 失效重翻。
-    en_doc = _read_json_artifact(state, "storyline_web_topic_en_artifact")
-    reference = (
-        format_web_topic_reference(en_doc) if isinstance(en_doc, dict) else ""
-    )
-    reference_sources = (
-        extract_web_topic_references(en_doc)
-        if (reference and isinstance(en_doc, dict))
-        else []
-    )
-    reference_sha256 = _reference_digest(reference)
-
     # ----- 翻译器身份与指纹(marker 复用判定,修订计划 §5.5)-----
     client = get_default_client()
     is_real = isinstance(client, LLMTranslateClient)
     translator_id = client.translator_id if is_real else "mock"
     prompt_version = client.prompt_version if is_real else TRANSLATION_PROMPT_VERSION
     fingerprint = _compute_source_fingerprint(
-        segments_zh,
-        translator_id=translator_id,
-        prompt_version=prompt_version,
-        reference_sha256=reference_sha256,
+        segments_zh, translator_id=translator_id, prompt_version=prompt_version
     )
     status = STATUS_REAL if is_real else STATUS_STUB
 
@@ -133,13 +109,12 @@ def node_16a_translate_and_check(state: WorkflowState) -> dict:
         fingerprint=fingerprint,
         translator_id=translator_id,
         prompt_version=prompt_version,
-        reference_sha256=reference_sha256,
     ):
         # 已有有效 marker,跳过翻译调用,直接读草稿(可能含人工修正)
         segments_en = _read_segments_from_draft(draft_dir_p)
     else:
         # 真实客户端失败 → TranslationError 上抛(fail-closed,marker 未写)
-        translated = translate_segments(segments_zh, reference=reference or None)
+        translated = translate_segments(segments_zh)
         # 同步 start_ms / end_ms(translate_client 可能不返回)
         for i, (src, dst) in enumerate(zip(segments_zh, translated)):
             dst.setdefault("start_ms", src.get("start_ms", 0))
@@ -153,19 +128,11 @@ def node_16a_translate_and_check(state: WorkflowState) -> dict:
             fingerprint=fingerprint,
             translator_id=translator_id,
             prompt_version=prompt_version,
-            reference_sha256=reference_sha256,
-            reference_sources=reference_sources,
         )
         segments_en = translated
 
     # ----- 写 SRT -----
     srt_path = write_srt_from_segments(draft_dir_p, segments_en)
-
-    status_log = ["node_16a_translate_done"]
-    if reference:
-        # 审计留痕(审查 §3.14):本次翻译实际使用了英文参考资料(来源与
-        # reference_sha256 已随 marker 落盘,可复现)。
-        status_log.append("node_16a_translate_with_reference")
 
     return {
         "subtitle_segments_en": list(segments_en),
@@ -173,5 +140,5 @@ def node_16a_translate_and_check(state: WorkflowState) -> dict:
         "subtitle_translation_status": status,
         "subtitle_translator_id": translator_id,
         "subtitle_translation_fingerprint": fingerprint,
-        "status_log": status_log,
+        "status_log": ["node_16a_translate_done"],
     }

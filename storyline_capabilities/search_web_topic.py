@@ -45,11 +45,6 @@ except ImportError:
 # client 不反向 import 本包)。
 from storyline_capabilities import mediacrawler_client as _mc_client
 
-# Xpoz(langchain-xpoz)海外社媒适配器(2026-11-20 审查修订版阶段2;无环依赖
-# 同上)。中文线(mediacrawler)与英文线(xpoz)共用本模块的分发框架,但
-# 产物/缓存/标签完全隔离(双线中英分离,审查 §2.1)。
-from storyline_capabilities import xpoz_client as _xpoz_client
-
 
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -83,7 +78,6 @@ ARTIFACT_SCHEMA_VERSION: int = 2
 # 渲染,隧道/直连均实测返回 10 条真实结果);google_html 代码保留可随时切回。
 _PARSER_VERSIONS: dict[str, str] = {
     "mediacrawler": "mediacrawler_v1",  # 基础键;实际 hash 用 mediacrawler:{platform}:{revision}
-    "xpoz": "xpoz_v1",  # 基础键;实际 hash 用 xpoz:{platforms}:mpp{n}:lp{v}:cp{v} → 动态解析 xpoz_v{adapter}(审查 §3.6)
     "duckduckgo_html": "ddg_html_v1",
     "google_html": "google_html_v1",
     "bing_html": "bing_html_v1",
@@ -91,7 +85,6 @@ _PARSER_VERSIONS: dict[str, str] = {
 }
 _PROVIDER_LOCALES: dict[str, str] = {
     "mediacrawler": "",
-    "xpoz": "en",
     "duckduckgo_html": "",
     "google_html": "zh-CN",
     "bing_html": "zh-CN",
@@ -99,7 +92,6 @@ _PROVIDER_LOCALES: dict[str, str] = {
 }
 _PROVIDER_ENGINE_LABELS: dict[str, str] = {
     "mediacrawler": "MediaCrawler",
-    "xpoz": "Xpoz(海外社媒)",
     "duckduckgo_html": "DuckDuckGo",
     "google_html": "Google",
     "bing_html": "Bing",
@@ -108,17 +100,6 @@ _PROVIDER_ENGINE_LABELS: dict[str, str] = {
 
 # mediacrawler 条目的 source 值(实际数据来源标识,进 script.json references)。
 _MC_ITEM_SOURCE = "mediacrawler"
-
-# ---------------------------------------------------------------------------
-# Xpoz 英文线常量(2026-11-20 审查修订版阶段2)
-# ---------------------------------------------------------------------------
-# 语言/内容策略版本(编入 request_hash,审查 §3.6:改策略必得不同 hash);
-# 语言过滤口径见 _detect_language_status docstring(D3 决策,执行记录 §阶段0)。
-_XPOZ_LANG_POLICY_VERSION = 1
-_XPOZ_CONTENT_POLICY_VERSION = 1
-# 英文线相关性守卫阈值:与 zh 的 WEB_TOPIC_RELEVANCE_MIN_MATCHED **分开声明**
-# (审查阶段2任务9:不为英文检索调整中文阈值;同值但独立可调、独立测试)。
-WEB_TOPIC_XPOZ_RELEVANCE_MIN_MATCHED: int = 2
 
 # 调试片段落盘上限(§5.5:≤64KiB)。
 WEB_TOPIC_DEBUG_MAX_BYTES: int = 64 * 1024
@@ -263,22 +244,17 @@ def _parser_version_for(provider: str) -> str:
     ``mediacrawler:{platform}:{revision}`` 动态键解析为
     ``mc_{platform}_v{adapter}``:平台与适配器语义进 hash;上游 revision 编在
     provider 串里,MC 升级(或节点层传的 revision 变化)必得不同 hash。
-    ``xpoz:{platforms}:mpp{n}:lp{v}:cp{v}`` 动态键解析为 ``xpoz_v{adapter}``。
     """
     if provider.startswith("mediacrawler:"):
         parts = provider.split(":")
         platform = parts[1] if len(parts) > 1 else "xhs"
         return f"mc_{platform}_v{_mc_client.MEDIACRAWLER_ADAPTER_VERSION}"
-    if provider.startswith("xpoz:"):
-        return f"xpoz_v{_xpoz_client.XPOZ_ADAPTER_VERSION}"
     return _PARSER_VERSIONS.get(provider, "unknown")
 
 
 def _locale_for(provider: str) -> str:
     if provider.startswith("mediacrawler:"):
         return ""
-    if provider.startswith("xpoz:"):
-        return "en"
     return _PROVIDER_LOCALES.get(provider, "")
 
 
@@ -290,20 +266,6 @@ def mediacrawler_request_provider(platform: str, mc_revision: str) -> str:
     以首选检索策略为准,回退成功也保留该 hash)。
     """
     return f"mediacrawler:{platform}:{mc_revision or 'unknown'}"
-
-
-def xpoz_request_provider(platforms, max_per_platform: int) -> str:
-    """xpoz 引擎的 request_hash provider 串(审查修订版 §3.6 P1)。
-
-    平台集合(**排序后**序列化,相同平台集合不受 env 顺序影响)+ 每平台上限
-    + 语言/内容策略版本全部编入 → 切换平台列表、调整条数、改过滤策略必得
-    不同 hash(缓存隔离);节点层与能力层用同一函数计算,两侧一致才命中缓存。
-    """
-    ordered = "+".join(sorted({str(p) for p in platforms}))
-    return (
-        f"xpoz:{ordered}:mpp{int(max_per_platform)}"
-        f":lp{_XPOZ_LANG_POLICY_VERSION}:cp{_XPOZ_CONTENT_POLICY_VERSION}"
-    )
 
 
 def build_request_hash(*, query: str, provider: str, max_results: int) -> str:
@@ -1099,194 +1061,6 @@ def _map_mc_records(
 
 
 # ---------------------------------------------------------------------------
-# Xpoz 条目映射与语言过滤(2026-11-20 审查修订版阶段2;§3.5/§3.13/§3.7)
-# ---------------------------------------------------------------------------
-# CJK/假名/谚文字符(启发式语言检测的"可判定非英文"信号)。
-_XPOZ_CJK_ANY_PATTERN = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
-
-
-def _detect_language_status(text: str) -> str:
-    """Reddit/Instagram 等无统一语言字段的启发式检测(执行记录 D3 策略)。
-
-    含 CJK/假名/谚文字符 → ``non_en``;字母类字符中 ASCII 占比 ≥0.9 → ``en``;
-    其余(混合脚本/无字母/占比不足)→ ``unknown``。不伪装判定结果 ——
-    unknown 条目保留但如实标记,产物表述为"英文关键词检索结果"。
-    """
-    s = str(text or "")
-    if not s.strip():
-        return "unknown"
-    if _XPOZ_CJK_ANY_PATTERN.search(s):
-        return "non_en"
-    letters = [ch for ch in s if ch.isalpha()]
-    if not letters:
-        return "unknown"
-    ascii_ratio = sum(1 for ch in letters if ord(ch) < 128) / len(letters)
-    return "en" if ascii_ratio >= 0.9 else "unknown"
-
-
-def _map_xpoz_item(platform: str, item: dict[str, Any]) -> Optional[dict[str, Any]]:
-    """单条 Xpoz 原始记录 → 扩展条目;无效/可判定非英文返回 None(整条丢弃)。
-
-    四平台字段规则(审查 §2.3 核验 + 执行记录 D3/D4):
-    - TikTok:url=@username/video/id 构造;language=description_language;
-      video=video_url/duration;snippet=description+hashtags;
-    - X/Twitter:url=x.com/{author}/status/{id}(服务端已 language="en" 过滤,
-      lang 字段仍二次核验);video=media_urls 扩展名;title=text;
-    - Reddit:url=permalink(补全域名)/url/post_url 候选;language=启发式;
-      video=is_video;title=title,snippet=selftext;
-    - Instagram:url=code_url;language=启发式;video=video_url/media_type;
-      title=caption。
-    """
-    url = ""
-    title_raw: Any = ""
-    snippet_raw: Any = ""
-    language_status = "unknown"
-    content_kind = "post"
-    has_video = False
-
-    if platform == "tiktok":
-        username = str(item.get("username") or "").strip().lstrip("@")
-        item_id = str(item.get("id") or "").strip()
-        if username and item_id:
-            url = f"https://www.tiktok.com/@{username}/video/{item_id}"
-        title_raw = item.get("description")
-        snippet_raw = item.get("description")
-        lang_field = str(item.get("description_language") or "").strip().lower()
-        language_status = (
-            "en" if lang_field == "en" else ("non_en" if lang_field else "unknown")
-        )
-        video_urls = item.get("video_url") if isinstance(item.get("video_url"), list) else []
-        duration = item.get("duration") or 0
-        has_video = bool(video_urls) or bool(duration)
-        content_kind = "video" if has_video else "post"
-        tags = item.get("hashtags") if isinstance(item.get("hashtags"), list) else []
-        tag_text = " ".join(
-            f"#{str(t).lstrip('#')}" for t in tags if str(t).strip()
-        )
-        if tag_text:
-            snippet_raw = f"{snippet_raw or ''} {tag_text}".strip()
-    elif platform == "twitter":
-        author = str(item.get("author_username") or "").strip().lstrip("@")
-        item_id = str(item.get("id") or "").strip()
-        if author and item_id:
-            url = f"https://x.com/{author}/status/{item_id}"
-        title_raw = item.get("text")
-        snippet_raw = item.get("text")
-        lang_field = str(item.get("lang") or "").strip().lower()
-        language_status = (
-            "en" if lang_field == "en" else ("non_en" if lang_field else "unknown")
-        )
-        media_urls = item.get("media_urls") if isinstance(item.get("media_urls"), list) else []
-        if media_urls:
-            content_kind = "media"
-            has_video = any(
-                str(u).lower().endswith((".mp4", ".m3u8", ".webm")) for u in media_urls
-            )
-    elif platform == "reddit":
-        title_raw = item.get("title")
-        snippet_raw = item.get("selftext")
-        for key in ("permalink", "url", "post_url"):
-            candidate = str(item.get(key) or "").strip()
-            if candidate:
-                url = (
-                    candidate
-                    if candidate.lower().startswith(("http://", "https://"))
-                    else f"https://www.reddit.com{candidate}"
-                )
-                break
-        language_status = _detect_language_status(f"{title_raw or ''} {snippet_raw or ''}")
-        is_video = bool(item.get("is_video"))
-        content_kind = "video" if is_video else "post"
-        has_video = is_video
-    elif platform == "instagram":
-        title_raw = item.get("caption")
-        snippet_raw = item.get("caption")
-        url = str(item.get("code_url") or "").strip()
-        media_type = str(item.get("media_type") or "").strip().lower()
-        ig_video = bool(item.get("video_url")) or media_type in ("video", "clips", "reel")
-        content_kind = "video" if ig_video else ("image" if media_type == "image" else "post")
-        has_video = ig_video
-        language_status = _detect_language_status(str(title_raw or ""))
-    else:  # 白名单外的平台代码不出现在 records(客户端已校验);防御丢弃
-        return None
-
-    # 语言过滤(D3):可判定非英文 → 整条丢弃;en/unknown 保留
-    if language_status == "non_en":
-        return None
-    # URL 校验:构造/候选 URL 须 scheme+host 双有效(与 _map_mc_records 纪律一致)
-    try:
-        parsed = urllib.parse.urlsplit(url)
-        scheme_ok = parsed.scheme.lower() in _ALLOWED_URL_SCHEMES
-    except ValueError:
-        scheme_ok = False
-    if not scheme_ok or not parsed.netloc:
-        return None
-    title = _clean_web_text(title_raw, 300)
-    if not title:
-        return None
-    snippet = _clean_web_text(snippet_raw, WEB_TOPIC_SNIPPET_MAX_CHARS)
-    return {
-        "url": url,
-        "title": title,
-        "snippet": snippet,
-        "source": _xpoz_client.platform_label(platform),
-        "platform": platform,
-        "language_status": language_status,
-        "content_kind": content_kind,
-        "has_video": has_video,
-    }
-
-
-def _map_xpoz_records(
-    records: list[dict[str, Any]],
-    max_results: int,
-    platforms: tuple[str, ...] | list[str],
-) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    """Xpoz 原始记录 → 扩展条目列表 + 各平台保留数(供 diagnostics)。
-
-    - 语言过滤/URL 校验/标题清洗由 ``_map_xpoz_item`` 完成;
-    - URL 全局去重(同 URL 取首条);
-    - 跨平台**均衡轮询合并**(审查 §3.7 P1:按平台固定拼接截断会让列表前序
-      平台占满名额)—— 每轮从各平台按序各取一条,直到上限或取尽;
-    - 轮询顺序 = platforms 传入顺序(config 白名单序),确定性可测试。
-    """
-    by_platform: dict[str, list[dict[str, Any]]] = {str(p): [] for p in platforms}
-    for rec in records:
-        if not isinstance(rec, dict):
-            continue
-        platform = str(rec.get("platform") or "")
-        item = rec.get("item")
-        if platform not in by_platform or not isinstance(item, dict):
-            continue
-        mapped = _map_xpoz_item(platform, item)
-        if mapped is not None:
-            by_platform[platform].append(mapped)
-
-    merged: list[dict[str, Any]] = []
-    seen_urls: set[str] = set()
-    cursors = {p: 0 for p in by_platform}
-    while len(merged) < max_results:
-        progressed = False
-        for p in by_platform:
-            if len(merged) >= max_results:
-                break
-            bucket = by_platform[p]
-            while cursors[p] < len(bucket):
-                candidate = bucket[cursors[p]]
-                cursors[p] += 1
-                if candidate["url"] in seen_urls:
-                    continue
-                seen_urls.add(candidate["url"])
-                merged.append(candidate)
-                progressed = True
-                break
-        if not progressed:
-            break
-    kept = {p: sum(1 for it in merged if it["platform"] == p) for p in by_platform}
-    return merged, kept
-
-
-# ---------------------------------------------------------------------------
 # 对外主入口(可注入 provider)
 # ---------------------------------------------------------------------------
 def search_web_topic(
@@ -1699,93 +1473,6 @@ def search_web_topic(
         doc["fallback"] = fallback_info
         return doc
 
-    if provider == "xpoz":
-        # 2026-11-20 审查修订版阶段2:Xpoz 海外社媒英文检索线(双线分离,审查
-        # §2.1/§4.1)—— 独立产物、独立缓存,**无回退引擎**(失败退回纯翻译现状,
-        # D6 决策);api_key 缺失由节点层先行软跳过,此处 fail-closed 兜底。
-        opts = dict(provider_options or {})
-        platforms = tuple(str(p) for p in (opts.get("platforms") or ()))
-        max_per_platform = int(opts.get("max_per_platform") or 5)
-        operation_timeout = float(
-            opts.get("operation_timeout") or _xpoz_client.XPOZ_SDK_DEFAULT_TIMEOUT
-        )
-        api_key = str(opts.get("api_key") or "")
-        if not platforms:
-            raise ValueError("xpoz provider_options requires platforms")
-        # request_hash:平台集合(排序)+每平台上限+语言/内容策略版本编入
-        # (审查 §3.6 P1:改任何一项必得不同 hash,缓存隔离)
-        effective_request_hash = build_request_hash(
-            query=str(query),
-            provider=xpoz_request_provider(platforms, max_per_platform),
-            max_results=max_results,
-        )
-        try:
-            records, x_error, x_message, x_diag = _xpoz_client.search_xpoz(
-                query=str(query),
-                max_results=max_per_platform,
-                platforms=platforms,
-                api_key=api_key,
-                operation_timeout=operation_timeout,
-            )
-        except (TypeError, ValueError) as exc:
-            # provider_options 形状错误属编程错误:节点层 TOOL_EXECUTION_FAILED 留痕
-            raise ValueError(f"xpoz provider_options invalid: {exc}") from exc
-
-        def _finalize(doc: dict[str, Any]) -> dict[str, Any]:
-            doc["request_hash"] = effective_request_hash
-            doc["provider"] = "xpoz"
-            doc["platforms"] = list(platforms)
-            return doc
-
-        if x_error:
-            return _finalize(
-                _result(
-                    items=[],
-                    error_code=x_error,
-                    message=str(x_message),
-                    diagnostics=x_diag,
-                )
-            )
-
-        items, kept = _map_xpoz_records(records, max_results, platforms)
-        x_diag["mapped_kept"] = kept
-        if not items:
-            return _finalize(
-                _result(
-                    items=[],
-                    error_code="NO_RESULTS",
-                    message="Xpoz returned no results (after language/content filtering).",
-                    diagnostics=x_diag,
-                )
-            )
-        # 相关性守卫(英文线独立阈值 WEB_TOPIC_XPOZ_RELEVANCE_MIN_MATCHED,
-        # 审查阶段2任务9):英文 query token 对结果零星命中 → 可观察失败。
-        matched = _count_relevant_results(str(query), items)
-        x_diag["relevance_matched"] = matched
-        x_diag["relevance_total"] = len(items)
-        if matched < min(WEB_TOPIC_XPOZ_RELEVANCE_MIN_MATCHED, len(items)):
-            return _finalize(
-                _result(
-                    items=[],
-                    error_code="IRRELEVANT_RESULTS",
-                    message=(
-                        "Xpoz results unrelated to the query (relevance matched "
-                        f"{matched}/{len(items)})."
-                    ),
-                    diagnostics=x_diag,
-                )
-            )
-        preview_urls = [it["url"] for it in items if it.get("url")]
-        return _finalize(
-            _result(
-                items=items,
-                preview_urls=preview_urls,
-                error_code=None,
-                message="",
-                diagnostics=x_diag,
-            )
-        )
-
     if provider != "duckduckgo_html":
         return _result(
             items=[],
@@ -1860,9 +1547,6 @@ __all__ = [
     "search_web_topic",
     "build_request_hash",
     "strip_instruction_parentheticals",
-    "mediacrawler_request_provider",
-    "xpoz_request_provider",
     "WEB_TOPIC_RELEVANCE_MIN_MATCHED",
-    "WEB_TOPIC_XPOZ_RELEVANCE_MIN_MATCHED",
     "ARTIFACT_SCHEMA_VERSION",
 ]

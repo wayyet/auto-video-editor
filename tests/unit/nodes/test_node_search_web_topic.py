@@ -14,47 +14,15 @@ from typing import Any, Callable
 
 import nodes.storyline.node_search_web_topic as node_mod
 from nodes.storyline.node_search_web_topic import storyline_search_web_topic_node
-from jy_common.translate_client import TranslationError
 from storyline_capabilities.search_web_topic import (
     build_request_hash,
     mediacrawler_request_provider,
-    xpoz_request_provider,
 )
 
 # 审查修订版 P2-01/P2-03:节点从 config 读引擎/代理/调试开关,单测统一显式
 # 固定这三项(不依赖 config 模块默认值,防环境变量泄漏影响断言)。
 _TEST_ENGINE = "google_html"
 _TEST_PROXY = "socks5h://127.0.0.1:1088"
-
-# 2026-11-20 审查修订版阶段2:双线节点的英文线标签(单测环境下 API key 未配置
-# → 英文线恒 skipped;所有 zh 断言都必须带上这枚尾随标签)。
-_EN_SKIPPED = "storyline_search_web_topic_en_skipped"
-_EN_DONE = "storyline_search_web_topic_en_done"
-_EN_NO_RESULTS = "storyline_search_web_topic_en_no_results"
-_EN_FAILED = "storyline_search_web_topic_en_failed"
-
-
-def _patch_en_config(
-    monkeypatch,
-    *,
-    enabled: bool = True,
-    api_key: str = "",
-    platforms: tuple[str, ...] = ("tiktok", "twitter", "reddit", "instagram"),
-    max_per_platform: int = 5,
-    timeout: int = 300,
-) -> None:
-    """英文线 config 显式钉桩(不依赖 config 模块默认值,防环境变量泄漏)。"""
-    monkeypatch.setattr(node_mod.config, "STORYLINE_ENABLE_WEB_TOPIC_EN", enabled)
-    monkeypatch.setattr(node_mod.config, "STORYLINE_WEB_TOPIC_XPOZ_API_KEY", api_key)
-    monkeypatch.setattr(
-        node_mod.config, "STORYLINE_WEB_TOPIC_XPOZ_PLATFORMS", platforms
-    )
-    monkeypatch.setattr(
-        node_mod.config,
-        "STORYLINE_WEB_TOPIC_XPOZ_MAX_PER_PLATFORM",
-        max_per_platform,
-    )
-    monkeypatch.setattr(node_mod.config, "STORYLINE_WEB_TOPIC_XPOZ_TIMEOUT", timeout)
 
 
 def _patch_engine_config(
@@ -65,7 +33,6 @@ def _patch_engine_config(
         node_mod.config, "STORYLINE_WEB_TOPIC_SOCKS5_PROXY", _TEST_PROXY
     )
     monkeypatch.setattr(node_mod.config, "STORYLINE_WEB_TOPIC_DEBUG", debug)
-    _patch_en_config(monkeypatch)  # 英文线恒 skipped(key 为空),zh 断言确定性
 
 
 def _fake_cap_topic(captured: dict, items: list[dict] | None = None) -> Callable:
@@ -126,7 +93,7 @@ def test_node_builds_query_from_artifacts_when_manual_query_missing(
     assert captured["proxy_url"] == _TEST_PROXY
     assert captured["debug_dir"] is None  # debug 默认关 → 不传诊断目录
     # 桩返回空结果(error_code=NO_RESULTS)→ 阶段2 起映射为 no_results 标签
-    assert out["status_log"] == ["storyline_search_web_topic_no_results", _EN_SKIPPED]
+    assert out["status_log"] == ["storyline_search_web_topic_no_results"]
     assert Path(out["storyline_web_topic_artifact"]).exists()
 
 
@@ -145,7 +112,7 @@ def test_node_manual_query_wins_and_stays_verbatim(
     assert captured["query"] == "夏季防晒"
     assert captured["provider"] == "google_html"
     # 桩返回空结果(error_code=NO_RESULTS)→ 阶段2 起映射为 no_results 标签
-    assert out["status_log"] == ["storyline_search_web_topic_no_results", _EN_SKIPPED]
+    assert out["status_log"] == ["storyline_search_web_topic_no_results"]
 
 
 def test_node_passes_debug_dir_when_config_enabled(
@@ -180,7 +147,6 @@ def test_node_query_prefers_search_directive_over_theme(
     )
     captured: dict = {}
     monkeypatch.setattr(node_mod, "cap_topic", _fake_cap_topic(captured))
-    _patch_en_config(monkeypatch)
 
     out = storyline_search_web_topic_node(
         _state(
@@ -213,7 +179,6 @@ def test_node_query_falls_back_to_theme_when_search_missing(
     )
     captured: dict = {}
     monkeypatch.setattr(node_mod, "cap_topic", _fake_cap_topic(captured))
-    _patch_en_config(monkeypatch)
 
     storyline_search_web_topic_node(
         _state(
@@ -244,7 +209,6 @@ def test_node_query_manual_query_still_beats_directives(
     """手动 query(创建台冻结契约位)保持最前,【检索】随后。"""
     captured: dict = {}
     monkeypatch.setattr(node_mod, "cap_topic", _fake_cap_topic(captured))
-    _patch_en_config(monkeypatch)
 
     storyline_search_web_topic_node(
         _state(
@@ -272,7 +236,7 @@ def test_node_tags_no_results_without_error_log(
         _state(tmp_path, storyline_targets={"query": "夏季防晒"})
     )
 
-    assert out["status_log"] == ["storyline_search_web_topic_no_results", _EN_SKIPPED]
+    assert out["status_log"] == ["storyline_search_web_topic_no_results"]
     assert "error_log" not in out
     assert Path(out["storyline_web_topic_artifact"]).exists()
 
@@ -296,7 +260,7 @@ def test_node_tags_capability_failure_and_logs_error(
         _state(tmp_path, storyline_targets={"query": "夏季防晒"})
     )
 
-    assert out["status_log"] == ["storyline_search_web_topic_failed", _EN_SKIPPED]
+    assert out["status_log"] == ["storyline_search_web_topic_failed"]
     assert any(
         "[storyline:search_web_topic] NETWORK_ERROR" in e for e in out["error_log"]
     )
@@ -323,7 +287,7 @@ def test_node_fake_without_new_fields_defaults_to_done(
         _state(tmp_path, storyline_targets={"query": "夏季防晒"})
     )
 
-    assert out["status_log"] == ["storyline_search_web_topic_done", _EN_SKIPPED]
+    assert out["status_log"] == ["storyline_search_web_topic_done"]
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +320,6 @@ def test_cache_hit_same_query_hash_skips_network(tmp_path: Path, monkeypatch) ->
         return _ok_result(kwargs["query"])
 
     monkeypatch.setattr(node_mod, "cap_topic", _counting)
-    _patch_en_config(monkeypatch)
     state = _state(tmp_path, storyline_targets={"query": "夏季防晒"})
 
     out1 = storyline_search_web_topic_node(state)
@@ -375,7 +338,7 @@ def test_cache_hit_same_query_hash_skips_network(tmp_path: Path, monkeypatch) ->
     assert doc["status"] == "cache_hit"
     assert doc["query_hash"] == hashlib.sha256("夏季防晒".encode("utf-8")).hexdigest()
     assert doc["search_web_topic"]  # 检索结果原样保留
-    assert out2["status_log"] == ["storyline_search_web_topic_done", _EN_SKIPPED]
+    assert out2["status_log"] == ["storyline_search_web_topic_done"]
 
 
 def test_cache_miss_when_query_changes_researches_and_overwrites(
@@ -389,7 +352,6 @@ def test_cache_miss_when_query_changes_researches_and_overwrites(
         return _ok_result(kwargs["query"])
 
     monkeypatch.setattr(node_mod, "cap_topic", _counting)
-    _patch_en_config(monkeypatch)
     state = _state(tmp_path, storyline_targets={"query": "夏季防晒"})
     out1 = storyline_search_web_topic_node(state)
     assert calls["n"] == 1
@@ -438,7 +400,7 @@ def test_cache_hit_of_failed_artifact_reuses_without_network(
     doc = json.loads(p.read_text(encoding="utf-8"))
     assert doc["status"] == "cache_hit"
     assert doc["error_code"] == "NETWORK_ERROR"  # 失败原因原样保留,不假成功
-    assert out["status_log"] == ["storyline_search_web_topic_failed", _EN_SKIPPED]
+    assert out["status_log"] == ["storyline_search_web_topic_failed"]
 
 
 def test_cache_hit_of_no_results_keeps_soft_tag(tmp_path: Path, monkeypatch) -> None:
@@ -465,7 +427,7 @@ def test_cache_hit_of_no_results_keeps_soft_tag(tmp_path: Path, monkeypatch) -> 
             storyline_web_topic_artifact=str(p),
         )
     )
-    assert out["status_log"] == ["storyline_search_web_topic_no_results", _EN_SKIPPED]
+    assert out["status_log"] == ["storyline_search_web_topic_no_results"]
     assert "error_log" not in out
 
 
@@ -571,7 +533,7 @@ def test_node_maps_blocked_and_proxy_errors_to_failed_tag(
         out = storyline_search_web_topic_node(
             _state(tmp_path, storyline_targets={"query": "夏季防晒"})
         )
-        assert out["status_log"] == ["storyline_search_web_topic_failed", _EN_SKIPPED]
+        assert out["status_log"] == ["storyline_search_web_topic_failed"]
         assert any(
             f"[storyline:search_web_topic] {error_code}" in e
             for e in out["error_log"]
@@ -589,7 +551,6 @@ def test_cache_ignores_legacy_artifact_without_query_hash(
         return _ok_result(kwargs["query"])
 
     monkeypatch.setattr(node_mod, "cap_topic", _counting)
-    _patch_en_config(monkeypatch)
     p = tmp_path / "out" / "storyline" / "search_web_topic.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(
@@ -619,7 +580,6 @@ def test_node_query_strips_instruction_parentheticals(
     """【检索】里的指令括号段不进入检索词;真实检索诉求原样保留。"""
     captured: dict = {}
     monkeypatch.setattr(node_mod, "cap_topic", _fake_cap_topic(captured))
-    _patch_en_config(monkeypatch)
 
     storyline_search_web_topic_node(
         _state(
@@ -649,7 +609,6 @@ def test_node_query_strips_trailing_period_from_overall_sentence(
     )
     captured: dict = {}
     monkeypatch.setattr(node_mod, "cap_topic", _fake_cap_topic(captured))
-    _patch_en_config(monkeypatch)
 
     storyline_search_web_topic_node(
         _state(tmp_path, storyline_understanding_artifact=str(understanding))
@@ -682,7 +641,6 @@ def _patch_mc_engine_config(
     monkeypatch.setattr(node_mod.config, "STORYLINE_WEB_TOPIC_MC_TIMEOUT", timeout)
     monkeypatch.setattr(node_mod.config, "STORYLINE_WEB_TOPIC_MC_HEADLESS", headless)
     monkeypatch.setattr(node_mod, "detect_revision", lambda root: revision)
-    _patch_en_config(monkeypatch)  # 英文线恒 skipped(key 为空),zh 断言确定性
 
 
 def test_node_mc_assembles_provider_options_and_effective_hash(
@@ -715,7 +673,7 @@ def test_node_mc_assembles_provider_options_and_effective_hash(
         provider=mediacrawler_request_provider("xhs", _MC_REVISION),
         max_results=7,
     )
-    assert out["status_log"] == ["storyline_search_web_topic_done", _EN_SKIPPED]
+    assert out["status_log"] == ["storyline_search_web_topic_done"]
 
 
 def test_node_mc_normalizes_commas_in_query(tmp_path: Path, monkeypatch) -> None:
@@ -743,7 +701,7 @@ def test_node_mc_query_all_commas_becomes_skip(tmp_path: Path, monkeypatch) -> N
     out = storyline_search_web_topic_node(
         _state(tmp_path, storyline_targets={"query": ", ,"})
     )
-    assert out["status_log"] == ["storyline_search_web_topic_skipped", _EN_SKIPPED]
+    assert out["status_log"] == ["storyline_search_web_topic_skipped"]
 
 
 def test_node_mc_fallback_success_keeps_done_plus_fallback_tag(
@@ -774,7 +732,6 @@ def test_node_mc_fallback_success_keeps_done_plus_fallback_tag(
     assert out["status_log"] == [
         "storyline_search_web_topic_done",
         "storyline_search_web_topic_fallback_bing",
-        _EN_SKIPPED,
     ]
     assert "error_log" not in out
     assert captured["provider"] == "mediacrawler"
@@ -836,327 +793,3 @@ def test_node_mc_cache_hit_when_everything_unchanged(
     assert calls["n"] == 1  # cache_hit
     doc = json.loads(Path(out2["storyline_web_topic_artifact"]).read_text(encoding="utf-8"))
     assert doc["status"] == "cache_hit"
-
-
-# ---------------------------------------------------------------------------
-# 2026-11-20 审查修订版阶段2:英文线(xpoz)节点行为
-# ---------------------------------------------------------------------------
-_EN_QUERY = "summer sun protection travel"
-
-
-def _patch_en_ready(monkeypatch, *, api_key: str = "test-key") -> None:
-    """英文线就绪态:key 已配 + 真实(非 Mock)翻译客户端 + 固定译文。"""
-    _patch_en_config(monkeypatch, api_key=api_key)
-    # get_default_client 返回非 Mock 对象 → 节点 stub 守卫放行
-    monkeypatch.setattr(node_mod, "get_default_client", lambda: object())
-    monkeypatch.setattr(
-        node_mod,
-        "translate_segments",
-        lambda segments: [
-            {"index": 0, "start_ms": 0, "end_ms": 0, "text_en": _EN_QUERY}
-        ],
-    )
-
-
-def _dual_fake(
-    captured_zh: dict,
-    captured_en: dict,
-    *,
-    en_result: dict | None = None,
-    en_raise: Exception | None = None,
-) -> Callable:
-    """按 provider 分流的 cap_topic 桩:zh 走 ok 产物,en 走注入的 fake。"""
-
-    def fake(**kwargs: Any) -> dict:
-        if kwargs.get("provider") == "xpoz":
-            captured_en.update(kwargs)
-            if en_raise is not None:
-                raise en_raise
-            return en_result or {
-                "search_web_topic": [],
-                "preview_urls": [],
-                "error_code": "NO_RESULTS",
-                "message": "",
-            }
-        captured_zh.update(kwargs)
-        return _ok_result(kwargs["query"])
-
-    return fake
-
-
-def _en_ok_result(query: str) -> dict:
-    return {
-        "status": "ok",
-        "search_web_topic": [
-            {
-                "url": "https://www.tiktok.com/@creator/video/1",
-                "title": "summer sun protection tips",
-                "snippet": "beach travel",
-                "source": "TikTok",
-                "platform": "tiktok",
-                "language_status": "en",
-                "content_kind": "video",
-                "has_video": True,
-            }
-        ],
-        "preview_urls": ["https://www.tiktok.com/@creator/video/1"],
-        "error_code": None,
-        "message": "",
-        "query_hash": hashlib.sha256(query.encode("utf-8")).hexdigest(),
-        "searched_at": "2026-11-20T00:00:00+00:00",
-    }
-
-
-def test_en_line_happy_path_uses_xpoz_provider_and_writes_artifact(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """英文线就绪:query 由翻译产出、provider=xpoz、产物独立落盘 + en_done 标签。"""
-    captured_zh: dict = {}
-    captured_en: dict = {}
-    monkeypatch.setattr(
-        node_mod,
-        "cap_topic",
-        _dual_fake(captured_zh, captured_en, en_result=_en_ok_result(_EN_QUERY)),
-    )
-    _patch_engine_config(monkeypatch)  # 中文线引擎/代理钉桩(google_html)
-    _patch_en_ready(monkeypatch)  # 英文线就绪态(key 覆盖为 test-key)
-
-    out = storyline_search_web_topic_node(
-        _state(tmp_path, storyline_targets={"query": "夏季防晒"})
-    )
-
-    assert captured_zh["provider"] == "google_html"  # 中文线不受英文线影响
-    assert captured_en["provider"] == "xpoz"
-    assert captured_en["query"] == _EN_QUERY  # 中文检索词经翻译进入英文线
-    assert captured_en["max_results"] == 10
-    opts = captured_en["provider_options"]
-    assert opts["api_key"] == "test-key"
-    assert opts["platforms"] == ["tiktok", "twitter", "reddit", "instagram"]
-    assert opts["max_per_platform"] == 5
-    assert opts["operation_timeout"] == 300
-    assert out["status_log"] == ["storyline_search_web_topic_done", _EN_DONE]
-    assert out["storyline_web_topic_en_artifact"]
-    doc = json.loads(
-        Path(out["storyline_web_topic_en_artifact"]).read_text(encoding="utf-8")
-    )
-    assert doc["request_hash"] == build_request_hash(
-        query=_EN_QUERY,
-        provider=xpoz_request_provider(
-            ("tiktok", "twitter", "reddit", "instagram"), 5
-        ),
-        max_results=10,
-    )
-
-
-def test_en_line_directive_english_wins_without_translation(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """【检索】标记值是英文 → 直接用作英文检索词,不调翻译(拍板 2)。"""
-    captured_zh: dict = {}
-    captured_en: dict = {}
-    monkeypatch.setattr(
-        node_mod,
-        "cap_topic",
-        _dual_fake(captured_zh, captured_en, en_result=_en_ok_result("tokyo travel")),
-    )
-    _patch_en_ready(monkeypatch)
-    translated: list = []
-
-    def _record_translate(segments):  # pragma: no cover - 被调用即失败
-        translated.append(segments)
-        raise AssertionError("标记英文直用时不应调翻译")
-
-    monkeypatch.setattr(node_mod, "translate_segments", _record_translate)
-
-    storyline_search_web_topic_node(
-        _state(
-            tmp_path,
-            storyline_targets={
-                "query": "夏季防晒",
-                "user_request": "【检索】tokyo travel guide",
-            },
-        )
-    )
-
-    assert captured_en["query"] == "tokyo travel guide"
-    assert translated == []
-
-
-def test_en_line_stub_translator_skips(tmp_path: Path, monkeypatch) -> None:
-    """stub 翻译器(Mock 单例)→ 英文线软跳过,防 "[EN] " 前缀污染检索词。"""
-    captured_zh: dict = {}
-    captured_en: dict = {}
-    monkeypatch.setattr(
-        node_mod, "cap_topic", _dual_fake(captured_zh, captured_en)
-    )
-    _patch_en_config(monkeypatch, api_key="test-key")  # key 已配,但翻译器是 Mock
-
-    out = storyline_search_web_topic_node(
-        _state(tmp_path, storyline_targets={"query": "夏季防晒"})
-    )
-
-    assert captured_en == {}  # 英文线未触达能力层
-    assert out["status_log"] == ["storyline_search_web_topic_done", _EN_SKIPPED]
-    assert out["storyline_web_topic_en_artifact"] is None
-
-
-def test_en_line_translation_failure_marks_failed(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """翻译失败 → en_failed 标签 + error_log 留痕;中文线不受影响。"""
-    captured_zh: dict = {}
-    captured_en: dict = {}
-    monkeypatch.setattr(
-        node_mod, "cap_topic", _dual_fake(captured_zh, captured_en)
-    )
-    _patch_en_ready(monkeypatch)
-
-    def _boom(segments):
-        raise TranslationError("LLM backend down")
-
-    monkeypatch.setattr(node_mod, "translate_segments", _boom)
-
-    out = storyline_search_web_topic_node(
-        _state(tmp_path, storyline_targets={"query": "夏季防晒"})
-    )
-
-    assert out["status_log"] == ["storyline_search_web_topic_done", _EN_FAILED]
-    assert any(
-        "[storyline:search_web_topic_en] TRANSLATION_FAILED" in e
-        for e in out["error_log"]
-    )
-    assert out["storyline_web_topic_en_artifact"] is None
-
-
-def test_en_line_capability_failure_isolated(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """英文线能力层异常被局部捕获:zh 产物正常,英文线 failed + error_log。"""
-    captured_zh: dict = {}
-    captured_en: dict = {}
-    monkeypatch.setattr(
-        node_mod,
-        "cap_topic",
-        _dual_fake(captured_zh, captured_en, en_raise=RuntimeError("xpoz down")),
-    )
-    _patch_en_ready(monkeypatch)
-
-    out = storyline_search_web_topic_node(
-        _state(tmp_path, storyline_targets={"query": "夏季防晒"})
-    )
-
-    assert out["status_log"] == ["storyline_search_web_topic_done", _EN_FAILED]
-    assert any(
-        "[storyline:search_web_topic_en] TOOL_EXECUTION_FAILED" in e
-        for e in out["error_log"]
-    )
-    assert Path(out["storyline_web_topic_artifact"]).exists()  # zh 产物正常
-    assert out["storyline_web_topic_en_artifact"] is None
-
-
-def test_en_line_no_results_keeps_soft_tag(tmp_path: Path, monkeypatch) -> None:
-    """英文线无结果是软态:en_no_results 标签,不进 error_log,产物照写。"""
-    captured_zh: dict = {}
-    captured_en: dict = {}
-    monkeypatch.setattr(node_mod, "cap_topic", _dual_fake(captured_zh, captured_en))
-    _patch_en_ready(monkeypatch)
-
-    out = storyline_search_web_topic_node(
-        _state(tmp_path, storyline_targets={"query": "夏季防晒"})
-    )
-
-    assert out["status_log"] == ["storyline_search_web_topic_done", _EN_NO_RESULTS]
-    assert "error_log" not in out
-    assert Path(out["storyline_web_topic_en_artifact"]).exists()
-
-
-def test_en_line_skip_clears_stale_state_ref(tmp_path: Path, monkeypatch) -> None:
-    """英文线 skip 时显式清 State 旧引用(审查 §4.4),防复用同 thread 旧路径。"""
-    captured_zh: dict = {}
-    captured_en: dict = {}
-    monkeypatch.setattr(node_mod, "cap_topic", _dual_fake(captured_zh, captured_en))
-    _patch_en_config(monkeypatch, enabled=True, api_key="")  # key 缺失 → skip
-
-    out = storyline_search_web_topic_node(
-        _state(
-            tmp_path,
-            storyline_targets={"query": "夏季防晒"},
-            storyline_web_topic_en_artifact="/old/stale/en.json",
-        )
-    )
-
-    assert out["storyline_web_topic_en_artifact"] is None
-    assert out["status_log"] == ["storyline_search_web_topic_done", _EN_SKIPPED]
-
-
-def test_en_line_switch_off_skips_and_clears_ref(tmp_path: Path, monkeypatch) -> None:
-    """EN 开关关闭 → 英文线跳过(带 skipped 标签)并清旧引用。"""
-    captured_zh: dict = {}
-    captured_en: dict = {}
-    monkeypatch.setattr(node_mod, "cap_topic", _dual_fake(captured_zh, captured_en))
-    _patch_en_config(monkeypatch, enabled=False)
-
-    out = storyline_search_web_topic_node(
-        _state(
-            tmp_path,
-            storyline_targets={"query": "夏季防晒"},
-            storyline_web_topic_en_artifact="/old/stale/en.json",
-        )
-    )
-
-    assert out["status_log"] == ["storyline_search_web_topic_done", _EN_SKIPPED]
-    assert out["storyline_web_topic_en_artifact"] is None
-
-
-def test_en_line_cache_hit_skips_network(tmp_path: Path, monkeypatch) -> None:
-    """英文线缓存与中文线同款语义:同 query_en+request_hash → cache_hit 复用。"""
-    en_calls = {"n": 0}
-
-    def _counting_en(**kwargs: Any) -> dict:
-        if kwargs.get("provider") == "xpoz":
-            en_calls["n"] += 1
-            return _en_ok_result(kwargs["query"])
-        return _ok_result(kwargs["query"])
-
-    monkeypatch.setattr(node_mod, "cap_topic", _counting_en)
-    _patch_en_ready(monkeypatch)
-    state = _state(tmp_path, storyline_targets={"query": "夏季防晒"})
-
-    out1 = storyline_search_web_topic_node(state)
-    assert en_calls["n"] == 1
-
-    state2 = {
-        **state,
-        "storyline_web_topic_en_artifact": out1["storyline_web_topic_en_artifact"],
-    }
-    out2 = storyline_search_web_topic_node(state2)
-    assert en_calls["n"] == 1  # 英文线命中缓存
-    doc = json.loads(
-        Path(out2["storyline_web_topic_en_artifact"]).read_text(encoding="utf-8")
-    )
-    assert doc["status"] == "cache_hit"
-
-
-def test_en_line_force_refresh_bypasses_cache(tmp_path: Path, monkeypatch) -> None:
-    """web_topic_force_refresh=true → 英文线缓存同样被显式绕过。"""
-    en_calls = {"n": 0}
-
-    def _counting_en(**kwargs: Any) -> dict:
-        if kwargs.get("provider") == "xpoz":
-            en_calls["n"] += 1
-            return _en_ok_result(kwargs["query"])
-        return _ok_result(kwargs["query"])
-
-    monkeypatch.setattr(node_mod, "cap_topic", _counting_en)
-    _patch_en_ready(monkeypatch)
-    state = _state(tmp_path, storyline_targets={"query": "夏季防晒"})
-    out1 = storyline_search_web_topic_node(state)
-    assert en_calls["n"] == 1
-
-    state2 = {
-        **state,
-        "storyline_web_topic_en_artifact": out1["storyline_web_topic_en_artifact"],
-        "web_topic_force_refresh": True,
-    }
-    storyline_search_web_topic_node(state2)
-    assert en_calls["n"] == 2  # 缓存被绕过

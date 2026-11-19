@@ -103,7 +103,6 @@ export function normalizeContentDetails(payload) {
   const sec = (s) => (s && typeof s === "object" ? s : {});
   const arr = (v) => (Array.isArray(v) ? v : []);
   const wt = sec(p.web_topic);
-  const wte = sec(p.web_topic_en);
   const tpl = sec(p.template);
   const sc = sec(p.script);
   const zh = sec(p.subtitles_zh);
@@ -131,17 +130,6 @@ export function normalizeContentDetails(payload) {
               reason: wt.fallback.reason ?? null,
             }
           : null,
-    },
-    // 英文检索线(2026-11-20 审查修订版阶段4):独立区块,不与中文线合并;
-    // entries 携带 platform/language_status/content_kind(语言未知不得标英文)
-    webTopicEn: {
-      status: wte.status || "missing",
-      reason: wte.reason || null,
-      engine: wte.engine || "未知引擎",
-      query: wte.query ?? null,
-      searchedAt: wte.searched_at ?? null,
-      platforms: arr(wte.platforms),
-      entries: arr(wte.entries),
     },
     template: {
       status: tpl.status || "missing",

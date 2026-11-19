@@ -31,23 +31,10 @@ from state import SubtitleSegment
 
 # ---------------------------------------------------------------------------
 # 2026-11-17 P1:marker schema v2(修订计划 §5.5)
-# 2026-11-20 审查修订版阶段3:schema v3 —— 增加 reference_sha256 /
-# reference_sources(英文参考资料指纹与审计来源,审查 §3.4 P1/§3.14)。
-# 参考资料 hash 进源指纹:同一草稿里英文检索资料变化 → 指纹变化 → 旧 marker
-# 失效重翻(否则新资料根本不参与翻译);旧 v1/v2 marker 缺该字段 → 未命中。
 # ---------------------------------------------------------------------------
-#: marker 结构版本 —— v2 及更旧(list 形态 / 无 reference 字段)一律未命中
-_MARKER_SCHEMA_VERSION = 3
+#: marker 结构版本 —— 旧 list 形态 = legacy mock/unknown,一律视为未命中(重翻)
+_MARKER_SCHEMA_VERSION = 2
 _MARKER_TARGET_LANGUAGE = "en"
-
-#: 空参考资料的固定 hash(sha256(b""))——"有参考"与"无参考"是不同指纹;
-#: 无参考翻译的指纹与"空串参考"一致,两者语义等价(都不进 prompt)。
-EMPTY_REFERENCE_SHA256 = hashlib.sha256(b"").hexdigest()
-
-
-def _reference_digest(reference: str | None) -> str:
-    """参考资料文本 → SHA-256;None/空串 → EMPTY_REFERENCE_SHA256(固定空值)。"""
-    return hashlib.sha256(str(reference or "").encode("utf-8")).hexdigest()
 
 
 def _compute_source_fingerprint(
@@ -55,14 +42,11 @@ def _compute_source_fingerprint(
     *,
     translator_id: str,
     prompt_version: str = TRANSLATION_PROMPT_VERSION,
-    reference_sha256: str = EMPTY_REFERENCE_SHA256,
 ) -> str:
-    """翻译输入指纹(SHA-256):源文本+时间码+目标语言+提示词版本+翻译器身份
-    +参考资料 hash(2026-11-20 审查修订版阶段3,§3.4 P1)。
+    """翻译输入指纹(SHA-256):源文本+时间码+目标语言+提示词版本+翻译器身份。
 
     指纹覆盖 marker 复用的全部判定维度(修订计划 §5.5):源文案变化、模型/
-    翻译器变化、提示词变化、**英文参考资料变化**任一发生 → 指纹变化 →
-    旧 marker 失效重翻(否则新检索资料根本不参与翻译)。
+    翻译器变化、提示词变化任一发生 → 指纹变化 → 旧 marker 失效重翻。
     """
     canonical = json.dumps(
         {
@@ -70,7 +54,6 @@ def _compute_source_fingerprint(
             "target_language": _MARKER_TARGET_LANGUAGE,
             "prompt_version": prompt_version,
             "translator_id": translator_id,
-            "reference_sha256": reference_sha256,
             "segments": [
                 {
                     "index": int(seg.get("index", i)),
@@ -204,15 +187,13 @@ def _marker_exists(
     fingerprint: str,
     translator_id: str,
     prompt_version: str = TRANSLATION_PROMPT_VERSION,
-    reference_sha256: str = EMPTY_REFERENCE_SHA256,
 ) -> bool:
-    """marker 命中判定(schema v3,审查修订版阶段3)。
+    """marker 命中判定(schema v2,修订计划 §5.5)。
 
-    复用条件**同时**满足:schema_version=3、target_language=en、源指纹一致
-    (含参考资料 hash)、翻译器身份一致、提示词版本一致、段数一致、每段
-    text_en 非空(翻译文本合法)。旧版 list 形态 / v1/v2 marker(v2 缺
-    reference_sha256 字段)→ 一律 False(重翻),不把 ``[EN] 中文`` 假翻译
-    或未带新资料的旧译文当命中。
+    复用条件**同时**满足:schema_version=2、target_language=en、源指纹一致、
+    翻译器身份一致、提示词版本一致、段数一致、每段 text_en 非空(翻译文本
+    合法)。旧版 list 形态 = legacy mock/unknown → 一律 False(重翻),不把
+    ``[EN] 中文`` 假翻译当真实翻译命中。
     """
     marker = draft_dir / "subtitle_en.json"
     if not marker.exists():
@@ -229,8 +210,6 @@ def _marker_exists(
         return False
     if data.get("source_fingerprint") != fingerprint:
         return False
-    if data.get("reference_sha256") != reference_sha256:
-        return False  # v2 及更旧 marker 缺该字段 → 未命中(审查 §3.4)
     if data.get("translator_id") != translator_id:
         return False
     if data.get("prompt_version") != prompt_version:
@@ -251,22 +230,13 @@ def _save_marker(
     fingerprint: str,
     translator_id: str,
     prompt_version: str = TRANSLATION_PROMPT_VERSION,
-    reference_sha256: str = EMPTY_REFERENCE_SHA256,
-    reference_sources: list[dict] | None = None,
 ) -> None:
-    """保存 subtitle_en.json 标记文件(schema v3)。
-
-    v3 新增(审查修订版阶段3):``reference_sha256``(参与指纹,参考资料
-    变化即失效)+ ``reference_sources``(本次翻译实际参考的来源 URL/平台
-    列表,审计与复现用,审查 §3.14;无参考时为空列表)。
-    """
+    """保存 subtitle_en.json 标记文件(schema v2:指纹 + 翻译器/提示词身份 + 段)。"""
     marker = draft_dir / "subtitle_en.json"
     payload = {
         "schema_version": _MARKER_SCHEMA_VERSION,
         "target_language": _MARKER_TARGET_LANGUAGE,
         "source_fingerprint": fingerprint,
-        "reference_sha256": reference_sha256,
-        "reference_sources": list(reference_sources or []),
         "translator_id": translator_id,
         "prompt_version": prompt_version,
         "segments": list(segments),
