@@ -55,12 +55,14 @@ STORYLINE_ENABLE_WEB_TOPIC: bool = (
 
 # 1.1) 网页话题检索引擎 / SOCKS5 代理 / 调试开关(2026-11-19 审查修订版 §5.1):
 #   - 引擎只允许白名单值,未知值在导入期明确报错,不静默回退(§5.1-1);
-#   - 默认 bing_html(2026-11-19 回拨:MediaCrawler 接入按拍板定默认
-#     mediacrawler,但其能力层 mc 分支尚未接线(计划 §5 步骤 3)——接线完成前
-#     默认 mediacrawler 会全部落 UNKNOWN_PROVIDER 软失败且无 Bing 自动回退;
-#     mc 客户端/config/env 已入库(d5d4eaf),接线完成后把默认值切回
-#     mediacrawler。MediaCrawler 失败或 0 条时能力层自动回退 bing_html,
-#     artifact 记 fallback 键。
+#   - 默认 mediacrawler(2026-11-20 默认切换:审查 6.4 门禁全项通过后按拍板
+#     单独提交 —— 真机成功/MC 失败回退/双失败软降级三路径实测通过,八场景
+#     矩阵与证据见 docs/第八期开发/MediaCrawler真机验收与默认切换-执行记录
+#     -20261120.md;历史:2026-11-19 曾回拨为 bing_html,因当时 mc 分支尚未
+#     接线,默认 mediacrawler 会全部落 UNKNOWN_PROVIDER 软失败且无自动回退)。
+#     MediaCrawler 失败或 0 条时能力层自动回退 bing_html,artifact 记 fallback
+#     键;回滚=显式设 STORYLINE_WEB_TOPIC_ENGINE=bing_html 并重启工作流进程
+#     (§5.1-5)。
 #     历史:google_html 纯 HTTP 路线被 Google 关闭(无 JS 桩页);DDG 挑战 VPS 出口;
 #     Bing 结果页服务端渲染 —— bing_html 降为回退引擎,代码保留可随时切回);
 #   - mediacrawler 走子进程调用本地 MediaCrawler 安装副本(§1.2 配置),无需代理;
@@ -84,7 +86,7 @@ _WEB_TOPIC_ENGINE_WHITELIST = (
     "stub",
 )
 _raw_web_topic_engine = os.environ.get(
-    "STORYLINE_WEB_TOPIC_ENGINE", "bing_html"
+    "STORYLINE_WEB_TOPIC_ENGINE", "mediacrawler"
 ).strip()
 if _raw_web_topic_engine not in _WEB_TOPIC_ENGINE_WHITELIST:
     raise ValueError(
@@ -107,8 +109,8 @@ STORYLINE_WEB_TOPIC_ENGINE: str = _raw_web_topic_engine
 #     首次使用需操作员扫码登录一次(非无头可见窗口);
 #   - 平台首期只开放 xhs(审查 P2-04:字段映射假定小红书记录结构,其他平台
 #     须独立 fixture+真机验证后逐个开放;上游其实支持 7 个);
-#   - 默认引擎保持 bing_html(审查 6.4 门禁:MC 接线+测试+真机验收全部通过
-#     后才单独提交默认切换,在此之前显式启用 mediacrawler 属于测试行为);
+#   - 默认引擎已切 mediacrawler(审查 6.4 门禁 2026-11-20 全项通过后单独提交
+#     切换;回滚=显式设 STORYLINE_WEB_TOPIC_ENGINE=bing_html 并重启进程);
 #   - MAX_NOTES/TIMEOUT 有业务范围校验(审查 P2-02):超范围导入期报错,
 #     不带 ValueError 裸堆栈;
 #   - 超时语义(审查 P1-08):外层 timeout 只是子进程最大运行时间;MC 内部
@@ -161,7 +163,8 @@ STORYLINE_WEB_TOPIC_MC_HEADLESS: bool = (
 #      搜索,产物独立落盘 storyline/search_web_topic_en.json(审查 §4.3)。
 #      与中文线互不掺杂;失败软降级退回纯翻译现状,不阻断主线(§4.1)。
 #   - 同样是**进程启动时**读取的模块常量:修改后必须重启实际运行工作流的进程。
-#   - D1 决策:本段配置不改变中文线默认引擎(保持 bing_html)。
+#   - D1 决策:本段配置不改变中文线默认引擎(2026-11-20 起为 mediacrawler,
+#     见 §1.1 默认切换记录)。
 STORYLINE_ENABLE_WEB_TOPIC_EN: bool = (
     os.environ.get("STORYLINE_ENABLE_WEB_TOPIC_EN", "true").lower().strip()
     in ("1", "true", "yes")

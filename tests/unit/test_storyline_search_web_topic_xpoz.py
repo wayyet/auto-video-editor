@@ -522,5 +522,6 @@ def test_config_en_line_defaults() -> None:
     )
     assert 1 <= config.STORYLINE_WEB_TOPIC_XPOZ_MAX_PER_PLATFORM <= 10
     assert 30 <= config.STORYLINE_WEB_TOPIC_XPOZ_TIMEOUT <= 600
-    # D1 决策:英文线配置不改变中文线默认引擎(保持 bing_html)
-    assert config.STORYLINE_WEB_TOPIC_ENGINE == "bing_html"
+    # D1 决策:英文线配置不改变中文线默认引擎(2026-11-20 起为 mediacrawler,
+    # 默认切换见 docs/第八期开发/MediaCrawler真机验收与默认切换-执行记录-20261120.md)
+    assert config.STORYLINE_WEB_TOPIC_ENGINE == "mediacrawler"
