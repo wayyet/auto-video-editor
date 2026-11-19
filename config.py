@@ -55,11 +55,14 @@ STORYLINE_ENABLE_WEB_TOPIC: bool = (
 
 # 1.1) 网页话题检索引擎 / SOCKS5 代理 / 调试开关(2026-11-19 审查修订版 §5.1):
 #   - 引擎只允许白名单值,未知值在导入期明确报错,不静默回退(§5.1-1);
-#   - 默认 mediacrawler(2026-11-19 用户拍板:改用开源项目 MediaCrawler 检索
-#     小红书等社交平台真实笔记,通用网页结果对旅游/探店类选题信息密度不足;
-#     MediaCrawler 失败或 0 条时能力层自动回退 bing_html,artifact 记 fallback 键。
+#   - 默认 bing_html(2026-11-19 回拨:MediaCrawler 接入按拍板定默认
+#     mediacrawler,但其能力层 mc 分支尚未接线(计划 §5 步骤 3)——接线完成前
+#     默认 mediacrawler 会全部落 UNKNOWN_PROVIDER 软失败且无 Bing 自动回退;
+#     mc 客户端/config/env 已入库(d5d4eaf),接线完成后把默认值切回
+#     mediacrawler。MediaCrawler 失败或 0 条时能力层自动回退 bing_html,
+#     artifact 记 fallback 键。
 #     历史:google_html 纯 HTTP 路线被 Google 关闭(无 JS 桩页);DDG 挑战 VPS 出口;
-#     Bing 结果页服务端渲染 —— bing_html 降级为回退引擎,代码保留可随时切回);
+#     Bing 结果页服务端渲染 —— bing_html 降为回退引擎,代码保留可随时切回);
 #   - mediacrawler 走子进程调用本地 MediaCrawler 安装副本(§1.2 配置),无需代理;
 #     google_html 强制 socks5h:// 代理(域名解析走代理端防本地 DNS 污染),
 #     缺失/格式不对由能力层返回 PROXY_ERROR(§5.1-2);bing_html/duckduckgo_html
@@ -81,7 +84,7 @@ _WEB_TOPIC_ENGINE_WHITELIST = (
     "stub",
 )
 _raw_web_topic_engine = os.environ.get(
-    "STORYLINE_WEB_TOPIC_ENGINE", "mediacrawler"
+    "STORYLINE_WEB_TOPIC_ENGINE", "bing_html"
 ).strip()
 if _raw_web_topic_engine not in _WEB_TOPIC_ENGINE_WHITELIST:
     raise ValueError(
