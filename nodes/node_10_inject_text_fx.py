@@ -286,8 +286,17 @@ def apply_text_fx(
 def inject_text_fx(state: WorkflowState, config: Optional[RunnableConfig] = None) -> dict:
     """中文主线节点 10:对中文草稿(``state["draft_path"]``)的字幕写原生入场动画。
 
-    返回整份 state + 新 status_log(2026-11-12 阶段5批2 移除无人消费的
-    ``text_fx_summary`` 审计摘要;注入结果以草稿内原生动画与 status_log 为准)。
+    返回 **增量 patch**(仅 status_log / error_log)。2026-11-20 修正:此前
+    ``{**state}`` 全量回传会把通道里的既有值原样重发 —— 本节点与
+    ``fork_draft_for_english_branch`` 同一超步并发执行(fork 唯一写
+    ``draft_dir_en_branch``),当线程复用旧 checkpoint(该键残留旧值)时,
+    全量回传 = 同一超步对该键二次写入 → LangGraph ``InvalidUpdateError:
+    Can receive only one value per step`` 崩溃(video-001 预热线程首次暴露;
+    2026-11-20 关卡①条件挂起后预热线程首次自动穿过该超步)。改为增量后
+    语义不变(patch 合并结果一致),并发双写源消除。
+
+    2026-11-12 阶段5批2 移除无人消费的 ``text_fx_summary`` 审计摘要;注入
+    结果以草稿内原生动画与 status_log 为准。
 
     ``config`` 由 LangGraph 注入(``Optional[RunnableConfig]`` 在其节点签名
     白名单内);job_id 经公共 ``resolve_job_id`` 解析(config.thread_id 权威,
@@ -297,20 +306,22 @@ def inject_text_fx(state: WorkflowState, config: Optional[RunnableConfig] = None
     raw_draft_path = state.get("draft_path")
     if not raw_draft_path:
         # node_05 早退时草稿不存在(D7,2026-10-20 修):降级跳过,别抛 TypeError
-        state.setdefault("error_log", []).append(
-            "[node_10] state.draft_path 缺失,跳过字幕动画注入"
-        )
         status_log = list(state.get("status_log", []) or [])
         status_log.append("node_10_inject_text_fx_skipped")
-        return {**state, "status_log": status_log}
+        return {
+            "error_log": ["[node_10] state.draft_path 缺失,跳过字幕动画注入"],
+            "status_log": status_log,
+        }
     # job_id 与 node_09/node_10b 同源解析(公共 resolver)—— zh/en 池轮换一致
     try:
         job_id = resolve_job_id(state, config)
     except ValueError as exc:
-        state.setdefault("error_log", []).append(f"[node_10] {exc},跳过字幕动画注入")
         status_log = list(state.get("status_log", []) or [])
         status_log.append("node_10_inject_text_fx_skipped")
-        return {**state, "status_log": status_log}
+        return {
+            "error_log": [f"[node_10] {exc},跳过字幕动画注入"],
+            "status_log": status_log,
+        }
     log, _ = apply_text_fx(
         Path(raw_draft_path),
         state.get("status_log"),
@@ -318,7 +329,7 @@ def inject_text_fx(state: WorkflowState, config: Optional[RunnableConfig] = None
         done_tag="node_10_inject_text_fx_done",
         job_id=job_id,
     )
-    return {**state, "status_log": log}
+    return {"status_log": log}
 
 
 def inject_text_fx_en(state: WorkflowState, config: Optional[RunnableConfig] = None) -> dict:

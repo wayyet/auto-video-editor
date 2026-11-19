@@ -73,6 +73,23 @@ def _state(draft_path: Path) -> dict:
     return {"draft_path": str(draft_path), "status_log": [], "error_log": []}
 
 
+def test_inject_text_fx_returns_delta_not_full_state(tmp_draft_with_texts: Path) -> None:
+    """返回增量 patch,不得 ``{**state}`` 全量回传(2026-11-20 回归锁)。
+
+    本节点与 fork_draft_for_english_branch 同一超步并发(fork 唯一写
+    ``draft_dir_en_branch``);线程复用旧 checkpoint 时该键在通道里残留旧值,
+    全量回传会把它原样重发 → 同超步双写 → LangGraph ``InvalidUpdateError``
+    (video-001 预热线程 2026-11-20 关卡①条件挂起后首次暴露)。
+    """
+    state = dict(_state(tmp_draft_with_texts))
+    state["draft_dir_en_branch"] = "C:/stale/en_branch"  # 旧 checkpoint 残留值
+    state["storyline_outputs_root"] = "C:/stale/outputs"
+    out = inject_text_fx(state)
+    assert "draft_dir_en_branch" not in out, "不得全量回传无关 state 键"
+    assert "storyline_outputs_root" not in out
+    assert "node_10_inject_text_fx_done" in (out.get("status_log") or [])
+
+
 def test_inject_text_fx_writes_native_animations(tmp_draft_with_texts: Path) -> None:
     """我方字幕 → material_animations 条目 + text 轨段 refs 绑定;人工文本不动。"""
     out = inject_text_fx(_state(tmp_draft_with_texts))
