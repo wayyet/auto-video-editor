@@ -15,6 +15,11 @@ jsonpointer==3.1.1
 jsonschema==4.26.0
 langchain-core==1.6.1
 langchain-protocol==0.0.19
+# langchain-xpoz(2026-11-19):Xpoz 社媒情报(X/IG/Reddit/TikTok)LangChain 工具集;
+# 仅装机登记未接线(项目 LLM 后端为 mcode-cli,无 chat-model agent 路径),接线另案。
+langchain-xpoz==0.3.0
+# langchain-xpoz 的核心 SDK(上游约束 xpoz>=0.7.0,显式钉版防 pip 自由解析)
+xpoz==0.10.1
 # LangGraph 使用公共 PyPI 版本(与本机 venv 锁定的 1.2.9 / 4.1.1 / 1.1.0 一致)
 # 如需本地修改版 LangGraph(editable),请额外执行:
 #   pip install -r requirements-local-dev.txt
