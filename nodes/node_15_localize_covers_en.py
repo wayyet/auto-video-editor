@@ -24,6 +24,10 @@ from pathlib import Path
 from jy_common.translate_client import LLMTranslateClient, get_default_client
 from mcp_clients.firered_image_edit_client import call_firered_edit
 from nodes._cover_title import resolve_zh_title
+from nodes.storyline._common import (
+    _read_json_artifact,
+    format_web_topic_reference,
+)
 from state import WorkflowState
 
 
@@ -36,6 +40,10 @@ def _get_titles(state: WorkflowState) -> tuple[str, str, str]:
     status:``real`` = 真实翻译成功;``stub`` = 默认翻译客户端是 Mock 桩;
     ``degraded`` = 真实客户端但翻译失败/空译文。stub/degraded 时 ``title_en``
     为空串 —— 调用方不得拼假英文标题。
+
+    2026-11-20 审查修订版阶段3:英文线检索产物存在时,把清洗后的英文参考
+    资料传入翻译 prompt(仅封面标题本地化,审查 §3.9;产物缺失/failed →
+    reference 为空,行为与旧版一致)。
     """
     draft_path = state.get("draft_path")
     title_zh = "默认标题"
@@ -46,13 +54,19 @@ def _get_titles(state: WorkflowState) -> tuple[str, str, str]:
         except (json.JSONDecodeError, OSError):
             pass
 
+    en_doc = _read_json_artifact(state, "storyline_web_topic_en_artifact")
+    reference = (
+        format_web_topic_reference(en_doc) if isinstance(en_doc, dict) else ""
+    )
+
     client = get_default_client()
     if not isinstance(client, LLMTranslateClient):
         return title_zh, "", "stub"
     try:
-        translated = client.translate([
-            {"index": 0, "start_ms": 0, "end_ms": 0, "text_zh": title_zh}
-        ])
+        translated = client.translate(
+            [{"index": 0, "start_ms": 0, "end_ms": 0, "text_zh": title_zh}],
+            reference=reference or None,
+        )
         title_en = str((translated[0] or {}).get("text_en") or "").strip()
     except Exception as exc:  # noqa: BLE001 — 封面翻译非关键路径,失败降级
         print(f"[node_15] 封面标题翻译失败: {exc!r}")
