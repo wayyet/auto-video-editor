@@ -322,6 +322,10 @@ class WorkflowState(TypedDict, total=False):
     # 2026-11-12 边治理阶段6 补声明,无行为变化)
     ai_transition_user_request: NotRequired[str]
     storyline_web_topic_artifact: Annotated[Optional[str], _last_wins]        # search_web_topic(条件)
+    # 英文检索线产物(2026-11-20 审查修订版阶段2;双线中英分离,与中文产物互不
+    # 掺杂):storyline/search_web_topic_en.json。英文线 skip 时节点显式写 None
+    # 清除旧引用(审查 §4.4),防止复用同 thread 早先留下的旧路径。
+    storyline_web_topic_en_artifact: Annotated[Optional[str], _last_wins]
     # 2026-10 调序新增的独立键(避免与既有键并发写冲突):
     storyline_search_media_artifact: Annotated[Optional[str], _last_wins]     # DEPRECATED(2026-11-10):search_media 节点已删;该键历史上从无读写者(节点实际写 storyline_media_artifact),仅旧 checkpoint 兼容
     storyline_auto_plan: Annotated[Optional[dict], _last_wins]                # storyline_join(不覆盖 storyline_plan)

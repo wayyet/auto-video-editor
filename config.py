@@ -155,6 +155,69 @@ STORYLINE_WEB_TOPIC_MC_HEADLESS: bool = (
     in ("1", "true", "yes")
 )
 
+# ---------------------------------------------------------------------------
+# 1.3) Xpoz 英文检索线(2026-11-20 审查修订版阶段2;双线中英分离审查 §3.2/
+#      §3.5/§3.6):langchain-xpoz 四平台(TikTok/X/Reddit/Instagram)关键词
+#      搜索,产物独立落盘 storyline/search_web_topic_en.json(审查 §4.3)。
+#      与中文线互不掺杂;失败软降级退回纯翻译现状,不阻断主线(§4.1)。
+#   - 同样是**进程启动时**读取的模块常量:修改后必须重启实际运行工作流的进程。
+#   - D1 决策:本段配置不改变中文线默认引擎(保持 bing_html)。
+STORYLINE_ENABLE_WEB_TOPIC_EN: bool = (
+    os.environ.get("STORYLINE_ENABLE_WEB_TOPIC_EN", "true").lower().strip()
+    in ("1", "true", "yes")
+)
+
+# API key 只从组件自身约定名 XPOZ_API_KEY 读取(单一来源,审查阶段2任务1);
+# 缺失 → 节点层英文线软跳过(skipped),不报错不阻断。key 不入产物/日志/仓库。
+STORYLINE_WEB_TOPIC_XPOZ_API_KEY: str = os.environ.get(
+    "XPOZ_API_KEY", ""
+).strip()
+
+_XPOZ_PLATFORM_WHITELIST = ("tiktok", "twitter", "reddit", "instagram")
+_raw_xpoz_platforms = os.environ.get(
+    "STORYLINE_WEB_TOPIC_XPOZ_PLATFORMS", "tiktok,twitter,reddit,instagram"
+).strip()
+# 白名单校验 + 去重保序(空值/未知值导入期明确报错,与 _MC_PLATFORM_WHITELIST 同款)
+_raw_xpoz_platform_list = []
+for _p in _raw_xpoz_platforms.split(","):
+    _p = _p.strip().lower()
+    if not _p:
+        continue
+    if _p not in _XPOZ_PLATFORM_WHITELIST:
+        raise ValueError(
+            f"STORYLINE_WEB_TOPIC_XPOZ_PLATFORMS 项 {_p!r} 不在白名单 "
+            f"{_XPOZ_PLATFORM_WHITELIST}(可选: tiktok / twitter / reddit / instagram)"
+        )
+    if _p not in _raw_xpoz_platform_list:
+        _raw_xpoz_platform_list.append(_p)
+if not _raw_xpoz_platform_list:
+    raise ValueError(
+        "STORYLINE_WEB_TOPIC_XPOZ_PLATFORMS 解析结果为空(须至少含一个平台)"
+    )
+STORYLINE_WEB_TOPIC_XPOZ_PLATFORMS: tuple[str, ...] = tuple(_raw_xpoz_platform_list)
+
+_raw_xpoz_mpp = int(
+    os.environ.get("STORYLINE_WEB_TOPIC_XPOZ_MAX_PER_PLATFORM", "5").strip() or "5"
+)
+# 每平台上限(与中文线 10 条口径对齐:四平台 × 5 = 20 原始条,均衡合并后截 10)
+if not 1 <= _raw_xpoz_mpp <= 10:
+    raise ValueError(
+        f"STORYLINE_WEB_TOPIC_XPOZ_MAX_PER_PLATFORM={_raw_xpoz_mpp} 超出范围 1..10"
+    )
+STORYLINE_WEB_TOPIC_XPOZ_MAX_PER_PLATFORM: int = _raw_xpoz_mpp
+
+# 单平台操作超时(秒):经适配器真实传入 XpozClient(timeout=...)(审查 §3.2
+# 修订要求 1,默认与 SDK 缺省一致);四平台串行最坏总耗时 ≈ 4×该值,执行记录
+# D5:不虚假宣称总超时。范围 30..600(下限防 0/负值直接失效,上限防节点久挂)。
+_raw_xpoz_timeout = int(
+    os.environ.get("STORYLINE_WEB_TOPIC_XPOZ_TIMEOUT", "300").strip() or "300"
+)
+if not 30 <= _raw_xpoz_timeout <= 600:
+    raise ValueError(
+        f"STORYLINE_WEB_TOPIC_XPOZ_TIMEOUT={_raw_xpoz_timeout} 超出范围 30..600(秒)"
+    )
+STORYLINE_WEB_TOPIC_XPOZ_TIMEOUT: int = _raw_xpoz_timeout
+
 STORYLINE_WEB_TOPIC_SOCKS5_PROXY: str = os.environ.get(
     "STORYLINE_WEB_TOPIC_SOCKS5_PROXY", ""
 ).strip()
