@@ -1350,10 +1350,27 @@ def search_web_topic(
 
         mc_items = [] if mc_error else _map_mc_records(mc_records, max_results)
         # 客户端成功但清洗后 0 条同样按 NO_RESULTS 回退(§6.3 有效性判定)
-        mc_primary_error = (
-            mc_error if mc_error else ("NO_RESULTS" if not mc_items else None)
+        # 相关性守卫(2026-11-19 真机事故防线,2026-11-20 覆盖 mc 分支 —— 审查
+        # 修订提醒的缺项):平台返回的低相关笔记同样不算成功 → IRRELEVANT_RESULTS
+        # → 回退 Bing;命中统计进诊断,不改变回退语义。
+        mc_relevance_blocked = False
+        if mc_error is None and mc_items:
+            matched = _count_relevant_results(str(query), mc_items)
+            mc_diag.setdefault("relevance_matched", matched)
+            mc_diag.setdefault("relevance_total", len(mc_items))
+            if matched < min(WEB_TOPIC_RELEVANCE_MIN_MATCHED, len(mc_items)):
+                mc_relevance_blocked = True
+        mc_primary_error = mc_error or (
+            "NO_RESULTS"
+            if not mc_items
+            else ("IRRELEVANT_RESULTS" if mc_relevance_blocked else None)
         )
         mc_primary_message = str(mc_message or "")
+        if mc_relevance_blocked:
+            mc_primary_message = (
+                f"relevance matched {mc_diag['relevance_matched']}"
+                f"/{mc_diag['relevance_total']} results"
+            )
         diagnostics: dict[str, Any] = {
             "requested_provider": "mediacrawler",
             "requested_platform": mc_platform,

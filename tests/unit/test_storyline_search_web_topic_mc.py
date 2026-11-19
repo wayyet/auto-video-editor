@@ -22,11 +22,13 @@ _MC_OK_DIAG = {"primary": {"returncode": 0}}
 
 
 def _mc_note(idx: int = 1) -> dict:
+    # 标题/摘要携带检索词 token(平台搜索结果的真实形态):低相关结果会被
+    # 相关性守卫拦截(独立用例覆盖),成功路径数据必须真实可过守卫。
     return {
         "note_id": str(idx),
         "xsec_token": "should_not_leak",
-        "title": f"笔记{idx}",
-        "desc": f"描述{idx}",
+        "title": f"夏季防晒笔记{idx}",
+        "desc": f"夏季防晒 描述{idx}",
         "note_url": f"https://www.xiaohongshu.com/explore/{idx}",
         "nickname": f"作者{idx}",
     }
@@ -82,8 +84,8 @@ def test_mc_success_maps_items_and_semantics(monkeypatch) -> None:
     assert len(items) == 2
     assert items[0] == {
         "url": "https://www.xiaohongshu.com/explore/1",
-        "title": "笔记1",
-        "snippet": "描述1",
+        "title": "夏季防晒笔记1",
+        "snippet": "夏季防晒 描述1",
         "source": "mediacrawler",
     }
     # 原始记录的敏感/无关字段不得进入产物(审查 P1-06 白名单四字段)
@@ -227,6 +229,51 @@ def test_mc_request_hash_differs_from_plain_engine_key() -> None:
         query="q", provider=mediacrawler_request_provider("xhs", "rev"), max_results=10
     )
     assert plain != dynamic
+
+
+# ---------------------------------------------------------------------------
+# 相关性守卫覆盖 mc 分支(2026-11-19 真机事故防线;并行会话审查提醒的缺项)
+# ---------------------------------------------------------------------------
+def test_mc_irrelevant_results_guard_falls_back(monkeypatch) -> None:
+    """低相关笔记(0 条命中检索词 token)→ IRRELEVANT_RESULTS → 回退 Bing。"""
+    records = [
+        {
+            "note_url": "https://www.xiaohongshu.com/explore/1",
+            "title": "completely unrelated topic",
+            "desc": "nothing to do with the query",
+        },
+        {
+            "note_url": "https://www.xiaohongshu.com/explore/2",
+            "title": "another unrelated one",
+            "desc": "still nothing",
+        },
+    ]
+    _patch_mc(monkeypatch, records)
+    _patch_bing(
+        monkeypatch,
+        [
+            {
+                "url": "https://e.com/1",
+                "title": "t",
+                "snippet": "",
+                "source": "bing_html",
+            }
+        ],
+    )
+    res = _mc_call(query="海上清真寺旅游攻略")
+    assert res["status"] == "ok"
+    assert res["provider"] == "bing_html"
+    assert res["fallback"]["primary_error_code"] == "IRRELEVANT_RESULTS"
+    assert "relevance matched" in res["fallback"]["primary_message"]
+
+
+def test_mc_guard_stats_recorded_in_diagnostics(monkeypatch) -> None:
+    """守卫命中统计进 diagnostics.primary,便于审计;全部命中不拦截。"""
+    _patch_mc(monkeypatch, [_mc_note(1), _mc_note(2)])
+    res = _mc_call()
+    primary = res["diagnostics"]["primary"]
+    assert primary["relevance_matched"] == 2
+    assert primary["relevance_total"] == 2
 
 
 # ---------------------------------------------------------------------------
