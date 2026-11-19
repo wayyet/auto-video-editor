@@ -26,11 +26,15 @@ subtitle_qc qc 链 + ``validate_layout`` 兜底),产出 ``layout_issues`` /
 
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from jy_common.translate_client import (
     TRANSLATION_PROMPT_VERSION,
     LLMTranslateClient,
+    TranslationError,
     get_default_client,
     translate_segments,
 )
@@ -50,6 +54,46 @@ STATUS_STUB = "stub"
 STATUS_SKIPPED = "skipped"
 
 
+def _dump_translation_failure(
+    outputs_root: str | None,
+    *,
+    trace: dict[str, Any],
+    translator_id: str,
+    prompt_version: str,
+    segments_count: int,
+    fingerprint: str,
+) -> None:
+    """翻译失败取证:trace(含模型原始输出 raw_head)落盘 diagnostics/ 再上抛。
+
+    背景(2026-11-20 形状漂移事故,console-011419d9ceec):chat_json_with_trace
+    会把 CLI 调用层异常折成空 dict,最终报错"翻译输出缺少 translations 数组"
+    判定的是空 dict 而非模型原始输出 —— trace.raw_head 是兜底文案下唯一能看到
+    真实原因的证据(异常对象挂着 trace,但全链路无人消费,run 日志里不留痕)。
+
+    Best-effort:outputs_root 缺失或写盘失败都静默跳过 —— 取证绝不掩盖原始
+    TranslationError(fail-closed 语义不变)。
+    """
+    if not outputs_root:
+        return
+    try:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        diag_dir = Path(outputs_root) / "diagnostics"
+        diag_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "node": "node_16a_translate_and_check",
+            "translator_id": translator_id,
+            "prompt_version": prompt_version,
+            "segments_count": segments_count,
+            "fingerprint": fingerprint,
+            "trace": trace,
+        }
+        (diag_dir / f"translation-failure-{stamp}.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception:  # noqa: BLE001 — 取证失败不得影响原异常的传递
+        return
+
+
 def node_16a_translate_and_check(state: WorkflowState) -> dict:
     """LangGraph 节点:翻译英文字幕 + 写 marker + 写英文分支草稿 + 写 SRT。
 
@@ -66,7 +110,9 @@ def node_16a_translate_and_check(state: WorkflowState) -> dict:
         - ``status_log``: 仅 delta(由 reducer ``_append_unique`` 合并)
 
     Raises:
-        TranslationError: 真实翻译失败(fail-closed,不写 marker/state)。
+        TranslationError: 真实翻译失败(fail-closed,不写 marker/state);
+            上抛前 best-effort 把 trace 取证落盘
+            ``<storyline_outputs_root>/diagnostics/``。
     """
     # 阶段 2(2026-11-09 效果缺失修复):翻译源 = node_08 产出的中文旁白字幕段
     # (subtitle_segments_zh,时间取自当前草稿,英文字幕/配音随其同步);旧线程
@@ -113,8 +159,21 @@ def node_16a_translate_and_check(state: WorkflowState) -> dict:
         # 已有有效 marker,跳过翻译调用,直接读草稿(可能含人工修正)
         segments_en = _read_segments_from_draft(draft_dir_p)
     else:
-        # 真实客户端失败 → TranslationError 上抛(fail-closed,marker 未写)
-        translated = translate_segments(segments_zh)
+        # 真实客户端失败 → TranslationError 上抛(fail-closed,marker 未写);
+        # 上抛前先落盘取证(trace.raw_head = 模型原始输出,2026-11-20 形状
+        # 漂移事故的排障证据),取证失败不影响异常传递。
+        try:
+            translated = translate_segments(segments_zh)
+        except TranslationError as exc:
+            _dump_translation_failure(
+                state.get("storyline_outputs_root"),
+                trace=exc.trace,
+                translator_id=translator_id,
+                prompt_version=prompt_version,
+                segments_count=len(segments_zh),
+                fingerprint=fingerprint,
+            )
+            raise
         # 同步 start_ms / end_ms(translate_client 可能不返回)
         for i, (src, dst) in enumerate(zip(segments_zh, translated)):
             dst.setdefault("start_ms", src.get("start_ms", 0))

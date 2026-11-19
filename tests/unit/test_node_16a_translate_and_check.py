@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from jy_common.translate_client import (
+    TRANSLATION_PROMPT_VERSION,
     LLMTranslateClient,
     MockTranslateClient,
     TranslationError,
@@ -113,14 +114,14 @@ def test_node_16a_happy_path_writes_state_and_srt(tmp_path: Path) -> None:
 def _write_v2_marker(draft_dir: Path, segments_zh: list[dict], texts: list[str]) -> None:
     """按当前 mock 身份写一枚 v2 marker(命中用)。"""
     fingerprint = _compute_source_fingerprint(
-        segments_zh, translator_id="mock", prompt_version="subtitle-translate-v1"
+        segments_zh, translator_id="mock", prompt_version=TRANSLATION_PROMPT_VERSION
     )
     payload = {
         "schema_version": 2,
         "target_language": "en",
         "source_fingerprint": fingerprint,
         "translator_id": "mock",
-        "prompt_version": "subtitle-translate-v1",
+        "prompt_version": TRANSLATION_PROMPT_VERSION,
         "segments": [
             {"index": seg["index"], "start_ms": seg["start_ms"],
              "end_ms": seg["end_ms"], "text_en": texts[seg["index"]]}
@@ -241,7 +242,40 @@ def test_node_16a_real_client_reports_real_status(tmp_path: Path) -> None:
 
 
 def test_node_16a_translation_failure_fails_closed(tmp_path: Path) -> None:
-    """真实翻译失败(重试后仍不符)→ TranslationError 上抛,marker 不落盘。"""
+    """真实翻译失败(重试后仍不符)→ TranslationError 上抛,marker 不落盘;
+    trace 取证落盘 diagnostics/(2026-11-20 形状漂移事故的排障证据)。"""
+    draft_dir = _seed_en_branch(tmp_path)
+    outputs_root = tmp_path / "outputs"
+    outputs_root.mkdir()
+
+    class _BadLLM:
+        def chat(self, **kwargs):
+            return "not-json-at-all"
+
+    set_default_client(LLMTranslateClient(_BadLLM(), max_retries=1))
+    state = _state(_normal_asr(), draft_dir)
+    state["storyline_outputs_root"] = str(outputs_root)
+    with pytest.raises(TranslationError):
+        node_16a_translate_and_check(state)
+
+    assert not (draft_dir / "subtitle_en.json").exists()
+
+    # 取证文件存在且带关键证据字段:raw_head = 模型原始输出(兜底文案
+    # "缺少 translations 数组"判定的空 dict 会把它整个吞掉)
+    dumps = list((outputs_root / "diagnostics").glob("translation-failure-*.json"))
+    assert len(dumps) == 1
+    evidence = json.loads(dumps[0].read_text(encoding="utf-8"))
+    assert evidence["node"] == "node_16a_translate_and_check"
+    assert evidence["segments_count"] == 2
+    assert evidence["translator_id"] == "_BadLLM"
+    assert evidence["trace"]["parsed"] is False
+    assert "not-json-at-all" in evidence["trace"]["raw_head"]
+
+
+def test_node_16a_translation_failure_without_outputs_root_still_raises(
+    tmp_path: Path,
+) -> None:
+    """storyline_outputs_root 缺失 → 取证静默跳过,异常照常上抛(不掩盖错误)。"""
     draft_dir = _seed_en_branch(tmp_path)
 
     class _BadLLM:
@@ -251,8 +285,6 @@ def test_node_16a_translation_failure_fails_closed(tmp_path: Path) -> None:
     set_default_client(LLMTranslateClient(_BadLLM(), max_retries=1))
     with pytest.raises(TranslationError):
         node_16a_translate_and_check(_state(_normal_asr(), draft_dir))
-
-    assert not (draft_dir / "subtitle_en.json").exists()
 
 
 def test_node_16a_no_asr_segments_skips(tmp_path: Path) -> None:

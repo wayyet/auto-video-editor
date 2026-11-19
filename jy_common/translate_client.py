@@ -24,7 +24,10 @@ import json
 from typing import Any, Protocol
 
 #: 提示词版本 —— 参与 marker 指纹,改提示词必须换版本号(否则旧 marker 误命中)
-TRANSLATION_PROMPT_VERSION = "subtitle-translate-v1"
+#: v2(2026-11-20):prompt 内嵌输出 JSON 结构示例 —— 形状漂移事故(console-
+#: 011419d9ceec,4 次尝试全漂移)实证模型看不到 --output-schema(仅事后校验),
+#: prompt 示例是它知道期望形状的唯一来源。
+TRANSLATION_PROMPT_VERSION = "subtitle-translate-v2"
 #: 失败重试次数(总尝试 = 1 + 重试)
 TRANSLATION_MAX_RETRIES = 1
 #: 单批输入字符预算(超预算切段分批,批间按原始 index 对齐)
@@ -57,6 +60,13 @@ _SYSTEM_PROMPT = (
     "3) 长度与原文相当,不扩写不缩写;"
     "4) 禁止添加任何前缀、注释或额外说明;"
     "5) 只输出 JSON,不要输出其它文字。"
+    "输出 JSON 必须严格符合以下格式:顶层键是 translations,数组每个元素"
+    "是对象(不是字符串),且只含 index(整数,与输入 segments 中对应段的"
+    " index 一致)和 text_en(字符串,英文译文)两个键。示例:"
+    '{"translations":[{"index":0,"text_en":"Hello there"},'
+    '{"index":1,"text_en":"See you tomorrow"}]}'
+    "禁止:顶层键用 segments 等其它名字;数组元素是纯字符串;"
+    "元素键名用 text 等其它名字代替 text_en;增删段数或改写 index。"
 )
 
 

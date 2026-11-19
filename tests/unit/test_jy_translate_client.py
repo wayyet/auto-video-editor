@@ -15,6 +15,7 @@ from jy_common.translate_client import (
     LLMTranslateClient,
     MockTranslateClient,
     TranslationError,
+    _SYSTEM_PROMPT,
     translate_segments,
     set_default_client,
     get_default_client,
@@ -140,6 +141,24 @@ def test_translation_error_carries_trace_without_retry_on_success() -> None:
     with pytest.raises(TranslationError) as exc_info:
         LLMTranslateClient(llm2).translate(_segs("你好"))
     assert "parsed" in exc_info.value.trace
+
+
+# ---------------------------------------------------------------------------
+# prompt 输出结构示例守卫(2026-11-20 形状漂移事故)
+# ---------------------------------------------------------------------------
+def test_system_prompt_embeds_output_shape_example() -> None:
+    """prompt 必须内嵌输出 JSON 结构示例 —— 模型看不到 --output-schema(mcode
+    仅做返回后校验),prompt 示例是它知道期望形状的唯一来源。
+
+    console-011419d9ceec 实证:无示例时模型 4 次尝试全漂移(顶层键照抄输入
+    segments / 条目键 text≠text_en / 元素退化成纯字符串),最终 fail-closed
+    整条 run 失败。删掉示例等于让事故重演。
+    """
+    assert '{"translations"' in _SYSTEM_PROMPT
+    assert '"text_en"' in _SYSTEM_PROMPT
+    assert '"index"' in _SYSTEM_PROMPT
+    assert "segments" in _SYSTEM_PROMPT  # 显式禁止照抄输入顶层键
+    assert TRANSLATION_PROMPT_VERSION == "subtitle-translate-v2"  # 改示例必须换版本
 
 
 # ---------------------------------------------------------------------------
