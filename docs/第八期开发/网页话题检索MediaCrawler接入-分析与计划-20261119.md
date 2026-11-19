@@ -1,6 +1,8 @@
 # 网页话题检索切换 MediaCrawler 接入 —— 分析与计划(2026-11-19)
 
 > 状态:**实施中途暂停**。本文档承载完整调研分析、实施方案与当前断点,任何会话可据此无损接续。接续点见 §6。
+>
+> ⚠️ **2026-11-20 审查修订**:本文档经《MediaCrawler接入方案_设计审查与修订执行计划_20261119》(同目录)全面审查,多处事实已按审查结论就地修正(修订处以「审查修订」标注)。当前权威执行计划 = 审查文档 §7 分阶段计划。要点:①默认引擎已回拨并保持 `bing_html`,MC 接线+测试+真机验收全通过后才单独提交默认切换;②浏览器模式定为审查 §4.3 **方案B**(MC 专用浏览器,本地副本已固定 `CDP_CONNECT_EXISTING=False`);③P0-01 用途门禁已确认=个人非商业学习研究(2026-11-20);④MediaCrawler 本地 revision 固定 `09ed1ec6`;⑤首次 CDP/登录预检与 600s 外层超时是不同阶段(内部 BROWSER_LAUNCH_TIMEOUT 默认 60s)。
 
 ---
 
@@ -18,7 +20,7 @@
 | # | 决策项 | 拍板结果 |
 |---|--------|----------|
 | 1 | 默认检索平台 | **小红书 xhs**(env 可切 7 平台:xhs/dy/ks/bili/wb/tieba/zhihu) |
-| 2 | 浏览器运行方式 | **可见浏览器**(非无头;CDP 连本地 Chrome 风控最低;首次使用操作员扫码登录一次,登录态缓存 `<platform>_user_data_dir` 复用) |
+| 2 | 浏览器运行方式 | **可见浏览器**(非无头)。~~CDP 连本地 Chrome 风控最低~~ → **审查修订(§4.3):2026-11-20 改定为方案B —— MC 专用浏览器**(`CDP_CONNECT_EXISTING=False`,自启独立 Chrome + 专用 profile `browser_data/cdp_xhs_user_data_dir`,与用户日常浏览器隔离;首跑扫码一次,不要求远程调试预配置) |
 | 3 | 失败兜底 | **MC 失败或 0 条 → 自动回退 bing_html**,artifact 记录回退来源(fallback 键) |
 
 ## 3. MediaCrawler 侧探查结论(本地副本实读)
@@ -55,13 +57,13 @@
 - 与现有条目契约 `{url,title,snippet,source}` 的映射:`note_url→url、title→title、desc→snippet、source 恒 "mediacrawler"`
 
 ### 3.4 登录与反爬
-- `USER_DATA_DIR = "%s_user_data_dir"`(base_config L96)→ 登录态缓存在项目根 `<platform>_user_data_dir`;qrcode 登录类型在已有登录态时**不重复扫码**
-- CDP 模式默认开:`ENABLE_CDP_MODE = True` L59、`CDP_DEBUG_PORT = 9222` L63、`CDP_HEADLESS = False` L73、`CDP_CONNECT_EXISTING = True` L83(连接/启动用户本地 Chrome,反检测更好;可见窗口)
-- 签名:**无需 JS 逆向** —— 用登录态浏览器上下文内 JS 表达式生成签名(README L48-50);7 平台关键词搜索+登录态缓存全 ✅(README L54-62)
+- ~~登录态缓存在项目根 `<platform>_user_data_dir`~~ **审查修订:`USER_DATA_DIR` 只在"启动新浏览器"路径生效**(`tools/cdp_browser.py` L260-261:profile 为 `browser_data/cdp_{USER_DATA_DIR % PLATFORM}`);上游默认 `CDP_CONNECT_EXISTING=True` 走"连接现有浏览器"分支,复用用户 Chrome 第一个 context(`contexts[0]` L396),与该目录无关。**2026-11-20 已按方案B固定 `CDP_CONNECT_EXISTING=False`** → 登录态缓存在 `browser_data/cdp_xhs_user_data_dir`,首跑扫码一次后复用
+- CDP 模式默认开:`ENABLE_CDP_MODE = True` L59、`CDP_DEBUG_PORT = 9222` L63、`CDP_HEADLESS = False` L73、`CDP_CONNECT_EXISTING` L83(**本地副本已改为 False**,上游默认 True);MC 内部 `BROWSER_LAUNCH_TIMEOUT` 默认 **60s** —— 浏览器启动/CDP 连接等待会先于外层子进程超时失败(审查 P1-08)
+- 签名:**无需 JS 逆向** —— 用登录态浏览器上下文内 JS 表达式生成签名(README L48-50);7 平台关键词搜索+登录态缓存全 ✅(README L54-62)。~~风控最低~~ **审查修订:CDP 模式的反检测优势是上游宣传性描述,平台是否触发风控取决于平台策略与实际行为,不作承诺**
 - `data/` 目录当前不存在 = 本地从未跑过,**首次运行必须扫码登录**
 
 ### 3.5 集成方式选型
-自带 `api/`(FastAPI,`api/main.py` L40-66:routers crawler/data/websocket),但 `api/services/crawler_manager.py` `_build_command` L205-216 实质是**拼 main.py CLI 起子进程**再转发日志 —— 浏览器并不常驻热复用。因此**直接子进程调 main.py 与 API 服务等价且省一个常驻服务**,选子进程。
+自带 `api/`(FastAPI,`api/main.py` L40-66:routers crawler/data/websocket),但 `api/services/crawler_manager.py` `_build_command` L205-216 实质是**拼 main.py CLI 起子进程**再转发日志 —— 浏览器并不常驻热复用。因此**直接子进程调 main.py 与 API 服务等价且省一个常驻服务**,选子进程。**审查修订(§3.5)补充四项硬要求:①上游版本固定(本地 revision `09ed1ec6`,纳入 diagnostics 与 request_hash);②project_root/save_root 父子进程统一绝对路径;③同机同 CDP 端口任务级互斥锁;④原始 JSON 数据最小化留存(成功映射即删+TTL 清扫),敏感字段(token/Cookie)不进 artifact/日志。**
 
 ## 4. auto-video-editor 侧探查结论(接入点全定位)
 
@@ -100,7 +102,7 @@
 
 | env | 默认值 | 说明 |
 |-----|--------|------|
-| `STORYLINE_WEB_TOPIC_ENGINE` | `mediacrawler` | 引擎总开关(白名单:mediacrawler/bing_html/google_html/duckduckgo_html/stub) |
+| `STORYLINE_WEB_TOPIC_ENGINE` | ~~`mediacrawler`~~ **`bing_html`(审查修订 6.4:接线+测试+真机验收全通过后才单独提交默认切换;此前显式启用 mediacrawler 属测试行为)** | 引擎总开关(白名单:mediacrawler/bing_html/google_html/duckduckgo_html/stub) |
 | `STORYLINE_WEB_TOPIC_MC_PLATFORM` | `xhs` | MC 平台(白名单:xhs/dy/ks/bili/wb/tieba/zhihu) |
 | `STORYLINE_WEB_TOPIC_MC_PROJECT_ROOT` | `C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler` | MC 安装根 |
 | `STORYLINE_WEB_TOPIC_MC_MAX_NOTES` | `10` | 每次检索最大条数 |
@@ -161,33 +163,41 @@ engine == "mediacrawler" 时(插在 L114-117 区域):
 - 既有 651 行用例与 GOLDEN_STEPS(`tests/integration/test_unreachable_nodes_wiring.py` L97-118,web_topic 在 `_CYCLE` 内)零改动(节点接线不变、SCHEMA_VERSION 不 bump)
 - 执行记录补充到本文件(实施完后改为「已完成」口径)
 
-## 6. 当前实施进度与断点(2026-11-19 暂停时点)
+## 6. 当前实施进度与断点(2026-11-20 审查修订后状态)
+
+> **审查修订(2026-11-20)**:d5d4eaf(config+client)已入库;0545b54 为保护性回拨提交(默认引擎回 bing_html,提交信息明确此前误称能力层已完成)。当前权威状态见下表,权威执行计划=审查文档 §7 分阶段计划(阶段1文档修订→2 client加固→3能力层→4节点层→5 console→6测试+真机+默认切换门禁)。
 
 | 项 | 状态 | 说明 |
 |----|------|------|
-| config.py | ✅ 已改 | 白名单加 mediacrawler;默认引擎 mediacrawler;新增 `_MC_PLATFORM_WHITELIST` 校验 + `STORYLINE_WEB_TOPIC_MC_PLATFORM/PROJECT_ROOT/MAX_NOTES/TIMEOUT/HEADLESS` 五 env(§5 步骤 1 表);SOCKS5/DEBUG 原样保留 |
-| storyline_capabilities/mediacrawler_client.py | ✅ 已新建 | 契约见 §5 步骤 2;含 MC_PLATFORM_LABELS/MC_PLATFORM_CODES/platform_label/_resolve_python_exe/_tail;命令形态与错误码映射已按 §3.2/§4.5 纪律落实现 |
-| storyline_capabilities/search_web_topic.py | ⬜ 未动 | **接续点**。改动清单=§5 步骤 3 全部(三 dict/helper/build_request_hash 平台感知/_map_mc_records/mc 分支+回退/签名 provider_options);实测行号:主入口 L949、_result 闭包 L1021-1056、bing 分支 L1138 起、未知 provider L1204 |
-| nodes/storyline/node_search_web_topic.py | ⬜ 未动 | 改动清单=§5 步骤 4 |
-| web/console_service.py | ⬜ 未动 | 一行关键词兜底(§5 步骤 5) |
-| 测试 | ⬜ 未写 | §5 步骤 6 |
-| 验证 | ⬜ 未跑 | 见 §7 |
-| git 提交 | ⬜ 未做 | 本文档 + 两文件改动待一并提交 |
+| config.py | ✅ 完成 | 白名单含 mediacrawler;**默认引擎 `bing_html`(待默认切换门禁)**;五 MC env 在;MAX_NOTES 1..10 / TIMEOUT 30..900 范围校验;平台白名单收紧 `("xhs",)`(P2-04) |
+| storyline_capabilities/mediacrawler_client.py | ✅ 完成(审查阶段2加固) | 绝对路径 resolve、preflight 三类缺失、detect_revision 入 hash、normalize_query 逗号规整、输出大小/结构校验、stdout/stderr 脱敏限长、CDP 端口互斥锁(陈旧抢占)、原始 JSON 成功即删+3 天 TTL 清扫、超时进程树终止(taskkill /T /F) |
+| MC 本地副本 | ✅ 方案B已固定 | `CDP_CONNECT_EXISTING=False`(base_config.py,带注释);专用 profile `browser_data/cdp_xhs_user_data_dir`;revision=09ed1ec6 |
+| storyline_capabilities/search_web_topic.py | ✅ 完成(审查阶段3) | 三 dict+`mediacrawler_request_provider(platform, revision)`+`_parser_version_for` 动态键+`_map_mc_records`(scheme 白名单/空标题丢/去重/限量)+mc 分支(Bing 回退,§6.2 artifact:requested_provider/provider 实际产出者/engine/fallback/fallback_error/request_hash=首选策略)+`_BING_ERROR_MESSAGES` 共用 |
+| nodes/storyline/node_search_web_topic.py | ✅ 完成(审查阶段4) | engine==mediacrawler 时 provider_options 组装(detect_revision);hash 用平台+revision+MC_MAX_NOTES;query 先 normalize_query 再算双 hash(query_hash 同步移到规整后);回退成功=done 标签+`storyline_search_web_topic_fallback_bing` 追加;其余引擎逐字不变 |
+| web/console_service.py + web/static/ai_content.mjs + web/ai_content.html | ✅ 完成(审查阶段5) | 关键词兜底加 mediacrawler;`_web_topic_section` 透传 fallback(to_provider/primary_error_code/reason);VM 加 fallback 字段;渲染器显示「回退说明:…」 |
+| 测试 | ✅ 完成(审查阶段6.1) | 新增 `tests/unit/test_mediacrawler_client.py`(28 例)+ `tests/unit/test_storyline_search_web_topic_mc.py`(11 例);节点 6 例;console 2 例;前端 fallback 1 例;client+能力层+节点+参考+console 全绿 |
+| 验证 | ✅ 代码层全过 | 全量 unit 退出码 0 零失败;`tests/integration/test_unreachable_nodes_wiring.py` 45 例全绿;真机验收留操作员(§7 前置检查+工作流矩阵) |
+| git 提交 | ⬜ 本次提交(不含默认切换) | 审查文档+原方案修订+阶段1-5 代码+测试一并提交;**默认切换单独提交,待真机验收门禁(审查 6.4)** |
 
-**接续点**:从 §5 步骤 3(能力层分支)开始,按 3→4→5→6 顺序;接续会话无需重新调研,§3/§4 结论已实测校准(注意:早期探索报告给的行号有漂移——def search_web_topic 实际 L949 而非 L851,以本文档实测值为准)。
+**接续点**:审查阶段 2(client 加固)→3→4→5→6;接续会话无需重新调研,§3/§4 结论已实测校准(注意:早期探索报告给的行号有漂移——def search_web_topic 实际 L949 而非 L851,以本文档实测值为准)。
 
-## 7. 验证方案(实施完成后)
+## 7. 验证方案(实施完成后;按审查 §6.2/6.3 修订)
 
-1. **单测**:`.venv\Scripts\python.exe -m pytest tests/unit/test_storyline_capabilities_search_web_topic.py tests/unit/test_web_topic_reference.py -q`;随后全量 unit,新增失败用 stash/worktree 对照区分存量
-2. **真机**:重启生产服务(config 导入期读 env,须管理员 pwsh7 一键脚本)→ 新建任务 → 首跑弹出 Chrome **操作员扫码登录小红书一次** → 「AI 内容明细」01 节点应显示引擎 `MediaCrawler(小红书)`、来源网站 10 条为小红书笔记链接,03 生成文案引用来源正常
-3. **回退验证**:临时 `STORYLINE_WEB_TOPIC_MC_PROJECT_ROOT` 指向不存在路径重启 → artifact 自动回退 Bing,含 `fallback` 键与 message
-4. **回滚**:`STORYLINE_WEB_TOPIC_ENGINE=bing_html` 重启即恢复原行为(MC env 全部闲置)
+1. **单测**:`.venv\Scripts\python.exe -m pytest tests/unit/test_mediacrawler_client.py tests/unit/test_storyline_capabilities_search_web_topic.py tests/unit/test_web_topic_reference.py -q`;随后全量 unit,新增失败用 stash/worktree 对照区分存量
+2. **真机前置检查(独立于任务,一次性)**:①MC 目录 `git rev-parse HEAD` 确认 revision;②`.venv` python 跑 `main.py --help` 冒烟;③方案B 下无需 chrome://inspect 远程调试预配置(专用浏览器自启);④**先在 MC 目录单独手动跑一次**单平台单关键词 ≤10 条命令,完成扫码登录并确认结果写盘
+3. **真机工作流**:重启生产服务(config 导入期读 env,须管理员 pwsh7 一键脚本)→ 新建任务 → 「AI 内容明细」01 节点应显示引擎 `MediaCrawler(小红书)`、来源网站为小红书笔记链接,03 生成文案引用正常;审查 §6.3 八场景矩阵(MC 成功/MC 未安装/CDP 未启/MC 无结果/双失败/缓存/平台切换/并发)逐项过
+4. **回退验证**:临时 `STORYLINE_WEB_TOPIC_MC_PROJECT_ROOT` 指向不存在路径重启 → artifact 自动回退 Bing,含 `fallback` 键与 message
+5. **回滚**:`STORYLINE_WEB_TOPIC_ENGINE=bing_html` 重启即恢复原行为(MC env 全部闲置)
 
-## 8. 风险与注记
+## 8. 风险与注记(审查修订:①-④列为启用前已落实事项,非事后处理)
 
-- **首次登录依赖人工扫码**:qrcode 首扫需操作员;登录态过期 → 节点软失败 → 自动回退 Bing,流水线不阻断
-- **OneDrive 同步干扰**:MC 的 `<platform>_user_data_dir`(浏览器 profile)在 OneDrive 目录内,Chromium 高频写文件可能与同步互相干扰(文件锁/流量);先观察,出问题再改 MC `config/base_config.py` `USER_DATA_DIR` 移出 OneDrive
-- **风控**:每任务 1 次、≤10 条、可见浏览器+登录态复用,符合 MC README 频控建议;个人账号高频使用需克制
-- **许可**:非商业学习许可;仅子进程调用外部安装副本、代码不入库、不对外分发
-- **并发**:两任务同时触发 MC 会争用 CDP 端口 9222 与浏览器实例;单操作员场景风险低,如出现再加文件锁
+- **许可(P0-01,已过门禁)**:非商业学习许可;2026-11-20 用户确认用途=个人非商业学习研究;仅子进程调用外部安装副本、代码不入库、不对外分发;**用途若变更须先取得版权方书面授权**
+- **CDP/浏览器模式(已定为方案B)**:MC 专用浏览器+专用 profile,与用户日常 Chrome 隔离;MC 运行期间该实例被独占,同机同 CDP 端口互斥锁已实现(阶段2),并发第二任务收到明确忙碌状态→回退 Bing
+- **超时分层(P1-08)**:外层 600s 只是子进程最大运行时间;MC 内部 `BROWSER_LAUNCH_TIMEOUT` 默认 60s 会先失败;首跑扫码/CDP 预检是独立前置步骤,不占用任务超时预算
+- **原始 JSON 数据留存(P1-06/P2-08)**:成功读取映射后即删本次原始 JSON;失败残留由 TTL 清扫(3 天)兜底;artifact 只出 `{url,title,snippet,source}` 白名单四字段,token/Cookie 不进 artifact/日志/前端
+- **孤儿浏览器进程(P2-09,方案B专属)**:子进程超时/异常退出时按进程树终止(taskkill /T /F 尽力清理),防止遗留孤儿 Chrome 占用专用 profile
+- **首次登录依赖人工扫码**:首扫在独立前置检查完成;登录态过期 → 节点软失败 → 自动回退 Bing,流水线不阻断
+- **OneDrive 同步干扰**:MC 安装目录(profile 在 `browser_data/`)在 OneDrive 内,Chromium 高频写文件可能与同步互相干扰;先观察,出问题把 MC `USER_DATA_DIR` 改到 OneDrive 外
+- **风控**:每任务 1 次、≤10 条、登录态复用,符合 MC README 频控建议;平台是否触发风控取决于平台策略,不承诺
+- **上游漂移(P2-01)**:本地 revision 固定 `09ed1ec6` 并纳入 request_hash;MC 升级即缓存失效,适配器语义变化须 bump `MEDIACRAWLER_ADAPTER_VERSION`
 - **代理语义**:MC 分支不走 SOCKS5(社交平台直连);回退 bing 分支沿用 `STORYLINE_WEB_TOPIC_SOCKS5_PROXY` 现行为

@@ -1,9 +1,13 @@
 """本地化 search_web_topic(plan_v4 §5 阶段 1 / A 类;2026-11-19 审查修订版扩展)。
 
 策略:
-- Provider 可插拔:``duckduckgo_html``(存量)、``google_html``(2026-11-19 按用户
-  拍板接入,走本地 SOCKS5;检测到挑战/人机验证页即停,**不做任何规避动作**)、
-  ``stub``。google_html 为生产默认引擎由节点层配置决定,能力层默认保持存量值。
+- Provider 可插拔:``mediacrawler``(2026-11-19 用户拍板;2026-11-20 审查修订版
+  阶段3接线 —— 子进程调本地 MediaCrawler 检索社交平台笔记,失败或有效 0 条
+  **自动回退 bing_html**,artifact 记 requested_provider/provider 实际产出者/
+  fallback 语义,见 §6.2)、``duckduckgo_html``(存量)、``google_html``
+  (2026-11-19 按用户拍板接入,走本地 SOCKS5;检测到挑战/人机验证页即停,
+  **不做任何规避动作**)、``stub``。**生产默认引擎由 config 决定(当前
+  bing_html,MC 待默认切换门禁);能力层不读配置,provider 由节点层传入。**
 - google_html **强制 SOCKS5 代理**(``socks5h://``,域名解析走代理端防本地 DNS
   污染);代理缺失/格式不对返回 ``PROXY_ERROR``,绝不静默回退直连。
 - 错误码体系(审查修订版 §4.4 表):``NO_RESULTS`` / ``NETWORK_ERROR`` /
@@ -37,6 +41,10 @@ except ImportError:
     _HAS_REQUESTS = False
     _requests_exceptions = None  # type: ignore[assignment]
 
+# MediaCrawler 子进程适配器(2026-11-20 审查修订版阶段3接线;无环依赖:
+# client 不反向 import 本包)。
+from storyline_capabilities import mediacrawler_client as _mc_client
+
 
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -69,23 +77,29 @@ ARTIFACT_SCHEMA_VERSION: int = 2
 # 也要求 JS)、DDG 挑战 VPS 出口 → 用户拍板默认引擎改 bing_html(Bing 结果页服务端
 # 渲染,隧道/直连均实测返回 10 条真实结果);google_html 代码保留可随时切回。
 _PARSER_VERSIONS: dict[str, str] = {
+    "mediacrawler": "mediacrawler_v1",  # 基础键;实际 hash 用 mediacrawler:{platform}:{revision}
     "duckduckgo_html": "ddg_html_v1",
     "google_html": "google_html_v1",
     "bing_html": "bing_html_v1",
     "stub": "stub_v1",
 }
 _PROVIDER_LOCALES: dict[str, str] = {
+    "mediacrawler": "",
     "duckduckgo_html": "",
     "google_html": "zh-CN",
     "bing_html": "zh-CN",
     "stub": "",
 }
 _PROVIDER_ENGINE_LABELS: dict[str, str] = {
+    "mediacrawler": "MediaCrawler",
     "duckduckgo_html": "DuckDuckGo",
     "google_html": "Google",
     "bing_html": "Bing",
     "stub": "stub",
 }
+
+# mediacrawler 条目的 source 值(实际数据来源标识,进 script.json references)。
+_MC_ITEM_SOURCE = "mediacrawler"
 
 # 调试片段落盘上限(§5.5:≤64KiB)。
 WEB_TOPIC_DEBUG_MAX_BYTES: int = 64 * 1024
@@ -224,6 +238,36 @@ def _count_relevant_results(query: str, results: list[dict[str, Any]]) -> int:
     return matched
 
 
+def _parser_version_for(provider: str) -> str:
+    """provider → 解析器版本(2026-11-20 审查 P2-01)。
+
+    ``mediacrawler:{platform}:{revision}`` 动态键解析为
+    ``mc_{platform}_v{adapter}``:平台与适配器语义进 hash;上游 revision 编在
+    provider 串里,MC 升级(或节点层传的 revision 变化)必得不同 hash。
+    """
+    if provider.startswith("mediacrawler:"):
+        parts = provider.split(":")
+        platform = parts[1] if len(parts) > 1 else "xhs"
+        return f"mc_{platform}_v{_mc_client.MEDIACRAWLER_ADAPTER_VERSION}"
+    return _PARSER_VERSIONS.get(provider, "unknown")
+
+
+def _locale_for(provider: str) -> str:
+    if provider.startswith("mediacrawler:"):
+        return ""
+    return _PROVIDER_LOCALES.get(provider, "")
+
+
+def mediacrawler_request_provider(platform: str, mc_revision: str) -> str:
+    """mediacrawler 引擎的 request_hash provider 串(审查 P2-01/P2-04)。
+
+    平台与上游 revision 编入 → 换平台/换 MC 版本必得不同 hash(缓存隔离);
+    节点层与能力层用同一函数计算,两侧 hash 一致才命中缓存(§6.2:request_hash
+    以首选检索策略为准,回退成功也保留该 hash)。
+    """
+    return f"mediacrawler:{platform}:{mc_revision or 'unknown'}"
+
+
 def build_request_hash(*, query: str, provider: str, max_results: int) -> str:
     """缓存键(审查修订版 §4.5):provider+query+参数+语言+解析器+schema 版本。
 
@@ -236,8 +280,8 @@ def build_request_hash(*, query: str, provider: str, max_results: int) -> str:
             provider,
             str(query),
             str(int(max_results)),
-            _PROVIDER_LOCALES.get(provider, ""),
-            _PARSER_VERSIONS.get(provider, "unknown"),
+            _locale_for(provider),
+            _parser_version_for(provider),
             str(ARTIFACT_SCHEMA_VERSION),
         ]
     )
@@ -946,6 +990,77 @@ def _bing_html_search(
 
 
 # ---------------------------------------------------------------------------
+# MediaCrawler provider(2026-11-20 审查修订版阶段3)
+# ---------------------------------------------------------------------------
+# Bing 失败消息字典(mc 回退路径与 bing_html 分支共用,避免双份漂移)。
+_BING_ERROR_MESSAGES: dict[str, str] = {
+    "NETWORK_ERROR": "Bing request failed (network error).",
+    "HTTP_ERROR": "Bing returned an HTTP error (see diagnostics).",
+    "PROXY_ERROR": (
+        "Bing proxy (if configured) is unreachable or PySocks "
+        "is missing; request not sent."
+    ),
+    "PROVIDER_BLOCKED": (
+        "Bing blocked this automated query (challenge page "
+        "detected); not retrying."
+    ),
+    "PARSE_ERROR": (
+        "Bing page fetched but no result blocks parsed "
+        "(layout change?). See search_web_topic_debug.txt "
+        "if debug enabled."
+    ),
+    "IRRELEVANT_RESULTS": (
+        "Bing results parsed but unrelated to the query "
+        "(degraded/cached SERP suspected). See "
+        "search_web_topic_debug.txt if debug enabled."
+    ),
+}
+
+
+def _map_mc_records(
+    records: list[dict[str, Any]], max_results: int
+) -> list[dict[str, Any]]:
+    """MC 原始记录 → 四键条目(审查 §6.3 结果有效性判定)。
+
+    - url 只接受 http/https(与 extract_web_topic_references 的 scheme 纪律
+      一致,非法 URL 整条丢弃,不"就地修复");
+    - title 清洗后非空(空标题条目对下游引用无意义);
+    - snippet 允许为空但限长;同 URL 去重取首条;
+    - 上限 max_results;source 恒 "mediacrawler"(不因 engine/缓存伪造来源)。
+    """
+    items: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    for rec in records:
+        if len(items) >= max_results:
+            break
+        if not isinstance(rec, dict):
+            continue
+        raw_url = ""
+        for key in ("note_url", "url"):
+            candidate = str(rec.get(key) or "").strip()
+            if candidate:
+                raw_url = candidate
+                break
+        title = _clean_web_text(rec.get("title"), 300)
+        snippet = _clean_web_text(
+            rec.get("desc") or rec.get("content"), WEB_TOPIC_SNIPPET_MAX_CHARS
+        )
+        try:
+            scheme = urllib.parse.urlsplit(raw_url).scheme.lower()
+        except ValueError:
+            scheme = ""
+        if scheme not in _ALLOWED_URL_SCHEMES or not title:
+            continue
+        if raw_url in seen_urls:
+            continue
+        seen_urls.add(raw_url)
+        items.append(
+            {"url": raw_url, "title": title, "snippet": snippet, "source": _MC_ITEM_SOURCE}
+        )
+    return items
+
+
+# ---------------------------------------------------------------------------
 # 对外主入口(可注入 provider)
 # ---------------------------------------------------------------------------
 def search_web_topic(
@@ -957,25 +1072,33 @@ def search_web_topic(
     proxy_url: Optional[str] = None,
     debug_dir: Optional[Path] = None,
     download: bool = False,
+    provider_options: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Web 主题搜索。
 
     Args:
-        query: 搜索关键字。
+        query: 搜索关键字(节点层已过 ``normalize_query`` 规整,单关键词)。
         max_results: 最多取多少条。
         media_dir: 可选,若指定 + ``download=True`` 则抓取 HTML 到本地。
-        provider: ``"duckduckgo_html"`` / ``"google_html"`` / ``"stub"``。
+        provider: ``"mediacrawler"`` / ``"duckduckgo_html"`` / ``"google_html"``
+            / ``"bing_html"`` / ``"stub"``。
         proxy_url: 传输层代理(google_html 强制 socks5h://;duckduckgo_html
             可选)。只作为网络传输配置,不用于任何挑战绕过(§5.3)。
+            mediacrawler 分支不走代理(社交平台直连),回退 Bing 时沿用。
         debug_dir: 诊断落盘目录(仅显式传入且解析失败时写受限 .txt,§5.5);
             由节点层按 ``STORYLINE_WEB_TOPIC_DEBUG`` 开关决定是否传入。
+        provider_options: 仅 ``mediacrawler`` 分支使用(platform/project_root/
+            save_root/timeout_seconds/headless/cdp_port/lock_dir/mc_revision);
+            缺 project_root/save_root 直接 raise ValueError(编程错误,由节点
+            层 TOOL_EXECUTION_FAILED 留痕)。
 
     Returns:
         dict::
 
             {"status": "ok"|"no_results"|"failed",
              "schema_version": 2,
-             "engine": UI 展示名, "provider": 适配器标识,
+             "engine": UI 展示名, "provider": **实际产出**结果的适配器标识,
+             "requested_provider": 节点配置的首选 provider(mediacrawler 分支才有),
              "query": str(实际提交的检索词),
              "search_web_topic": [items],
              "preview_urls": [...],
@@ -984,8 +1107,12 @@ def search_web_topic(
                           |"IRRELEVANT_RESULTS"|"UNKNOWN_PROVIDER",
              "message": str,
              "query_hash": sha256(query),
-             "request_hash": sha256(请求语义,§4.5),
+             "request_hash": sha256(请求语义,§4.5;按首选策略计算,回退成功也保留),
              "searched_at": UTC isoformat,
+             "fallback": mc 回退 Bing 时 {from_provider, from_platform,
+                          to_provider, primary_error_code, primary_message},
+             "fallback_error": 仅 Bing 回退也失败时 {error_code, message}
+                          (两端错误都保留,审查 P1-05),
              "diagnostics": {...}}
 
     2026-11-10 阶段2(前置化设计方案 §4.2):所有分支统一加
@@ -1136,28 +1263,10 @@ def search_web_topic(
             debug_dir=debug_dir,
         )
         if error_code:
-            message = {
-                "NETWORK_ERROR": "Bing request failed (network error).",
-                "HTTP_ERROR": "Bing returned an HTTP error (see diagnostics).",
-                "PROXY_ERROR": (
-                    "Bing proxy (if configured) is unreachable or PySocks "
-                    "is missing; request not sent."
-                ),
-                "PROVIDER_BLOCKED": (
-                    "Bing blocked this automated query (challenge page "
-                    "detected); not retrying."
-                ),
-                "PARSE_ERROR": (
-                    "Bing page fetched but no result blocks parsed "
-                    "(layout change?). See search_web_topic_debug.txt "
-                    "if debug enabled."
-                ),
-                "IRRELEVANT_RESULTS": (
-                    "Bing results parsed but unrelated to the query "
-                    "(degraded/cached SERP suspected). See "
-                    "search_web_topic_debug.txt if debug enabled."
-                ),
-            }.get(error_code, f"search failed: {error_code}")
+            # 消息字典与 mediacrawler 回退路径共用(2026-11-20 审查阶段3)
+            message = _BING_ERROR_MESSAGES.get(
+                error_code, f"search failed: {error_code}"
+            )
             if error_code == "IRRELEVANT_RESULTS":
                 message += (
                     f" relevance matched {diagnostics.get('relevance_matched', 0)}"
@@ -1204,6 +1313,148 @@ def search_web_topic(
             message="",
             diagnostics=diagnostics,
         )
+
+    if provider == "mediacrawler":
+        # 2026-11-20 审查修订版阶段3:MediaCrawler 子进程检索 + Bing 自动回退
+        # (2026-11-19 用户拍板;artifact 语义=审查文档 §6.2,回退状态矩阵=§6.4)。
+        opts = dict(provider_options or {})
+        mc_platform = str(opts.get("platform") or "xhs")
+        mc_revision = str(opts.get("mc_revision") or "unknown")
+        mc_label = _mc_client.platform_label(mc_platform)
+        if not opts.get("project_root") or not opts.get("save_root"):
+            raise ValueError(
+                "mediacrawler provider_options requires project_root and save_root"
+            )
+        # request_hash 以**首选检索策略**为准(§6.2):平台+上游 revision 编入;
+        # 回退成功也保留该 hash(QA 重试幂等;换平台/换 MC 版本必 miss)。
+        effective_request_hash = build_request_hash(
+            query=str(query),
+            provider=mediacrawler_request_provider(mc_platform, mc_revision),
+            max_results=max_results,
+        )
+        try:
+            mc_records, mc_error, mc_message, mc_diag = _mc_client.search_notes(
+                query=str(query),
+                max_results=max_results,
+                platform=mc_platform,
+                project_root=str(opts.get("project_root")),
+                save_root=str(opts.get("save_root")),
+                timeout_seconds=int(opts.get("timeout_seconds") or 600),
+                headless=bool(opts.get("headless") or False),
+                cdp_port=int(opts.get("cdp_port") or 9222),
+                lock_dir=opts.get("lock_dir"),
+            )
+        except (TypeError, ValueError) as exc:
+            # provider_options 形状错误属编程错误:节点层 TOOL_EXECUTION_FAILED 留痕
+            raise ValueError(f"mediacrawler provider_options invalid: {exc}") from exc
+
+        mc_items = [] if mc_error else _map_mc_records(mc_records, max_results)
+        # 客户端成功但清洗后 0 条同样按 NO_RESULTS 回退(§6.3 有效性判定)
+        mc_primary_error = (
+            mc_error if mc_error else ("NO_RESULTS" if not mc_items else None)
+        )
+        mc_primary_message = str(mc_message or "")
+        diagnostics: dict[str, Any] = {
+            "requested_provider": "mediacrawler",
+            "requested_platform": mc_platform,
+            "mc_revision": mc_revision,
+            "adapter_version": _mc_client.MEDIACRAWLER_ADAPTER_VERSION,
+            "parser_version": (
+                f"mc_{mc_platform}_v{_mc_client.MEDIACRAWLER_ADAPTER_VERSION}"
+            ),
+            "primary": mc_diag,
+        }
+
+        if mc_primary_error is None:
+            # MC 成功:provider=实际产出者,source 恒 "mediacrawler"
+            preview_urls = [it["url"] for it in mc_items if it.get("url")]
+            doc = _result(
+                items=mc_items,
+                preview_urls=preview_urls,
+                error_code=None,
+                message="",
+                diagnostics=diagnostics,
+            )
+            doc["request_hash"] = effective_request_hash
+            doc["provider"] = "mediacrawler"
+            doc["requested_provider"] = "mediacrawler"
+            doc["engine"] = f"MediaCrawler({mc_label})"
+            return doc
+
+        # ---- 回退:MC 失败或有效 0 条 → bing_html(审查 §6.4 回退矩阵) ----
+        fallback_info: dict[str, Any] = {
+            "from_provider": "mediacrawler",
+            "from_platform": mc_platform,
+            "to_provider": "bing_html",
+            "primary_error_code": mc_primary_error,
+            "primary_message": mc_primary_message,
+        }
+        diagnostics["fallback_engine"] = "bing_html"
+        bing_items, bing_error, bing_diag = _bing_html_search(
+            query=query,
+            max_results=max_results,
+            proxy_url=proxy_url,
+            debug_dir=debug_dir,
+        )
+        diagnostics["fallback_diagnostics"] = bing_diag
+        mc_reason = (
+            f"MediaCrawler({mc_label}) {mc_primary_error}"
+            + (f": {mc_primary_message}" if mc_primary_message else "")
+        )
+
+        if bing_error:
+            # 双重失败:status=failed;MC 主错误挂 fallback,Bing 错误挂
+            # fallback_error(两端都不丢,审查 P1-05)
+            bing_message = _BING_ERROR_MESSAGES.get(
+                bing_error, f"search failed: {bing_error}"
+            )
+            if bing_error == "IRRELEVANT_RESULTS":
+                bing_message += (
+                    f" relevance matched {bing_diag.get('relevance_matched', 0)}"
+                    f"/{bing_diag.get('relevance_total', 0)} results."
+                )
+            doc = _result(
+                items=[],
+                error_code=bing_error,
+                message=f"{mc_reason}; Bing fallback also failed ({bing_message})",
+                diagnostics=diagnostics,
+            )
+            doc["request_hash"] = effective_request_hash
+            doc["provider"] = "bing_html"
+            doc["requested_provider"] = "mediacrawler"
+            doc["engine"] = "Bing"
+            doc["fallback"] = fallback_info
+            doc["fallback_error"] = {"error_code": bing_error, "message": bing_message}
+            return doc
+        if not bing_items:
+            doc = _result(
+                items=[],
+                error_code="NO_RESULTS",
+                message=f"{mc_reason}; Bing fallback returned no results.",
+                diagnostics=diagnostics,
+            )
+            doc["request_hash"] = effective_request_hash
+            doc["provider"] = "bing_html"
+            doc["requested_provider"] = "mediacrawler"
+            doc["engine"] = "Bing"
+            doc["fallback"] = fallback_info
+            return doc
+        # 回退成功:status=ok(下游有可用结果,不标失败,审查 §6.4),但 engine
+        # 如实显示回退来源,message 记录 MC 失败原因,审计链不丢失。
+        preview_urls = [it["url"] for it in bing_items if it.get("url")]
+        doc = _result(
+            items=bing_items,
+            preview_urls=preview_urls,
+            error_code=None,
+            message=f"{mc_reason}; 已回退 Bing",
+            diagnostics=diagnostics,
+        )
+        doc["request_hash"] = effective_request_hash
+        doc["provider"] = "bing_html"
+        doc["requested_provider"] = "mediacrawler"
+        doc["engine"] = "Bing(MediaCrawler 回退)"
+        doc["fallback"] = fallback_info
+        return doc
 
     if provider != "duckduckgo_html":
         return _result(

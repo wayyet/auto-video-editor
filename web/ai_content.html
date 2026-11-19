@@ -258,6 +258,11 @@
         } else if (sec.status === "ok" || sec.status === "cache_hit") {
           rows.push(el("div", { class: "hint", text: "检索完成,未返回结果条目。" }));
         }
+        // 2026-11-20 审查阶段5:MC 回退 Bing 时明示回退与原因(不能只显示
+        // 「Bing(MediaCrawler 回退)」而隐藏失败细节;数据来自后端已脱敏限长)
+        if (sec.fallback && sec.fallback.reason) {
+          rows.push(el("div", { class: "hint", text: `回退说明:${sec.fallback.reason}` }));
+        }
         rows.push(reasonNote(sec.reason));
         body.append(...rows.filter(Boolean));
       },

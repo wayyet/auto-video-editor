@@ -94,16 +94,26 @@ if _raw_web_topic_engine not in _WEB_TOPIC_ENGINE_WHITELIST:
     )
 STORYLINE_WEB_TOPIC_ENGINE: str = _raw_web_topic_engine
 
-# 1.2) MediaCrawler 子进程适配(2026-11-19 用户拍板):引擎为 mediacrawler 时,
-#   能力层经子进程调用本地 MediaCrawler 安装副本
-#   (https://github.com/NanmiCoder/MediaCrawler,非商业学习许可,外部安装、
+# 1.2) MediaCrawler 子进程适配(2026-11-19 用户拍板;2026-11-20 按审查修订版加固):
+#   能力层经子进程调用本地 MediaCrawler 安装副本(revision 09ed1ec6 固定,
+#   https://github.com/NanmiCoder/MediaCrawler,非商业学习许可,外部安装、
 #   代码不入库)做社交平台关键词搜索;失败或 0 条自动回退 bing_html。
 #   同样是进程启动时读取的模块常量,修改后须重启。
-#   - 平台代码限 MediaCrawler 支持的 7 个(xhs/dy/ks/bili/wb/tieba/zhihu);
-#   - 默认可见浏览器(非无头):CDP 连本地 Chrome 风控最低,首次使用需操作员
-#     扫码登录一次,登录态缓存在 <platform>_user_data_dir 复用;
-#   - 超时默认 600s,涵盖首次扫码的人工等待;子进程层面硬超时兜底。
-_MC_PLATFORM_WHITELIST = ("xhs", "dy", "ks", "bili", "wb", "tieba", "zhihu")
+#   - 用途门禁 P0-01:已确认检索数据仅用于个人非商业学习/研究(2026-11-20
+#     用户确认);若用途变更须先取得版权方书面授权;
+#   - 浏览器模式(审查 §4.3 方案B):MC 专用浏览器 —— 本地副本已固定
+#     CDP_CONNECT_EXISTING=False,自启独立 Chrome + 专用 profile
+#     (browser_data/cdp_xhs_user_data_dir),与用户日常浏览器隔离,
+#     首次使用需操作员扫码登录一次(非无头可见窗口);
+#   - 平台首期只开放 xhs(审查 P2-04:字段映射假定小红书记录结构,其他平台
+#     须独立 fixture+真机验证后逐个开放;上游其实支持 7 个);
+#   - 默认引擎保持 bing_html(审查 6.4 门禁:MC 接线+测试+真机验收全部通过
+#     后才单独提交默认切换,在此之前显式启用 mediacrawler 属于测试行为);
+#   - MAX_NOTES/TIMEOUT 有业务范围校验(审查 P2-02):超范围导入期报错,
+#     不带 ValueError 裸堆栈;
+#   - 超时语义(审查 P1-08):外层 timeout 只是子进程最大运行时间;MC 内部
+#     BROWSER_LAUNCH_TIMEOUT 默认 60s,CDP 连接等待会先于外层超时失败。
+_MC_PLATFORM_WHITELIST = ("xhs",)  # 审查 P2-04:首期仅 xhs;其余平台验证后逐个开放
 _raw_mc_platform = os.environ.get(
     "STORYLINE_WEB_TOPIC_MC_PLATFORM", "xhs"
 ).strip().lower()
@@ -111,7 +121,7 @@ if _raw_mc_platform not in _MC_PLATFORM_WHITELIST:
     raise ValueError(
         "STORYLINE_WEB_TOPIC_MC_PLATFORM="
         f"{_raw_mc_platform!r} 不在白名单 {_MC_PLATFORM_WHITELIST}"
-        "(可选: xhs / dy / ks / bili / wb / tieba / zhihu)"
+        "(首期仅开放 xhs;其他平台待独立验证后逐个开放)"
     )
 STORYLINE_WEB_TOPIC_MC_PLATFORM: str = _raw_mc_platform
 
@@ -120,13 +130,25 @@ STORYLINE_WEB_TOPIC_MC_PROJECT_ROOT: str = os.environ.get(
     r"C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler",
 ).strip()
 
-STORYLINE_WEB_TOPIC_MC_MAX_NOTES: int = int(
+_raw_mc_max_notes = int(
     os.environ.get("STORYLINE_WEB_TOPIC_MC_MAX_NOTES", "10").strip() or "10"
 )
+# 审查 P2-02:1..10(检索条数与既有 10 条口径一致;过大无业务意义且加重平台负担)
+if not 1 <= _raw_mc_max_notes <= 10:
+    raise ValueError(
+        f"STORYLINE_WEB_TOPIC_MC_MAX_NOTES={_raw_mc_max_notes} 超出范围 1..10"
+    )
+STORYLINE_WEB_TOPIC_MC_MAX_NOTES: int = _raw_mc_max_notes
 
-STORYLINE_WEB_TOPIC_MC_TIMEOUT: int = int(
+_raw_mc_timeout = int(
     os.environ.get("STORYLINE_WEB_TOPIC_MC_TIMEOUT", "600").strip() or "600"
 )
+# 审查 P2-02:30..900 秒(下限须覆盖 MC 内部 60s 浏览器启动等待,上限防节点久挂)
+if not 30 <= _raw_mc_timeout <= 900:
+    raise ValueError(
+        f"STORYLINE_WEB_TOPIC_MC_TIMEOUT={_raw_mc_timeout} 超出范围 30..900(秒)"
+    )
+STORYLINE_WEB_TOPIC_MC_TIMEOUT: int = _raw_mc_timeout
 
 STORYLINE_WEB_TOPIC_MC_HEADLESS: bool = (
     os.environ.get("STORYLINE_WEB_TOPIC_MC_HEADLESS", "0").lower().strip()

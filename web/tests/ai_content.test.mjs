@@ -176,3 +176,26 @@ test("normalizeContentDetails:空对象/null/数组异常全部容错", () => {
   assert.equal(vm3.subtitlesZh.count, 1, "count 缺失时回退 cues.length");
   assert.equal(vm3.webTopic.status, "missing", "缺区块不串数据");
 });
+
+// 2026-11-20 审查阶段5:MC 回退 Bing 的 fallback 透传(后端已脱敏限长)
+test("normalizeContentDetails:webTopic fallback 状态映射与缺省", () => {
+  const vm = normalizeContentDetails({
+    web_topic: {
+      status: "ok",
+      engine: "Bing(MediaCrawler 回退)",
+      fallback: {
+        to_provider: "bing_html",
+        primary_error_code: "NETWORK_ERROR",
+        reason: "MediaCrawler(小红书) NETWORK_ERROR: down; 已回退 Bing",
+      },
+    },
+  });
+  assert.equal(vm.webTopic.fallback.toProvider, "bing_html");
+  assert.equal(vm.webTopic.fallback.primaryErrorCode, "NETWORK_ERROR");
+  assert.ok(vm.webTopic.fallback.reason.includes("已回退 Bing"));
+
+  const vmNoFallback = normalizeContentDetails({
+    web_topic: { status: "ok", engine: "MediaCrawler(小红书)" },
+  });
+  assert.equal(vmNoFallback.webTopic.fallback, null, "无 fallback 时为 null");
+});

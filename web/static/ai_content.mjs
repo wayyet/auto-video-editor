@@ -121,6 +121,15 @@ export function normalizeContentDetails(payload) {
       query: wt.query ?? null,
       searchedAt: wt.searched_at ?? null,
       entries: arr(wt.entries),
+      // 2026-11-20 审查阶段5:MC 回退 Bing 的状态与原因透传(后端已脱敏限长)
+      fallback:
+        wt.fallback && typeof wt.fallback === "object"
+          ? {
+              toProvider: wt.fallback.to_provider ?? null,
+              primaryErrorCode: wt.fallback.primary_error_code ?? null,
+              reason: wt.fallback.reason ?? null,
+            }
+          : null,
     },
     template: {
       status: tpl.status || "missing",

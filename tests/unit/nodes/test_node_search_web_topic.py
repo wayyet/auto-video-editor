@@ -14,7 +14,10 @@ from typing import Any, Callable
 
 import nodes.storyline.node_search_web_topic as node_mod
 from nodes.storyline.node_search_web_topic import storyline_search_web_topic_node
-from storyline_capabilities.search_web_topic import build_request_hash
+from storyline_capabilities.search_web_topic import (
+    build_request_hash,
+    mediacrawler_request_provider,
+)
 
 # 审查修订版 P2-01/P2-03:节点从 config 读引擎/代理/调试开关,单测统一显式
 # 固定这三项(不依赖 config 模块默认值,防环境变量泄漏影响断言)。
@@ -612,3 +615,181 @@ def test_node_query_strips_trailing_period_from_overall_sentence(
     )
 
     assert captured["query"] == "素材记录了一次阴天参访清真寺的过程"
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-20 审查修订版阶段4:mediacrawler 引擎(参数组装/hash 协同/回退标签)
+# ---------------------------------------------------------------------------
+_MC_PROJECT_ROOT = "C:/fake/MediaCrawler"
+_MC_REVISION = "09ed1ec62d8"
+
+
+def _patch_mc_engine_config(
+    monkeypatch,
+    *,
+    max_notes: int = 7,
+    timeout: int = 600,
+    headless: bool = False,
+    revision: str = _MC_REVISION,
+) -> None:
+    _patch_engine_config(monkeypatch, engine="mediacrawler")
+    monkeypatch.setattr(node_mod.config, "STORYLINE_WEB_TOPIC_MC_PLATFORM", "xhs")
+    monkeypatch.setattr(
+        node_mod.config, "STORYLINE_WEB_TOPIC_MC_PROJECT_ROOT", _MC_PROJECT_ROOT
+    )
+    monkeypatch.setattr(node_mod.config, "STORYLINE_WEB_TOPIC_MC_MAX_NOTES", max_notes)
+    monkeypatch.setattr(node_mod.config, "STORYLINE_WEB_TOPIC_MC_TIMEOUT", timeout)
+    monkeypatch.setattr(node_mod.config, "STORYLINE_WEB_TOPIC_MC_HEADLESS", headless)
+    monkeypatch.setattr(node_mod, "detect_revision", lambda root: revision)
+
+
+def test_node_mc_assembles_provider_options_and_effective_hash(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """MC 引擎:provider_options 从 config 组装;hash 用平台+revision+条数。"""
+    captured: dict = {}
+    monkeypatch.setattr(
+        node_mod, "cap_topic", _fake_cap_topic(captured, items=[{"url": "https://xhs.com/1", "title": "t", "snippet": "s", "source": "mediacrawler"}])
+    )
+    _patch_mc_engine_config(monkeypatch, max_notes=7, headless=True)
+
+    out = storyline_search_web_topic_node(
+        _state(tmp_path, storyline_targets={"query": "夏季防晒"})
+    )
+
+    assert captured["provider"] == "mediacrawler"
+    assert captured["max_results"] == 7
+    opts = captured["provider_options"]
+    assert opts["platform"] == "xhs"
+    assert opts["project_root"] == _MC_PROJECT_ROOT
+    assert opts["timeout_seconds"] == 600
+    assert opts["headless"] is True
+    assert opts["mc_revision"] == _MC_REVISION
+    assert opts["save_root"].endswith("web_topic_mc")
+    # 节点计算的 request_hash 与能力层同函数(平台+revision 编入,两侧一致才命中缓存)
+    doc = json.loads(Path(out["storyline_web_topic_artifact"]).read_text(encoding="utf-8"))
+    assert doc["request_hash"] == build_request_hash(
+        query="夏季防晒",
+        provider=mediacrawler_request_provider("xhs", _MC_REVISION),
+        max_results=7,
+    )
+    assert out["status_log"] == ["storyline_search_web_topic_done"]
+
+
+def test_node_mc_normalizes_commas_in_query(tmp_path: Path, monkeypatch) -> None:
+    """MC 引擎:检索词先过 normalize_query(英文逗号→空格),hash 用规整后文本。"""
+    captured: dict = {}
+    monkeypatch.setattr(node_mod, "cap_topic", _fake_cap_topic(captured))
+    _patch_mc_engine_config(monkeypatch)
+
+    storyline_search_web_topic_node(
+        _state(tmp_path, storyline_targets={"query": "海上清真寺,旅游攻略"})
+    )
+
+    assert captured["query"] == "海上清真寺 旅游攻略"
+
+
+def test_node_mc_query_all_commas_becomes_skip(tmp_path: Path, monkeypatch) -> None:
+    """规整后为空(全逗号/空白)→ 与空检索词同款软跳过,不请求网络。"""
+
+    def _no_network(**_kw):  # pragma: no cover - 不应被调用
+        raise AssertionError("空检索词不应请求网络")
+
+    monkeypatch.setattr(node_mod, "cap_topic", _no_network)
+    _patch_mc_engine_config(monkeypatch)
+
+    out = storyline_search_web_topic_node(
+        _state(tmp_path, storyline_targets={"query": ", ,"})
+    )
+    assert out["status_log"] == ["storyline_search_web_topic_skipped"]
+
+
+def test_node_mc_fallback_success_keeps_done_plus_fallback_tag(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """MC 回退 Bing 成功=检索成功,追加 fallback 标签留痕(审查阶段4.7)。"""
+    captured: dict = {}
+    monkeypatch.setattr(node_mod, "cap_topic", _fake_cap_topic(captured))
+    _patch_mc_engine_config(monkeypatch)
+
+    # 伪造回退产物:ok + fallback 键(真实回退语义由能力层测试锁定)
+    state = _state(tmp_path, storyline_targets={"query": "夏季防晒"})
+
+    def fake_with_fallback(**kwargs: Any) -> dict:
+        captured.update(kwargs)
+        result = _ok_result(kwargs["query"])
+        result["fallback"] = {
+            "from_provider": "mediacrawler",
+            "from_platform": "xhs",
+            "to_provider": "bing_html",
+            "primary_error_code": "NETWORK_ERROR",
+            "primary_message": "down",
+        }
+        return result
+
+    monkeypatch.setattr(node_mod, "cap_topic", fake_with_fallback)
+    out = storyline_search_web_topic_node(state)
+    assert out["status_log"] == [
+        "storyline_search_web_topic_done",
+        "storyline_search_web_topic_fallback_bing",
+    ]
+    assert "error_log" not in out
+    assert captured["provider"] == "mediacrawler"
+
+
+def test_node_mc_cache_miss_when_revision_changes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """MC 上游 revision 变化 → request_hash 变化 → 缓存 miss 重新检索(P2-01)。"""
+    calls = {"n": 0}
+
+    def _counting(**kwargs: Any) -> dict:
+        calls["n"] += 1
+        return _ok_result(kwargs["query"])
+
+    monkeypatch.setattr(node_mod, "cap_topic", _counting)
+    _patch_mc_engine_config(monkeypatch, revision=_MC_REVISION)
+    state = _state(tmp_path, storyline_targets={"query": "夏季防晒"})
+    out1 = storyline_search_web_topic_node(state)
+    assert calls["n"] == 1
+
+    state2 = {
+        **state,
+        "storyline_web_topic_artifact": out1["storyline_web_topic_artifact"],
+    }
+    _patch_mc_engine_config(monkeypatch, revision="bbbbbbbbbbbb")
+    storyline_search_web_topic_node(state2)
+    assert calls["n"] == 2  # revision 变化 → 缓存失效
+
+
+def test_node_mc_cache_hit_when_everything_unchanged(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """同 query/平台/revision/条数 → 命中缓存,不再起子进程。"""
+    calls = {"n": 0}
+
+    def _counting(**kwargs: Any) -> dict:
+        calls["n"] += 1
+        result = _ok_result(kwargs["query"])
+        # 伪造能力层 MC 成功产物:request_hash 与节点同函数
+        result["request_hash"] = build_request_hash(
+            query=kwargs["query"],
+            provider=mediacrawler_request_provider("xhs", _MC_REVISION),
+            max_results=7,
+        )
+        return result
+
+    monkeypatch.setattr(node_mod, "cap_topic", _counting)
+    _patch_mc_engine_config(monkeypatch, max_notes=7)
+    state = _state(tmp_path, storyline_targets={"query": "夏季防晒"})
+    out1 = storyline_search_web_topic_node(state)
+    assert calls["n"] == 1
+
+    state2 = {
+        **state,
+        "storyline_web_topic_artifact": out1["storyline_web_topic_artifact"],
+    }
+    out2 = storyline_search_web_topic_node(state2)
+    assert calls["n"] == 1  # cache_hit
+    doc = json.loads(Path(out2["storyline_web_topic_artifact"]).read_text(encoding="utf-8"))
+    assert doc["status"] == "cache_hit"

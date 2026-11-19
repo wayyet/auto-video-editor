@@ -243,6 +243,51 @@ class TestHappyPath:
         assert body["entries"] == []
         assert body["reason"] == "检索完成,搜索引擎未返回结果"
 
+    def test_web_topic_mc_fallback_exposed(self, ai_env):
+        """审查阶段5:MC 回退 Bing → engine 显回退文案 + fallback 原因透传(P2-07)。"""
+        doc = dict(WEB_TOPIC_OK)
+        doc.update(
+            {
+                "engine": "Bing(MediaCrawler 回退)",
+                "provider": "bing_html",
+                "requested_provider": "mediacrawler",
+                "message": "MediaCrawler(小红书) NETWORK_ERROR: down; 已回退 Bing",
+                "fallback": {
+                    "from_provider": "mediacrawler",
+                    "from_platform": "xhs",
+                    "to_provider": "bing_html",
+                    "primary_error_code": "NETWORK_ERROR",
+                    "primary_message": "down",
+                },
+                "search_web_topic": [
+                    {
+                        "url": "https://travel.example.com/mosque",
+                        "title": "马六甲海峡清真寺",
+                        "snippet": "s",
+                        "source": "bing_html",
+                    }
+                ],
+            }
+        )
+        make_task(ai_env, TID, storyline={"search_web_topic.json": doc})
+        wt = _get(TID).json()["web_topic"]
+        assert wt["status"] == "ok"
+        assert wt["engine"] == "Bing(MediaCrawler 回退)"
+        assert wt["fallback"]["to_provider"] == "bing_html"
+        assert wt["fallback"]["primary_error_code"] == "NETWORK_ERROR"
+        assert "已回退 Bing" in wt["fallback"]["reason"]
+
+    def test_web_topic_mc_engine_label_from_keywords(self, ai_env):
+        """engine 缺失的历史产物:provider/source 含 mediacrawler → 关键词兜底。"""
+        doc = dict(WEB_TOPIC_OK)
+        doc.pop("engine", None)
+        doc["provider"] = "mediacrawler"
+        doc["search_web_topic"] = [
+            {"url": "https://xhslink.com/a", "title": "t", "snippet": "s", "source": "mediacrawler"}
+        ]
+        make_task(ai_env, TID, storyline={"search_web_topic.json": doc})
+        assert _get(TID).json()["web_topic"]["engine"] == "MediaCrawler"
+
     def test_web_topic_unknown_status_is_invalid(self, ai_env):
         doc = dict(WEB_TOPIC_OK)
         doc["status"] = "weird"

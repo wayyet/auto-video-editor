@@ -31,6 +31,15 @@ from nodes.storyline._common import (
     append_status_tag,
     build_web_topic_query,
 )
+from storyline_capabilities.mediacrawler_client import (
+    detect_revision,
+    normalize_query,
+)
+from storyline_capabilities.search_web_topic import (
+    build_request_hash,
+    mediacrawler_request_provider,
+    search_web_topic as cap_topic,
+)
 
 # 能力层 error_code → 固定状态标签(前置化设计方案 §4.5:标签静态,动态数值
 # 只进产物 JSON 与 error_log;能力层新字段缺失时走 .get 默认 → done,兼容旧桩)。
@@ -53,6 +62,10 @@ _KNOWN_STATUSES = ("ok", "no_results", "failed", "cache_hit")
 
 # 开关关闭 / 检索词为空时的固定标签(2026-11-14 依赖约简阶段5)。
 SKIPPED_STATUS_TAG = "storyline_search_web_topic_skipped"
+
+# MC 回退 Bing 成功时的状态标签(2026-11-20 审查阶段4:回退成功=检索成功
+# 不标 failed,但必须留痕,防止使用者误读来源)。
+FALLBACK_STATUS_TAG = "storyline_search_web_topic_fallback_bing"
 
 
 def _load_reusable_cache(
@@ -108,15 +121,45 @@ def storyline_search_web_topic_node(state: WorkflowState) -> dict:
         return {
             "status_log": append_status_tag(state, SKIPPED_STATUS_TAG),
         }
-    query_hash = hashlib.sha256(query.encode("utf-8")).hexdigest()
 
     # 2026-11-19 审查修订版 P2-01/P2-03:引擎/代理/诊断开关由 config 决定
     # (进程启动时读取,改后须重启进程;§5.1-5)。google_html 强制 socks5h://
     # 代理的校验在能力层(PROXY_ERROR),节点只透传。
+    # 2026-11-20 审查修订版阶段4:mediacrawler 分支 —— 平台/条数/上游 revision
+    # 编入缓存 hash(与能力层 mediacrawler_request_provider 同函数,两侧一致
+    # 才命中缓存);检索词过 normalize_query 规整英文逗号(审查 P2-05),产物
+    # query 记录的就是实际提交词。其余引擎行为逐字不变(max_results=10)。
     engine = str(config.STORYLINE_WEB_TOPIC_ENGINE)
     proxy_url = (config.STORYLINE_WEB_TOPIC_SOCKS5_PROXY or "").strip() or None
     debug_dir = out_dir if config.STORYLINE_WEB_TOPIC_DEBUG else None
-    request_hash = build_request_hash(query=query, provider=engine, max_results=10)
+    provider_options: dict | None = None
+    max_results = 10
+    hash_provider = engine
+    if engine == "mediacrawler":
+        mc_platform = str(config.STORYLINE_WEB_TOPIC_MC_PLATFORM)
+        max_results = int(config.STORYLINE_WEB_TOPIC_MC_MAX_NOTES)
+        mc_revision = detect_revision(config.STORYLINE_WEB_TOPIC_MC_PROJECT_ROOT)
+        provider_options = {
+            "platform": mc_platform,
+            "project_root": config.STORYLINE_WEB_TOPIC_MC_PROJECT_ROOT,
+            "save_root": str(out_dir / "web_topic_mc"),
+            "timeout_seconds": int(config.STORYLINE_WEB_TOPIC_MC_TIMEOUT),
+            "headless": bool(config.STORYLINE_WEB_TOPIC_MC_HEADLESS),
+            "mc_revision": mc_revision,
+        }
+        hash_provider = mediacrawler_request_provider(mc_platform, mc_revision)
+        query = normalize_query(query)
+        if not query:
+            # 规整后为空(如检索词全由逗号/空白组成)→ 与空检索词同款软跳过
+            return {
+                "status_log": append_status_tag(state, SKIPPED_STATUS_TAG),
+            }
+    # query_hash 在检索词最终定形(含 MC 逗号规整)之后计算:必须与能力层
+    # 按同一 query 文本计算,否则 QA 重试缓存永远对不上。
+    query_hash = hashlib.sha256(query.encode("utf-8")).hexdigest()
+    request_hash = build_request_hash(
+        query=query, provider=hash_provider, max_results=max_results
+    )
 
     # 2026-11-10 前置化阶段3:hash 一致且结构有效 → cache_hit 直接复用,不重复
     # 请求互联网(设计方案 §4.6);2026-11-19 升级为 request_hash 匹配(§4.5)。
@@ -138,10 +181,11 @@ def storyline_search_web_topic_node(state: WorkflowState) -> dict:
     try:
         result = cap_topic(
             query=query,
-            max_results=10,
+            max_results=max_results,
             provider=engine,
             proxy_url=proxy_url,
             debug_dir=debug_dir,
+            provider_options=provider_options,
         )
     except Exception as e:  # noqa: BLE001
         return {
@@ -164,10 +208,19 @@ def storyline_search_web_topic_node(state: WorkflowState) -> dict:
     )
 
     # 2026-11-10 阶段2:成功 / 无结果 / 失败三类分别落固定标签,error_log 只记失败。
+    # 2026-11-20 审查阶段4:MC 回退 Bing 成功=检索成功(不标 failed),但追加
+    # fallback 标签留痕;message 里的 MC 失败原因随产物落盘可查。
     tag = _status_tag_for(result)
+    tags = [tag]
+    if (
+        tag == "storyline_search_web_topic_done"
+        and isinstance(result, dict)
+        and result.get("fallback")
+    ):
+        tags.append(FALLBACK_STATUS_TAG)
     update: dict = {
         "storyline_web_topic_artifact": str(out_path),
-        "status_log": append_status_tag(state, tag),
+        "status_log": append_status_tag(state, *tags),
     }
     if tag == "storyline_search_web_topic_failed":
         update["error_log"] = append_error(

@@ -1024,6 +1024,7 @@ def _pending_or_missing(task_state: str) -> str:
 # 引擎展示名(审查修订版 §6.3):只认产物里的证据;历史产物**不得**伪造当前引擎。
 _WEB_TOPIC_UNKNOWN_ENGINE_LABEL = "未知引擎(历史记录)"
 _WEB_TOPIC_ENGINE_KEYWORDS: tuple[tuple[str, str], ...] = (
+    ("mediacrawler", "MediaCrawler"),
     ("google", "Google"),
     ("bing", "Bing"),
     ("duckduckgo", "DuckDuckGo"),
@@ -1070,6 +1071,9 @@ def _web_topic_section(
         "searched_at": None,
         "entries": [],
         "reason": None,
+        # 2026-11-20 审查阶段5:MC 回退 Bing 时透传回退状态与原因(审查 P2-07:
+        # 不能只显示 Bing 而隐藏 MC 失败;reason 用产物 message,已脱敏限长)
+        "fallback": None,
     }
     doc, err = _read_json_file(task_dir / "storyline" / "search_web_topic.json")
     if err == "invalid":
@@ -1089,6 +1093,18 @@ def _web_topic_section(
             reason = _clamp_str(doc.get("message"), 300) or "检索执行失败"
         elif status == "no_results":
             reason = "检索完成,搜索引擎未返回结果"
+        fallback_raw = doc.get("fallback")
+        fallback = (
+            {
+                "to_provider": _clamp_str(fallback_raw.get("to_provider"), 64),
+                "primary_error_code": _clamp_str(
+                    fallback_raw.get("primary_error_code"), 64
+                ),
+                "reason": _clamp_str(doc.get("message"), 300),
+            }
+            if isinstance(fallback_raw, dict)
+            else None
+        )
         return {
             **base,
             "engine": engine_label,
@@ -1097,6 +1113,7 @@ def _web_topic_section(
             "searched_at": _clamp_str(doc.get("searched_at"), 64),
             "entries": _normalize_topic_entries(doc.get("search_web_topic")),
             "reason": reason,
+            "fallback": fallback,
         }
     if _WEB_TOPIC_SKIPPED_TAG in status_log:
         return {**base, "status": "skipped", "reason": "本次任务跳过网页检索(检索开关关闭或检索词为空)"}
