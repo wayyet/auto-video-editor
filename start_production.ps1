@@ -25,7 +25,10 @@
 #   - 默认 thread-id = video-001;默认源视频来自 jianying-editor skill 演示素材
 #   - 全程 UTF-8,避免中文/符号乱码
 #   - 每一步写日志到 logs\start_<时间戳>.log;失败保留现场不退
-#   - 工作流停在人工关卡(①/②/③)是预期行为:run_workflow.py 退出码 0,
+#   - 工作流关卡行为(2026-11-20 条件挂起后):预热链 QC pass → 关卡① 自动
+#     通过,node_05 自动铺 BGM → 关卡② 也无需人工,整链无人干预跑完;预热
+#     initial-state 的 required_features 全 False,交付 QA 不当闸门。真实
+#     任务的关卡挂起(仅 QC 降级① / BGM 缺失②)仍是预期行为,退出码 0,
 #     用 agent_gate status 或 scripts/resume_workflow.py --dry-run 查看挂起关卡
 #   - 日志文件**单写者**:子进程输出顺序 Add-Content,禁止 Tee-Object
 #   - -WhatIf 严格零副作用:不建目录、不建日志文件、不起进程
@@ -471,9 +474,26 @@ try {
     Write-Phase ("  视频大小: {0:N1} MB" -f ($dstInfo.Length / 1MB))
 
     # 2) 生成 initial-state.json
+    # 2026-11-20 关卡①条件挂起后,预热线程(QC pass → ① 自动通过;node_05
+    # 自动铺 BGM → ② 无需人工)会首次**无人干预跑完全链**直到交付 QA。配音
+    # (jianying SAMI)需要剪映客户端在线,无人值守的预热必然产不出 → 若不
+    # 显式声明必需功能,交付 QA 会 fail-closed 把每次启动都打成 run.failed。
+    # 预热的职责是链路健康检查(与整图测试同口径):required_features 全
+    # False,QA 照常检查并留痕,但不在预热里当交付闸门。
     $state = [ordered]@{
         session_id       = $ThreadId
         video_input_path = $InputsFull
+        required_features = [ordered]@{
+            subtitles_zh   = $false
+            subtitles_en   = $false
+            voiceover_zh   = $false
+            voiceover_en   = $false
+            bgm            = $false
+            transitions    = $false
+            text_animation = $false
+            stickers       = $false
+            volume_fades   = $false
+        }
         error_log        = @()
     }
     $stateJsonText = $state | ConvertTo-Json -Depth 4
