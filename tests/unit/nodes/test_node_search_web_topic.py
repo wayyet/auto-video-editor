@@ -162,7 +162,7 @@ def test_node_query_prefers_search_directive_over_theme(
     query = captured["query"]
     assert query.startswith("海上清真寺旅游攻略")  # 【检索】优先于【主题】
     assert "马六甲海上清真寺旅行Vlog" not in query  # 有【检索】时【主题】不再重复拼接
-    assert "素材整体呈现了一段海滨建筑群游览。" in query  # 概述首句顺延保留
+    assert "素材整体呈现了一段海滨建筑群游览" in query  # 概述首句顺延保留(句尾句号已剥离)
 
 
 def test_node_query_falls_back_to_theme_when_search_missing(
@@ -195,8 +195,8 @@ def test_node_query_falls_back_to_theme_when_search_missing(
             storyline_understanding_artifact=str(understanding),
         )
     )
-    # 无标记 = 严格旧行为(P1-06):自由文本不进入检索词
-    assert captured2["query"].startswith("素材整体呈现了一段海滨建筑群游览。")
+    # 无标记 = 严格旧行为(P1-06):自由文本不进入检索词(句尾句号已剥离)
+    assert captured2["query"].startswith("素材整体呈现了一段海滨建筑群游览")
     assert "自由文本" not in captured2["query"]
 
 
@@ -520,7 +520,12 @@ def test_node_maps_blocked_and_proxy_errors_to_failed_tag(
         return _fake
 
     _patch_engine_config(monkeypatch)
-    for error_code in ("PROVIDER_BLOCKED", "PROXY_ERROR", "HTTP_ERROR"):
+    for error_code in (
+        "PROVIDER_BLOCKED",
+        "PROXY_ERROR",
+        "HTTP_ERROR",
+        "IRRELEVANT_RESULTS",
+    ):
         monkeypatch.setattr(node_mod, "cap_topic", _stub_error(error_code))
         out = storyline_search_web_topic_node(
             _state(tmp_path, storyline_targets={"query": "夏季防晒"})
@@ -561,3 +566,49 @@ def test_cache_ignores_legacy_artifact_without_query_hash(
         )
     )
     assert calls["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-19 真机事故修订:检索词清洗(指令括号段 / 句尾句号)
+# ---------------------------------------------------------------------------
+def test_node_query_strips_instruction_parentheticals(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """【检索】里的指令括号段不进入检索词;真实检索诉求原样保留。"""
+    captured: dict = {}
+    monkeypatch.setattr(node_mod, "cap_topic", _fake_cap_topic(captured))
+
+    storyline_search_web_topic_node(
+        _state(
+            tmp_path,
+            storyline_targets={
+                "user_request": "【检索】海上清真寺旅游攻略，开放时间(勿写平台名)"
+            },
+        )
+    )
+
+    query = captured["query"]
+    assert "海上清真寺旅游攻略" in query
+    assert "开放时间" in query
+    assert "勿写平台名" not in query
+
+
+def test_node_query_strips_trailing_period_from_overall_sentence(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """概述首句句尾句号不进入检索词(真机事故检索词即以「过程。」收尾)。"""
+    understanding = tmp_path / "understanding.json"
+    understanding.write_text(
+        json.dumps(
+            {"overall": "素材记录了一次阴天参访清真寺的过程。"}, ensure_ascii=False
+        ),
+        encoding="utf-8",
+    )
+    captured: dict = {}
+    monkeypatch.setattr(node_mod, "cap_topic", _fake_cap_topic(captured))
+
+    storyline_search_web_topic_node(
+        _state(tmp_path, storyline_understanding_artifact=str(understanding))
+    )
+
+    assert captured["query"] == "素材记录了一次阴天参访清真寺的过程"

@@ -25,12 +25,14 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import urllib.parse
 from pathlib import Path
 from typing import Any
 
 from config import DEFAULT_TARGET_DURATION_MS
 from jy_common.user_directives import parse_user_directives
+from storyline_capabilities.search_web_topic import strip_instruction_parentheticals
 from state import WorkflowState
 
 
@@ -480,7 +482,10 @@ def build_web_topic_query(state: WorkflowState) -> str:
       此层跳过,行为与旧版一致;
     - ``storyline_understanding_artifact.overall`` 取首句;
     - ``storyline_groups_artifact.groups[].theme`` 取前 3 个;
-    - 去重后用「、」拼接,总长截断;所有来源全空返回空串,调用方据此跳过检索。
+    - 去重后用「、」拼接,总长截断;所有来源全空返回空串,调用方据此跳过检索;
+    - 2026-11-19 真机事故修订:指令性括号段(如「(勿写平台名)」,写给文案
+      模型的元指令)与句尾句号在拼接前后剥离 —— 清洗后的字符串就是提交给
+      搜索引擎/落盘/展示的唯一检索词(三处同源,query_hash 也以清洗后为准)。
 
     一致性约束:条件路由与节点必须共用本函数(阶段3落地),避免
     「路由判定能跑、节点内却构造为空」的错位。
@@ -516,9 +521,15 @@ def build_web_topic_query(state: WorkflowState) -> str:
         if theme:
             parts.append(theme)
             theme_count += 1
-    return "、".join(dict.fromkeys(p for p in parts if p))[
-        :WEB_TOPIC_QUERY_TOTAL_MAX_CHARS
-    ].strip()
+    # 2026-11-19 真机事故修订:指令括号段先按段剥离(剥离后为空的段丢弃),
+    # 截断后再兜底剥一次(防截断产生残缺括号),最后清掉句尾句号与悬挂分隔符。
+    cleaned = [strip_instruction_parentheticals(p).strip() for p in parts]
+    joined = "、".join(dict.fromkeys(p for p in cleaned if p))
+    joined = strip_instruction_parentheticals(
+        joined[:WEB_TOPIC_QUERY_TOTAL_MAX_CHARS]
+    )
+    joined = re.sub(r"、{2,}", "、", joined).strip("、").rstrip("。.")
+    return joined.strip()
 
 
 __all__ = [

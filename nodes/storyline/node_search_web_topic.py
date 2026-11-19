@@ -35,7 +35,8 @@ from nodes.storyline._common import (
 # 能力层 error_code → 固定状态标签(前置化设计方案 §4.5:标签静态,动态数值
 # 只进产物 JSON 与 error_log;能力层新字段缺失时走 .get 默认 → done,兼容旧桩)。
 # 2026-11-19 审查修订版 P2-04:新错误码 HTTP_ERROR / PROXY_ERROR /
-# PROVIDER_BLOCKED 均映射到既有 failed 标签(软失败语义不变)。
+# PROVIDER_BLOCKED 均映射到既有 failed 标签(软失败语义不变);2026-11-19
+# 真机事故新增 IRRELEVANT_RESULTS(相关性守卫)同样映射 failed。
 _ERROR_STATUS_TAGS: dict[str, str] = {
     "NO_RESULTS": "storyline_search_web_topic_no_results",
     "NETWORK_ERROR": "storyline_search_web_topic_failed",
@@ -43,6 +44,7 @@ _ERROR_STATUS_TAGS: dict[str, str] = {
     "PROXY_ERROR": "storyline_search_web_topic_failed",
     "PROVIDER_BLOCKED": "storyline_search_web_topic_failed",
     "PARSE_ERROR": "storyline_search_web_topic_failed",
+    "IRRELEVANT_RESULTS": "storyline_search_web_topic_failed",
     "UNKNOWN_PROVIDER": "storyline_search_web_topic_failed",
 }
 

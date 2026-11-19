@@ -8,7 +8,8 @@
   污染);代理缺失/格式不对返回 ``PROXY_ERROR``,绝不静默回退直连。
 - 错误码体系(审查修订版 §4.4 表):``NO_RESULTS`` / ``NETWORK_ERROR`` /
   ``HTTP_ERROR`` / ``PROXY_ERROR`` / ``PROVIDER_BLOCKED`` / ``PARSE_ERROR`` /
-  ``UNKNOWN_PROVIDER``。
+  ``IRRELEVANT_RESULTS``(2026-11-19 真机事故:解析成功但与检索词零相关的
+  降级 SERP,不再算成功)/ ``UNKNOWN_PROVIDER``。
 - 诊断:摘要随产物 ``diagnostics`` 字段返回(不含代理凭据/Cookie);仅当调用方
   显式传 ``debug_dir`` 时才把响应片段落成受限文本文件(≤64KiB、.txt、原子替换,
   审查修订版 §5.5)。
@@ -22,6 +23,7 @@ import base64
 import datetime as _dt
 import hashlib
 import json
+import re
 import urllib.parse
 from html.parser import HTMLParser
 from pathlib import Path
@@ -143,6 +145,83 @@ def _clean_web_text(raw: object, max_len: int) -> str:
     s = "".join(ch if (ch.isprintable() or ch == " ") else " " for ch in str(raw or ""))
     s = " ".join(s.split())
     return s[:max_len].strip()
+
+
+# ---------------------------------------------------------------------------
+# 检索词指令括号剥离 + 结果相关性守卫(2026-11-19 真机事故修订)
+# ---------------------------------------------------------------------------
+# 事故:console-061cd2d39245 经默认 SOCKS5(Azure 新加坡数据中心出口)查询
+# 「海上清真寺旅游攻略…」,Bing 返回整页无关降级 SERP(安徽大学教务页),
+# 解析层照单全收 status=ok → 垃圾引用注入文案。同请求事后重放结果正常,
+# 判定为搜索引擎对数据中心出口的间歇性反爬降级。两道防线:
+# ①检索词不携带指令性括号段(「(勿写平台名)」是给文案模型的元指令);
+# ②解析结果与检索词零相关 → 不算成功(IRRELEVANT_RESULTS,可观察失败)。
+#
+# 指令动词表(括号内出现即整段剥离;刻意保守,避免误删正常检索词):
+_INSTRUCTION_PAREN_PATTERN = re.compile(
+    r"[（(][^（）()]*?(?:勿|不要|不得|禁止|无需|不用|别|避免|注意|务必|请)"
+    r"[^（）()]*?[）)]"
+)
+# 检索词切段分隔符(构造侧用「、」拼接;引擎侧常见标点一律切开)。
+_QUERY_SEGMENT_SPLIT_PATTERN = re.compile(r"[、，。,.;;!!??\s()（）/·]+")
+# CJK 段按连续汉字串取二字滑窗(避免跨语种噪声 bigram,如「Vlog」切出「lo」)。
+_CJK_RUN_PATTERN = re.compile(r"[\u4e00-\u9fff]{2,}")
+_CJK_CHAR_PATTERN = re.compile(r"[\u4e00-\u9fff]")
+_LATIN_WORD_TOKEN_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9]+")
+
+# 相关性守卫阈值:命中检索词 token 的结果数低于该值即判不相关;结果数不足
+# 该值时须全部命中。无可判定 token(如单字符 query)→ 守卫跳过不拦截。
+WEB_TOPIC_RELEVANCE_MIN_MATCHED: int = 2
+
+
+def strip_instruction_parentheticals(query: object) -> str:
+    """剥离「(勿写平台名)」「（不要出现品牌名）」这类写给文案模型的指令括号段。
+
+    指令文本进入搜索引擎只会污染查询;括号外的真实检索诉求原样保留。
+    半角/全角括号都识别;无括号或括号内不含指令动词时原样返回。
+    """
+    return _INSTRUCTION_PAREN_PATTERN.sub("", str(query or ""))
+
+
+def _relevance_tokens(query: str) -> list[str]:
+    """检索词 → 判相关用的 token 集:CJK 段取二字滑窗,拉丁段取含字母的整词。
+
+    指令括号段先剥离;切不出任何 token(如 query="q")返回空列表,调用方
+    据此跳过守卫(无法判定时不拦截,避免误伤正常结果)。
+    """
+    tokens: list[str] = []
+    segments = _QUERY_SEGMENT_SPLIT_PATTERN.split(
+        strip_instruction_parentheticals(query)
+    )
+    for seg in segments:
+        seg = seg.strip()
+        if not seg:
+            continue
+        if _CJK_CHAR_PATTERN.search(seg):
+            for run in _CJK_RUN_PATTERN.findall(seg):
+                tokens.extend(run[i : i + 2] for i in range(len(run) - 1))
+        for word in _LATIN_WORD_TOKEN_PATTERN.findall(seg):
+            if len(word) >= 3:
+                tokens.append(word.lower())
+    return list(dict.fromkeys(tokens))
+
+
+def _count_relevant_results(query: str, results: list[dict[str, Any]]) -> int:
+    """统计标题/摘要命中任一检索词 token 的结果条数。
+
+    无可判定 token → 返回 ``len(results)``(守卫视为全部命中,即跳过)。
+    """
+    tokens = _relevance_tokens(query)
+    if not tokens:
+        return len(results)
+    matched = 0
+    for item in results:
+        haystack = (
+            str(item.get("title") or "") + "\n" + str(item.get("snippet") or "")
+        ).lower()
+        if any(token in haystack for token in tokens):
+            matched += 1
+    return matched
 
 
 def build_request_hash(*, query: str, provider: str, max_results: int) -> str:
@@ -470,6 +549,11 @@ def _ddg_html_search(
         if any(marker in html for marker in _DDG_NO_RESULTS_MARKERS):
             return [], None  # 页面明示无结果 → 上游按 NO_RESULTS 归类
         return [], "PARSE_ERROR"
+    # 相关性守卫(2026-11-19 真机事故):整页无关降级 SERP 不算检索成功。
+    if _count_relevant_results(query, results) < min(
+        WEB_TOPIC_RELEVANCE_MIN_MATCHED, len(results)
+    ):
+        return [], "IRRELEVANT_RESULTS"
     return results, None
 
 
@@ -488,7 +572,7 @@ def _google_html_search(
     Returns:
         ``(results, error_code, diagnostics)``。error_code ∈ {None,
         PROXY_ERROR, NETWORK_ERROR, HTTP_ERROR, PROVIDER_BLOCKED, NO_RESULTS,
-        PARSE_ERROR};diagnostics 不含代理凭据/Cookie(§4.4)。
+        PARSE_ERROR, IRRELEVANT_RESULTS};diagnostics 不含代理凭据/Cookie(§4.4)。
     """
     diagnostics: dict[str, Any] = {
         "http_status": None,
@@ -632,6 +716,14 @@ def _google_html_search(
             return [], "NO_RESULTS", diagnostics
         _write_debug_dump(debug_dir, diagnostics, html)
         return [], "PARSE_ERROR", diagnostics
+    # 相关性守卫(2026-11-19 真机事故):解析成功但与检索词零相关的降级 SERP
+    # 不算成功,落盘取证并返回 IRRELEVANT_RESULTS(与 PARSE_ERROR 同为可观察失败)。
+    matched = _count_relevant_results(query, results)
+    diagnostics["relevance_matched"] = matched
+    diagnostics["relevance_total"] = len(results)
+    if matched < min(WEB_TOPIC_RELEVANCE_MIN_MATCHED, len(results)):
+        _write_debug_dump(debug_dir, diagnostics, html)
+        return [], "IRRELEVANT_RESULTS", diagnostics
     return results, None, diagnostics
 
 
@@ -713,7 +805,8 @@ def _bing_html_search(
     Returns:
         ``(results, error_code, diagnostics)``。错误码域与 google_html 一致
         (PROXY_ERROR/NETWORK_ERROR/HTTP_ERROR/PROVIDER_BLOCKED/NO_RESULTS/
-        PARSE_ERROR);Bing 无 proxy 时直连(国内可达),有 proxy 时经代理出口。
+        PARSE_ERROR/IRRELEVANT_RESULTS);Bing 无 proxy 时直连(国内可达),
+        有 proxy 时经代理出口。
     """
     diagnostics: dict[str, Any] = {
         "http_status": None,
@@ -840,6 +933,15 @@ def _bing_html_search(
             return [], "NO_RESULTS", diagnostics
         _write_debug_dump(debug_dir, diagnostics, html)
         return [], "PARSE_ERROR", diagnostics
+    # 相关性守卫(2026-11-19 真机事故):解析成功但与检索词零相关的降级 SERP
+    # (如数据中心出口被反爬降级、返回整页无关缓存结果)不算成功,落盘取证
+    # 并返回 IRRELEVANT_RESULTS(与 PARSE_ERROR 同为可观察失败)。
+    matched = _count_relevant_results(query, results)
+    diagnostics["relevance_matched"] = matched
+    diagnostics["relevance_total"] = len(results)
+    if matched < min(WEB_TOPIC_RELEVANCE_MIN_MATCHED, len(results)):
+        _write_debug_dump(debug_dir, diagnostics, html)
+        return [], "IRRELEVANT_RESULTS", diagnostics
     return results, None, diagnostics
 
 
@@ -879,7 +981,7 @@ def search_web_topic(
              "preview_urls": [...],
              "error_code": None|"NO_RESULTS"|"NETWORK_ERROR"|"HTTP_ERROR"
                           |"PROXY_ERROR"|"PROVIDER_BLOCKED"|"PARSE_ERROR"
-                          |"UNKNOWN_PROVIDER",
+                          |"IRRELEVANT_RESULTS"|"UNKNOWN_PROVIDER",
              "message": str,
              "query_hash": sha256(query),
              "request_hash": sha256(请求语义,§4.5),
@@ -955,28 +1057,39 @@ def search_web_topic(
             debug_dir=debug_dir,
         )
         if error_code:
+            message = {
+                "NETWORK_ERROR": "Google request failed (network error).",
+                "HTTP_ERROR": (
+                    "Google returned an HTTP error (see diagnostics)."
+                ),
+                "PROXY_ERROR": (
+                    "google_html requires a socks5h:// proxy (and PySocks "
+                    "installed); proxy missing/invalid or unreachable."
+                ),
+                "PROVIDER_BLOCKED": (
+                    "Google blocked this automated query (challenge/consent "
+                    "page detected); not retrying."
+                ),
+                "PARSE_ERROR": (
+                    "Google page fetched but no result blocks parsed "
+                    "(layout change?). See search_web_topic_debug.txt "
+                    "if debug enabled."
+                ),
+                "IRRELEVANT_RESULTS": (
+                    "Google results parsed but unrelated to the query "
+                    "(degraded/cached SERP suspected). See "
+                    "search_web_topic_debug.txt if debug enabled."
+                ),
+            }.get(error_code, f"search failed: {error_code}")
+            if error_code == "IRRELEVANT_RESULTS":
+                message += (
+                    f" relevance matched {diagnostics.get('relevance_matched', 0)}"
+                    f"/{diagnostics.get('relevance_total', 0)} results."
+                )
             return _result(
                 items=[],
                 error_code=error_code,
-                message={
-                    "NETWORK_ERROR": "Google request failed (network error).",
-                    "HTTP_ERROR": (
-                        "Google returned an HTTP error (see diagnostics)."
-                    ),
-                    "PROXY_ERROR": (
-                        "google_html requires a socks5h:// proxy (and PySocks "
-                        "installed); proxy missing/invalid or unreachable."
-                    ),
-                    "PROVIDER_BLOCKED": (
-                        "Google blocked this automated query (challenge/consent "
-                        "page detected); not retrying."
-                    ),
-                    "PARSE_ERROR": (
-                        "Google page fetched but no result blocks parsed "
-                        "(layout change?). See search_web_topic_debug.txt "
-                        "if debug enabled."
-                    ),
-                }.get(error_code, f"search failed: {error_code}"),
+                message=message,
                 diagnostics=diagnostics,
             )
         if not items:
@@ -1023,26 +1136,37 @@ def search_web_topic(
             debug_dir=debug_dir,
         )
         if error_code:
+            message = {
+                "NETWORK_ERROR": "Bing request failed (network error).",
+                "HTTP_ERROR": "Bing returned an HTTP error (see diagnostics).",
+                "PROXY_ERROR": (
+                    "Bing proxy (if configured) is unreachable or PySocks "
+                    "is missing; request not sent."
+                ),
+                "PROVIDER_BLOCKED": (
+                    "Bing blocked this automated query (challenge page "
+                    "detected); not retrying."
+                ),
+                "PARSE_ERROR": (
+                    "Bing page fetched but no result blocks parsed "
+                    "(layout change?). See search_web_topic_debug.txt "
+                    "if debug enabled."
+                ),
+                "IRRELEVANT_RESULTS": (
+                    "Bing results parsed but unrelated to the query "
+                    "(degraded/cached SERP suspected). See "
+                    "search_web_topic_debug.txt if debug enabled."
+                ),
+            }.get(error_code, f"search failed: {error_code}")
+            if error_code == "IRRELEVANT_RESULTS":
+                message += (
+                    f" relevance matched {diagnostics.get('relevance_matched', 0)}"
+                    f"/{diagnostics.get('relevance_total', 0)} results."
+                )
             return _result(
                 items=[],
                 error_code=error_code,
-                message={
-                    "NETWORK_ERROR": "Bing request failed (network error).",
-                    "HTTP_ERROR": "Bing returned an HTTP error (see diagnostics).",
-                    "PROXY_ERROR": (
-                        "Bing proxy (if configured) is unreachable or PySocks "
-                        "is missing; request not sent."
-                    ),
-                    "PROVIDER_BLOCKED": (
-                        "Bing blocked this automated query (challenge page "
-                        "detected); not retrying."
-                    ),
-                    "PARSE_ERROR": (
-                        "Bing page fetched but no result blocks parsed "
-                        "(layout change?). See search_web_topic_debug.txt "
-                        "if debug enabled."
-                    ),
-                }.get(error_code, f"search failed: {error_code}"),
+                message=message,
                 diagnostics=diagnostics,
             )
         if not items:
@@ -1105,6 +1229,10 @@ def search_web_topic(
                     "DuckDuckGo page fetched but no result anchors parsed "
                     "(provider layout change?)."
                 ),
+                "IRRELEVANT_RESULTS": (
+                    "DuckDuckGo results parsed but unrelated to the query "
+                    "(degraded/cached SERP suspected)."
+                ),
             }.get(error_code, f"search failed: {error_code}"),
             diagnostics=ddg_diagnostics,
         )
@@ -1147,4 +1275,10 @@ def search_web_topic(
     )
 
 
-__all__ = ["search_web_topic", "build_request_hash", "ARTIFACT_SCHEMA_VERSION"]
+__all__ = [
+    "search_web_topic",
+    "build_request_hash",
+    "strip_instruction_parentheticals",
+    "WEB_TOPIC_RELEVANCE_MIN_MATCHED",
+    "ARTIFACT_SCHEMA_VERSION",
+]

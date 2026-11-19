@@ -55,29 +55,83 @@ STORYLINE_ENABLE_WEB_TOPIC: bool = (
 
 # 1.1) 网页话题检索引擎 / SOCKS5 代理 / 调试开关(2026-11-19 审查修订版 §5.1):
 #   - 引擎只允许白名单值,未知值在导入期明确报错,不静默回退(§5.1-1);
-#   - 默认 bing_html(2026-11-19 实测定案:google_html 纯 HTTP 路线被 Google 关闭
-#     ——无 JS 桩页且 enablejs 重试也要求 JS;DDG 挑战 VPS 出口;Bing 结果页服务端
-#     渲染,隧道/直连均实测返回 10 条真实结果。google_html 代码保留,可随时切回);
-#   - google_html 强制 socks5h:// 代理(域名解析走代理端防本地 DNS 污染),
+#   - 默认 mediacrawler(2026-11-19 用户拍板:改用开源项目 MediaCrawler 检索
+#     小红书等社交平台真实笔记,通用网页结果对旅游/探店类选题信息密度不足;
+#     MediaCrawler 失败或 0 条时能力层自动回退 bing_html,artifact 记 fallback 键。
+#     历史:google_html 纯 HTTP 路线被 Google 关闭(无 JS 桩页);DDG 挑战 VPS 出口;
+#     Bing 结果页服务端渲染 —— bing_html 降级为回退引擎,代码保留可随时切回);
+#   - mediacrawler 走子进程调用本地 MediaCrawler 安装副本(§1.2 配置),无需代理;
+#     google_html 强制 socks5h:// 代理(域名解析走代理端防本地 DNS 污染),
 #     缺失/格式不对由能力层返回 PROXY_ERROR(§5.1-2);bing_html/duckduckgo_html
 #     代理可选(有则经代理出口,无则直连);
+#   - 2026-11-19 真机事故(console-061cd2d39245):本变量默认值曾为
+#     socks5h://127.0.0.1:1088,使 bing_html(现为回退引擎)也经 Azure 新加坡
+#     数据中心出口,Bing 间歇性返回整页无关降级 SERP(安徽大学教务页),当时
+#     解析层零相关性校验照单全收。Bing 国内直连可达,数据中心出口有害无益
+#     → 默认值改为空(直连);确需代理的任务显式设置本变量。能力层已加相关性
+#     守卫(IRRELEVANT_RESULTS)兜底同类降级页。
 #   - 调试响应片段落盘默认关闭(§5.5);开启时能力层写任务目录受限 .txt(≤64KiB);
-#   - 三个值都是**进程启动时**读取的模块常量:修改后必须重启实际运行工作流的
+#   - 这些值都是**进程启动时**读取的模块常量:修改后必须重启实际运行工作流的
 #     进程才生效(§5.1-5),运行中改 os.environ 不会刷新已导入的常量。
-_WEB_TOPIC_ENGINE_WHITELIST = ("bing_html", "google_html", "duckduckgo_html", "stub")
+_WEB_TOPIC_ENGINE_WHITELIST = (
+    "mediacrawler",
+    "bing_html",
+    "google_html",
+    "duckduckgo_html",
+    "stub",
+)
 _raw_web_topic_engine = os.environ.get(
-    "STORYLINE_WEB_TOPIC_ENGINE", "bing_html"
+    "STORYLINE_WEB_TOPIC_ENGINE", "mediacrawler"
 ).strip()
 if _raw_web_topic_engine not in _WEB_TOPIC_ENGINE_WHITELIST:
     raise ValueError(
         "STORYLINE_WEB_TOPIC_ENGINE="
         f"{_raw_web_topic_engine!r} 不在白名单 {_WEB_TOPIC_ENGINE_WHITELIST}"
-        "(可选: google_html / duckduckgo_html / stub)"
+        "(可选: mediacrawler / bing_html / google_html / duckduckgo_html / stub)"
     )
 STORYLINE_WEB_TOPIC_ENGINE: str = _raw_web_topic_engine
 
+# 1.2) MediaCrawler 子进程适配(2026-11-19 用户拍板):引擎为 mediacrawler 时,
+#   能力层经子进程调用本地 MediaCrawler 安装副本
+#   (https://github.com/NanmiCoder/MediaCrawler,非商业学习许可,外部安装、
+#   代码不入库)做社交平台关键词搜索;失败或 0 条自动回退 bing_html。
+#   同样是进程启动时读取的模块常量,修改后须重启。
+#   - 平台代码限 MediaCrawler 支持的 7 个(xhs/dy/ks/bili/wb/tieba/zhihu);
+#   - 默认可见浏览器(非无头):CDP 连本地 Chrome 风控最低,首次使用需操作员
+#     扫码登录一次,登录态缓存在 <platform>_user_data_dir 复用;
+#   - 超时默认 600s,涵盖首次扫码的人工等待;子进程层面硬超时兜底。
+_MC_PLATFORM_WHITELIST = ("xhs", "dy", "ks", "bili", "wb", "tieba", "zhihu")
+_raw_mc_platform = os.environ.get(
+    "STORYLINE_WEB_TOPIC_MC_PLATFORM", "xhs"
+).strip().lower()
+if _raw_mc_platform not in _MC_PLATFORM_WHITELIST:
+    raise ValueError(
+        "STORYLINE_WEB_TOPIC_MC_PLATFORM="
+        f"{_raw_mc_platform!r} 不在白名单 {_MC_PLATFORM_WHITELIST}"
+        "(可选: xhs / dy / ks / bili / wb / tieba / zhihu)"
+    )
+STORYLINE_WEB_TOPIC_MC_PLATFORM: str = _raw_mc_platform
+
+STORYLINE_WEB_TOPIC_MC_PROJECT_ROOT: str = os.environ.get(
+    "STORYLINE_WEB_TOPIC_MC_PROJECT_ROOT",
+    r"C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler",
+).strip()
+
+STORYLINE_WEB_TOPIC_MC_MAX_NOTES: int = int(
+    os.environ.get("STORYLINE_WEB_TOPIC_MC_MAX_NOTES", "10").strip() or "10"
+)
+
+STORYLINE_WEB_TOPIC_MC_TIMEOUT: int = int(
+    os.environ.get("STORYLINE_WEB_TOPIC_MC_TIMEOUT", "600").strip() or "600"
+)
+
+STORYLINE_WEB_TOPIC_MC_HEADLESS: bool = (
+    os.environ.get("STORYLINE_WEB_TOPIC_MC_HEADLESS", "0").lower().strip()
+    in ("1", "true", "yes")
+)
+
 STORYLINE_WEB_TOPIC_SOCKS5_PROXY: str = os.environ.get(
-    "STORYLINE_WEB_TOPIC_SOCKS5_PROXY", "socks5h://127.0.0.1:1088"
+    "STORYLINE_WEB_TOPIC_SOCKS5_PROXY", ""
 ).strip()
 
 STORYLINE_WEB_TOPIC_DEBUG: bool = (

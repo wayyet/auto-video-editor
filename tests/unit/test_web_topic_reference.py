@@ -247,7 +247,8 @@ def test_build_query_manual_only_returns_it_verbatim() -> None:
 
 def test_build_query_uses_overall_first_sentence(tmp_path: Path) -> None:
     state = _understanding_state("夏季户外徒步，强日照。人物长时间运动。", tmp_path)
-    assert build_web_topic_query(state) == "夏季户外徒步，强日照。"
+    # 2026-11-19 真机事故修订:句尾句号不进入检索词
+    assert build_web_topic_query(state) == "夏季户外徒步，强日照"
 
 
 def test_build_query_falls_back_to_head_without_sentence_end(tmp_path: Path) -> None:

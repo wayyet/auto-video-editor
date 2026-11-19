@@ -135,7 +135,9 @@ def test_status_query_hash_and_searched_at_are_stamped(monkeypatch) -> None:
     monkeypatch.setattr(
         cap_mod,
         "requests",
-        _FakeRequests(_FakeResponse(_result_html([("https://e.com/1", "t", "s")]))),
+        _FakeRequests(
+            _FakeResponse(_result_html([("https://e.com/1", "防晒指南", "s")]))
+        ),
     )
     res = search_web_topic(query="夏季防晒")
     assert res["query_hash"] == hashlib.sha256("夏季防晒".encode("utf-8")).hexdigest()
@@ -261,7 +263,7 @@ def test_google_normal_results_parse_with_socks_proxy(monkeypatch) -> None:
     html = _google_result_html(
         [
             ("https://a.com/1", "防晒指南", "户外防晒要点"),
-            (wrapped, "补水面霜", "保湿测评汇总"),
+            (wrapped, "防晒补水面霜", "保湿测评汇总"),
         ]
     )
     fake = _FakeRequests(_FakeResponse(html))
@@ -281,7 +283,7 @@ def test_google_normal_results_parse_with_socks_proxy(monkeypatch) -> None:
     )
     items = res["search_web_topic"]
     assert [it["url"] for it in items] == ["https://a.com/1", "https://b.com/2?k=1&lang=zh"]
-    assert [it["title"] for it in items] == ["防晒指南", "补水面霜"]
+    assert [it["title"] for it in items] == ["防晒指南", "防晒补水面霜"]
     assert [it["snippet"] for it in items] == ["户外防晒要点", "保湿测评汇总"]
     assert all(it["source"] == "google_html" for it in items)
     # 请求形态:代理双 scheme、参数 q/num/hl、超时元组(§5.3)
@@ -649,3 +651,151 @@ def test_bing_debug_dump_written_on_parse_error(monkeypatch, tmp_path) -> None:
     assert dump.exists()
     assert dump.stat().st_size <= cap_mod.WEB_TOPIC_DEBUG_MAX_BYTES
     assert "bing_html_v1" in dump.read_text(encoding="utf-8", errors="replace")
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-19 真机事故修订:相关性守卫(IRRELEVANT_RESULTS)+ 指令括号剥离
+# ---------------------------------------------------------------------------
+def test_strip_instruction_parentheticals_variants() -> None:
+    """指令括号段剥离:半角/全角括号、独立指令段、无指令动词的括号原样保留。"""
+    assert (
+        cap_mod.strip_instruction_parentheticals(
+            "海上清真寺旅游攻略，开放时间(勿写平台名)"
+        )
+        == "海上清真寺旅游攻略，开放时间"
+    )
+    assert (
+        cap_mod.strip_instruction_parentheticals("攻略（不要出现品牌名）日落")
+        == "攻略日落"
+    )
+    assert cap_mod.strip_instruction_parentheticals("(勿写平台名)") == ""
+    # 括号内无指令动词 → 视为正常检索词,原样保留
+    assert (
+        cap_mod.strip_instruction_parentheticals("马尔代夫(度假)攻略")
+        == "马尔代夫(度假)攻略"
+    )
+
+
+def test_bing_irrelevant_results_map_to_irrelevant_results(
+    monkeypatch, tmp_path
+) -> None:
+    """真机事故回归:整页无关降级 SERP(AHU 教务页)→ IRRELEVANT_RESULTS + 落盘取证。"""
+    html = _bing_result_html(
+        [
+            (
+                "https://jw.ahu.edu.cn/",
+                "登录页面",
+                "安徽大学教务系统登录页面，提供统一身份认证及账户激活服务。",
+            ),
+            (
+                "https://one.ahu.edu.cn/cas/login",
+                "智慧安大",
+                "记住用户名 绑定此设备 忘记密码？360浏览器请使用极速模式",
+            ),
+            (
+                "https://jwc.ahu.edu.cn/",
+                "教务处",
+                "教务处公众号 友情链接：地址:安徽省合肥市经济技术开发区九龙路111号",
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        cap_mod,
+        "requests",
+        _FakeRequests(_FakeResponse(html, url="https://www.bing.com/search?q=x")),
+    )
+    res = search_web_topic(
+        query="海上清真寺旅游攻略", provider="bing_html", debug_dir=tmp_path
+    )
+    assert res["error_code"] == "IRRELEVANT_RESULTS"
+    assert res["status"] == "failed"
+    assert res["search_web_topic"] == []
+    assert res["diagnostics"]["relevance_matched"] == 0
+    assert res["diagnostics"]["relevance_total"] == 3
+    dump = tmp_path / "search_web_topic_debug.txt"
+    assert dump.exists()
+    assert "jw.ahu.edu.cn" in dump.read_text(encoding="utf-8", errors="replace")
+
+
+def test_bing_relevant_results_pass_relevance_guard(monkeypatch) -> None:
+    """正常相关结果不受守卫影响;diagnostics 留痕命中数供审计。"""
+    html = _bing_result_html(
+        [
+            ("https://a.com/1", "马六甲海上清真寺旅游攻略", "清真寺开放时间与着装要求"),
+            ("https://b.com/2", "海上清真寺打卡指南", "日落时分最美"),
+            ("https://c.com/3", "清真寺参观须知", "门票与交通汇总"),
+        ]
+    )
+    monkeypatch.setattr(
+        cap_mod,
+        "requests",
+        _FakeRequests(_FakeResponse(html, url="https://www.bing.com/search?q=x")),
+    )
+    res = search_web_topic(query="海上清真寺旅游攻略", provider="bing_html")
+    assert res["error_code"] is None
+    assert res["status"] == "ok"
+    assert res["diagnostics"]["relevance_matched"] == 3
+    assert res["diagnostics"]["relevance_total"] == 3
+
+
+def test_bing_relevance_guard_partial_junk_trips(monkeypatch) -> None:
+    """10 条里仅 1 条相关 → 仍判不相关(阈值 2,结果数不足阈值时须全命中)。"""
+    html = _bing_result_html(
+        [("https://good.com/1", "海上清真寺攻略", "清真寺介绍")]
+        + [
+            (f"https://x.com/{i}", f"教务系统{i}", f"安徽大学教务处页面{i}")
+            for i in range(2, 11)
+        ]
+    )
+    monkeypatch.setattr(
+        cap_mod,
+        "requests",
+        _FakeRequests(_FakeResponse(html, url="https://www.bing.com/search?q=x")),
+    )
+    res = search_web_topic(query="海上清真寺旅游攻略", provider="bing_html")
+    assert res["error_code"] == "IRRELEVANT_RESULTS"
+    assert res["diagnostics"]["relevance_matched"] == 1
+
+
+def test_bing_relevance_guard_skipped_when_query_has_no_tokens(monkeypatch) -> None:
+    """单字符 query 切不出 token → 守卫跳过(无法判定时不拦截)。"""
+    html = _bing_result_html([("https://a.com/1", "任意标题", "任意摘要")])
+    monkeypatch.setattr(
+        cap_mod,
+        "requests",
+        _FakeRequests(_FakeResponse(html, url="https://www.bing.com/search?q=x")),
+    )
+    res = search_web_topic(query="q", provider="bing_html")
+    assert res["status"] == "ok"
+
+
+def test_google_irrelevant_results_map_to_irrelevant_results(monkeypatch) -> None:
+    """守卫对 google_html 同样生效(三引擎统一语义);message 带命中计数。"""
+    html = _google_result_html(
+        [
+            ("https://jw.ahu.edu.cn/", "登录页面", "安徽大学教务系统登录页"),
+            ("https://one.ahu.edu.cn/", "智慧安大", "统一身份认证登录"),
+            ("https://jwc.ahu.edu.cn/", "教务处", "友情链接与联系方式"),
+        ]
+    )
+    monkeypatch.setattr(cap_mod, "requests", _FakeRequests(_FakeResponse(html)))
+    res = search_web_topic(
+        query="海上清真寺旅游攻略", provider="google_html", proxy_url=_SOCKS
+    )
+    assert res["error_code"] == "IRRELEVANT_RESULTS"
+    assert res["status"] == "failed"
+    assert res["message"].endswith("relevance matched 0/3 results.")
+
+
+def test_ddg_irrelevant_results_map_to_irrelevant_results(monkeypatch) -> None:
+    """守卫对 duckduckgo_html 同样生效。"""
+    html = _result_html(
+        [
+            ("https://jw.ahu.edu.cn/", "登录页面", "安徽大学教务系统登录页"),
+            ("https://jwc.ahu.edu.cn/", "教务处", "友情链接与联系方式"),
+        ]
+    )
+    monkeypatch.setattr(cap_mod, "requests", _FakeRequests(_FakeResponse(html)))
+    res = search_web_topic(query="海上清真寺旅游攻略")
+    assert res["error_code"] == "IRRELEVANT_RESULTS"
+    assert res["status"] == "failed"
