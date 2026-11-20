@@ -84,7 +84,7 @@ def test_node_without_bgm_selection_passes_none(
 def test_node_capability_exception_writes_error_log(
     base_state, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """能力层抛异常 → error_log + failed 标签,不写 transition_plan。"""
+    """能力层抛异常 → error_log + failed 标签,同时清空 transition_plan。"""
 
     def boom(**_kw):
         raise RuntimeError("capability down")
@@ -94,7 +94,8 @@ def test_node_capability_exception_writes_error_log(
 
     assert any("TOOL_EXECUTION_FAILED" in e for e in delta["error_log"])
     assert "storyline_recommend_transition_failed" in delta["status_log"]
-    assert "storyline_transition_plan" not in delta
+    # 边核验 R3b:失败分支刷新产物键(dict 键清空值 {}),不让上一轮旧方案流进 PTP
+    assert delta.get("storyline_transition_plan") == {}
 
 
 def test_capability_with_bgm_selection_maps_llm_items_to_groups(
