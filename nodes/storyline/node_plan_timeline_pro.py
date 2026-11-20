@@ -144,9 +144,12 @@ def storyline_plan_timeline_pro_node(state: WorkflowState) -> dict:
         "status_log": append_status_tag(state, *delta_log),
     }
 
-    # warnings 写 status_log 便于联调识别;不阻断
-    for w in timeline.get("warnings") or []:
-        delta["status_log"] = append_status_tag(
-            state, f"storyline_timeline_warning: {w}"
-        )
+    # warnings 写 status_log 便于联调识别;不阻断。
+    # 一次性并入 done / method 标签之后:append_status_tag 每次都从 state 起算,
+    # 在循环里反复赋值会覆盖前面的标签,只剩最后一条 warning。
+    warning_tags = [
+        f"storyline_timeline_warning: {w}" for w in timeline.get("warnings") or []
+    ]
+    if warning_tags:
+        delta["status_log"] = append_status_tag(state, *delta_log, *warning_tags)
     return delta
