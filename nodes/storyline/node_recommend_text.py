@@ -52,6 +52,10 @@ def storyline_recommend_text_node(state: WorkflowState) -> dict:
         )
     except Exception as e:  # noqa: BLE001
         return {
+            # 失败也要刷新产物键:不写就保留上一轮的旧文字样式(QA 重试轮里
+            # plan_timeline_pro 会把它并进新时间线)。dict 键清空值是 {} 而不是
+            # None —— state.py 的 _last_wins 对 None 是"保持原值"(state.py:82-90)。
+            "storyline_text_style_plan": {},
             "error_log": [
                 *list(state.get("error_log", []) or []),
                 f"[storyline:recommend_text] TOOL_EXECUTION_FAILED: {e!r}",
