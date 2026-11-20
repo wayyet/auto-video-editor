@@ -111,6 +111,10 @@ def storyline_generate_voiceover_node(state: WorkflowState) -> dict:
         )
     except Exception as e:  # noqa: BLE001
         return {
+            # 失败也要刷新产物键:不写就保留上一轮的旧配音(QA 重试轮里 select_bgm /
+            # plan_timeline_pro / node_08 会读到它)。用 "" 而不是 None ——
+            # state.py 的 _last_wins 对 None 是"保持原值"(state.py:82-90)。
+            "storyline_voiceover_artifact": "",
             "error_log": [
                 *list(state.get("error_log", []) or []),
                 f"[storyline:generate_voiceover] {StorylineErrorCode.TOOL_EXECUTION_FAILED}: {e!r}",
