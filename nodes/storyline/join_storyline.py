@@ -35,7 +35,12 @@ from nodes.storyline._common import (
 
 
 def _read_timeline_dict(state: WorkflowState) -> dict | None:
-    """从 ``storyline_timeline_plan`` 读 JSON;失败时返回 None(不抛)。"""
+    """从 ``storyline_timeline_plan`` 读 JSON;失败或内容为空值时返回 None(不抛)。
+
+    内容为空值(``{}`` / ``[]`` / ``0`` / ``false`` / ``""``)与"文件缺失"同口径 →
+    调用方走占位时间线。否则这些空值会原样写进 ``storyline_plan`` 并被下游判为
+    "无 plan"(修复前 ``_route_after_storyline_join`` 因此把图送到 END,静默"完成")。
+    """
     path = state.get("storyline_timeline_plan")
     if not path:
         return None
@@ -43,9 +48,10 @@ def _read_timeline_dict(state: WorkflowState) -> dict | None:
     if not p.exists():
         return None
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        data = json.loads(p.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
+    return data or None
 
 
 def storyline_join_node(state: WorkflowState) -> dict:
