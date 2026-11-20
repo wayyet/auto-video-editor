@@ -13,8 +13,8 @@
 设计纪律(plan §3.3):
 - 不引入新的 ``storyline_status_log`` / ``storyline_error_log``,统一用既有
   ``status_log`` / ``error_log``(Week 4 reducer 已支持 fan-in 去重)。
-- 不重排 clips,不引入浮点;若 Pydantic 校验失败 → 写 error_log,返回 state
-  由图走向 END;不抛异常(避免 graph 终止不优雅)。
+- 不重排 clips,不引入浮点;若 Pydantic 校验失败 → 写 error_log,仍把原值写入
+  ``storyline_plan`` 交 node_05 的合约校验处理;不抛异常(避免 graph 终止不优雅)。
 """
 from __future__ import annotations
 

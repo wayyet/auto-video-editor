@@ -82,8 +82,8 @@
   AI 转场两节点每轮必跑(建图时按开关决定接不接),可以进屏障。
   (``storyline_local_asr`` / ``storyline_speech_rough_cut`` 曾是条件旁支,
   2026-11-08 B1 ASR 移除已整体删除,``split_shots`` 改为静态直连 ``understand_clips``。)
-- ⚠️ qa 重试路由靠 ``status_log[-1] == "storyline_qa_retry"`` 判断:重试回路内的
-  节点**不得产生每轮都不同的状态标签**。
+- qa 重试路由以 ``storyline_qa_route_signal``(qa_gate 每次必写)为准;仅旧 checkpoint
+  缺该字段时才回退读 ``status_log`` 末条(qa_gate.py)。
 
 Week 5 关键改动(历史记录):
 - ``node_16_translate_subtitles`` 曾拆为 ``node_16a_translate_and_check`` +
@@ -561,7 +561,7 @@ def _build_state_graph():
         "storyline_search_web_topic_en", storyline_search_web_topic_en_node
     )
     g.add_node("storyline_split_shots", storyline_split_shots_node)
-    # 2026-10 已接入:与 plan_timeline_pro 并排(同一道 4 源屏障;建图时按开关接边)
+    # 2026-10 已接入:与 plan_timeline_pro 并排(RTR→GAT 单源边,二者汇入 [PTP, GAT]→PTAT 屏障;建图时按开关接边)
     g.add_node(
         "storyline_generate_ai_transition",
         storyline_generate_ai_transition_node,
@@ -799,8 +799,9 @@ def _build_state_graph():
     #     RTR 自己还读取 BGM selection 与 transition plan);
     #   - TXT 单独保证 text_style_plan 就绪(TXT 是 GS 之后的独立 fan-out
     #     分支,RTR 链不含它 —— 这是不能只等 RTR 的唯一理由);
-    #   - 不把 web topic 加进屏障:检索是条件节点,某些轮次不跑(D10 ——
-    #     屏障永远凑不齐 → 图静默 END);PTP 也不直接读取检索产物。
+    #   - 不把 web topic 加进这个屏障:它已在 [STR, WT]→GS 屏障里,经 GS→…→RTR
+    #     链保证先于 PTP;PTP 也不直接读取检索产物。(历史:WT 曾是条件节点,放进
+    #     屏障会触发 D10 静默 END;现已每轮必跑。)
     # 2026-10-20 修 D10:**SS(split_shots)被移出这个 barrier**(历史教训,
     #   保留作防回归记录):qa_gate 超时重试会回到 storyline_group_clips 重跑,
     #   SS 在重试点**上游**、不会重跑。barrier 渠道在首次触发后被清空,第二轮

@@ -10,7 +10,7 @@
   ``langgraph/pregel/_draw.py``):``get_graph()`` 是**静态模拟 + 画图启发式**,
   会 (a) 给所有"只入不出"的 termini 节点**合成** ``→__end__`` 边(storyline
   死胡同/侧支节点各多一条),并 (b) **漏掉**"有出边的节点的普通边直连 END"
-  (``storyline_join→END``)。真实边数与画图边数因此不一致,偏差规则已在
+  (``storyline_join→END``,2026-11-01 当时的例子;该边后来改成了条件边)。真实边数与画图边数因此不一致,偏差规则已在
   ``tests/integration/test_workflow_graph_schema.py`` 固化为 langgraph 行为护栏。
 - 本模块是**纯函数层**:输入编译图 + config 模块,输出 §4.3 的图 JSON dict。
   不接 API、不碰前端、不触发任何图执行(阶段 4 再由 FastAPI router 消费)。
@@ -271,7 +271,7 @@ _NODE_META: dict[str, dict[str, Any]] = {
     "storyline_search_web_topic": {
         "name": "网页话题检索",
         "group": "storyline_media",
-        "description": "group_clips 后条件前置节点:WEB_TOPIC 开启且能构造出检索词时先检索再文案;产物经 web_research 独立上下文进入 generate_script",
+        "description": "与模板推荐并行(group_clips 之后每轮必跑):WEB_TOPIC 关闭或构造不出检索词时节点内软跳过;产物经 web_research 独立上下文进入 generate_script",
     },
     "storyline_search_web_topic_en": {
         "name": "海外话题检索",
@@ -301,7 +301,7 @@ _NODE_META: dict[str, dict[str, Any]] = {
     "storyline_generate_script": {
         "name": "生成文案",
         "group": "storyline_script",
-        "description": "按分组与话题生成长文案;并行 fan-out 出模板/配音/BGM/文本四路",
+        "description": "按分组、模板与话题生成长文案;之后并行 fan-out 出配音/文本两路",
     },
     "storyline_script_template_recommendation": {
         "name": "文案模板推荐",
@@ -331,12 +331,12 @@ _NODE_META: dict[str, dict[str, Any]] = {
     "storyline_plan_timeline_pro": {
         "name": "时间线规划",
         "group": "storyline_timeline",
-        "description": "6 源屏障(分组/文案/配音/BGM/普通转场/文字样式)后规划时间线",
+        "description": "[转场推荐, 文本推荐] 双源屏障后规划时间线(分组/文案/配音/BGM 由转场推荐的祖先链保证)",
     },
     "storyline_generate_ai_transition": {
         "name": "生成 AI 转场",
         "group": "storyline_timeline",
-        "description": "屏障 [group_clips, recommend_transition](其全部真实输入);按 STORYLINE_ENABLE_AI_TRANSITION 接边",
+        "description": "recommend_transition 之后的单源边(其全部真实输入经祖先链保证);按 STORYLINE_ENABLE_AI_TRANSITION 接边",
     },
     "storyline_plan_timeline_ai_transition": {
         "name": "AI 转场时间线规划",
@@ -351,7 +351,7 @@ _NODE_META: dict[str, dict[str, Any]] = {
     "storyline_join": {
         "name": "剧情结果汇合",
         "group": "storyline_render",
-        "description": "反序列化规划产物;有 storyline_plan 进 generate_draft,无则 END",
+        "description": "反序列化规划产物并写入 storyline_plan;assembly QC 开进 assembly 前置链,QC 关直连 generate_draft;无 plan 则 END",
     },
 }
 
@@ -385,17 +385,9 @@ _EDGE_LABELS: dict[tuple[str, str], str] = {
     # (2026-11-10:load_media → search_media「已配检索源」旁路已随检索素材节点移除删除;
     #  load_media → search_web_topic 并行旁支已随前置化阶段3 拆除,条件路由移到 group_clips 之后)
     ("storyline_load_media", "storyline_split_shots"): "主干",
-    ("storyline_group_clips", "storyline_search_web_topic"): "WEB_TOPIC 开且有可检索输入",
+    ("storyline_group_clips", "storyline_search_web_topic"): "每轮(与模板推荐并行)",
     ("storyline_search_web_topic", "storyline_generate_script"): "检索→文案",
     ("storyline_split_shots", "storyline_understand_clips"): "主干",
-    ("storyline_group_clips", "storyline_plan_timeline_pro"): "列表 fan-in(4 源屏障)",
-    ("storyline_generate_script", "storyline_plan_timeline_pro"): "列表 fan-in(4 源屏障)",
-    ("storyline_generate_voiceover", "storyline_plan_timeline_pro"): "列表 fan-in(4 源屏障)",
-    ("storyline_select_bgm", "storyline_plan_timeline_pro"): "列表 fan-in(4 源屏障)",
-    ("storyline_group_clips", "storyline_generate_ai_transition"): "列表 fan-in(4 源屏障)",
-    ("storyline_generate_script", "storyline_generate_ai_transition"): "列表 fan-in(4 源屏障)",
-    ("storyline_generate_voiceover", "storyline_generate_ai_transition"): "列表 fan-in(4 源屏障)",
-    ("storyline_select_bgm", "storyline_generate_ai_transition"): "列表 fan-in(4 源屏障)",
     ("storyline_plan_timeline_pro", "storyline_plan_timeline_ai_transition"): "AI 转场屏障",
     ("storyline_generate_ai_transition", "storyline_plan_timeline_ai_transition"): "AI 转场屏障",
     ("storyline_plan_timeline_pro", "storyline_qa_gate"): "最终时间线单源(AI 关)",

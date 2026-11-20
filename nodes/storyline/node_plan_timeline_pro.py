@@ -127,8 +127,8 @@ def storyline_plan_timeline_pro_node(state: WorkflowState) -> dict:
 
     # 2026-11-08 B1 ASR 移除:原"ASR / 口播粗剪产物回填 Clip.transcript"步骤
     # 随旁支一起删除(timeline_transcript.fill_clip_transcripts 已删)。
-    # ⚠️ 历史约束仍然有效:qa 重试路由(qa_gate.route_after_storyline_qa)靠
-    #    status_log 的**最后一条**判断,本节点不得产生每轮都不同的状态标签。
+    # (qa 重试路由 qa_gate.route_after_storyline_qa 已改读 storyline_qa_route_signal,
+    #  不再依赖 status_log 末条;仅旧 checkpoint 缺该字段时才回退。)
 
     out_path = out_dir / "timeline_plan.json"
     out_path.write_text(
