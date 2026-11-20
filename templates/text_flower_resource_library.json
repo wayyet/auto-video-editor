@@ -1,0 +1,40 @@
+{
+  "_source": "docs/第七期开发/花字审计证据_20261118/rpdb_flower_record.json authoritative_own_item_records(脱敏证据离线导入,运行时不依赖 rp.db;按 (effect_id, resource_id, md5) 资源身份去重)",
+  "_generated_at": "2026-11-20T18:07:40+00:00",
+  "_counts": {
+    "records_raw": 2,
+    "flowers_unique": 1,
+    "verified": 1
+  },
+  "flowers": [
+    {
+      "name": "互动立体",
+      "category_id": "panel-text-flower",
+      "effect_id": "7407340226189757733",
+      "resource_id": "7407340226189757733",
+      "md5": "c093f229a5b9529beab4d27c00bc0c4f",
+      "is_vip": true,
+      "paid_type": "subscribe",
+      "enabled": true,
+      "verified": true,
+      "source_snapshot": {
+        "rowid": 3449,
+        "url_head": "/artist/v1/effect/get_resources_by_category_id_371E8B03E795E816E68A30B6CA1471EE_flower_jianyingpro_0",
+        "cache_timestamp": "2026-11-18 00:00:23"
+      },
+      "verification": {
+        "status": "verified",
+        "verified_at": "2026-11-18",
+        "jianying_version": "5.9.0.11632",
+        "resource_identity": {
+          "resource_id": "7407340226189757733",
+          "effect_id": "7407340226189757733",
+          "md5": "c093f229a5b9529beab4d27c00bc0c4f"
+        },
+        "evidence_path": "docs/第七期开发/花字审计证据_20261118/",
+        "cache_manifest_sha256": "a2d0e07830cf2a21471afe77a4a865387148beb12f1e78135b100d0d68597fcb",
+        "note": "草稿52373c6f9e11中文稿GUI应用「互动立体」(effect_id 7407340226189757733):materials.effects type=text_effect + text轨段refs实证,经两次UI保存存活;缓存Cache/artistEffect/7407340226189757733/c093f229a5b9529beab4d27c00bc0c4f 5文件就位(核验文档20261118,采集说明.md时间线)"
+      }
+    }
+  ]
+}

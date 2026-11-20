@@ -93,7 +93,8 @@ def test_build_render_plan_orders_and_fields() -> None:
 def test_build_render_plan_counts_text_effects_fidelity() -> None:
     """TF-16:materials.effects 中 type=text_effect 计入「原生花字未渲染」明细。
 
-    只计 text_effect(花字标记,真机样本实证);桶内其他类型不冒充花字。
+    2026-11-21 口径收紧(审查 R-07):只计**唯一且实际绑定到 text 轨段**的
+    花字 id;桶内其他类型不冒充花字,孤立素材不计入已应用。
     """
     draft = _draft()
     draft["materials"]["effects"] = [
@@ -101,8 +102,67 @@ def test_build_render_plan_counts_text_effects_fidelity() -> None:
         {"id": "flower-2", "type": "text_effect"},
         {"id": "other-1", "type": "not_a_flower"},
     ]
+    draft["tracks"].append(
+        {
+            "type": "text",
+            "segments": [
+                {
+                    "id": "text-seg-1",
+                    "material_id": "text-1",
+                    "extra_material_refs": ["flower-1"],
+                }
+            ],
+        }
+    )
     plan = build_render_plan(draft)
-    assert any("2 个原生花字未渲染" in w for w in plan["fidelity_warnings"])
+    # flower-1 已绑定计入;flower-2 孤立不计;non-text_effect 不计
+    assert any("1 个原生花字(绑定 1 条字幕)未渲染" in w for w in plan["fidelity_warnings"])
+
+
+def test_build_render_plan_dedupes_gui_duplicated_flower_entries() -> None:
+    """TF-24:GUI 保存会把同 id 条目/refs 复制一遍,唯一绑定 id 计数不得高估。"""
+    draft = _draft()
+    flower = {"id": "flower-1", "type": "text_effect"}
+    draft["materials"]["effects"] = [dict(flower), dict(flower)]
+    draft["tracks"].append(
+        {
+            "type": "text",
+            "segments": [
+                {
+                    "id": "text-seg-1",
+                    "material_id": "text-1",
+                    "extra_material_refs": ["flower-1", "flower-1"],
+                }
+            ],
+        }
+    )
+    plan = build_render_plan(draft)
+    assert any("1 个原生花字(绑定 1 条字幕)未渲染" in w for w in plan["fidelity_warnings"])
+
+
+def test_build_render_plan_reports_flower_segment_span() -> None:
+    """TF-25:同一花字共享绑定到多条字幕(GUI 正常形态)→ 唯一素材数与绑定段数分开报告。"""
+    draft = _draft()
+    draft["materials"]["effects"] = [{"id": "flower-shared", "type": "text_effect"}]
+    draft["tracks"].append(
+        {
+            "type": "text",
+            "segments": [
+                {
+                    "id": "text-seg-1",
+                    "material_id": "text-1",
+                    "extra_material_refs": ["flower-shared"],
+                },
+                {
+                    "id": "text-seg-2",
+                    "material_id": "text-1",
+                    "extra_material_refs": ["flower-shared"],
+                },
+            ],
+        }
+    )
+    plan = build_render_plan(draft)
+    assert any("1 个原生花字(绑定 2 条字幕)未渲染" in w for w in plan["fidelity_warnings"])
     assert all("3 个原生花字" not in w for w in plan["fidelity_warnings"])
 
 

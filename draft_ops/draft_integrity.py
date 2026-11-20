@@ -176,6 +176,93 @@ def check_track_references(draft: dict, tag: str) -> list[dict[str, str]]:
     return issues
 
 
+def check_text_flowers(draft: dict, tag: str) -> list[dict[str, str]]:
+    """原生花字(``materials.effects`` 中 ``type=text_effect``)结构一致性检查。
+
+    2026-11-21 原生花字通道(审查修订版 §4.8);只补花字**专属**校验,通用
+    悬空引用已由 :func:`check_track_references` 兜底,不重复实现。口径:
+
+    - 同 ID 重复条目:内容完全一致 = warning(GUI 保存会复制条目/refs,观察
+      现象,未验证渲染影响前不作无害断言也不作致命错误,R-06);内容冲突 = error;
+    - 我方标记条目(私有键 ``autovideo_role=text-flower``)字段完整性;
+    - 孤立花字(无任何轨段引用)= warning,不计入已应用花字(TF-21);
+    - 同一轨段重复引用同一花字 = warning(TF-20;跨段引用共享同一 material 是
+      GUI 正常行为,不报)。
+    """
+    issues: list[dict[str, str]] = []
+    materials = draft.get("materials") or {}
+    flowers_by_id: dict[str, list[dict]] = {}
+    for e in materials.get("effects") or []:
+        if isinstance(e, dict) and e.get("type") == "text_effect":
+            flowers_by_id.setdefault(str(e.get("id") or ""), []).append(e)
+    if not flowers_by_id:
+        return issues
+
+    for eid, group in flowers_by_id.items():
+        if not eid:
+            continue
+        if len(group) > 1:
+            canonical = json.dumps(group[0], ensure_ascii=False, sort_keys=True)
+            if all(
+                json.dumps(g, ensure_ascii=False, sort_keys=True) == canonical
+                for g in group[1:]
+            ):
+                issues.append(
+                    _issue(
+                        "花字结构", SEV_WARNING, tag,
+                        f"花字 material {eid} 重复 {len(group)} 条(内容一致;GUI 保存行为观察,渲染影响待金丝雀确认)",
+                    )
+                )
+            else:
+                issues.append(
+                    _issue("花字结构", SEV_ERROR, tag, f"花字 material {eid} 重复 {len(group)} 条且内容冲突")
+                )
+        for item in group:
+            if item.get("autovideo_role") == "text-flower":
+                missing = [
+                    k
+                    for k in ("effect_id", "resource_id", "name", "category_id", "path")
+                    if not str(item.get(k) or "")
+                ]
+                if missing:
+                    issues.append(
+                        _issue("花字结构", SEV_ERROR, tag, f"我方花字 {eid} 缺必填字段 {missing}")
+                    )
+                if item.get("category_id") != "panel-text-flower":
+                    issues.append(
+                        _issue("花字结构", SEV_ERROR, tag, f"我方花字 {eid} category_id 非花字分类: {item.get('category_id')}")
+                    )
+
+    flower_ids = set(flowers_by_id)
+    ref_counts: dict[str, int] = {}
+    for track in draft.get("tracks") or []:
+        if not isinstance(track, dict) or track.get("type") != "text":
+            continue
+        for seg in track.get("segments") or []:
+            if not isinstance(seg, dict):
+                continue
+            seg_refs: dict[str, int] = {}
+            for ref in seg.get("extra_material_refs") or []:
+                ref_str = str(ref)
+                if ref_str in flower_ids:
+                    ref_counts[ref_str] = ref_counts.get(ref_str, 0) + 1
+                    seg_refs[ref_str] = seg_refs.get(ref_str, 0) + 1
+            for ref_str, cnt in seg_refs.items():
+                if cnt > 1:
+                    issues.append(
+                        _issue(
+                            "花字结构", SEV_WARNING, tag,
+                            f"轨段 {seg.get('material_id', '?')} 重复引用花字 {ref_str} {cnt} 次(写入前须去重;GUI 保存产物观察)",
+                        )
+                    )
+    for eid in flower_ids:
+        if eid and ref_counts.get(eid, 0) == 0:
+            issues.append(
+                _issue("花字结构", SEV_WARNING, tag, f"花字 material {eid} 孤立(无轨段引用),不计入已应用花字")
+            )
+    return issues
+
+
 def check_material_paths(draft: dict, tag: str) -> list[dict[str, str]]:
     """``materials.videos[].path`` 与 ``materials.audios[].path/ref`` 指向的本机文件存在。
 
@@ -487,6 +574,8 @@ def check_draft_dir(
         result["checks"].append("video_track")
         issues.extend(check_track_references(content, tag))
         result["checks"].append("track_references")
+        issues.extend(check_text_flowers(content, tag))
+        result["checks"].append("text_flowers")
         issues.extend(check_material_paths(content, tag))
         result["checks"].append("material_paths")
         issues.extend(check_texts(content, tag))
@@ -710,6 +799,7 @@ DEEP_CHECK_CATEGORY: dict[str, str] = {
     "目录": "draft_integrity",
     "视频轨": "draft_integrity",
     "素材引用": "draft_integrity",
+    "花字结构": "draft_integrity",
     "素材路径": "draft_integrity",
     "素材裁切": "draft_integrity",
     "素材比例": "draft_integrity",

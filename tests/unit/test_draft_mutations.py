@@ -177,3 +177,58 @@ def test_join_qa_report_aggregates_mutations(tmp_path: Path) -> None:
     assert "mutations" not in build_join_qa_report({"draft_dir_en_branch": ""}) or True
     # skipped 报告不带 mutations 键(整段跳过)
     assert build_join_qa_report({}).get("skipped") is True
+
+
+# ------------------------------------------------ 花字指纹(2026-11-21,审查 R-08 / TF-22/23)
+
+
+def test_flower_fingerprint_tracks_effects_content_change() -> None:
+    """TF-22:effects 条目内容变化但数量不变 → 指纹 before/after 不同。"""
+    before = _base_draft()
+    after = json.loads(json.dumps(before, ensure_ascii=False))
+    flower = {"id": "F1", "type": "text_effect", "name": "互动立体"}
+    before["materials"]["effects"] = [dict(flower)]
+    after["materials"]["effects"] = [{**flower, "name": "别的花字"}]
+    record = build_draft_mutation_record(
+        "node_10", "/x/drafts/a/draft_content.json", before, after,
+        sha_before={"draft_content.json": "aaa"}, sha_after={"draft_content.json": "bbb"},
+    )
+    fp = record["flower_fingerprint"]
+    assert fp["before"]["effects_sha"] and fp["after"]["effects_sha"]
+    assert fp["before"]["effects_sha"] != fp["after"]["effects_sha"]
+    assert record["changed_counts"] == {}, "数量未变,桶计数为空 —— 指纹是唯一观测通道"
+
+
+def test_flower_fingerprint_tracks_refs_change() -> None:
+    """TF-23:只改 text 轨段花字 refs(段数不变)→ refs 指纹变化。"""
+    before = _base_draft()
+    after = json.loads(json.dumps(before, ensure_ascii=False))
+    flower = {"id": "F1", "type": "text_effect", "name": "互动立体"}
+    for d in (before, after):
+        d["materials"]["effects"] = [dict(flower)]
+        d["tracks"].append({
+            "type": "text",
+            "segments": [{"id": "ts1", "material_id": "text-zh-1", "extra_material_refs": []}],
+        })
+    after["tracks"][1]["segments"][0]["extra_material_refs"] = ["F1"]
+    record = build_draft_mutation_record(
+        "node_10", "/x/drafts/a/draft_content.json", before, after,
+        sha_before={"draft_content.json": "aaa"}, sha_after={"draft_content.json": "bbb"},
+    )
+    fp = record["flower_fingerprint"]
+    assert fp["before"]["refs_sha"] != fp["after"]["refs_sha"]
+
+
+def test_flower_fingerprint_empty_when_no_flowers() -> None:
+    """无花字草稿:指纹两侧均为空串(记录体积不膨胀)。"""
+    before = _base_draft()
+    after = json.loads(json.dumps(before, ensure_ascii=False))
+    after["materials"]["texts"].append({"id": "text-zh-2", "content": "世界"})
+    record = build_draft_mutation_record(
+        "node_08", "/x/drafts/a/draft_content.json", before, after,
+        sha_before={"draft_content.json": "aaa"}, sha_after={"draft_content.json": "bbb"},
+    )
+    assert record["flower_fingerprint"] == {
+        "before": {"effects_sha": "", "refs_sha": ""},
+        "after": {"effects_sha": "", "refs_sha": ""},
+    }

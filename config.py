@@ -385,6 +385,37 @@ JIANYING_CACHE_ROOT: str = (
 )
 
 # ---------------------------------------------------------------------------
+# 原生花字通道(2026-11-21 第九期,审查修订版执行计划阶段 2)
+# ---------------------------------------------------------------------------
+# 花字功能开关:缺省开启(用户 2026-11-21 拍板)——新建任务 zh/en 正文字幕自动挂
+# 原生花字;池无可用条目时 fail-closed 降级不写(与入场动画守卫同款),不会产出
+# 坏草稿。设 TEXT_FLOWER_ENABLED=0 关闭:只停止新写入,保留草稿已有花字
+# (审查 R-10:关闭 ≠ 清理,清理只在本轮成功写入后按我方标记执行)。
+TEXT_FLOWER_ENABLED: bool = (
+    os.environ.get("TEXT_FLOWER_ENABLED", "1").strip().lower()
+    not in ("0", "false", "no", "off")
+)
+
+# 花字池模式(与 TEXT_FX_INTRO_POOL_MODE 同款语义):auto = 每任务按
+# sha256(job_id|"text_flower_pool") 从 text_flower_resource_library.json 全部
+# 可用条目确定性选 1 个,zh/en 双草稿一致;fixed = 用下面的 TEXT_FLOWER_NAME
+# 固定名(须过可用性守卫,未命中回落可用子集池序第一个)。非法值按 auto 处理。
+TEXT_FLOWER_POOL_MODE: str = (
+    os.environ.get("TEXT_FLOWER_POOL_MODE", "auto").strip().lower() or "auto"
+)
+TEXT_FLOWER_NAME: str = (
+    os.environ.get("TEXT_FLOWER_NAME", "").strip() or "互动立体"
+)
+
+# 花字资源包缓存根(审查 R-04:**独立于** JIANYING_CACHE_ROOT —— 后者指向
+# Cache/effect(字幕动画),花字资源包在 Cache/artistEffect/<effect_id>/<md5>,
+# Golden Sample 草稿 path 字段与 flower_cache_inventory.json 双重实证)。
+JIANYING_ARTIST_EFFECT_CACHE_ROOT: str = (
+    os.environ.get("JIANYING_ARTIST_EFFECT_CACHE_ROOT", "").strip()
+    or str(Path.home() / "AppData" / "Local" / "JianyingPro" / "User Data" / "Cache" / "artistEffect")
+)
+
+# ---------------------------------------------------------------------------
 # 节点 13:adjust_volume(阶段 5,2026-11-09)—— 分角色音量与淡入淡出
 # ---------------------------------------------------------------------------
 # 角色识别按轨名:Voiceover_zh(node_08 中文配音)/ en_voiceover(node_17 英文

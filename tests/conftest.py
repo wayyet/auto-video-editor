@@ -61,6 +61,15 @@ def _hermetic_anim_cache(tmp_path_factory: pytest.TempPathFactory, monkeypatch: 
         "nodes.node_10_inject_text_fx.JIANYING_CACHE_ROOT", str(cache_root)
     )
     monkeypatch.setattr("config.JIANYING_CACHE_ROOT", str(cache_root))
+
+    # 花字缓存守卫封闭化(2026-11-21 原生花字通道):Cache/artistEffect 独立根
+    # 同样指到临时空目录 —— 否则套件依赖操作机真实花字缓存(有缓存=挂花字,
+    # 无缓存=降级,结果漂移);花字相关用例自行 monkeypatch 到伪造缓存。
+    flower_cache_root = tmp_path_factory.mktemp("jy-cache-artist-effect")
+    monkeypatch.setattr(
+        "nodes._text_flower.JIANYING_ARTIST_EFFECT_CACHE_ROOT", str(flower_cache_root)
+    )
+    monkeypatch.setattr("config.JIANYING_ARTIST_EFFECT_CACHE_ROOT", str(flower_cache_root))
     return cache_root
 
 

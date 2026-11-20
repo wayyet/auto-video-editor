@@ -38,6 +38,13 @@ OUR_TEXT_ANIMATION_PREFIX = "text-anim-"
 OUR_STICKER_PREFIX = "sticker-"
 OUR_AUDIO_FADE_PREFIX = "audio-fade-"
 
+#: 原生花字(2026-11-21)我方标记:material **id** 是 UUIDv5(Golden Sample 同形,
+#: 审查 R-03 —— 前缀 id 无 GUI 兼容证据,故不以 id 前缀识别我方),改用私有标记键。
+#: 与 materials.texts 条目携带工作流私有字段同一先例;剪映重写草稿若剥掉该键,
+#: 清理会退化为"少清理"(孤儿由 QA 挂账),绝不误删人工素材(无标记键)。
+OUR_TEXT_FLOWER_PRIVATE_KEY = "autovideo_role"
+OUR_TEXT_FLOWER_ROLE = "text-flower"
+
 
 def is_19_digit_resource_id(resource_id: Any) -> bool:
     """resource_id 是否为剪映 19 位数字 ID(占位/缺失 → False)。"""
@@ -222,16 +229,111 @@ def build_native_audio_fade_material(
     }
 
 
+def flower_effect_cache_available(
+    flower_meta: dict[str, Any],
+    cache_root: str | Path | None,
+) -> bool:
+    """花字元数据(effect_id+md5)对应的剪映本地缓存目录是否存在。
+
+    花字资源包按 ``Cache/artistEffect/<effect_id>/<md5>`` 解析(**独立于**字幕
+    动画的 ``Cache/effect`` —— 审查 R-04,`JIANYING_ARTIST_EFFECT_CACHE_ROOT`),
+    Golden Sample 草稿 path 字段与 flower_cache_inventory.json 双重实证。
+
+    注意:目录存在≠一定可渲染,本检查只是守卫的一半;另一半是池条目的
+    ``verified`` + ``verification.cache_manifest_sha256`` 完整性比对
+    (:func:`nodes._text_flower.flower_entry_status`,审查 R-05)。
+    """
+    effect_id = str(flower_meta.get("effect_id") or "")
+    md5 = str(flower_meta.get("md5") or "")
+    if not effect_id or not md5 or not cache_root:
+        return False
+    return (Path(cache_root) / effect_id / md5).is_dir()
+
+
+def build_native_text_effect_material(
+    *,
+    material_id: str,
+    flower_meta: dict[str, Any],
+    artist_effect_cache_root: str | Path,
+) -> dict[str, Any]:
+    """花字池条目 → 原生 ``materials.effects`` 条目(type=text_effect)。
+
+    字段形状以 Golden Sample 为准(2026-11-18 console-52373c6f9e11 中文稿 UI
+    应用「互动立体」实证,经两次 UI 保存存活;docs/第七期开发/花字审计证据_
+    20261118/zh_draft_flower_extract.json),不从字幕动画结构推断。
+
+    - ``path`` 由当前运行环境的缓存根动态构造(Golden Sample 同款正斜杠
+      POSIX 形态),不得硬编码采集机器路径(审查 §4.4)。
+    - material **id 由调用方传入**(约定:UUIDv5 确定性派生,见
+      ``nodes._text_flower.our_flower_material_id``);附带我方私有标记键,
+      清理逻辑据此区分"我方旧产物"与人工 UUID 花字。
+
+    Raises:
+        ValueError: 花字元数据缺 effect_id/resource_id/name,或缓存目录缺失
+            (fail-closed,调用方应先用 ``flower_effect_cache_available`` + 状态
+            守卫筛选;本构造器做最后一道字段防线)。
+    """
+    effect_id = str(flower_meta.get("effect_id") or "")
+    resource_id = str(flower_meta.get("resource_id") or "")
+    name = str(flower_meta.get("name") or "")
+    if not effect_id or not resource_id or not name:
+        raise ValueError(
+            f"花字元数据不完整(effect_id/resource_id/name 需非空): {flower_meta!r}"
+        )
+    md5 = str(flower_meta.get("md5") or "")
+    cache_dir = Path(artist_effect_cache_root) / effect_id / md5 if md5 else None
+    if cache_dir is None or not cache_dir.is_dir():
+        raise ValueError(f"花字资源包缓存目录缺失: {cache_dir}({name})")
+    return {
+        "id": material_id,
+        "type": "text_effect",
+        "adjust_params": [],
+        "algorithm_artifact_path": "",
+        "apply_target_type": 0,
+        "bloom_params": None,
+        "category_id": "panel-text-flower",
+        "category_name": "花字",
+        "color_match_info": {
+            "source_feature_path": "",
+            "target_feature_path": "",
+            "target_image_path": "",
+        },
+        "effect_id": effect_id,
+        "enable_skin_tone_correction": False,
+        "exclusion_group": [],
+        "face_adjust_params": [],
+        "formula_id": "",
+        "intensity_key": "",
+        "multi_language_current": "",
+        "name": name,
+        "panel_id": "",
+        "path": cache_dir.as_posix(),
+        "platform": "all",
+        "request_id": "",
+        "resource_id": resource_id,
+        "source_platform": 1,
+        "sub_type": "none",
+        "time_range": None,
+        "value": 1.0,
+        "version": "",
+        OUR_TEXT_FLOWER_PRIVATE_KEY: OUR_TEXT_FLOWER_ROLE,
+    }
+
+
 __all__ = [
     "OUR_AUDIO_FADE_PREFIX",
     "OUR_STICKER_PREFIX",
     "OUR_TEXT_ANIMATION_PREFIX",
+    "OUR_TEXT_FLOWER_PRIVATE_KEY",
+    "OUR_TEXT_FLOWER_ROLE",
     "OUR_TRANSITION_PATTERN",
     "OUR_VIDEO_EFFECT_PATTERN",
     "build_native_audio_fade_material",
     "build_native_sticker_material",
     "build_native_text_animation_material",
+    "build_native_text_effect_material",
     "build_native_transition_material",
     "build_native_video_effect_material",
+    "flower_effect_cache_available",
     "is_19_digit_resource_id",
 ]

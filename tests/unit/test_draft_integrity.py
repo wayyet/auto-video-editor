@@ -426,3 +426,107 @@ def test_join_qa_report_carries_sha256(tmp_path: Path) -> None:
         zh_dir / "draft_content.json"
     )["draft_content.json"]
     assert len(report["sha256"]["zh"]["draft_content.json"]) == 64
+
+
+# ------------------------------------------------ 原生花字结构检查(2026-11-21,审查 §4.8)
+
+
+def _flower_draft() -> dict:
+    """含 1 条我方花字(已绑定)+ 1 条人工花字的基础草稿。"""
+    return {
+        "materials": {
+            "videos": [{"id": "video-1", "path": ""}],
+            "audios": [],
+            "effects": [
+                {
+                    "id": "FLOWER-OURS-0001",
+                    "type": "text_effect",
+                    "category_id": "panel-text-flower",
+                    "name": "互动立体",
+                    "effect_id": "7407340226189757733",
+                    "resource_id": "7407340226189757733",
+                    "path": "C:/cache/artistEffect/7407340226189757733/c093",
+                    "autovideo_role": "text-flower",
+                },
+                {"id": "FLOWER-HUMAN", "type": "text_effect", "category_id": "panel-text-flower", "name": "人工花字"},
+            ],
+            "texts": [{"id": "text-zh-1", "content": "你好"}],
+        },
+        "tracks": [
+            {"type": "video", "segments": [
+                {"id": "s1", "material_id": "video-1", "extra_material_refs": ["sticker-1", "ghost-ref"]}]},
+            {"type": "text", "segments": [
+                {"id": "ts1", "material_id": "text-zh-1", "extra_material_refs": ["FLOWER-OURS-0001", "FLOWER-HUMAN"]}]},
+        ],
+    }
+
+
+def test_check_text_flowers_clean_draft_passes() -> None:
+    from draft_ops.draft_integrity import check_text_flowers
+
+    assert check_text_flowers(_flower_draft(), "zh") == []
+
+
+def test_check_text_flowers_identical_duplicate_warns() -> None:
+    """TF-18:同 ID 同内容重复(GUI 保存观察)→ 非阻断 warning,不报 error。"""
+    from draft_ops.draft_integrity import check_text_flowers, issue_text
+
+    draft = _flower_draft()
+    ours = next(e for e in draft["materials"]["effects"] if e["id"] == "FLOWER-OURS-0001")
+    draft["materials"]["effects"].append(json.loads(json.dumps(ours, ensure_ascii=False)))
+    issues = check_text_flowers(draft, "zh")
+    assert len(issues) == 1
+    assert issues[0]["severity"] == "warning"
+    assert "重复" in issue_text(issues[0])
+
+
+def test_check_text_flowers_conflicting_duplicate_errors() -> None:
+    """TF-19:同 ID 不同内容 → error(数据异常,不允许静默规范化)。"""
+    from draft_ops.draft_integrity import check_text_flowers
+
+    draft = _flower_draft()
+    ours = next(e for e in draft["materials"]["effects"] if e["id"] == "FLOWER-OURS-0001")
+    conflict = json.loads(json.dumps(ours, ensure_ascii=False))
+    conflict["name"] = "别的花字"
+    draft["materials"]["effects"].append(conflict)
+    issues = check_text_flowers(draft, "zh")
+    assert any(i["severity"] == "error" and "内容冲突" in i["detail"] for i in issues)
+
+
+def test_check_text_flowers_orphan_warns_not_counted() -> None:
+    """TF-21:effect material 存在但无轨段引用 → warning(孤立,不计入已应用)。"""
+    from draft_ops.draft_integrity import check_text_flowers
+
+    draft = _flower_draft()
+    draft["tracks"][1]["segments"][0]["extra_material_refs"] = []
+    issues = check_text_flowers(draft, "zh")
+    assert any("孤立" in i["detail"] and i["severity"] == "warning" for i in issues)
+
+
+def test_check_text_flowers_duplicate_refs_in_segment_warns() -> None:
+    """TF-20:同一轨段重复引用同一花字 → warning(写入前须去重)。"""
+    from draft_ops.draft_integrity import check_text_flowers
+
+    draft = _flower_draft()
+    draft["tracks"][1]["segments"][0]["extra_material_refs"] = ["FLOWER-OURS-0001"] * 2
+    issues = check_text_flowers(draft, "zh")
+    assert any("重复引用" in i["detail"] for i in issues)
+
+
+def test_check_text_flowers_our_marker_missing_fields_errors() -> None:
+    """我方标记条目缺必填字段/category 错误 → error(构造器防线后的 QA 闸)。"""
+    from draft_ops.draft_integrity import check_text_flowers
+
+    draft = _flower_draft()
+    ours = next(e for e in draft["materials"]["effects"] if e["id"] == "FLOWER-OURS-0001")
+    ours["path"] = ""
+    ours["category_id"] = "not-flower"
+    issues = check_text_flowers(draft, "zh")
+    assert any("缺必填字段" in i["detail"] for i in issues)
+    assert any("category_id" in i["detail"] for i in issues)
+
+
+def test_check_text_flowers_no_flowers_returns_empty() -> None:
+    from draft_ops.draft_integrity import check_text_flowers
+
+    assert check_text_flowers(_minimal_draft(), "zh") == []

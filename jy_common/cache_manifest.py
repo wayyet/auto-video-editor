@@ -30,9 +30,12 @@ def _sha256_file(path: Path) -> str:
 def build_cache_manifest(
     cache_root: str | Path, effect_id: str, md5: str
 ) -> dict[str, Any] | None:
-    """生成单个动画资源 ``Cache/effect/<effect_id>/<md5>`` 的缓存 manifest。
+    """生成单个资源 ``<cache_root>/<effect_id>/<md5>`` 的缓存 manifest。
 
-    目录不存在(或不是目录)返回 ``None`` —— 调用方按 cache_missing 处理。
+    ``cache_root`` 由调用方决定:字幕动画传 ``Cache/effect``(JIANYING_CACHE_ROOT),
+    原生花字传 ``Cache/artistEffect``(``JIANYING_ARTIST_EFFECT_CACHE_ROOT``,
+    2026-11-21 审查 R-04 —— 两类资源包在不同缓存根,不可混用)。目录不存在
+    (或不是目录)返回 ``None`` —— 调用方按 cache_missing 处理。
 
     Returns:
         ``{"effect_id", "md5", "cache_root", "file_count", "total_size",

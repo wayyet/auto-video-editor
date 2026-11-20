@@ -216,11 +216,31 @@ def build_render_plan(draft: dict) -> dict[str, Any]:
     n_sticker = len(materials.get("stickers") or [])
     # 原生花字(materials.effects 中 type=text_effect,2026-11-18 真机样本实证)
     # 此前整个 effects 桶不进保真度明细,花字存在但导出报告不提(审查计划 P5)。
-    n_flower = sum(
-        1
+    # 2026-11-21 口径收紧(审查 R-07):只统计**唯一且实际绑定到 text 轨段**的
+    # 花字 id —— GUI 保存会把同 id 条目与 refs 复制一遍,按原始条目数计数会把
+    # 1 个花字报成 2 个;孤立素材(无轨段引用)不计入已应用。
+    flower_effect_ids = {
+        str(e.get("id") or "")
         for e in (materials.get("effects") or [])
-        if isinstance(e, dict) and e.get("type") == "text_effect"
-    )
+        if isinstance(e, dict) and e.get("type") == "text_effect" and e.get("id")
+    }
+    bound_flower_ids: set[str] = set()
+    n_flower_segments = 0
+    for track in draft.get("tracks") or []:
+        if not isinstance(track, dict) or track.get("type") != "text":
+            continue
+        for seg in track.get("segments") or []:
+            if not isinstance(seg, dict):
+                continue
+            hit = {
+                str(r)
+                for r in (seg.get("extra_material_refs") or [])
+                if str(r) in flower_effect_ids
+            }
+            if hit:
+                n_flower_segments += 1
+                bound_flower_ids.update(hit)
+    n_flower = len(bound_flower_ids)
     # 我方字幕/标题入场动画(2026-11-19 审查 P2-02):客户端内动效,FFmpeg 导出
     # 不渲染(字幕文本本身已烧录,动画不随导出)。只统计**实际绑定到轨段**
     # (extra_material_refs 引用)的素材,孤立素材不计;字幕(text-anim-*)与
@@ -258,7 +278,9 @@ def build_render_plan(draft: dict) -> dict[str, Any]:
     if n_sticker:
         fidelity.append(f"{n_sticker} 个贴纸未渲染进 MP4(剪映客户端内可见)")
     if n_flower:
-        fidelity.append(f"{n_flower} 个原生花字未渲染进 MP4(剪映客户端内可见)")
+        fidelity.append(
+            f"{n_flower} 个原生花字(绑定 {n_flower_segments} 条字幕)未渲染进 MP4(剪映客户端内可见)"
+        )
     if n_subtitle_anim:
         fidelity.append(f"{n_subtitle_anim} 条字幕入场动画未渲染进 MP4(剪映客户端内可见)")
     if n_title_anim:

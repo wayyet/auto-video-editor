@@ -26,6 +26,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -90,6 +91,53 @@ def _bucket_counts(draft: dict[str, Any] | None) -> dict[str, int]:
     return counts
 
 
+def _flower_state_fingerprint(draft: dict[str, Any] | None) -> dict[str, str]:
+    """花字状态指纹(2026-11-21,审查 R-08):``changed_counts`` 只比较桶长度,
+    同数量的条目内容变化 / refs 变化无法在桶级定位 —— 这里对两处做规范化摘要:
+
+    - ``effects_sha``:``materials.effects`` 全部条目(规范化 JSON)摘要;
+    - ``refs_sha``:text 轨段指向花字 material 的 ``extra_material_refs`` 摘要。
+
+    只记录 SHA-256,不落资源包绝对路径(审查 §4.7)。无花字时为空串。
+    """
+    empty = {"effects_sha": "", "refs_sha": ""}
+    if not isinstance(draft, dict):
+        return empty
+    materials = draft.get("materials") or {}
+    effect_items = sorted(
+        json.dumps(e, ensure_ascii=False, sort_keys=True)
+        for e in (materials.get("effects") or [])
+        if isinstance(e, dict)
+    )
+    if not effect_items:
+        return empty
+    effects_sha = hashlib.sha256("\n".join(effect_items).encode("utf-8")).hexdigest()
+    flower_ids = {
+        str(e.get("id") or "")
+        for e in (materials.get("effects") or [])
+        if isinstance(e, dict) and e.get("type") == "text_effect"
+    }
+    ref_items: list[str] = []
+    for track in draft.get("tracks") or []:
+        if not isinstance(track, dict) or track.get("type") != "text":
+            continue
+        for seg in track.get("segments") or []:
+            if not isinstance(seg, dict):
+                continue
+            refs = seg.get("extra_material_refs") or []
+            flower_refs = sorted(
+                {str(r) for r in refs if str(r) in flower_ids}
+            )
+            if flower_refs:
+                ref_items.append(f"{seg.get('material_id')}:{','.join(flower_refs)}")
+    refs_sha = (
+        hashlib.sha256("|".join(sorted(ref_items)).encode("utf-8")).hexdigest()
+        if ref_items
+        else ""
+    )
+    return {"effects_sha": effects_sha, "refs_sha": refs_sha}
+
+
 def build_draft_mutation_record(
     node_id: str,
     draft_path: Path | str,
@@ -109,6 +157,9 @@ def build_draft_mutation_record(
         for key in sorted(set(counts_before) | set(counts_after))
         if counts_before.get(key, 0) != counts_after.get(key, 0)
     }
+    # 花字指纹(2026-11-21,审查 R-08):同数量内容变化/refs 变化的桶级可观测
+    flower_fp_before = _flower_state_fingerprint(before)
+    flower_fp_after = _flower_state_fingerprint(after)
     return {
         "node_id": node_id,
         "draft_role": draft_role_of(draft_path),
@@ -120,6 +171,7 @@ def build_draft_mutation_record(
             != (sha_after or {}).get("draft_content.json")
         ),
         "changed_counts": changed_counts,
+        "flower_fingerprint": {"before": flower_fp_before, "after": flower_fp_after},
         "status": status,
         "reason": reason,
         "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),

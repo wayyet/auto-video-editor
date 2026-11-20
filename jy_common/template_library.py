@@ -35,10 +35,12 @@ class TemplateLibrary:
         data: dict[str, Any],
         fx_lib: dict[str, Any] | None = None,
         text_lib: dict[str, Any] | None = None,
+        flower_lib: dict[str, Any] | None = None,
     ) -> None:
         self._data = data
         self._fx_lib = fx_lib or {}
         self._text_lib = text_lib or {}
+        self._flower_lib = flower_lib or {}
 
     # ---------- 单文件加载(兼容旧 API) ----------
 
@@ -57,11 +59,16 @@ class TemplateLibrary:
         fx_template: str | Path,
         fx_resource: str | Path,
         text_resource: str | Path,
+        text_flower_resource: str | Path | None = None,
     ) -> "TemplateLibrary":
         """一次性加载三件套:风格索引 + fx 资源库 + text 资源库。
 
         任一文件不存在:对应那一块就是空 dict(``_data`` 的 _missing=True 时标记整个 lib
         为空)。仅 fx_resource / text_resource 不存在时,主体仍可用,只是查询返回 None。
+
+        ``text_flower_resource``(2026-11-21 原生花字池)为**可选**第四参(审查 R-12:
+        保持既有三参数调用兼容);文件缺失/未传 = 空花字库,调用方按 degraded 处理,
+        不影响转场/视频特效/字幕动画既有逻辑。
         """
         fx_template_path = Path(fx_template)
         if not fx_template_path.exists():
@@ -82,7 +89,14 @@ class TemplateLibrary:
             with open(text_resource_path, "r", encoding="utf-8") as f:
                 text_lib = json.load(f)
 
-        return cls(data, fx_lib=fx_lib, text_lib=text_lib)
+        flower_lib: dict[str, Any] = {}
+        if text_flower_resource is not None:
+            flower_resource_path = Path(text_flower_resource)
+            if flower_resource_path.exists():
+                with open(flower_resource_path, "r", encoding="utf-8") as f:
+                    flower_lib = json.load(f)
+
+        return cls(data, fx_lib=fx_lib, text_lib=text_lib, flower_lib=flower_lib)
 
     # ---------- 属性 ----------
 
@@ -101,6 +115,11 @@ class TemplateLibrary:
         return any(
             self._text_lib.get(k) for k in ("intro", "loop", "outro")
         )
+
+    @property
+    def has_flower_lib(self) -> bool:
+        """原生花字池是否已加载(2026-11-21;文件缺失/未传 = False → 调用方降级)。"""
+        return bool(self._flower_lib.get("flowers"))
 
     # ---------- 旧 API(Week 5 升级 — 按 style_tag 精确匹配 + hash 兜底)----------
 
@@ -277,6 +296,31 @@ class TemplateLibrary:
             out.append(dict(row))
         return out
 
+    # ---------- 原生花字池(2026-11-21,审查修订版阶段 2)----------
+
+    def list_flower_rows(self) -> list[dict[str, Any]]:
+        """返回花字池全部条目**完整行**(保序复制,文件序即池序)。
+
+        条目字段(name/effect_id/resource_id/md5/is_vip/paid_type/category_id/
+        enabled/verified/verification)见 ``templates/text_flower_resource_library.json``;
+        ``enabled=false`` 的条目也返回,由调用方守卫过滤(便于审计口径报告)。
+        """
+        if not self._flower_lib:
+            return []
+        rows = self._flower_lib.get("flowers")
+        if not isinstance(rows, list):
+            return []
+        return [dict(r) for r in rows if isinstance(r, dict)]
+
+    def pick_flower_by_name(self, name: str) -> dict[str, Any] | None:
+        """精确按 name 查花字条目;未命中或花字库缺失 → None。"""
+        if not self._flower_lib:
+            return None
+        for row in self._flower_lib.get("flowers", []) or []:
+            if isinstance(row, dict) and row.get("name") == name:
+                return dict(row)
+        return None
+
 
 def load_template_library(path: str | Path) -> TemplateLibrary:
     """便捷构造器 — Week 3 各节点的统一入口(单文件模式)。"""
@@ -287,10 +331,16 @@ def load_resource_libraries(
     fx_template: str | Path,
     fx_resource: str | Path,
     text_resource: str | Path,
+    text_flower_resource: str | Path | None = None,
 ) -> TemplateLibrary:
-    """便捷构造器 — Week 4 升级后,节点 9/10 的统一入口(多文件模式)。"""
+    """便捷构造器 — Week 4 升级后,节点 9/10 的统一入口(多文件模式)。
+
+    ``text_flower_resource`` 为可选第四参(2026-11-21 原生花字池,审查 R-12);
+    未传/文件缺失 = 空花字库,既有三参数调用行为不变。
+    """
     return TemplateLibrary.from_json_files(
         fx_template=fx_template,
         fx_resource=fx_resource,
         text_resource=text_resource,
+        text_flower_resource=text_flower_resource,
     )

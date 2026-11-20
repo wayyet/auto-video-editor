@@ -183,14 +183,14 @@ _NODE_META: dict[str, dict[str, Any]] = {
         "description": "英文字幕写入英文分支草稿",
     },
     "node_10_inject_text_fx": {
-        "name": "注入中文字幕入场动画",
+        "name": "注入中文字幕入场动画与花字",
         "group": "subtitles_covers",
-        "description": "中文字幕入场动画原生落草稿(material_animations+轨段引用,只动我方字幕)",
+        "description": "中文字幕入场动画(material_animations)+原生花字(materials.effects type=text_effect)原生落草稿,只动我方正文字幕",
     },
     "node_10b_inject_text_fx_en": {
-        "name": "注入英文字幕入场动画",
+        "name": "注入英文字幕入场动画与花字",
         "group": "subtitles_covers",
-        "description": "英文字幕入场动画原生落草稿;先于关卡③落地,人工校对看到最终效果(K3=B)",
+        "description": "英文字幕入场动画+原生花字原生落草稿,与中文同 job_id 选同一资源;先于关卡③落地,人工校对看到最终效果(K3=B)",
     },
     "node_14_make_covers": {
         "name": "生成封面",

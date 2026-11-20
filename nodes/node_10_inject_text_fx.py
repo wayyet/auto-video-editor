@@ -41,7 +41,12 @@ import hashlib
 from pathlib import Path
 from typing import Any, Optional
 
-from config import JIANYING_CACHE_ROOT, TEXT_FX_INTRO_ANIMATION, TEXT_FX_INTRO_POOL_MODE
+from config import (
+    JIANYING_CACHE_ROOT,
+    TEXT_FLOWER_ENABLED,
+    TEXT_FX_INTRO_ANIMATION,
+    TEXT_FX_INTRO_POOL_MODE,
+)
 from jy_common.job_identity import resolve_job_id
 from jy_common.native_fx import (
     OUR_TEXT_ANIMATION_PREFIX,
@@ -51,13 +56,16 @@ from jy_common.native_fx import (
 from jy_common.template_library import TemplateLibrary, load_resource_libraries
 from langchain_core.runnables import RunnableConfig
 from nodes._draft_io import apply_and_write, find_text_segment_by_material_id, load_draft
+from nodes._text_flower import apply_text_flower_effects
 from state import WorkflowState
 
 
 #: 我方字幕素材 id 前缀(node_08 / node_08b 产出)
 _OUR_TEXT_PREFIXES = ("text-zh-", "text-en-")
-#: 旧默认动画名(保留为兜底顺序的一部分;经实证全不在 VIP 库内)
+#: 旧默认动画名(保留为兜底顺序的一部分;经实证全不在库内)
 _LEGACY_INTRO_NAMES = ("居中打字机", "渐次出现", "渐显", "打字机 II")
+#: 原生花字池文件(2026-11-21;缺失/为空 = 空花字库,花字降级不写)
+FLOWER_LIBRARY_PATH = "templates/text_flower_resource_library.json"
 
 
 def _is_our_text(text_obj: dict) -> bool:
@@ -249,22 +257,34 @@ def apply_text_fx(
     done_tag: str,
     job_id: str = "",
 ) -> tuple[list[str], dict]:
-    """读取草稿 → 为我方字幕写原生入场动画 → 原子写回。
+    """读取草稿 → 为我方字幕写原生入场动画与原生花字 → 原子写回。
 
     中文主线(``inject_text_fx``)与英文分支(``inject_text_fx_en``)共用的核心。
-    ``job_id`` 仅用于 auto 池模式的确定性轮换 seed(zh/en 传同一值保证动画一致)。
+    ``job_id`` 仅用于 auto 池模式的确定性轮换 seed(zh/en 传同一值保证动画与
+    花字一致)。花字逻辑见 ``nodes._text_flower``(2026-11-21 接入,摘要随返回
+    值 ``text_flower`` 子键携带,不覆盖动画摘要)。
 
     Returns:
-        (新的 status_log 列表, text_fx 摘要 dict)。
+        (新的 status_log 列表, text_fx 摘要 dict;花字摘要在 ``text_flower`` 键)。
     """
     draft = load_draft(draft_path)
     template_lib = load_resource_libraries(
         fx_template="templates/fx_template.json",
         fx_resource="templates/fx_resource_library.json",
         text_resource="templates/text_resource_library.json",
+        text_flower_resource=FLOWER_LIBRARY_PATH,
     )
 
     warnings, summary = _apply_text_animations(draft, template_lib, node_tag, job_id)
+    # 原生花字(2026-11-21):动画之后、同一份草稿、同一原子写回;摘要不覆盖
+    # 动画摘要,以 "text_flower" 子键随返回值携带(审查 §4.7)
+    flower_warnings, flower_summary = apply_text_flower_effects(
+        draft,
+        template_lib,
+        job_id=job_id,
+        enabled=TEXT_FLOWER_ENABLED,
+        tag=node_tag,
+    )
 
     log = list(status_log or [])
     selected = summary.get("selected") or {}
@@ -278,9 +298,22 @@ def apply_text_fx(
             f"start={audit.get('seed_start_index')},pick={audit.get('selected_index')},"
             f"offset={audit.get('fallback_offset')},mode={audit.get('mode')})"
         )
+    flower_selected = flower_summary.get("selected") or {}
+    if flower_selected.get("name"):
+        # 花字审计标签(同款可复算口径;不落本机缓存绝对路径,审查 §4.7)
+        audit = flower_summary.get("selection_audit") or {}
+        status_counts = audit.get("status_counts") or {}
+        log.append(
+            f"{node_tag}_text_flower_selected:{flower_selected['name']}"
+            f"@{flower_selected['effect_id']}"
+            f"(pool={audit.get('pool_size')},usable={status_counts.get('ready', 0)},"
+            f"start={audit.get('seed_start_index')},pick={audit.get('selected_index')},"
+            f"offset={audit.get('fallback_offset')},mode={audit.get('mode')})"
+        )
     log.extend(warnings)
+    log.extend(flower_warnings)
     log.extend(apply_and_write(draft_path, draft, node_tag, done_tag=done_tag))
-    return log, summary
+    return log, {**summary, "text_flower": flower_summary}
 
 
 def inject_text_fx(state: WorkflowState, config: Optional[RunnableConfig] = None) -> dict:
@@ -346,7 +379,7 @@ def inject_text_fx_en(state: WorkflowState, config: Optional[RunnableConfig] = N
     """
     draft_dir_raw = state.get("draft_dir_en_branch")
     if not draft_dir_raw:
-        return {"error_log": ["[node_10b] draft_dir_en_branch 缺失,跳过英文花字"]}
+        return {"error_log": ["[node_10b] draft_dir_en_branch 缺失,跳过英文字幕动画与花字"]}
     draft_file = Path(draft_dir_raw) / "draft_content.json"
     if not draft_file.exists():
         return {"error_log": [f"[node_10b] 英文分支草稿不存在,跳过: {draft_file}"]}
