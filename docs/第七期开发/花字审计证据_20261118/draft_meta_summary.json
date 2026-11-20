@@ -19,7 +19,7 @@
     "draft_name": "AutoVideo_console-52373c6f9e11",
     "draft_new_version": "",
     "draft_removable_storage_device": "",
-    "draft_root_path": "C:/Users/wayyet/AppData/Local/JianyingPro/User Data/Projects/com.lveditor.draft",
+    "draft_root_path": "C:/Users/<user>/AppData/Local/JianyingPro/User Data/Projects/com.lveditor.draft",
     "draft_timeline_materials_size_": 122994262,
     "draft_type": "",
     "tm_draft_cloud_completed": "",
@@ -49,7 +49,7 @@
     "draft_name": "en_branch_console-52373c6f9e11_20261118_064813_970710",
     "draft_new_version": "",
     "draft_removable_storage_device": "",
-    "draft_root_path": "C:\\Users\\wayyet\\AppData\\Local\\JianyingPro\\User Data\\Projects\\com.lveditor.draft",
+    "draft_root_path": "C:\\Users\\<user>\\AppData\\Local\\JianyingPro\\User Data\\Projects\\com.lveditor.draft",
     "draft_timeline_materials_size_": 122903560,
     "draft_type": "",
     "tm_draft_cloud_completed": "",
@@ -60,9 +60,9 @@
     "tm_duration": 27348000
   },
   "mtimes": {
-    "C:\\Users\\wayyet\\AppData\\Local\\JianyingPro\\User Data\\Projects\\com.lveditor.draft\\AutoVideo_console-52373c6f9e11\\draft_content.json": "2026-11-18 08:01:29",
-    "C:\\Users\\wayyet\\AppData\\Local\\JianyingPro\\User Data\\Projects\\com.lveditor.draft\\AutoVideo_console-52373c6f9e11\\.autovideo_draft_mutations.jsonl": "2026-11-18 06:50:11",
-    "C:\\Users\\wayyet\\AppData\\Local\\JianyingPro\\User Data\\Projects\\com.lveditor.draft\\en_branch_console-52373c6f9e11_20261118_064813_970710\\draft_content.json": "2026-11-18 06:50:12"
+    "C:\\Users\\<user>\\AppData\\Local\\JianyingPro\\User Data\\Projects\\com.lveditor.draft\\AutoVideo_console-52373c6f9e11\\draft_content.json": "2026-11-18 08:01:29",
+    "C:\\Users\\<user>\\AppData\\Local\\JianyingPro\\User Data\\Projects\\com.lveditor.draft\\AutoVideo_console-52373c6f9e11\\.autovideo_draft_mutations.jsonl": "2026-11-18 06:50:11",
+    "C:\\Users\\<user>\\AppData\\Local\\JianyingPro\\User Data\\Projects\\com.lveditor.draft\\en_branch_console-52373c6f9e11_20261118_064813_970710\\draft_content.json": "2026-11-18 06:50:12"
   },
   "jianying_running_at_collect": true
 }

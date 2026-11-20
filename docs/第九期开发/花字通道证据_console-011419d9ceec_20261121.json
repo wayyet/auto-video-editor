@@ -1,0 +1,40 @@
+{
+  "_source": "console-011419d9ceec 花字缺失分析(2026-11-21)结构化证据摘要;与 2026-11-18 的 console-52373c6f9e11 Golden Sample(第七期证据目录)分开管理(审查 R-14)",
+  "_sanitization": "本文件不含本机绝对路径;草稿目录仅以剪映草稿库目录名指代",
+  "task": "console-011419d9ceec",
+  "collected_at": "2026-11-21",
+  "jianying_version": "5.9.0.11632(便携版)",
+  "zh_draft": {
+    "draft_dir": "AutoVideo_console-011419d9ceec(剪映草稿库)",
+    "flower_traces": {"panel-text-flower": 0, "text_effect": 0, "artistEffect": 0},
+    "materials_effects_key_present": true,
+    "subtitle_animations": {"text-anim-text-zh_refs": 15, "names": {"逐字旋入": 5}},
+    "texts_total": 6,
+    "material_animations_total": 6
+  },
+  "en_branch_draft": {
+    "draft_dir": "en_branch_console-011419d9ceec_20261120_033006_881928(剪映草稿库)",
+    "flower_traces": {"panel-text-flower": 0}
+  },
+  "pipeline_mutation_audit": {
+    "record_count": 9,
+    "touches_materials_effects": false,
+    "highlights": [
+      {"node_id": "node_05", "recorded_at": "2026-11-19T18:55:01+00:00", "changed_counts": {"materials.audios": [0, 3], "materials.speeds": [0, 7], "materials.videos": [0, 4], "track_segments": [0, 7]}},
+      {"node_id": "node_08", "recorded_at": "2026-11-19T19:30:06+00:00", "changed_counts": {"materials.texts": [0, 5], "materials.speeds": [7, 9], "track_segments": [7, 12]}},
+      {"node_id": "node_10", "recorded_at": "2026-11-19T19:30:07+00:00", "changed_counts": {"materials.material_animations": [0, 5]}},
+      {"node_id": "node_09", "recorded_at": "2026-11-20T17:14:15+00:00", "changed_counts": {"materials.transitions": [0, 3], "materials.video_effects": [0, 2]}},
+      {"node_id": "node_09b", "recorded_at": "2026-11-20T17:14:15+00:00", "changed_counts": {"materials.texts": [5, 6], "materials.material_animations": [5, 6], "materials.video_effects": [2, 3], "track_segments": [12, 13]}},
+      {"node_id": "node_11", "recorded_at": "2026-11-20T17:14:16+00:00", "changed_counts": {}},
+      {"node_id": "node_13", "recorded_at": "2026-11-20T17:14:17+00:00", "changed_counts": {"materials.audio_fades": [0, 1]}}
+    ]
+  },
+  "code_baseline": {
+    "head": "f885e938(文档提交)",
+    "code_baseline": "edec4b0",
+    "panel-text-flower_hits_in_code": 0,
+    "text_effect_write_sites": 0,
+    "four_layer_absence": ["无花字池", "materials.effects 零写入代码", "native_fx 无 text_effect 构造器", "vendor 无 text_style 模块"]
+  },
+  "conclusion": "字幕无花字 = 流水线未实现原生花字通道(2026-11-18 定案的未实现能力),非运行故障;字幕实际携带默认样式 + 逐字旋入入场动画。"
+}

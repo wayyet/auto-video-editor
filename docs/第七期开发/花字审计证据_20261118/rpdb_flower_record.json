@@ -954,7 +954,7 @@
           "is_business": false,
           "business_info": {
             "json_str": "{\"is_vip\":true,\"is_expired\":false,\"paid_type\":\"subscribe\",\"commercial_strategy\":{\"resource_export\":{\"paid_strategy_list\":[{\"paid_mode\":\"subscribe\",\"subscribe_package\":\"Pro\"}]}}}",
-            "sign": "Cz6dRIFcs62WYn9sZEgyS5EupAevbZZ/sEoX5pPqTVlUcBN1u7hTFaG3PtEZ+NSyROei4ZRHxcAb4ane6dA9S1POI46o591vu1FqtnIWU1ZeEaFGRJoby0TPmhc86QpT/5VlMzePAXVCNa/Vst/fYru918Qg7u/KP41xmGIswVE="
+            "sign": "(sign已脱敏)"
           },
           "category_ids": [
             11754,
@@ -1010,7 +1010,7 @@
           "is_business": false,
           "business_info": {
             "json_str": "{\"is_vip\":true,\"is_expired\":false,\"paid_type\":\"subscribe\",\"commercial_strategy\":{\"resource_export\":{\"paid_strategy_list\":[{\"paid_mode\":\"subscribe\",\"subscribe_package\":\"Pro\"}]}}}",
-            "sign": "Cz6dRIFcs62WYn9sZEgyS5EupAevbZZ/sEoX5pPqTVlUcBN1u7hTFaG3PtEZ+NSyROei4ZRHxcAb4ane6dA9S1POI46o591vu1FqtnIWU1ZeEaFGRJoby0TPmhc86QpT/5VlMzePAXVCNa/Vst/fYru918Qg7u/KP41xmGIswVE="
+            "sign": "(sign已脱敏)"
           },
           "category_ids": [
             11754,
@@ -1063,7 +1063,7 @@
         "is_business": false,
         "business_info": {
           "json_str": "{\"is_vip\":true,\"is_expired\":false,\"paid_type\":\"subscribe\",\"commercial_strategy\":{\"resource_export\":{\"paid_strategy_list\":[{\"paid_mode\":\"subscribe\",\"subscribe_package\":\"Pro\"}]}}}",
-          "sign": "Cz6dRIFcs62WYn9sZEgyS5EupAevbZZ/sEoX5pPqTVlUcBN1u7hTFaG3PtEZ+NSyROei4ZRHxcAb4ane6dA9S1POI46o591vu1FqtnIWU1ZeEaFGRJoby0TPmhc86QpT/5VlMzePAXVCNa/Vst/fYru918Qg7u/KP41xmGIswVE="
+          "sign": "(sign已脱敏)"
         },
         "category_ids": [
           11754,
@@ -1112,7 +1112,7 @@
         "is_business": false,
         "business_info": {
           "json_str": "{\"is_vip\":true,\"is_expired\":false,\"paid_type\":\"subscribe\",\"commercial_strategy\":{\"resource_export\":{\"paid_strategy_list\":[{\"paid_mode\":\"subscribe\",\"subscribe_package\":\"Pro\"}]}}}",
-          "sign": "Cz6dRIFcs62WYn9sZEgyS5EupAevbZZ/sEoX5pPqTVlUcBN1u7hTFaG3PtEZ+NSyROei4ZRHxcAb4ane6dA9S1POI46o591vu1FqtnIWU1ZeEaFGRJoby0TPmhc86QpT/5VlMzePAXVCNa/Vst/fYru918Qg7u/KP41xmGIswVE="
+          "sign": "(sign已脱敏)"
         },
         "category_ids": [
           11754,
