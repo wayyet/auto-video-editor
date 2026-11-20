@@ -84,7 +84,7 @@ WORKFLOW_ID = "auto_video_editor_main"
 #: 2026-11-20 关卡①条件挂起:node_06 展示名/描述/入边标签改写(QC 降级才
 #: 挂起复核),拓扑零变更(先例 bump4:仅元数据文案也 bump,使浏览器布局
 #: 缓存里的旧显示信息失效)→ bump 11。
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 #: 关卡编号全集(阶段3 删除关卡⓪后剩 ①②③;2026-11-15 关卡③删除 → ①②;
 #: 2026-11-20 起关卡① 仅 QC 降级时挂起复核,编号与恢复契约不变)
@@ -272,6 +272,11 @@ _NODE_META: dict[str, dict[str, Any]] = {
         "name": "网页话题检索",
         "group": "storyline_media",
         "description": "group_clips 后条件前置节点:WEB_TOPIC 开启且能构造出检索词时先检索再文案;产物经 web_research 独立上下文进入 generate_script",
+    },
+    "storyline_search_web_topic_en": {
+        "name": "海外话题检索",
+        "group": "storyline_media",
+        "description": "2026-11-20 第九期:reach-mcp 英文线,与中文检索并行启动(不进文案屏障);产物 search_web_topic_en.json 供字幕/封面翻译参考",
     },
     "storyline_split_shots": {
         "name": "分镜切分",

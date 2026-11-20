@@ -245,7 +245,9 @@ def test_week4_replay_safety_translate_called_once(
     call_count = {"n": 0}
 
     class _CountingTranslate:
-        def translate(self, segments):
+        # 2026-11-20 第九期:TranslateClient Protocol 增加 reference 关键字参数
+        # (单次调用参数,None=无参考),测试桩同步签名
+        def translate(self, segments, *, reference=None):
             call_count["n"] += 1
             return [
                 {"index": i, "start_ms": s["start_ms"], "end_ms": s["end_ms"],

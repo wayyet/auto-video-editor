@@ -26,6 +26,7 @@ subtitle_qc qc 链 + ``validate_layout`` 兜底),产出 ``layout_issues`` /
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,6 +47,7 @@ from nodes.node_16_translate_subtitles import (
     _write_marker,
     write_srt_from_segments,
 )
+from nodes.storyline._common import load_web_topic_en_reference
 from state import WorkflowState
 
 #: 翻译状态取值(subtitle_translation_status)
@@ -139,13 +141,25 @@ def node_16a_translate_and_check(state: WorkflowState) -> dict:
 
     draft_dir_p = Path(draft_dir)
 
+    # ----- 英文检索参考(2026-11-20 第九期,审查修订版 §7.4)-----
+    # 读取失败/无效一律 (None, []) → 走无参考旧行为;reference 是**单次调用
+    # 参数**,不落共享客户端状态(审查 P1-06)。空参考哈希=sha256(""),保证
+    # 「有参考」与「无参考」是不同指纹(审查 §7.5)。
+    reference, reference_sources = load_web_topic_en_reference(state)
+    reference_sha256 = hashlib.sha256(
+        (reference or "").encode("utf-8")
+    ).hexdigest()
+
     # ----- 翻译器身份与指纹(marker 复用判定,修订计划 §5.5)-----
     client = get_default_client()
     is_real = isinstance(client, LLMTranslateClient)
     translator_id = client.translator_id if is_real else "mock"
     prompt_version = client.prompt_version if is_real else TRANSLATION_PROMPT_VERSION
     fingerprint = _compute_source_fingerprint(
-        segments_zh, translator_id=translator_id, prompt_version=prompt_version
+        segments_zh,
+        translator_id=translator_id,
+        prompt_version=prompt_version,
+        reference_sha256=reference_sha256,
     )
     status = STATUS_REAL if is_real else STATUS_STUB
 
@@ -156,6 +170,7 @@ def node_16a_translate_and_check(state: WorkflowState) -> dict:
         fingerprint=fingerprint,
         translator_id=translator_id,
         prompt_version=prompt_version,
+        reference_sha256=reference_sha256,
     ):
         # 已有有效 marker,跳过翻译调用,直接读草稿(可能含人工修正)
         segments_en = _read_segments_from_draft(draft_dir_p)
@@ -164,7 +179,7 @@ def node_16a_translate_and_check(state: WorkflowState) -> dict:
         # 上抛前先落盘取证(trace.raw_head = 模型原始输出,2026-11-20 形状
         # 漂移事故的排障证据),取证失败不影响异常传递。
         try:
-            translated = translate_segments(segments_zh)
+            translated = translate_segments(segments_zh, reference=reference)
         except TranslationError as exc:
             _dump_translation_failure(
                 state.get("storyline_outputs_root"),
@@ -188,6 +203,8 @@ def node_16a_translate_and_check(state: WorkflowState) -> dict:
             fingerprint=fingerprint,
             translator_id=translator_id,
             prompt_version=prompt_version,
+            reference_sha256=reference_sha256,
+            reference_sources=reference_sources,
         )
         segments_en = translated
 

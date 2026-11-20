@@ -103,6 +103,7 @@ export function normalizeContentDetails(payload) {
   const sec = (s) => (s && typeof s === "object" ? s : {});
   const arr = (v) => (Array.isArray(v) ? v : []);
   const wt = sec(p.web_topic);
+  const wte = sec(p.web_topic_en);
   const tpl = sec(p.template);
   const sc = sec(p.script);
   const zh = sec(p.subtitles_zh);
@@ -130,6 +131,17 @@ export function normalizeContentDetails(payload) {
               reason: wt.fallback.reason ?? null,
             }
           : null,
+    },
+    // 2026-11-20 第九期:英文线独立视图模型(不与中文线共享字段;审查 §8.3)
+    webTopicEn: {
+      status: wte.status || "missing",
+      reason: wte.reason || null,
+      engine: wte.engine || "未知引擎",
+      query: wte.query ?? null,
+      searchedAt: wte.searched_at ?? null,
+      entries: arr(wte.entries),
+      // 逐源状态摘要(部分源空/错的可观测诊断;后端已脱敏限长)
+      sourceSummary: wte.source_summary ?? null,
     },
     template: {
       status: tpl.status || "missing",

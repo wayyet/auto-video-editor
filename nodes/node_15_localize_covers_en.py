@@ -13,6 +13,10 @@
 - 英文标题走默认翻译客户端**真实翻译**,``[EN] `` 前缀拼接删除;
 - 翻译不可用(stub)/失败 → ``cover_translation_status="degraded"``、全部
   ``en_path=None`` + error_log —— **绝不生成伪英文标题**。
+
+2026-11-20 第九期(审查修订版 §7.6):英文标题翻译同样注入英文检索参考
+(``load_web_topic_en_reference`` 单次调用参数,不落共享客户端状态);
+stub/degraded 降级语义不变,参考缺失走无参考旧行为。
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ from pathlib import Path
 from jy_common.translate_client import LLMTranslateClient, get_default_client
 from mcp_clients.firered_image_edit_client import call_firered_edit
 from nodes._cover_title import resolve_zh_title
+from nodes.storyline._common import load_web_topic_en_reference
 from state import WorkflowState
 
 
@@ -35,7 +40,8 @@ def _get_titles(state: WorkflowState) -> tuple[str, str, str]:
 
     status:``real`` = 真实翻译成功;``stub`` = 默认翻译客户端是 Mock 桩;
     ``degraded`` = 真实客户端但翻译失败/空译文。stub/degraded 时 ``title_en``
-    为空串 —— 调用方不得拼假英文标题。
+    为空串 —— 调用方不得拼假英文标题。参考文本来自英文检索产物(缺省
+    ``None`` = 无参考旧行为)。
     """
     draft_path = state.get("draft_path")
     title_zh = "默认标题"
@@ -49,10 +55,12 @@ def _get_titles(state: WorkflowState) -> tuple[str, str, str]:
     client = get_default_client()
     if not isinstance(client, LLMTranslateClient):
         return title_zh, "", "stub"
+    reference, _reference_sources = load_web_topic_en_reference(state)
     try:
-        translated = client.translate([
-            {"index": 0, "start_ms": 0, "end_ms": 0, "text_zh": title_zh}
-        ])
+        translated = client.translate(
+            [{"index": 0, "start_ms": 0, "end_ms": 0, "text_zh": title_zh}],
+            reference=reference,
+        )
         title_en = str((translated[0] or {}).get("text_en") or "").strip()
     except Exception as exc:  # noqa: BLE001 — 封面翻译非关键路径,失败降级
         print(f"[node_15] 封面标题翻译失败: {exc!r}")

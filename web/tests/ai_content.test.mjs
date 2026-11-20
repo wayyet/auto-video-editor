@@ -155,11 +155,12 @@ test("normalizeContentDetails:空对象/null/数组异常全部容错", () => {
   const vm = normalizeContentDetails({});
   assert.equal(vm.threadId, "");
   assert.equal(vm.taskStatus, "unknown");
-  for (const sec of [vm.webTopic, vm.template, vm.script, vm.subtitlesZh, vm.subtitlesEn]) {
+  for (const sec of [vm.webTopic, vm.webTopicEn, vm.template, vm.script, vm.subtitlesZh, vm.subtitlesEn]) {
     assert.equal(sec.status, "missing");
     assert.equal(sec.reason, null);
   }
   assert.equal(vm.webTopic.entries.length, 0);
+  assert.equal(vm.webTopicEn.entries.length, 0);
   assert.equal(vm.template.candidates.length, 0);
   assert.equal(vm.template.selectedTemplate, null);
   assert.equal(vm.script.groups.length, 0);
@@ -198,4 +199,43 @@ test("normalizeContentDetails:webTopic fallback 状态映射与缺省", () => {
     web_topic: { status: "ok", engine: "MediaCrawler(小红书)" },
   });
   assert.equal(vmNoFallback.webTopic.fallback, null, "无 fallback 时为 null");
+});
+
+// ---------------------------------------------------------------------------
+// 2026-11-20 第九期:webTopicEn 视图模型(英文线独立区块,审查修订版 §8.3)
+// ---------------------------------------------------------------------------
+test("normalizeContentDetails:webTopicEn 完整归一化", () => {
+  const vm = normalizeContentDetails({
+    web_topic_en: {
+      status: "ok",
+      engine: "ReachMCP(海外检索)",
+      query: "portable power station camping",
+      searched_at: "2026-11-20T06:00:00+00:00",
+      entries: [
+        {
+          title: "Review", url: "https://www.youtube.com/watch?v=abc",
+          domain: "www.youtube.com", snippet: "s",
+          reach_source: "youtube", date: "2026-11-18", engagement_views: 100,
+        },
+      ],
+      source_summary: "youtube:3 | EMPTY: reddit",
+    },
+  });
+  assert.equal(vm.webTopicEn.status, "ok");
+  assert.equal(vm.webTopicEn.engine, "ReachMCP(海外检索)");
+  assert.equal(vm.webTopicEn.entries[0].reach_source, "youtube");
+  assert.equal(vm.webTopicEn.entries[0].engagement_views, 100);
+  assert.equal(vm.webTopicEn.sourceSummary, "youtube:3 | EMPTY: reddit");
+});
+
+test("normalizeContentDetails:webTopicEn 与中文区块不串数据", () => {
+  const vm = normalizeContentDetails({
+    web_topic: { status: "ok", entries: [{ title: "zh-only" }] },
+    web_topic_en: { status: "skipped", reason: "开关关闭" },
+  });
+  assert.equal(vm.webTopic.status, "ok");
+  assert.equal(vm.webTopic.entries[0].title, "zh-only");
+  assert.equal(vm.webTopicEn.status, "skipped");
+  assert.equal(vm.webTopicEn.reason, "开关关闭");
+  assert.equal(vm.webTopicEn.entries.length, 0);
 });

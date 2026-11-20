@@ -176,6 +176,9 @@ from nodes.storyline import (
 )
 from nodes.storyline.node_load_media import storyline_load_media_node
 from nodes.storyline.node_search_web_topic import storyline_search_web_topic_node
+from nodes.storyline.node_search_web_topic_en import (
+    storyline_search_web_topic_en_node,
+)
 from nodes.storyline.node_split_shots import storyline_split_shots_node
 from nodes.storyline.node_generate_ai_transition import (
     storyline_generate_ai_transition_node,
@@ -552,6 +555,11 @@ def _build_state_graph():
     # 开关关/无检索词时节点内部软跳过);历史:2026-11-10 前置化阶段3 条件前置、
     # 2026-11-12 noop 治理阶段1 条件路由挂模板推荐出口 —— 均已随并行化删除
     g.add_node("storyline_search_web_topic", storyline_search_web_topic_node)
+    # 英文线检索节点(2026-11-20 第九期):reach-mcp 海外检索,独立开关/产物/
+    # 缓存;每轮必跑(开关关/Mock 翻译器 → 节点内部写 skipped 产物,零网络)
+    g.add_node(
+        "storyline_search_web_topic_en", storyline_search_web_topic_en_node
+    )
     g.add_node("storyline_split_shots", storyline_split_shots_node)
     # 2026-10 已接入:与 plan_timeline_pro 并排(同一道 4 源屏障;建图时按开关接边)
     g.add_node(
@@ -649,11 +657,21 @@ def _build_state_graph():
     # 中文线
     g.add_edge("node_08_add_subtitles", "node_10_inject_text_fx")
     g.add_edge("node_10_inject_text_fx", "node_14_make_covers")
-    g.add_edge("node_14_make_covers", "node_15_localize_covers_en")
+    # 英文检索产物 → 封面英文标题翻译参考(第九期 §6.4):**两源屏障**(列表
+    # 形式才是 AND-join;多条独立普通边会让目标节点每条边各执行一次 —— 已被
+    # 黄金轨迹实测证伪后改正)。node_14 与 en 节点都每轮必跑,进屏障不踩 D10。
+    g.add_edge(
+        ["node_14_make_covers", "storyline_search_web_topic_en"],
+        "node_15_localize_covers_en",
+    )
 
     # 英文线:B1 ASR 移除后 16a 无源字幕即正常 skip;08 → fork 的图边保留(拓扑不变)
     g.add_edge("node_08_add_subtitles", "fork_draft_for_english_branch")
-    g.add_edge("fork_draft_for_english_branch", "node_16a_translate_and_check")
+    # 英文检索产物 → 字幕翻译参考(第九期 §6.4):两源屏障(理由同 node_15)
+    g.add_edge(
+        ["fork_draft_for_english_branch", "storyline_search_web_topic_en"],
+        "node_16a_translate_and_check",
+    )
     g.add_edge("node_16a_translate_and_check", "node_08b_add_subtitles_en")
     # K3=B 历史:花字(10b)曾先于人工校对(③)——2026-11-15 关卡③整体删除后
     # 10b 普通直连 17(历史注释见 route_after_translate 删除处)。
@@ -729,6 +747,12 @@ def _build_state_graph():
     #      只含 [RTR, TXT],GC 由 RTR 祖先链传递保证。
     g.add_edge("storyline_group_clips", "storyline_script_template_recommendation")
     g.add_edge("storyline_group_clips", "storyline_search_web_topic")
+    # 英文线(2026-11-20 第九期,审查修订版 §6.4):与中文检索**并行**启动,
+    # **不进** [STR, WT]→GS 双源屏障 —— 延迟隔离:英文搜索的等待时间不拖慢
+    # 文案生成(错误隔离由节点内 fail-closed 保证);消费者(node_15 封面标题 /
+    # node_16a 字幕翻译)以**两源屏障**形式有界等待英文产物(预算=英文节点
+    # 自身 timeout;正常情况下英文检索在流水线中段早已完成,不新增等待)。
+    g.add_edge("storyline_group_clips", "storyline_search_web_topic_en")
     # [STR, WT] 双源屏障 → 文案:模板推荐与检索分支每轮都会到达,屏障必凑齐;
     # QA 重试轮两者都在回路内(qa → GC → A/A'),不会静默 END。
     g.add_edge(

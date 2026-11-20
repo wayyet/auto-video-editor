@@ -322,6 +322,10 @@ class WorkflowState(TypedDict, total=False):
     # 2026-11-12 边治理阶段6 补声明,无行为变化)
     ai_transition_user_request: NotRequired[str]
     storyline_web_topic_artifact: Annotated[Optional[str], _last_wins]        # search_web_topic(条件)
+    # 2026-11-20 第九期:reach-mcp 英文检索产物(独立节点,审查修订版 §4.2)。
+    # 清除语义(审查 P0-04):_last_wins 对 None 保持旧值,**空字符串 tombstone
+    # 才能清除旧引用**;读侧统一经 _read_json_artifact(空值安全返回 None)。
+    storyline_web_topic_en_artifact: Annotated[Optional[str], _last_wins]     # search_web_topic_en(英文线,每轮必写)
     # 2026-10 调序新增的独立键(避免与既有键并发写冲突):
     storyline_search_media_artifact: Annotated[Optional[str], _last_wins]     # DEPRECATED(2026-11-10):search_media 节点已删;该键历史上从无读写者(节点实际写 storyline_media_artifact),仅旧 checkpoint 兼容
     storyline_auto_plan: Annotated[Optional[dict], _last_wins]                # storyline_join(不覆盖 storyline_plan)

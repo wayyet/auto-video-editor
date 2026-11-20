@@ -18,6 +18,7 @@ import hashlib
 import urllib.parse
 from typing import Any, Union
 
+import pytest
 import requests
 
 import storyline_capabilities.search_web_topic as cap_mod
@@ -799,3 +800,195 @@ def test_ddg_irrelevant_results_map_to_irrelevant_results(monkeypatch) -> None:
     res = search_web_topic(query="海上清真寺旅游攻略")
     assert res["error_code"] == "IRRELEVANT_RESULTS"
     assert res["status"] == "failed"
+
+
+# ---------------------------------------------------------------------------
+# reach_mcp 分支(2026-11-20 第九期:审查修订版 §5.4;经 reach_client 接缝注入)
+# ---------------------------------------------------------------------------
+_REACH_OPTS_BASE = {
+    "endpoint": "http://127.0.0.1:8765/mcp",
+    "sources": ("youtube", "web", "reddit"),
+    "days": 30,
+    "max_per_source": 5,
+    "max_chars_per_item": 500,
+    "timeout_seconds": 90,
+}
+
+
+def _install_reach(monkeypatch, raw_items, error=None, message="", diag=None):
+    calls: list[dict] = []
+
+    def fake_search_via_reach(**kwargs):
+        calls.append(kwargs)
+        return raw_items, error, message, (diag or {"sources_used": []})
+
+    monkeypatch.setattr(cap_mod._reach_client, "search_via_reach", fake_search_via_reach)
+    return calls
+
+
+def _reach_item(url="https://www.youtube.com/watch?v=abc", title="A", text="snippet A", source="youtube", **extra):
+    item = {"url": url, "title": title, "text": text, "source": source}
+    item.update(extra)
+    return item
+
+
+def test_reach_branch_success_maps_and_balances_quota(monkeypatch) -> None:
+    raw = [
+        _reach_item(url="https://a/1", title="Portable Web One", text="first portable", source="web"),
+        _reach_item(url="https://a/2", title="Power Web Two", text="second power", source="web"),
+        _reach_item(url="https://a/3", title="Station Web Three", text="third station", source="web"),
+        _reach_item(url="https://v/1", title="Portable Video One", source="youtube", engagement={"views": 100}),
+        _reach_item(url="https://v/2", title="Power Video Two", source="youtube", engagement=7),
+    ]
+    calls = _install_reach(monkeypatch, raw)
+    res = search_web_topic(
+        query="portable power station",
+        max_results=4,
+        provider="reach_mcp",
+        provider_options=dict(_REACH_OPTS_BASE),
+    )
+    assert res["status"] == "ok" and res["provider"] == "reach_mcp"
+    assert res["engine"] == "ReachMCP(海外检索)"
+    assert res["error_code"] is None
+    # round-robin 均衡:web 与 youtube 交替,单源不占满 4 个名额(§3.7)
+    sources = [it["source"] for it in res["search_web_topic"]]
+    assert sources == ["web", "youtube", "web", "youtube"]
+    it = res["search_web_topic"][0]
+    assert it["reach_source"] == "web" and it["date"] is None
+    assert res["search_web_topic"][1]["engagement_views"] == 100
+    assert res["search_web_topic"][3]["engagement_views"] == 7
+    # 请求参数透传契约
+    assert calls[0]["sources"] == ["youtube", "web", "reddit"]
+    assert calls[0]["max_per_source"] == 5 and calls[0]["days"] == 30
+    # diagnostics 携带 parser/adapter 版本
+    assert res["diagnostics"]["adapter_version"] == "1"
+    assert res["diagnostics"]["parser_version"] == "reach_mcp_v1"
+
+
+def test_reach_branch_url_validation_title_fallback_and_dedupe(monkeypatch) -> None:
+    raw = [
+        _reach_item(url="ftp://bad", title="dropped scheme"),
+        _reach_item(url="https://ok/1", title="", text="fallback title from text"),
+        _reach_item(url="https://ok/2", title="", text=""),
+        _reach_item(url="https://ok/1", title="duplicate url"),
+    ]
+    _install_reach(monkeypatch, raw)
+    res = search_web_topic(
+        query="anything at all", max_results=10, provider="reach_mcp",
+        provider_options=dict(_REACH_OPTS_BASE),
+    )
+    items = res["search_web_topic"]
+    assert [it["url"] for it in items] == ["https://ok/1"]
+    assert items[0]["title"] == "fallback title from text"
+
+
+def test_reach_branch_engagement_normalization(monkeypatch) -> None:
+    raw = [
+        _reach_item(url="https://a/1", title="engagement dict views", engagement={"views": 42, "likes": 1}),
+        _reach_item(url="https://a/2", title="engagement plain number", engagement=15),
+        _reach_item(url="https://a/3", title="engagement negative", engagement=-3),
+        _reach_item(url="https://a/4", title="engagement missing", engagement=None),
+        _reach_item(url="https://a/5", title="engagement empty dict", engagement={}),
+    ]
+    _install_reach(monkeypatch, raw)
+    res = search_web_topic(
+        query="engagement test", max_results=10, provider="reach_mcp",
+        provider_options=dict(_REACH_OPTS_BASE),
+    )
+    views = {it["url"]: it["engagement_views"] for it in res["search_web_topic"]}
+    assert views == {
+        "https://a/1": 42,
+        "https://a/2": 15,
+        "https://a/3": None,
+        "https://a/4": None,
+        "https://a/5": None,
+    }
+
+
+def test_reach_branch_relevance_guard_blocks_without_fallback(monkeypatch) -> None:
+    raw = [
+        _reach_item(url="https://x/1", title="安徽大学教务系统登录页", text="友情链接", source="web"),
+        _reach_item(url="https://x/2", title="教务处通知", text="与检索词无关", source="web"),
+    ]
+    _install_reach(monkeypatch, raw)
+    res = search_web_topic(
+        query="quantum computing breakthrough",
+        max_results=10, provider="reach_mcp",
+        provider_options=dict(_REACH_OPTS_BASE),
+    )
+    assert res["error_code"] == "IRRELEVANT_RESULTS"
+    assert res["status"] == "failed"
+    # 英文线无 Bing 回退(§4.2):不得出现 fallback 键
+    assert "fallback" not in res
+    assert res["diagnostics"]["relevance_matched"] == 0
+
+
+def test_reach_branch_no_results_status(monkeypatch) -> None:
+    _install_reach(monkeypatch, None, error="NO_RESULTS", message="reach-mcp returned no items")
+    res = search_web_topic(
+        query="portable power station", max_results=10, provider="reach_mcp",
+        provider_options=dict(_REACH_OPTS_BASE),
+    )
+    assert res["status"] == "no_results" and res["error_code"] == "NO_RESULTS"
+    assert res["search_web_topic"] == []
+
+
+def test_reach_branch_network_error_status(monkeypatch) -> None:
+    _install_reach(monkeypatch, None, error="NETWORK_ERROR", message="reach-mcp request timed out")
+    res = search_web_topic(
+        query="portable power station", max_results=10, provider="reach_mcp",
+        provider_options=dict(_REACH_OPTS_BASE),
+    )
+    assert res["status"] == "failed" and res["error_code"] == "NETWORK_ERROR"
+
+
+def test_reach_branch_request_hash_isolates_every_param(monkeypatch) -> None:
+    _install_reach(monkeypatch, [])
+    hashes = []
+    for overrides in (
+        {},
+        {"sources": ("youtube", "web")},
+        {"max_per_source": 6},
+        {"days": 60},
+        {"max_chars_per_item": 200},
+    ):
+        res = search_web_topic(
+            query="same query", max_results=10, provider="reach_mcp",
+            provider_options={**_REACH_OPTS_BASE, **overrides},
+        )
+        hashes.append(res["request_hash"])
+    assert len(set(hashes)) == len(hashes), "任一参数变化都必须改变 request_hash"
+    # 同参数幂等
+    again = search_web_topic(
+        query="same query", max_results=10, provider="reach_mcp",
+        provider_options=dict(_REACH_OPTS_BASE),
+    )
+    assert again["request_hash"] == hashes[0]
+
+
+def test_reach_branch_missing_provider_options_raises(monkeypatch) -> None:
+    _install_reach(monkeypatch, [])
+    with pytest.raises(ValueError):
+        search_web_topic(query="q", provider="reach_mcp", provider_options={"endpoint": "http://x"})
+    with pytest.raises(ValueError):
+        search_web_topic(query="q", provider="reach_mcp", provider_options={"sources": ("web",)})
+
+
+def test_reach_branch_failure_keeps_request_hash(monkeypatch) -> None:
+    """失败产物同样携带 request_hash(节点层缓存对 failed 产物复用的前提)。"""
+    _install_reach(monkeypatch, None, error="NETWORK_ERROR", message="down")
+    res = search_web_topic(
+        query="portable power station", max_results=10, provider="reach_mcp",
+        provider_options=dict(_REACH_OPTS_BASE),
+    )
+    assert res["request_hash"]
+
+
+def test_reach_branch_max_results_cap(monkeypatch) -> None:
+    raw = [_reach_item(url=f"https://a/{i}", title=f"cap test item {i}", source="web") for i in range(9)]
+    _install_reach(monkeypatch, raw)
+    res = search_web_topic(
+        query="cap test", max_results=3, provider="reach_mcp",
+        provider_options=dict(_REACH_OPTS_BASE),
+    )
+    assert len(res["search_web_topic"]) == 3

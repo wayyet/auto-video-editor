@@ -166,6 +166,103 @@ STORYLINE_WEB_TOPIC_DEBUG: bool = (
     in ("1", "true", "yes")
 )
 
+# 1.3) 英文线:reach-mcp 海外检索(2026-11-20 第九期,审查修订版 §5.3):
+#   - 与中文线**完全隔离**:独立开关/产物/缓存 hash/状态标签;英文线任何失败
+#     只影响英文参考资料,不阻断中文线与主工作流(§4.2);
+#   - provider 固定 reach_mcp,不进中文引擎白名单(§0.2);
+#   - 检索经 Docker 常驻容器 reach-mcp(ghcr.io/xyonium/reach-mcp,本地叠加
+#     镜像补装 socksio)的 HTTP MCP 端点;默认源 web/reddit/youtube 全部免凭据;
+#   - timeout 即消费者等待预算的上界(§4.3):英文节点经图边汇入字幕/封面
+#     消费节点,正常情况下英文检索在流水线中段早已完成;此值只影响全缓存
+#     快速流转时的最坏等待;
+#   - SOURCES 只做格式校验(逗号分隔标识符),不硬编码上游源名单 —— 上游会
+#     新增源,名单过期反而阻断;不可用/未配置源由 reach diagnostics 如实暴露
+#     (§2.4:逐源状态,不伪报)。
+#   - 同样是进程启动时读取的模块常量,修改后须重启工作流进程。
+STORYLINE_ENABLE_WEB_TOPIC_EN: bool = (
+    os.environ.get("STORYLINE_ENABLE_WEB_TOPIC_EN", "true").lower().strip()
+    in ("1", "true", "yes")
+)
+
+STORYLINE_WEB_TOPIC_REACH_ENDPOINT: str = os.environ.get(
+    "STORYLINE_WEB_TOPIC_REACH_ENDPOINT", "http://127.0.0.1:8765/mcp"
+).strip()
+if not STORYLINE_WEB_TOPIC_REACH_ENDPOINT.lower().startswith(("http://", "https://")):
+    raise ValueError(
+        "STORYLINE_WEB_TOPIC_REACH_ENDPOINT 必须是 http/https URL:"
+        f"{STORYLINE_WEB_TOPIC_REACH_ENDPOINT!r}"
+    )
+
+_raw_reach_sources = [
+    s.strip().lower()
+    for s in os.environ.get(
+        "STORYLINE_WEB_TOPIC_REACH_SOURCES", "web,reddit,youtube"
+    ).split(",")
+]
+_raw_reach_sources = sorted({s for s in _raw_reach_sources if s})
+_reach_source_chars = set("abcdefghijklmnopqrstuvwxyz0123456789_")
+if (
+    not _raw_reach_sources
+    or any(
+        len(s) > 32 or any(c not in _reach_source_chars for c in s)
+        for s in _raw_reach_sources
+    )
+):
+    raise ValueError(
+        f"STORYLINE_WEB_TOPIC_REACH_SOURCES 非法:{_raw_reach_sources!r}"
+        "(逗号分隔的小写字母/数字/下划线标识符)"
+    )
+STORYLINE_WEB_TOPIC_REACH_SOURCES: tuple = tuple(_raw_reach_sources)
+
+_raw_reach_timeout = int(
+    os.environ.get("STORYLINE_WEB_TOPIC_REACH_TIMEOUT", "90").strip() or "90"
+)
+if not 30 <= _raw_reach_timeout <= 600:
+    raise ValueError(
+        f"STORYLINE_WEB_TOPIC_REACH_TIMEOUT={_raw_reach_timeout} 超出范围 30..600(秒)"
+    )
+STORYLINE_WEB_TOPIC_REACH_TIMEOUT: int = _raw_reach_timeout
+
+_raw_reach_max_per_source = int(
+    os.environ.get("STORYLINE_WEB_TOPIC_REACH_MAX_PER_SOURCE", "5").strip() or "5"
+)
+if not 1 <= _raw_reach_max_per_source <= 20:
+    raise ValueError(
+        "STORYLINE_WEB_TOPIC_REACH_MAX_PER_SOURCE="
+        f"{_raw_reach_max_per_source} 超出范围 1..20"
+    )
+STORYLINE_WEB_TOPIC_REACH_MAX_PER_SOURCE: int = _raw_reach_max_per_source
+
+_raw_reach_days = int(
+    os.environ.get("STORYLINE_WEB_TOPIC_REACH_DAYS", "30").strip() or "30"
+)
+if not 1 <= _raw_reach_days <= 3650:
+    raise ValueError(
+        f"STORYLINE_WEB_TOPIC_REACH_DAYS={_raw_reach_days} 超出范围 1..3650"
+    )
+STORYLINE_WEB_TOPIC_REACH_DAYS: int = _raw_reach_days
+
+_raw_reach_max_results = int(
+    os.environ.get("STORYLINE_WEB_TOPIC_REACH_MAX_RESULTS", "10").strip() or "10"
+)
+if not 1 <= _raw_reach_max_results <= 20:
+    raise ValueError(
+        "STORYLINE_WEB_TOPIC_REACH_MAX_RESULTS="
+        f"{_raw_reach_max_results} 超出范围 1..20"
+    )
+STORYLINE_WEB_TOPIC_REACH_MAX_RESULTS: int = _raw_reach_max_results
+
+_raw_reach_max_chars = int(
+    os.environ.get("STORYLINE_WEB_TOPIC_REACH_MAX_CHARS_PER_ITEM", "500").strip()
+    or "500"
+)
+if not 100 <= _raw_reach_max_chars <= 2000:
+    raise ValueError(
+        "STORYLINE_WEB_TOPIC_REACH_MAX_CHARS_PER_ITEM="
+        f"{_raw_reach_max_chars} 超出范围 100..2000"
+    )
+STORYLINE_WEB_TOPIC_REACH_MAX_CHARS_PER_ITEM: int = _raw_reach_max_chars
+
 # 2) auto 模式:与 plan_timeline_pro 并排生成 AI 转场,qa_gate 之前把清单写进时间线 ai_transitions
 #    (storyline_generate_ai_transition → storyline_plan_timeline_ai_transition)。建图时读取。
 #    ADR-005 原为默认关闭;2026-10 按用户决定改为默认开启(当前仅 stub 客户端,不改动 clips)。

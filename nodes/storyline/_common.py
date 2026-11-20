@@ -444,6 +444,37 @@ def extract_web_topic_references(
     return refs
 
 
+def load_web_topic_en_reference(
+    state: WorkflowState,
+) -> tuple[str | None, list[dict[str, str]]]:
+    """读取英文检索产物 → ``(参考文本, 可审计来源列表)``(2026-11-20 第九期,
+    审查修订版 §7.4:字幕 node_16a 与封面 node_15 共用同一解析/清洗逻辑)。
+
+    返回 ``(None, [])`` 的情形:State 键空(tombstone)/文件缺失/JSON 损坏/
+    状态非 ``ok|cache_hit``/有效条目为空 —— 调用方据此走"无参考"旧行为。
+    参考文本经 :func:`format_web_topic_reference` 清洗(自带「外部不可信」
+    头部);来源列表经 :func:`extract_web_topic_references`(title/url/source,
+    供 marker 留痕审计)。
+
+    语义:产物由英文线节点**每轮覆盖写**(含 skipped/failed),故文件即"本轮
+    最新尝试";若本轮英文线尚未执行到(消费者屏障保证不会发生),读到的是
+    上一轮产物,状态域校验兜底防误注入。
+    """
+    doc = _read_json_artifact(state, "storyline_web_topic_en_artifact")
+    if not isinstance(doc, dict):
+        return None, []
+    if doc.get("status") not in ("ok", "cache_hit"):
+        return None, []
+    if not isinstance(doc.get("search_web_topic"), list) or not doc.get(
+        "search_web_topic"
+    ):
+        return None, []
+    reference = format_web_topic_reference(doc)
+    if not reference:
+        return None, []
+    return reference, extract_web_topic_references(doc)
+
+
 # ---------------------------------------------------------------------------
 # 检索词自动构造(2026-11-10 阶段1:前置化设计方案 §4.1)
 # ---------------------------------------------------------------------------

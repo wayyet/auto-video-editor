@@ -20,10 +20,6 @@ from pathlib import Path
 
 import config
 from state import WorkflowState
-from storyline_capabilities.search_web_topic import (
-    build_request_hash,
-    search_web_topic as cap_topic,
-)
 from nodes.storyline._common import (
     _read_json_artifact,
     _resolve_outputs_root,
@@ -35,6 +31,7 @@ from storyline_capabilities.mediacrawler_client import (
     detect_revision,
     normalize_query,
 )
+# 2026-11-20 第九期:合并此前的重复 import(审查文档阶段 D 第 10 项清理项)
 from storyline_capabilities.search_web_topic import (
     build_request_hash,
     mediacrawler_request_provider,

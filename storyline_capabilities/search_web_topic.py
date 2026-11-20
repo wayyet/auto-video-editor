@@ -44,6 +44,7 @@ except ImportError:
 # MediaCrawler 子进程适配器(2026-11-20 审查修订版阶段3接线;无环依赖:
 # client 不反向 import 本包)。
 from storyline_capabilities import mediacrawler_client as _mc_client
+from storyline_capabilities import reach_client as _reach_client
 
 
 DEFAULT_USER_AGENT = (
@@ -82,6 +83,9 @@ _PARSER_VERSIONS: dict[str, str] = {
     "google_html": "google_html_v1",
     "bing_html": "bing_html_v1",
     "stub": "stub_v1",
+    # 基础键;实际 hash 用 reach_mcp:{sources}:{per}:{days}:{chars}:{adapter}
+    # (2026-11-20 第九期:reach-mcp 英文线,hash provider 串见 reach_client)
+    "reach_mcp": "reach_mcp_v1",
 }
 _PROVIDER_LOCALES: dict[str, str] = {
     "mediacrawler": "",
@@ -89,6 +93,7 @@ _PROVIDER_LOCALES: dict[str, str] = {
     "google_html": "zh-CN",
     "bing_html": "zh-CN",
     "stub": "",
+    "reach_mcp": "",
 }
 _PROVIDER_ENGINE_LABELS: dict[str, str] = {
     "mediacrawler": "MediaCrawler",
@@ -96,10 +101,13 @@ _PROVIDER_ENGINE_LABELS: dict[str, str] = {
     "google_html": "Google",
     "bing_html": "Bing",
     "stub": "stub",
+    "reach_mcp": "ReachMCP(海外检索)",
 }
 
 # mediacrawler 条目的 source 值(实际数据来源标识,进 script.json references)。
 _MC_ITEM_SOURCE = "mediacrawler"
+# reach_mcp 条目 source 缺失时的兜底值(真实来源名在 reach_source 字段)。
+_REACH_ITEM_SOURCE = "reach_mcp"
 
 # 调试片段落盘上限(§5.5:≤64KiB)。
 WEB_TOPIC_DEBUG_MAX_BYTES: int = 64 * 1024
@@ -249,11 +257,15 @@ def _parser_version_for(provider: str) -> str:
         parts = provider.split(":")
         platform = parts[1] if len(parts) > 1 else "xhs"
         return f"mc_{platform}_v{_mc_client.MEDIACRAWLER_ADAPTER_VERSION}"
+    if provider.startswith("reach_mcp:"):
+        # 动态键解析:适配器版本编入 hash(2026-11-20 审查 P2-01)——
+        # reach 适配层映射/解包行为变化(适配器升版)必得不同 hash。
+        return f"reach_mcp_v{_reach_client.REACH_ADAPTER_VERSION}"
     return _PARSER_VERSIONS.get(provider, "unknown")
 
 
 def _locale_for(provider: str) -> str:
-    if provider.startswith("mediacrawler:"):
+    if provider.startswith("mediacrawler:") or provider.startswith("reach_mcp:"):
         return ""
     return _PROVIDER_LOCALES.get(provider, "")
 
@@ -1061,6 +1073,82 @@ def _map_mc_records(
 
 
 # ---------------------------------------------------------------------------
+# reach-mcp 条目映射(2026-11-20 第九期:审查修订版 §5.4)
+# ---------------------------------------------------------------------------
+def _reach_engagement_views(engagement: object) -> Optional[int]:
+    """engagement 归一化:dict 取 views / 数值取自身 / 其余 None(非负整数)。"""
+    if isinstance(engagement, dict):
+        engagement = engagement.get("views")
+    if isinstance(engagement, bool) or not isinstance(engagement, (int, float)):
+        return None
+    if engagement < 0:
+        return None
+    return int(engagement)
+
+
+def _map_reach_items(raw_items: list, max_results: int) -> list[dict[str, Any]]:
+    """reach 原始条目 → 标准条目(URL 校验/清洗/去重/按源均衡取样)。
+
+    映射规则(审查修订版 §5.4 表):
+    - url 只接受合法 http/https 且有 hostname;无效整条丢弃;
+    - title 缺失回退 ``text[:80]``,两者皆空整条丢弃;
+    - snippet = ``text`` 清洗限长,**允许为空**(不生成虚假摘要);
+    - source 规范化为小写真实源名,缺失兜底 ``_REACH_ITEM_SOURCE``;
+    - date 保留原始可解析文本(限长),不强猜时区;
+    - engagement → ``engagement_views``(dict/数值/None 归一化,P2-08);
+    - 同 URL 去重;**按源 round-robin 均衡取样**(§3.7:防单源占满名额)。
+    """
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    seen_urls: set[str] = set()
+    for raw in raw_items or []:
+        if not isinstance(raw, dict):
+            continue
+        url = str(raw.get("url") or "").strip()
+        try:
+            parsed = urllib.parse.urlparse(url)
+        except ValueError:
+            continue
+        if parsed.scheme.lower() not in _ALLOWED_URL_SCHEMES or not parsed.netloc:
+            continue
+        if url in seen_urls:
+            continue
+        title = _clean_web_text(raw.get("title"), 200)
+        if not title:
+            title = _clean_web_text(str(raw.get("text") or "")[:80], 80)
+        if not title:
+            continue
+        snippet = _clean_web_text(raw.get("text"), WEB_TOPIC_SNIPPET_MAX_CHARS)
+        source = _clean_web_text(raw.get("source"), 32).lower() or _REACH_ITEM_SOURCE
+        seen_urls.add(url)
+        buckets.setdefault(source, []).append({
+            "url": url,
+            "title": title,
+            "snippet": snippet,
+            "source": source,
+            "reach_source": source,
+            "date": (str(raw.get("date") or "")[:64] or None),
+            "engagement_views": _reach_engagement_views(raw.get("engagement")),
+        })
+    # round-robin:源名排序保证确定性;名额用尽即停
+    merged: list[dict[str, Any]] = []
+    source_names = sorted(buckets)
+    index = 0
+    while len(merged) < max_results and any(buckets[s] for s in source_names):
+        progressed = False
+        for name in source_names:
+            if len(merged) >= max_results:
+                break
+            queue = buckets[name]
+            if queue:
+                merged.append(queue.pop(0))
+                progressed = True
+        if not progressed:
+            break
+        index += 1
+    return merged
+
+
+# ---------------------------------------------------------------------------
 # 对外主入口(可注入 provider)
 # ---------------------------------------------------------------------------
 def search_web_topic(
@@ -1471,6 +1559,101 @@ def search_web_topic(
         doc["requested_provider"] = "mediacrawler"
         doc["engine"] = "Bing(MediaCrawler 回退)"
         doc["fallback"] = fallback_info
+        return doc
+
+    if provider == "reach_mcp":
+        # 2026-11-20 第九期:reach-mcp 英文线(审查修订版 §5)。设计要点:
+        # - provider_options 必含 endpoint/sources/timeout_seconds,形状错误
+        #   raise ValueError(编程错误,节点层 TOOL_EXECUTION_FAILED 留痕);
+        # - request_hash 用完整 provider 串(源集合/每源条数/时间窗/摘要上限/
+        #   适配器版本,§4.5)—— max_results 由 build_request_hash 统一编码;
+        # - **无 Bing 回退**(§4.2 两线互不回退):英文线失败只影响英文参考;
+        # - 相关性守卫复用中文实现(拉丁 token ≥3 字符,§5.4),拦截即
+        #   IRRELEVANT_RESULTS(英文线无回退,守卫=最终态)。
+        opts = dict(provider_options or {})
+        reach_endpoint = str(opts.get("endpoint") or "")
+        reach_sources = list(opts.get("sources") or [])
+        reach_days = int(opts.get("days") or 30)
+        reach_max_per_source = int(opts.get("max_per_source") or 5)
+        reach_max_chars = int(opts.get("max_chars_per_item") or 500)
+        reach_timeout = int(opts.get("timeout_seconds") or 90)
+        if not reach_endpoint or not reach_sources:
+            raise ValueError(
+                "reach_mcp provider_options requires endpoint and sources"
+            )
+        effective_request_hash = build_request_hash(
+            query=str(query),
+            provider=_reach_client.reach_request_provider(
+                sources=reach_sources,
+                max_per_source=reach_max_per_source,
+                days=reach_days,
+                max_chars_per_item=reach_max_chars,
+            ),
+            max_results=max_results,
+        )
+        try:
+            raw_items, reach_error, reach_message, reach_diag = (
+                _reach_client.search_via_reach(
+                    query=str(query),
+                    sources=reach_sources,
+                    days=reach_days,
+                    max_per_source=reach_max_per_source,
+                    max_chars_per_item=reach_max_chars,
+                    endpoint=reach_endpoint,
+                    timeout_seconds=reach_timeout,
+                )
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"reach_mcp provider_options invalid: {exc}") from exc
+
+        reach_items = [] if reach_error else _map_reach_items(
+            raw_items or [], max_results
+        )
+        diagnostics: dict[str, Any] = {
+            "requested_provider": "reach_mcp",
+            "adapter_version": _reach_client.REACH_ADAPTER_VERSION,
+            "parser_version": (
+                f"reach_mcp_v{_reach_client.REACH_ADAPTER_VERSION}"
+            ),
+            "primary": reach_diag,
+        }
+        relevance_blocked = False
+        if reach_error is None and reach_items:
+            matched = _count_relevant_results(str(query), reach_items)
+            diagnostics["relevance_matched"] = matched
+            diagnostics["relevance_total"] = len(reach_items)
+            if matched < min(WEB_TOPIC_RELEVANCE_MIN_MATCHED, len(reach_items)):
+                relevance_blocked = True
+        reach_error_code = reach_error or (
+            "NO_RESULTS"
+            if not reach_items
+            else ("IRRELEVANT_RESULTS" if relevance_blocked else None)
+        )
+        message = str(reach_message or "")
+        if relevance_blocked:
+            message = (
+                f"relevance matched {diagnostics['relevance_matched']}"
+                f"/{diagnostics['relevance_total']} results"
+            )
+        if not message and reach_error_code:
+            message = {
+                "NO_RESULTS": "ReachMCP returned no results.",
+                "NETWORK_ERROR": "ReachMCP request failed (network / endpoint unreachable).",
+                "TOOL_ERROR": "ReachMCP tool reported an error.",
+                "PARSE_ERROR": "ReachMCP result could not be parsed.",
+            }.get(reach_error_code, f"search failed: {reach_error_code}")
+
+        doc = _result(
+            items=reach_items if not reach_error_code else [],
+            preview_urls=[it["url"] for it in reach_items if it.get("url")]
+            if not reach_error_code
+            else [],
+            error_code=reach_error_code,
+            message=message,
+            diagnostics=diagnostics,
+        )
+        doc["request_hash"] = effective_request_hash
+        doc["provider"] = "reach_mcp"
         return doc
 
     if provider != "duckduckgo_html":

@@ -155,16 +155,28 @@ def main() -> int:
     checks["marker_fingerprint_matches_state"] = (
         marker.get("source_fingerprint") == out.get("subtitle_translation_fingerprint")
     )
+    # 2026-11-20 第九期:marker v3(+reference_sha256);参考哈希镜像节点逻辑
+    # —— 无英文检索产物时为 sha256("") 空参考哈希
+    import hashlib as _hashlib
+
+    from nodes.storyline._common import load_web_topic_en_reference  # noqa: E402
+
+    reference, _ref_sources = load_web_topic_en_reference(state)
+    reference_sha256 = _hashlib.sha256(
+        (reference or "").encode("utf-8")
+    ).hexdigest()
     checks["marker_valid"] = (
-        marker.get("schema_version") == 2
-        and marker.get("prompt_version") == "subtitle-translate-v2"
+        marker.get("schema_version") == 3
+        and marker.get("prompt_version") == TRANSLATION_PROMPT_VERSION
         and marker.get("translator_id") == "mcode-cli"
+        and marker.get("reference_sha256") == reference_sha256
     )
     checks["fingerprint_recomputes"] = (
         _compute_source_fingerprint(
             state["subtitle_segments_zh"],
             translator_id="mcode-cli",
             prompt_version=TRANSLATION_PROMPT_VERSION,
+            reference_sha256=reference_sha256,
         )
         == out.get("subtitle_translation_fingerprint")
     )

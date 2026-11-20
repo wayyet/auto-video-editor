@@ -897,6 +897,12 @@ _AI_CONTENT_MAX_TEXT = 2000
 
 #: web_topic 产物状态取值域(能力层三态 + 节点层 cache_hit 复用改写)
 _WEB_TOPIC_STATUSES = ("ok", "cache_hit", "no_results", "failed")
+
+# 英文线(2026-11-20 第九期):英文节点**每轮必写产物**(含 skipped),所以
+# skipped 直接来自产物 status;文件缺失时的证据链用英文线专属标签。
+_WEB_TOPIC_EN_STATUSES = ("ok", "cache_hit", "no_results", "failed", "skipped")
+_WEB_TOPIC_EN_SKIPPED_TAG = "storyline_search_web_topic_en_skipped"
+_WEB_TOPIC_EN_FAILED_TAG = "storyline_search_web_topic_en_failed"
 #: 模板推荐产物状态取值域(节点任何情况都落盘,节点层异常降级为 unavailable)
 _TEMPLATE_STATUSES = ("ok", "no_match", "unavailable")
 
@@ -1028,6 +1034,8 @@ _WEB_TOPIC_ENGINE_KEYWORDS: tuple[tuple[str, str], ...] = (
     ("google", "Google"),
     ("bing", "Bing"),
     ("duckduckgo", "DuckDuckGo"),
+    # 第九期英文线(老产物无 engine 字段时按 provider/source 关键词兜底)
+    ("reach_mcp", "ReachMCP(海外检索)"),
 )
 
 
@@ -1131,6 +1139,101 @@ def _web_topic_section(
         **base,
         "status": status,
         "reason": "等待网页检索节点生成" if status == "pending" else "任务已结束但无检索产物与状态证据",
+    }
+
+
+def _normalize_topic_en_entries(entries: Any) -> list[dict[str, Any]]:
+    """英文检索条目归一化(第九期):中文字段之外带 reach_source/date/
+    engagement_views;engagement_views 只允许非负整数,异常值归 None。"""
+    out: list[dict[str, Any]] = []
+    if not isinstance(entries, list):
+        return out
+    for item in entries[:_AI_CONTENT_MAX_CUES]:
+        if not isinstance(item, dict):
+            continue
+        url = _clamp_str(item.get("url"))
+        views = item.get("engagement_views")
+        out.append(
+            {
+                "title": _clamp_str(item.get("title"), 300),
+                "url": url,
+                "domain": _safe_domain(url),
+                "snippet": _clamp_str(item.get("snippet"), 500),
+                "reach_source": _clamp_str(item.get("reach_source"), 32) or None,
+                "date": _clamp_str(item.get("date"), 64) or None,
+                "engagement_views": views if isinstance(views, int) and views >= 0 else None,
+            }
+        )
+    return out
+
+
+def _web_topic_en_section(
+    task_dir: Path, task_state: str, status_log: list[str], error_log: list[str]
+) -> dict[str, Any]:
+    """01b 英文话题检索(reach-mcp 海外检索):英文节点**每轮必写本轮状态产物**
+    (含 skipped,审查 §6.3),所以文件即"本轮最新尝试"—— 与中文线"skip 不写
+    产物需查证据链"不同。文件仍缺失时回退证据链(en 专属标签 → pending/missing)。
+    """
+    base: dict[str, Any] = {
+        "status": None,
+        "engine": _WEB_TOPIC_UNKNOWN_ENGINE_LABEL,
+        "query": None,
+        "searched_at": None,
+        "entries": [],
+        "reason": None,
+    }
+    doc, err = _read_json_file(task_dir / "storyline" / "search_web_topic_en.json")
+    if err == "invalid":
+        return {**base, "status": "invalid", "reason": "英文检索产物 JSON 无法解析(文件存在但格式损坏)"}
+    if isinstance(doc, dict):
+        engine_label = _web_topic_engine_label(doc)
+        status = doc.get("status")
+        if status not in _WEB_TOPIC_EN_STATUSES:
+            return {
+                **base,
+                "engine": engine_label,
+                "status": "invalid",
+                "reason": f"英文检索产物状态无法识别: {status!r}",
+            }
+        reason = None
+        if status == "failed":
+            reason = _clamp_str(doc.get("message"), 300) or "英文检索执行失败"
+        elif status == "no_results":
+            reason = "检索完成,海外源未返回结果(部分源不可用见 diagnostics)"
+        elif status == "skipped":
+            reason = _clamp_str(doc.get("message"), 300) or "英文线跳过(开关关闭或检索词不可用)"
+        diag = doc.get("diagnostics")
+        source_summary = (
+            _clamp_str(diag.get("source_summary"), 200)
+            if isinstance(diag, dict)
+            else None
+        )
+        return {
+            **base,
+            "engine": engine_label,
+            "status": status,
+            "query": _clamp_str(doc.get("query")),
+            "searched_at": _clamp_str(doc.get("searched_at"), 64),
+            "entries": _normalize_topic_en_entries(doc.get("search_web_topic")),
+            "reason": reason,
+            "source_summary": source_summary,
+        }
+    if _WEB_TOPIC_EN_SKIPPED_TAG in status_log:
+        return {**base, "status": "skipped", "reason": "本次任务跳过英文检索(开关关闭或检索词不可用)"}
+    if _WEB_TOPIC_EN_FAILED_TAG in status_log:
+        detail = next(
+            (line for line in error_log if "storyline:search_web_topic_en" in line), None
+        )
+        return {
+            **base,
+            "status": "failed",
+            "reason": _clamp_str(detail, 300) or "英文检索节点执行失败(无产物落盘)",
+        }
+    status = _pending_or_missing(task_state)
+    return {
+        **base,
+        "status": status,
+        "reason": "等待英文检索节点生成" if status == "pending" else "任务已结束但无英文检索产物与状态证据",
     }
 
 
@@ -1393,6 +1496,10 @@ def get_ai_content_details(
         "task_status": task_state,
         "generated_at": _now_iso(),
         "web_topic": _web_topic_section(task_dir, task_state, status_log, error_log),
+        # 2026-11-20 第九期:英文线独立区块(与中文线不共享 entries/状态字段)
+        "web_topic_en": _web_topic_en_section(
+            task_dir, task_state, status_log, error_log
+        ),
         "template": _template_section(task_dir, task_state),
         "script": _script_section(task_dir, task_state, status_log, checkpoint_error),
     }

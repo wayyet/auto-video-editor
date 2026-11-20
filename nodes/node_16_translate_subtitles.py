@@ -31,9 +31,12 @@ from state import SubtitleSegment
 
 # ---------------------------------------------------------------------------
 # 2026-11-17 P1:marker schema v2(修订计划 §5.5)
+# 2026-11-20 第九期:schema v3 = + 英文检索参考指纹(审查修订版 §7.5)——
+#   参考内容变化必须失效重翻;空参考用 sha256("") 固定值,保证「有参考」与
+#   「无参考」指纹不同;v2 marker 缺新字段 → 一律未命中(一次性重翻,预期)。
 # ---------------------------------------------------------------------------
 #: marker 结构版本 —— 旧 list 形态 = legacy mock/unknown,一律视为未命中(重翻)
-_MARKER_SCHEMA_VERSION = 2
+_MARKER_SCHEMA_VERSION = 3
 _MARKER_TARGET_LANGUAGE = "en"
 
 
@@ -42,11 +45,15 @@ def _compute_source_fingerprint(
     *,
     translator_id: str,
     prompt_version: str = TRANSLATION_PROMPT_VERSION,
+    reference_sha256: str = "",
 ) -> str:
-    """翻译输入指纹(SHA-256):源文本+时间码+目标语言+提示词版本+翻译器身份。
+    """翻译输入指纹(SHA-256):源文本+时间码+目标语言+提示词版本+翻译器身份
+    +英文检索参考哈希(第九期)。
 
-    指纹覆盖 marker 复用的全部判定维度(修订计划 §5.5):源文案变化、模型/
-    翻译器变化、提示词变化任一发生 → 指纹变化 → 旧 marker 失效重翻。
+    指纹覆盖 marker 复用的全部判定维度(修订计划 §5.5 + 审查 §7.5):源文案
+    变化、模型/翻译器变化、提示词变化、**参考资料变化**任一发生 → 指纹变化
+    → 旧 marker 失效重翻。``reference_sha256`` 为空串时按空串参与(即
+    sha256("") 的语义由调用方计算;这里只做透传组合)。
     """
     canonical = json.dumps(
         {
@@ -54,6 +61,7 @@ def _compute_source_fingerprint(
             "target_language": _MARKER_TARGET_LANGUAGE,
             "prompt_version": prompt_version,
             "translator_id": translator_id,
+            "reference_sha256": reference_sha256,
             "segments": [
                 {
                     "index": int(seg.get("index", i)),
@@ -187,13 +195,14 @@ def _marker_exists(
     fingerprint: str,
     translator_id: str,
     prompt_version: str = TRANSLATION_PROMPT_VERSION,
+    reference_sha256: str = "",
 ) -> bool:
-    """marker 命中判定(schema v2,修订计划 §5.5)。
+    """marker 命中判定(schema v3,修订计划 §5.5 + 审查 §7.5)。
 
-    复用条件**同时**满足:schema_version=2、target_language=en、源指纹一致、
-    翻译器身份一致、提示词版本一致、段数一致、每段 text_en 非空(翻译文本
-    合法)。旧版 list 形态 = legacy mock/unknown → 一律 False(重翻),不把
-    ``[EN] 中文`` 假翻译当真实翻译命中。
+    复用条件**同时**满足:schema_version=3、target_language=en、源指纹一致
+    (已含参考哈希)、翻译器身份一致、提示词版本一致、**reference_sha256
+    一致**、段数一致、每段 text_en 非空。v2 marker 缺 ``reference_sha256``
+    字段 → 一律 False(重翻);旧 list 形态同理。
     """
     marker = draft_dir / "subtitle_en.json"
     if not marker.exists():
@@ -214,6 +223,8 @@ def _marker_exists(
         return False
     if data.get("prompt_version") != prompt_version:
         return False
+    if data.get("reference_sha256") != reference_sha256:
+        return False
     segs = data.get("segments")
     if not isinstance(segs, list) or len(segs) != expected_count:
         return False
@@ -230,8 +241,11 @@ def _save_marker(
     fingerprint: str,
     translator_id: str,
     prompt_version: str = TRANSLATION_PROMPT_VERSION,
+    reference_sha256: str = "",
+    reference_sources: list[dict[str, str]] | None = None,
 ) -> None:
-    """保存 subtitle_en.json 标记文件(schema v2:指纹 + 翻译器/提示词身份 + 段)。"""
+    """保存 subtitle_en.json 标记文件(schema v3:指纹 + 翻译器/提示词身份
+    + 参考哈希与参考来源留痕(审计,审查 §7.5)+ 段)。"""
     marker = draft_dir / "subtitle_en.json"
     payload = {
         "schema_version": _MARKER_SCHEMA_VERSION,
@@ -239,6 +253,8 @@ def _save_marker(
         "source_fingerprint": fingerprint,
         "translator_id": translator_id,
         "prompt_version": prompt_version,
+        "reference_sha256": reference_sha256,
+        "reference_sources": list(reference_sources or []),
         "segments": list(segments),
     }
     atomic_write_file(

@@ -569,3 +569,165 @@ class TestPartialFailures:
         assert body_a["web_topic"]["entries"][0]["domain"] == "travel.example.com"
         assert body_b["web_topic"]["query"] == "另一个任务的检索词"
         assert body_b["web_topic"]["entries"][0]["domain"] == "other.example.com"
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-20 第九期:英文话题检索区块(web_topic_en,审查修订版 §10.5)
+# ---------------------------------------------------------------------------
+WEB_TOPIC_EN_OK = {
+    "schema_version": 2,
+    "status": "ok",
+    "engine": "ReachMCP(海外检索)",
+    "provider": "reach_mcp",
+    "query": "portable power station camping",
+    "searched_at": "2026-11-20T06:00:00+00:00",
+    "search_web_topic": [
+        {
+            "url": "https://www.youtube.com/watch?v=abc",
+            "title": "Portable power station review",
+            "snippet": "camping power",
+            "source": "youtube",
+            "reach_source": "youtube",
+            "date": "2026-11-18",
+            "engagement_views": 112831,
+        },
+        {
+            "url": "javascript:alert(1)",
+            "title": "bad url",
+            "snippet": "",
+            "source": "web",
+            "reach_source": "web",
+        },
+    ],
+    "diagnostics": {"source_summary": "youtube:3 | EMPTY: reddit"},
+}
+
+
+class TestWebTopicEn:
+    def test_ok_with_entries_normalized(self, ai_env):
+        make_task(ai_env, TID, storyline={"search_web_topic_en.json": WEB_TOPIC_EN_OK})
+        sec = _get(TID).json()["web_topic_en"]
+        assert sec["status"] == "ok"
+        assert sec["engine"] == "ReachMCP(海外检索)"
+        assert sec["query"] == "portable power station camping"
+        assert sec["source_summary"] == "youtube:3 | EMPTY: reddit"
+        first = sec["entries"][0]
+        assert first["domain"] == "www.youtube.com"
+        assert first["reach_source"] == "youtube"
+        assert first["date"] == "2026-11-18"
+        assert first["engagement_views"] == 112831
+
+    def test_bad_entry_url_still_clamped(self, ai_env):
+        """非法 URL 条目不过滤(节点层已过滤,这里是防线),但 domain 解析安全。"""
+        make_task(ai_env, TID, storyline={"search_web_topic_en.json": WEB_TOPIC_EN_OK})
+        sec = _get(TID).json()["web_topic_en"]
+        assert sec["entries"][1]["domain"] in ("", None)
+        assert sec["entries"][1]["reach_source"] == "web"
+
+    def test_skipped_from_artifact(self, ai_env):
+        doc = {
+            "schema_version": 2,
+            "status": "skipped",
+            "engine": "ReachMCP(海外检索)",
+            "message": "英文线开关关闭(STORYLINE_ENABLE_WEB_TOPIC_EN=false)",
+            "search_web_topic": [],
+        }
+        make_task(ai_env, TID, storyline={"search_web_topic_en.json": doc})
+        sec = _get(TID).json()["web_topic_en"]
+        assert sec["status"] == "skipped"
+        assert "开关关闭" in sec["reason"]
+
+    def test_failed_with_reason_and_summary(self, ai_env):
+        doc = {
+            "schema_version": 2,
+            "status": "failed",
+            "engine": "ReachMCP(海外检索)",
+            "error_code": "NETWORK_ERROR",
+            "message": "reach-mcp request timed out",
+            "search_web_topic": [],
+            "diagnostics": {"source_summary": "ERRORS: web, reddit"},
+        }
+        make_task(ai_env, TID, storyline={"search_web_topic_en.json": doc})
+        sec = _get(TID).json()["web_topic_en"]
+        assert sec["status"] == "failed"
+        assert "timed out" in sec["reason"]
+        assert sec["source_summary"] == "ERRORS: web, reddit"
+
+    def test_no_results_reason(self, ai_env):
+        doc = {
+            "schema_version": 2,
+            "status": "no_results",
+            "engine": "ReachMCP(海外检索)",
+            "search_web_topic": [],
+        }
+        make_task(ai_env, TID, storyline={"search_web_topic_en.json": doc})
+        sec = _get(TID).json()["web_topic_en"]
+        assert sec["status"] == "no_results"
+        assert sec["reason"]
+
+    def test_skipped_tag_evidence_when_no_file(self, ai_env, monkeypatch):
+        make_task(ai_env, TID)
+        # 无产物但 status_log 有英文 skipped 标签(经 checkpoint 假 values 注入)
+        monkeypatch.setattr(
+            console_service,
+            "_fetch_checkpoint_values",
+            lambda tid: {"status_log": ["storyline_search_web_topic_en_skipped"]},
+        )
+        sec = _get(TID).json()["web_topic_en"]
+        assert sec["status"] == "skipped"
+
+    def test_failed_tag_evidence_when_no_file(self, ai_env, monkeypatch):
+        make_task(ai_env, TID)
+        monkeypatch.setattr(
+            console_service,
+            "_fetch_checkpoint_values",
+            lambda tid: {
+                "status_log": ["storyline_search_web_topic_en_failed"],
+                "error_log": [
+                    "[storyline:search_web_topic_en] TOOL_EXECUTION_FAILED: RuntimeError('mcp down')"
+                ],
+            },
+        )
+        sec = _get(TID).json()["web_topic_en"]
+        assert sec["status"] == "failed"
+        assert "mcp down" in sec["reason"]
+
+    def test_missing_when_completed_no_evidence(self, ai_env):
+        make_task(ai_env, TID)
+        assert _get(TID).json()["web_topic_en"]["status"] == "missing"
+
+    def test_pending_when_running_no_evidence(self, ai_env, monkeypatch):
+        monkeypatch.setattr(
+            console_service, "reconcile_run_state", lambda record, tid: "running"
+        )
+        make_task(ai_env, TID, status="running")
+        assert _get(TID).json()["web_topic_en"]["status"] == "pending"
+
+    def test_invalid_json_isolated_to_en_section(self, ai_env):
+        make_task(
+            ai_env,
+            TID,
+            storyline={
+                "search_web_topic_en.json": "{not json",
+                "search_web_topic.json": WEB_TOPIC_OK,
+            },
+        )
+        body = _get(TID).json()
+        assert body["web_topic_en"]["status"] == "invalid"
+        assert body["web_topic"]["status"] == "ok", "中文区块不受英文产物损坏影响"
+
+    def test_unknown_status_is_invalid(self, ai_env):
+        doc = {"schema_version": 2, "status": "weird", "search_web_topic": []}
+        make_task(ai_env, TID, storyline={"search_web_topic_en.json": doc})
+        assert _get(TID).json()["web_topic_en"]["status"] == "invalid"
+
+    def test_old_task_without_en_file_keeps_zh_block(self, ai_env, monkeypatch):
+        """旧任务只有中文产物:英文区块 missing,中文区块不受影响。"""
+        make_task(ai_env, TID, storyline=_full_storyline())
+        monkeypatch.setattr(
+            console_service, "_fetch_checkpoint_values", lambda tid: dict(CHECKPOINT_OK)
+        )
+        body = _get(TID).json()
+        assert body["web_topic"]["status"] == "ok"
+        assert body["web_topic_en"]["status"] == "missing"
+        assert body["web_topic_en"]["entries"] == []

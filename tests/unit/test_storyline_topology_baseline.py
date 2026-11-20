@@ -32,11 +32,13 @@ import config
 import graph as graph_module
 
 # ---------------------------------------------------------------------------
-# 17 个 storyline_* 节点(2026-11-13 审计 §2.1;render_video 已随 2026-11-12
-# 边治理阶段5 整体删除,search_media 已随 2026-11-10 整体删除)
+# 18 个 storyline_* 节点(2026-11-13 审计 §2.1 的 17 个 + 2026-11-20 第九期
+# 新增 reach-mcp 英文线检索节点;render_video 已随 2026-11-12 边治理阶段5
+# 整体删除,search_media 已随 2026-11-10 整体删除)
 # ---------------------------------------------------------------------------
 _LM = "storyline_load_media"
 _WT = "storyline_search_web_topic"
+_WT_EN = "storyline_search_web_topic_en"
 _SS = "storyline_split_shots"
 _GAT = "storyline_generate_ai_transition"
 _UC = "storyline_understand_clips"
@@ -54,7 +56,7 @@ _QA = "storyline_qa_gate"
 _JOIN = "storyline_join"
 
 STORYLINE_NODES: set[str] = {
-    _LM, _WT, _SS, _GAT, _UC, _FC, _GC, _GS, _STR,
+    _LM, _WT, _WT_EN, _SS, _GAT, _UC, _FC, _GC, _GS, _STR,
     _GV, _SB, _RTR, _TXT, _PTP, _PTAT, _QA, _JOIN,
 }
 
@@ -71,6 +73,9 @@ _STORYLINE_NORMAL_EDGES_BASE: set[tuple[str, str]] = {
     (_FC, _GC),
     (_GC, _STR),
     (_GC, _WT),   # 2026-11-14 依赖约简阶段5:检索并行 fan-out
+    (_GC, _WT_EN),  # 2026-11-20 第九期:英文线并行 fan-out(不进 GS 屏障,
+    #   消费者经 [node_14, WT_EN]→node_15 与 [fork, WT_EN]→node_16a 两源屏障
+    #   连接 —— 目标非 storyline_ 前缀,不在本快照范围,由 wiring 集成测试锁定)
     (_GS, _GV),
     (_GS, _TXT),
     (_GV, _SB),   # 2026-11-14 依赖约简阶段1:GV 唯一入边(GV 已等 GS)

@@ -254,3 +254,64 @@ def test_node_15_empty_covers_skips(tmp_path: Path) -> None:
     assert "node_15_localize_covers_skipped" in out["status_log"]
     # Week 4:跳过路径不返回 error_log(LangGraph 保留上游)
     assert "error_log" not in out
+
+# ---------------------------------------------------------------------------
+# 2026-11-20 第九期:封面标题翻译注入英文检索参考(审查修订版 §7.6)
+# ---------------------------------------------------------------------------
+def test_get_titles_injects_reference_from_en_artifact(tmp_path: Path) -> None:
+    """英文产物存在 → 参考文本以单次调用参数进入标题翻译 prompt;参考缺失
+    (旧任务)→ reference=None 旧行为;stub/degraded 语义不变。"""
+    draft_dir = tmp_path / "draft"
+    _seed_draft(draft_dir)
+    out_dir = tmp_path / "out" / "storyline"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    artifact = out_dir / "search_web_topic_en.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "status": "ok",
+                "search_web_topic": [
+                    {
+                        "url": "https://r.example/1",
+                        "title": "camping power words",
+                        "snippet": "snippet",
+                        "source": "web",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    seen: dict = {}
+
+    class _RefTitleLLM:
+        def chat(self, *, system_prompt, user_prompt, **kwargs):
+            seen["system_prompt"] = system_prompt
+            seen["user_prompt"] = user_prompt
+            payload = json.loads(user_prompt.split("【英文表达参考")[0])
+            return json.dumps(
+                {"translations": [
+                    {"index": s["index"], "text_en": f"Real {s['text_zh']}"}
+                    for s in payload["segments"]
+                ]},
+                ensure_ascii=False,
+            )
+
+    set_translate_default(LLMTranslateClient(_RefTitleLLM(), translator_id="mcode-cli"))
+    state = {
+        "draft_path": str(draft_dir / "draft_content.json"),
+        "storyline_web_topic_en_artifact": str(artifact),
+    }
+    zh, en, status = _get_titles(state)
+    assert status == "real" and en == "Real 原中文标题"
+    assert "英文表达参考" in seen["user_prompt"]
+    assert "camping power words" in seen["user_prompt"]
+
+    # 旧任务(无英文产物)→ reference=None,无参考块
+    seen.clear()
+    state2 = {"draft_path": str(draft_dir / "draft_content.json")}
+    zh2, en2, status2 = _get_titles(state2)
+    assert status2 == "real"
+    assert "英文表达参考" not in seen["user_prompt"]

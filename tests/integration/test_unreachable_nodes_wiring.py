@@ -107,7 +107,13 @@ _PREFIX = [
 ]
 _CYCLE = [
     ["storyline_group_clips"],
-    ["storyline_script_template_recommendation", "storyline_search_web_topic"],
+    # 2026-11-20 第九期:英文线检索节点与中文检索/模板推荐同超步并行
+    # (GC 三出边;en 不进 GS 屏障,Mock 翻译器下内部 skipped,零网络请求)
+    [
+        "storyline_script_template_recommendation",
+        "storyline_search_web_topic",
+        "storyline_search_web_topic_en",
+    ],
     ["storyline_generate_script"],
     ["storyline_generate_voiceover", "storyline_recommend_text"],
     ["storyline_select_bgm"],
@@ -157,6 +163,12 @@ NEIGHBORS: dict[str, tuple[set[str], set[str]]] = {
     # 2026-11-14 依赖约简阶段5:检索节点改并行 fan-out(入边=GC 普通边,原挂
     # STR 条件出口已删);出边 = GS 屏障源(每轮必跑,进屏障不踩 D10)
     "storyline_search_web_topic": ({_GC}, {_GS}),
+    # 2026-11-20 第九期(审查修订版 §6.4):reach-mcp 英文线 —— 并行启动,
+    # **不进** GS 屏障(延迟隔离);出边 = 两个消费者普通单源边(有界等待)
+    "storyline_search_web_topic_en": (
+        {_GC},
+        {"node_15_localize_covers_en", "node_16a_translate_and_check"},
+    ),
     # 2026-11-14 依赖约简阶段1:select_bgm 唯一入边 = GV 普通边(历史:
     # 2026-11-12 曾为 [GS, GV] 双源屏障;GV 已等 GS,GS 源属重复约束);
     # 出边 = RTR 普通边(不再是 PTP 屏障源)
@@ -387,6 +399,16 @@ def test_ai_flag_off_graph_has_no_ai_nodes_wired_and_barriers_as_before(
         (frozenset({_RTR, _RT}), _PTP),
         (frozenset({"storyline_script_template_recommendation", "storyline_search_web_topic"}), _GS),  # 2026-11-14 阶段5 并行化
         (frozenset({"node_15_localize_covers_en", "node_17_inject_english_tts"}), "node_09_inject_fx"),
+        # 2026-11-20 第九期:英文检索产物消费者(AND-join 必须用列表屏障;
+        # 多条独立普通边会让目标节点每条边各执行一次,已实测证伪)
+        (
+            frozenset({"node_14_make_covers", "storyline_search_web_topic_en"}),
+            "node_15_localize_covers_en",
+        ),
+        (
+            frozenset({"fork_draft_for_english_branch", "storyline_search_web_topic_en"}),
+            "node_16a_translate_and_check",
+        ),
     }
 
 
@@ -468,6 +490,7 @@ def run_auto(
     tmp_path: Path,
     *,
     web: bool = True,
+    web_en: bool = True,
     ai: bool = True,
     has_audio: bool = True,
     query: str = "",
@@ -498,6 +521,10 @@ def run_auto(
     """
     # ---- 开关 ----
     monkeypatch.setattr(config, "STORYLINE_ENABLE_WEB_TOPIC", web)
+    # 英文线开关独立钉住(第九期 P1-12:英文线不依赖中文开关控制流;默认
+    # True=节点每轮必跑,Mock 翻译器下内部 skipped 零网络,轨迹已并入
+    # GOLDEN_STEPS 的 _CYCLE 组)
+    monkeypatch.setattr(config, "STORYLINE_ENABLE_WEB_TOPIC_EN", web_en)
     monkeypatch.setattr(config, "STORYLINE_ENABLE_AI_TRANSITION", ai)
     monkeypatch.setattr("storyline_capabilities.ai_transition_client.ENABLE_AI_TRANSITION", ai)
     monkeypatch.setattr(config, "ASSEMBLY_QC_GATE_ENABLED", False)  # 直连 node_06,不跑 assembly 6 节点
@@ -859,6 +886,9 @@ def test_defaults_run_all_wired_nodes_with_expected_shape(
     assert script_steps == [s + 1 for s in str_steps], "文案应紧跟模板推荐+检索的双源屏障"
     assert run.count("storyline_search_web_topic") == run.count(_GC), (
         "检索节点每轮必跑(并行 fan-out 后进必需屏障,不得漏跑)"
+    )
+    assert run.count("storyline_search_web_topic_en") == run.count(_GC), (
+        "英文线检索节点每轮必跑(第九期:并行 fan-out,消费者有界等待)"
     )
     # B1 ASR 移除:split_shots 后静态直连 understand_clips(同一条主边,无旁支)
 

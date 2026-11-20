@@ -14,6 +14,8 @@ import json
 from pathlib import Path
 
 from nodes.node_16_translate_subtitles import (
+    _compute_source_fingerprint,
+    _marker_exists,
     _ms_to_srt_time,
     _read_segments_from_draft,
     _segments_to_srt,
@@ -124,3 +126,43 @@ def test_wrapped_native_content_srt_roundtrip(tmp_path: Path) -> None:
     srt = _segments_to_srt(segs)
     assert "00:00:00,000 --> 00:00:02,000" in srt
     assert "line one\nline two" in srt, "SRT cue 内多行按设计保留"
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-20 第九期:指纹/ marker v3 的参考哈希维度(审查修订版 §10.4)
+# ---------------------------------------------------------------------------
+def test_fingerprint_reference_hash_is_a_fingerprint_dimension() -> None:
+    segs = [{"index": 0, "start_ms": 0, "end_ms": 1, "text_zh": "你好"}]
+    empty = _compute_source_fingerprint(segs, translator_id="t", reference_sha256="")
+    other = _compute_source_fingerprint(segs, translator_id="t", reference_sha256="aa")
+    again = _compute_source_fingerprint(segs, translator_id="t", reference_sha256="")
+    assert empty != other, "参考哈希必须参与指纹"
+    assert empty == again, "同参考指纹稳定"
+
+
+def test_marker_exists_rejects_v2_marker(tmp_path) -> None:
+    """v2 marker(缺 reference_sha256 字段)→ 未命中重翻(一次性升级代价)。"""
+    draft_dir = tmp_path
+    segs = [{"index": 0, "start_ms": 0, "end_ms": 1, "text_en": "hello"}]
+    fingerprint = _compute_source_fingerprint(
+        [{"index": 0, "start_ms": 0, "end_ms": 1, "text_zh": "你好"}],
+        translator_id="t",
+        reference_sha256="",
+    )
+    (draft_dir / "subtitle_en.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "target_language": "en",
+                "source_fingerprint": fingerprint,
+                "translator_id": "t",
+                "prompt_version": "subtitle-translate-v3",
+                "segments": segs,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    assert not _marker_exists(
+        draft_dir, 1, fingerprint=fingerprint, translator_id="t", reference_sha256=""
+    )

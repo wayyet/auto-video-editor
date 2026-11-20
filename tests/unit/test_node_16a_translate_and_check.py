@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from jy_common.translate_client import (
 )
 from nodes.node_16_translate_subtitles import _compute_source_fingerprint
 from nodes.node_16a_translate_and_check import node_16a_translate_and_check
+from nodes.storyline._common import load_web_topic_en_reference
 
 
 @pytest.fixture(autouse=True)
@@ -106,22 +108,27 @@ def test_node_16a_happy_path_writes_state_and_srt(tmp_path: Path) -> None:
     assert Path(srt_path).exists()
     # marker 落盘为 v2 dict(含指纹与身份)
     marker = json.loads((draft_dir / "subtitle_en.json").read_text(encoding="utf-8"))
-    assert marker["schema_version"] == 2
+    assert marker["schema_version"] == 3
     assert marker["translator_id"] == "mock"
     assert marker["source_fingerprint"] == out["subtitle_translation_fingerprint"]
 
 
-def _write_v2_marker(draft_dir: Path, segments_zh: list[dict], texts: list[str]) -> None:
-    """按当前 mock 身份写一枚 v2 marker(命中用)。"""
+def _write_v3_marker(draft_dir: Path, segments_zh: list[dict], texts: list[str]) -> None:
+    """按当前 mock 身份写一枚 v3 marker(命中用;reference_sha256=无参考空哈希)。"""
     fingerprint = _compute_source_fingerprint(
-        segments_zh, translator_id="mock", prompt_version=TRANSLATION_PROMPT_VERSION
+        segments_zh,
+        translator_id="mock",
+        prompt_version=TRANSLATION_PROMPT_VERSION,
+        reference_sha256=hashlib.sha256(b"").hexdigest(),
     )
     payload = {
-        "schema_version": 2,
+        "schema_version": 3,
         "target_language": "en",
         "source_fingerprint": fingerprint,
         "translator_id": "mock",
         "prompt_version": TRANSLATION_PROMPT_VERSION,
+        "reference_sha256": hashlib.sha256(b"").hexdigest(),
+        "reference_sources": [],
         "segments": [
             {"index": seg["index"], "start_ms": seg["start_ms"],
              "end_ms": seg["end_ms"], "text_en": texts[seg["index"]]}
@@ -136,12 +143,12 @@ def _write_v2_marker(draft_dir: Path, segments_zh: list[dict], texts: list[str])
 def test_node_16a_marker_exists_skips_translate(tmp_path: Path) -> None:
     """v2 marker 全维度命中 → 不调翻译客户端,直接读草稿。"""
     draft_dir = _seed_en_branch(tmp_path)
-    _write_v2_marker(
+    _write_v3_marker(
         draft_dir, _normal_asr(), ["PreExisting", "PreExisting2"]
     )
 
     class _ShouldNotCall:
-        def translate(self, segments):
+        def translate(self, segments, *, reference=None):
             raise AssertionError("marker 存在时不应调翻译")
 
     set_default_client(_ShouldNotCall())
@@ -165,7 +172,7 @@ def test_node_16a_legacy_list_marker_retranslates(tmp_path: Path) -> None:
     calls: list[list[dict]] = []
 
     class _SpyClient:
-        def translate(self, segments):
+        def translate(self, segments, *, reference=None):
             calls.append(list(segments))
             return [
                 {"index": s["index"], "start_ms": s["start_ms"],
@@ -181,18 +188,18 @@ def test_node_16a_legacy_list_marker_retranslates(tmp_path: Path) -> None:
         "Real 你好", "Real 世界"
     ]
     marker = json.loads((draft_dir / "subtitle_en.json").read_text(encoding="utf-8"))
-    assert marker["schema_version"] == 2
+    assert marker["schema_version"] == 3
 
 
 def test_node_16a_source_change_invalidates_marker(tmp_path: Path) -> None:
     """同段数但源文本变化 → 指纹不匹配,重翻(修订计划 §5.5)。"""
     draft_dir = _seed_en_branch(tmp_path)
-    _write_v2_marker(draft_dir, _normal_asr(), ["Stale A", "Stale B"])
+    _write_v3_marker(draft_dir, _normal_asr(), ["Stale A", "Stale B"])
 
     calls: list[list[dict]] = []
 
     class _SpyClient:
-        def translate(self, segments):
+        def translate(self, segments, *, reference=None):
             calls.append(list(segments))
             return [
                 {"index": s["index"], "start_ms": s["start_ms"],
@@ -451,3 +458,137 @@ def test_node_16a_translates_subtitle_segments_zh(tmp_path: Path) -> None:
     segs_en = out.get("subtitle_segments_en") or []
     assert [s["start_ms"] for s in segs_en] == [0, 2_000]
     assert all(s.get("text_en") for s in segs_en)
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-20 第九期:英文检索参考注入(marker v3,审查修订版 §10.4)
+# ---------------------------------------------------------------------------
+def _seed_en_artifact(tmp_path: Path, titles: list[str]) -> Path:
+    """写一枚 ok 状态英文检索产物,返回路径(state 键指向)。"""
+    out_dir = tmp_path / "out" / "storyline"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "search_web_topic_en.json"
+    path.write_text(
+        json.dumps(
+            {
+                "status": "ok",
+                "search_web_topic": [
+                    {
+                        "url": f"https://r.example/{i}",
+                        "title": t,
+                        "snippet": "snippet",
+                        "source": "web",
+                    }
+                    for i, t in enumerate(titles)
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_node_16a_reference_change_invalidates_marker(tmp_path: Path) -> None:
+    """英文参考从无到有 → 指纹变化 → v3 marker 失效重翻;参考以单次调用参数
+    传入翻译客户端;新 marker 留痕 reference_sha256 + reference_sources。"""
+    draft_dir = _seed_en_branch(tmp_path)
+    artifact = _seed_en_artifact(tmp_path, ["Portable power station camping"])
+    state = _state(_normal_asr(), draft_dir)
+    state["storyline_web_topic_en_artifact"] = str(artifact)
+
+    _write_v3_marker(draft_dir, _normal_asr(), ["Stale", "Stale2"])
+
+    calls: list[dict] = []
+
+    class _SpyClient:
+        def translate(self, segments, *, reference=None):
+            calls.append({"segments": list(segments), "reference": reference})
+            return [
+                {"index": s["index"], "start_ms": s["start_ms"],
+                 "end_ms": s["end_ms"], "text_en": f"Ref {s['text_zh']}"}
+                for s in segments
+            ]
+
+    set_default_client(_SpyClient())
+    out = node_16a_translate_and_check(state)
+
+    assert calls, "参考变化必须失效重翻"
+    reference = calls[0]["reference"]
+    assert reference and "Portable power station camping" in reference
+    marker = json.loads((draft_dir / "subtitle_en.json").read_text(encoding="utf-8"))
+    assert marker["schema_version"] == 3
+    assert marker["reference_sha256"] == hashlib.sha256(
+        reference.encode("utf-8")
+    ).hexdigest()
+    assert marker["reference_sources"][0]["url"] == "https://r.example/0"
+
+
+def test_node_16a_reference_stable_reuses_marker(tmp_path: Path) -> None:
+    """同一英文参考下再次执行 → marker 命中,不调翻译客户端。"""
+    draft_dir = _seed_en_branch(tmp_path)
+    artifact = _seed_en_artifact(tmp_path, ["Portable power station camping"])
+
+    ref, _sources = load_web_topic_en_reference(
+        {"storyline_web_topic_en_artifact": str(artifact)}
+    )
+    reference_sha256 = hashlib.sha256((ref or "").encode("utf-8")).hexdigest()
+    fingerprint = _compute_source_fingerprint(
+        _normal_asr(),
+        translator_id="mock",
+        prompt_version=TRANSLATION_PROMPT_VERSION,
+        reference_sha256=reference_sha256,
+    )
+    payload = {
+        "schema_version": 3,
+        "target_language": "en",
+        "source_fingerprint": fingerprint,
+        "translator_id": "mock",
+        "prompt_version": TRANSLATION_PROMPT_VERSION,
+        "reference_sha256": reference_sha256,
+        "reference_sources": [],
+        "segments": [
+            {"index": seg["index"], "start_ms": seg["start_ms"],
+             "end_ms": seg["end_ms"], "text_en": "PreExisting"}
+            for seg in _normal_asr()
+        ],
+    }
+    (draft_dir / "subtitle_en.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    class _ShouldNotCall:
+        def translate(self, segments, *, reference=None):
+            raise AssertionError("同参考下 marker 应命中,不调翻译")
+
+    set_default_client(_ShouldNotCall())
+    state = _state(_normal_asr(), draft_dir)
+    state["storyline_web_topic_en_artifact"] = str(artifact)
+    out = node_16a_translate_and_check(state)
+    assert out.get("subtitle_segments_en")
+    assert out["subtitle_translation_status"] == "stub"
+
+
+def test_node_16a_missing_en_artifact_is_no_reference(tmp_path: Path) -> None:
+    """无英文产物(旧任务)→ reference=None 旧行为,marker 以空参考哈希落盘。"""
+    draft_dir = _seed_en_branch(tmp_path)
+
+    class _SpyClient:
+        def __init__(self) -> None:
+            self.seen: list = []
+
+        def translate(self, segments, *, reference=None):
+            self.seen.append(reference)
+            return [
+                {"index": s["index"], "start_ms": s["start_ms"],
+                 "end_ms": s["end_ms"], "text_en": f"Real {s['text_zh']}"}
+                for s in segments
+            ]
+
+    spy = _SpyClient()
+    set_default_client(spy)
+    out = node_16a_translate_and_check(_state(_normal_asr(), draft_dir))
+
+    assert spy.seen == [None]
+    marker = json.loads((draft_dir / "subtitle_en.json").read_text(encoding="utf-8"))
+    assert marker["reference_sha256"] == hashlib.sha256(b"").hexdigest()
