@@ -1,0 +1,140 @@
+diff --git a/graph.py b/graph.py
+index f75dbe3..f7f7a50 100644
+--- a/graph.py
++++ b/graph.py
+@@ -79,8 +79,8 @@
+   AI 转场两节点每轮必跑(建图时按开关决定接不接),可以进屏障。
+   (``storyline_local_asr`` / ``storyline_speech_rough_cut`` 曾是条件旁支,
+   2026-11-08 B1 ASR 移除已整体删除,``split_shots`` 改为静态直连 ``understand_clips``。)
+-- ⚠️ qa 重试路由靠 ``status_log[-1] == "storyline_qa_retry"`` 判断:重试回路内的
+-  节点**不得产生每轮都不同的状态标签**。
++- qa 重试路由以 ``storyline_qa_route_signal``(qa_gate 每次必写)为准;仅旧 checkpoint
++  缺该字段时才回退读 ``status_log`` 末条(qa_gate.py)。
+ 
+ Week 5 关键改动(历史记录):
+ - ``node_16_translate_subtitles`` 曾拆为 ``node_16a_translate_and_check`` +
+@@ -550,7 +550,7 @@ def _build_state_graph():
+     # 2026-11-12 noop 治理阶段1 条件路由挂模板推荐出口 —— 均已随并行化删除
+     g.add_node("storyline_search_web_topic", storyline_search_web_topic_node)
+     g.add_node("storyline_split_shots", storyline_split_shots_node)
+-    # 2026-10 已接入:与 plan_timeline_pro 并排(同一道 4 源屏障;建图时按开关接边)
++    # 2026-10 已接入:与 plan_timeline_pro 并排(RTR→GAT 单源边,二者汇入 [PTP, GAT]→PTAT 屏障;建图时按开关接边)
+     g.add_node(
+         "storyline_generate_ai_transition",
+         storyline_generate_ai_transition_node,
+@@ -769,8 +769,9 @@ def _build_state_graph():
+     #     RTR 自己还读取 BGM selection 与 transition plan);
+     #   - TXT 单独保证 text_style_plan 就绪(TXT 是 GS 之后的独立 fan-out
+     #     分支,RTR 链不含它 —— 这是不能只等 RTR 的唯一理由);
+-    #   - 不把 web topic 加进屏障:检索是条件节点,某些轮次不跑(D10 ——
+-    #     屏障永远凑不齐 → 图静默 END);PTP 也不直接读取检索产物。
++    #   - 不把 web topic 加进这个屏障:它已在 [STR, WT]→GS 屏障里,经 GS→…→RTR
++    #     链保证先于 PTP;PTP 也不直接读取检索产物。(历史:WT 曾是条件节点,放进
++    #     屏障会触发 D10 静默 END;现已每轮必跑。)
+     # 2026-10-20 修 D10:**SS(split_shots)被移出这个 barrier**(历史教训,
+     #   保留作防回归记录):qa_gate 超时重试会回到 storyline_group_clips 重跑,
+     #   SS 在重试点**上游**、不会重跑。barrier 渠道在首次触发后被清空,第二轮
+diff --git a/monitoring/workflow_graph.py b/monitoring/workflow_graph.py
+index 0c0aad6..b9dd03b 100644
+--- a/monitoring/workflow_graph.py
++++ b/monitoring/workflow_graph.py
+@@ -10,7 +10,7 @@
+   ``langgraph/pregel/_draw.py``):``get_graph()`` 是**静态模拟 + 画图启发式**,
+   会 (a) 给所有"只入不出"的 termini 节点**合成** ``→__end__`` 边(storyline
+   死胡同/侧支节点各多一条),并 (b) **漏掉**"有出边的节点的普通边直连 END"
+-  (``storyline_join→END``)。真实边数与画图边数因此不一致,偏差规则已在
++  (``storyline_join→END``,2026-11-01 当时的例子;该边后来改成了条件边)。真实边数与画图边数因此不一致,偏差规则已在
+   ``tests/integration/test_workflow_graph_schema.py`` 固化为 langgraph 行为护栏。
+ - 本模块是**纯函数层**:输入编译图 + config 模块,输出 §4.3 的图 JSON dict。
+   不接 API、不碰前端、不触发任何图执行(阶段 4 再由 FastAPI router 消费)。
+@@ -267,7 +267,7 @@ _NODE_META: dict[str, dict[str, Any]] = {
+     "storyline_search_web_topic": {
+         "name": "网页话题检索",
+         "group": "storyline_media",
+-        "description": "group_clips 后条件前置节点:WEB_TOPIC 开启且能构造出检索词时先检索再文案;产物经 web_research 独立上下文进入 generate_script",
++        "description": "与模板推荐并行(group_clips 之后每轮必跑):WEB_TOPIC 关闭或构造不出检索词时节点内软跳过;产物经 web_research 独立上下文进入 generate_script",
+     },
+     "storyline_split_shots": {
+         "name": "分镜切分",
+@@ -292,7 +292,7 @@ _NODE_META: dict[str, dict[str, Any]] = {
+     "storyline_generate_script": {
+         "name": "生成文案",
+         "group": "storyline_script",
+-        "description": "按分组与话题生成长文案;并行 fan-out 出模板/配音/BGM/文本四路",
++        "description": "按分组、模板与话题生成长文案;之后并行 fan-out 出配音/文本两路",
+     },
+     "storyline_script_template_recommendation": {
+         "name": "文案模板推荐",
+@@ -322,12 +322,12 @@ _NODE_META: dict[str, dict[str, Any]] = {
+     "storyline_plan_timeline_pro": {
+         "name": "时间线规划",
+         "group": "storyline_timeline",
+-        "description": "6 源屏障(分组/文案/配音/BGM/普通转场/文字样式)后规划时间线",
++        "description": "[转场推荐, 文本推荐] 双源屏障后规划时间线(分组/文案/配音/BGM 由转场推荐的祖先链保证)",
+     },
+     "storyline_generate_ai_transition": {
+         "name": "生成 AI 转场",
+         "group": "storyline_timeline",
+-        "description": "屏障 [group_clips, recommend_transition](其全部真实输入);按 STORYLINE_ENABLE_AI_TRANSITION 接边",
++        "description": "recommend_transition 之后的单源边(其全部真实输入经祖先链保证);按 STORYLINE_ENABLE_AI_TRANSITION 接边",
+     },
+     "storyline_plan_timeline_ai_transition": {
+         "name": "AI 转场时间线规划",
+@@ -342,7 +342,7 @@ _NODE_META: dict[str, dict[str, Any]] = {
+     "storyline_join": {
+         "name": "剧情结果汇合",
+         "group": "storyline_render",
+-        "description": "反序列化规划产物;有 storyline_plan 进 generate_draft,无则 END",
++        "description": "反序列化规划产物并写入 storyline_plan;assembly QC 开进 assembly 前置链,QC 关直连 generate_draft;无 plan 则 END",
+     },
+ }
+ 
+@@ -376,17 +376,9 @@ _EDGE_LABELS: dict[tuple[str, str], str] = {
+     # (2026-11-10:load_media → search_media「已配检索源」旁路已随检索素材节点移除删除;
+     #  load_media → search_web_topic 并行旁支已随前置化阶段3 拆除,条件路由移到 group_clips 之后)
+     ("storyline_load_media", "storyline_split_shots"): "主干",
+-    ("storyline_group_clips", "storyline_search_web_topic"): "WEB_TOPIC 开且有可检索输入",
++    ("storyline_group_clips", "storyline_search_web_topic"): "每轮(与模板推荐并行)",
+     ("storyline_search_web_topic", "storyline_generate_script"): "检索→文案",
+     ("storyline_split_shots", "storyline_understand_clips"): "主干",
+-    ("storyline_group_clips", "storyline_plan_timeline_pro"): "列表 fan-in(4 源屏障)",
+-    ("storyline_generate_script", "storyline_plan_timeline_pro"): "列表 fan-in(4 源屏障)",
+-    ("storyline_generate_voiceover", "storyline_plan_timeline_pro"): "列表 fan-in(4 源屏障)",
+-    ("storyline_select_bgm", "storyline_plan_timeline_pro"): "列表 fan-in(4 源屏障)",
+-    ("storyline_group_clips", "storyline_generate_ai_transition"): "列表 fan-in(4 源屏障)",
+-    ("storyline_generate_script", "storyline_generate_ai_transition"): "列表 fan-in(4 源屏障)",
+-    ("storyline_generate_voiceover", "storyline_generate_ai_transition"): "列表 fan-in(4 源屏障)",
+-    ("storyline_select_bgm", "storyline_generate_ai_transition"): "列表 fan-in(4 源屏障)",
+     ("storyline_plan_timeline_pro", "storyline_plan_timeline_ai_transition"): "AI 转场屏障",
+     ("storyline_generate_ai_transition", "storyline_plan_timeline_ai_transition"): "AI 转场屏障",
+     ("storyline_plan_timeline_pro", "storyline_qa_gate"): "最终时间线单源(AI 关)",
+diff --git a/nodes/storyline/join_storyline.py b/nodes/storyline/join_storyline.py
+index 6e0ab94..fcd7428 100644
+--- a/nodes/storyline/join_storyline.py
++++ b/nodes/storyline/join_storyline.py
+@@ -13,8 +13,8 @@
+ 设计纪律(plan §3.3):
+ - 不引入新的 ``storyline_status_log`` / ``storyline_error_log``,统一用既有
+   ``status_log`` / ``error_log``(Week 4 reducer 已支持 fan-in 去重)。
+-- 不重排 clips,不引入浮点;若 Pydantic 校验失败 → 写 error_log,返回 state
+-  由图走向 END;不抛异常(避免 graph 终止不优雅)。
++- 不重排 clips,不引入浮点;若 Pydantic 校验失败 → 写 error_log,仍把原值写入
++  ``storyline_plan`` 交 node_05 的合约校验处理;不抛异常(避免 graph 终止不优雅)。
+ """
+ from __future__ import annotations
+ 
+diff --git a/nodes/storyline/node_plan_timeline_pro.py b/nodes/storyline/node_plan_timeline_pro.py
+index cdda801..babd64f 100644
+--- a/nodes/storyline/node_plan_timeline_pro.py
++++ b/nodes/storyline/node_plan_timeline_pro.py
+@@ -127,8 +127,8 @@ def storyline_plan_timeline_pro_node(state: WorkflowState) -> dict:
+ 
+     # 2026-11-08 B1 ASR 移除:原"ASR / 口播粗剪产物回填 Clip.transcript"步骤
+     # 随旁支一起删除(timeline_transcript.fill_clip_transcripts 已删)。
+-    # ⚠️ 历史约束仍然有效:qa 重试路由(qa_gate.route_after_storyline_qa)靠
+-    #    status_log 的**最后一条**判断,本节点不得产生每轮都不同的状态标签。
++    # (qa 重试路由 qa_gate.route_after_storyline_qa 已改读 storyline_qa_route_signal,
++    #  不再依赖 status_log 末条;仅旧 checkpoint 缺该字段时才回退。)
+ 
+     out_path = out_dir / "timeline_plan.json"
+     out_path.write_text(

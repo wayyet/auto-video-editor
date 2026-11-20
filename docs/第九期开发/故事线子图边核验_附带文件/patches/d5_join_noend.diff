@@ -1,0 +1,168 @@
+diff --git a/graph.py b/graph.py
+index f7f7a50..01a5afa 100644
+--- a/graph.py
++++ b/graph.py
+@@ -209,27 +209,24 @@ from storyline_capabilities.ai_transition_client import is_ai_transition_enabled
+ # assembly_write_report 交棒 generate_draft)
+ # ---------------------------------------------------------------------------
+ def _route_after_storyline_join(state: WorkflowState) -> str:
+-    """storyline_join 之后的条件路由。
++    """storyline_join 之后的条件路由(只在 QC 两种姿态之间选路,没有 END 出口)。
+ 
+-    - 有 ``storyline_plan``(join_storyline 已反序列化到 state):
+-      - ``ASSEMBLY_QC_GATE_ENABLED=True`` → ``assembly_discover_and_probe``
+-        (assembly 六节点先完成候选编辑计划的 QC/修复,再交棒 generate_draft)
+-      - ``False`` → ``generate_draft``(应急直连,QC 关闭姿态)
+-    - 否则 → ``END``(空 plan 与 qa_gate 失败强制 continue 的语义一致;
+-      没有可生成的有效计划时不进入 assembly)
+-    - ``shot_plan`` 是 node_05 generate_draft 的旧 checkpoint / 测试兜底输入,
+-      保留读取兼容(human 路径删除后正常运行不再产生该键)。
++    - ``ASSEMBLY_QC_GATE_ENABLED=True`` → ``assembly_discover_and_probe``
++      (assembly 六节点先完成候选编辑计划的 QC/修复,再交棒 generate_draft)
++    - ``False`` → ``generate_draft``(应急直连,QC 关闭姿态)
++
++    join 恒写出真值 ``storyline_plan``(时间线文件缺失 / 空值 / 损坏 → 占位时间线;
++    合约非法 → 仍写出原值,交 node_05 校验),所以不存在"无 plan 走 END"的分支;
++    clips=0 的空时间线由 node_05 的空 storyline fail-closed 拦截。
+ 
+     运行时读 ``config.ASSEMBLY_QC_GATE_ENABLED``(属性访问,单测
+     monkeypatch 生效;与 _build_state_graph 内接线块的读法一致)。
+     """
+-    if state.get("storyline_plan") or state.get("shot_plan"):
+-        import config as _config
++    import config as _config
+ 
+-        if _config.ASSEMBLY_QC_GATE_ENABLED:
+-            return "assembly_discover_and_probe"
+-        return "generate_draft"
+-    return "__end__"
++    if _config.ASSEMBLY_QC_GATE_ENABLED:
++        return "assembly_discover_and_probe"
++    return "generate_draft"
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -839,7 +836,8 @@ def _build_state_graph():
+     )
+ 
+     # join → assembly 前置通道(QC 开)/ generate_draft(QC 关)条件边
+-    # (2026-11-15 第六期 P1-1:QC 开时成功流量先进 assembly 链;END 语义保留)
++    # (2026-11-15 第六期 P1-1:QC 开时成功流量先进 assembly 链;
++    # 边核验 R2 第二步:删除 END 出口 —— join 恒写出真值 plan,该出口在设计上是死分支)
+     if _config.ASSEMBLY_QC_GATE_ENABLED:
+         g.add_conditional_edges(
+             "storyline_join",
+@@ -847,14 +845,13 @@ def _build_state_graph():
+             {
+                 "assembly_discover_and_probe": "assembly_discover_and_probe",
+                 "generate_draft": "generate_draft",
+-                END: END,
+             },
+         )
+     else:
+         g.add_conditional_edges(
+             "storyline_join",
+             _route_after_storyline_join,
+-            {"generate_draft": "generate_draft", END: END},
++            {"generate_draft": "generate_draft"},
+         )
+ 
+     # 兼容默认 graph 入边(notebook / 旧脚本可能直接 invoke 但不在测试范围)
+diff --git a/monitoring/workflow_graph.py b/monitoring/workflow_graph.py
+index b9dd03b..dd9c5e5 100644
+--- a/monitoring/workflow_graph.py
++++ b/monitoring/workflow_graph.py
+@@ -81,7 +81,9 @@ WORKFLOW_ID = "auto_video_editor_main"
+ #: 2026-11-15 第六期 P1-1(assembly 前移,设计文档 §2.1):六节点入口从
+ #: generate_draft 之后改挂 storyline_join 成功条件路由、出口
+ #: assembly_write_report 改接 generate_draft(拓扑变更)→ bump 10。
+-SCHEMA_VERSION = 10
++#: 2026-11-18 边核验 R2 第二步:storyline_join 条件路由删除 END 出口(join 恒写出
++#: 真值 storyline_plan,该出口在设计上是死分支;拓扑变更)→ bump 11。
++SCHEMA_VERSION = 11
+ 
+ #: 关卡编号全集(阶段3 删除关卡⓪后剩 ①②③;2026-11-15 关卡③删除 → ①②)
+ CHECKPOINT_MARKS = ("①", "②")
+@@ -342,7 +344,7 @@ _NODE_META: dict[str, dict[str, Any]] = {
+     "storyline_join": {
+         "name": "剧情结果汇合",
+         "group": "storyline_render",
+-        "description": "反序列化规划产物并写入 storyline_plan;assembly QC 开进 assembly 前置链,QC 关直连 generate_draft;无 plan 则 END",
++        "description": "反序列化规划产物并写入 storyline_plan(时间线缺失/空值时用占位时间线);QC 开进 assembly 前置链,QC 关直连 generate_draft",
+     },
+ }
+ 
+@@ -385,7 +387,6 @@ _EDGE_LABELS: dict[tuple[str, str], str] = {
+     ("storyline_plan_timeline_ai_transition", "storyline_qa_gate"): "最终时间线单源(AI 开)",
+     ("storyline_qa_gate", "storyline_group_clips"): "QA 未过,重试",
+     ("storyline_qa_gate", "storyline_join"): "QA 通过/失败/空 plan(边治理阶段5 直连)",
+-    ("storyline_join", "END"): "无规划产物",
+     ("join_before_delivery", "export_final_video"): "QA gate 通过",
+     ("join_before_delivery", "delivery_qa_repair"): "required 缺失,定向修复",
+     ("join_before_delivery", "delivery_qa_failed"): "复检仍失败,终止",
+diff --git a/state.py b/state.py
+index 5dcd950..2a3716d 100644
+--- a/state.py
++++ b/state.py
+@@ -125,7 +125,7 @@ class WorkflowState(TypedDict, total=False):
+     video_input_paths: NotRequired[list[str]]
+ 
+     # 步骤 4(阶段3 auto-only 收敛后唯一保留的旧人工步骤字段:
+-    # node_05_generate_draft 兜底读取 + _route_after_storyline_join 判断仍依赖)
++    # node_05_generate_draft 兜底读取仍依赖)
+     shot_plan: Optional[dict]
+ 
+     # 步骤 5(依赖阶段 B 的加密/版本状态)
+diff --git a/tests/integration/test_unreachable_nodes_wiring.py b/tests/integration/test_unreachable_nodes_wiring.py
+index 379942e..4a7cfd3 100644
+--- a/tests/integration/test_unreachable_nodes_wiring.py
++++ b/tests/integration/test_unreachable_nodes_wiring.py
+@@ -333,8 +333,8 @@ def test_assembly_chain_moved_before_generate_draft(monkeypatch: pytest.MonkeyPa
+     QC 开(= _compiled 默认):storyline_join 条件路由多一个
+     assembly_discover_and_probe 目标;assembly_write_report → generate_draft;
+     旧边 generate_draft→assembly_* / write_report→node_06 不存在;
+-    storyline_join 的 END 出边保留(无 plan 不进 assembly)。
+-    QC 关:storyline_join 只剩 generate_draft/END 两个条件目标,assembly 零边。
++    storyline_join 没有 END 出边(边核验 R2 第二步:join 恒写出真值 plan)。
++    QC 关:storyline_join 只剩 generate_draft 一个条件目标,assembly 零边。
+     """
+     _, compiled_on = _compiled(monkeypatch)
+     edges_on = _edge_set(compiled_on)
+diff --git a/tests/integration/test_workflow_graph_schema.py b/tests/integration/test_workflow_graph_schema.py
+index 8d38e26..01dcc79 100644
+--- a/tests/integration/test_workflow_graph_schema.py
++++ b/tests/integration/test_workflow_graph_schema.py
+@@ -328,8 +328,8 @@ def test_assembly_chain_moved_before_generate_draft(monkeypatch):
+     # 旧边残留检查(P1-1 验收项)
+     assert ("generate_draft", "assembly_discover_and_probe") not in pairs_on
+     assert ("assembly_write_report", "node_06_human_reorder") not in pairs_on
+-    # storyline_join 的 END 路由语义保留
+-    assert ("storyline_join", "END") in pairs_on
++    # storyline_join 的 END 出口已删除(边核验 R2 第二步:join 恒写出真值 plan)
++    assert ("storyline_join", "END") not in pairs_on
+ 
+     off = _make_schema(monkeypatch, qc=False)
+     pairs_off = _edge_pairs(off)
+@@ -353,7 +353,7 @@ def test_checkpoint3_node_removed_and_10b_17_direct(monkeypatch):
+     assert ("node_15_localize_covers_en", "node_09_inject_fx") in pairs
+     assert ("node_17_inject_english_tts", "node_09_inject_fx") in pairs
+ 
+-    assert SCHEMA_VERSION == 10
++    assert SCHEMA_VERSION >= 10  # 10 起 assembly 前移;之后的拓扑变更只会继续 bump
+     assert CHECKPOINT_MARKS == ("①", "②")
+ 
+ 
+diff --git a/tests/unit/test_storyline_topology_baseline.py b/tests/unit/test_storyline_topology_baseline.py
+index 417b1f6..47fd4e7 100644
+--- a/tests/unit/test_storyline_topology_baseline.py
++++ b/tests/unit/test_storyline_topology_baseline.py
+@@ -89,7 +89,8 @@ _STORYLINE_BARRIERS_BASE: set[tuple[frozenset[str], str]] = {
+ #: 2026-11-15 第六期 P1-1:assembly 前移后 JOIN 成功路由多一个 assembly 目标
+ #: —— QC 开启时的默认档,_deterministic_flags fixture 固定 QC=True)
+ _QA_CONDITIONAL_EXITS = {_GC, _JOIN}
+-_JOIN_CONDITIONAL_EXITS = {"generate_draft", "__end__", "assembly_discover_and_probe"}
++#: 边核验 R2 第二步:END 出口已删除(join 恒写出真值 plan)
++_JOIN_CONDITIONAL_EXITS = {"generate_draft", "assembly_discover_and_probe"}
+ 
+ 
+ def _build():
