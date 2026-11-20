@@ -361,8 +361,8 @@ def test_assembly_chain_moved_before_generate_draft(monkeypatch: pytest.MonkeyPa
     QC 开(= _compiled 默认):storyline_join 条件路由多一个
     assembly_discover_and_probe 目标;assembly_write_report → generate_draft;
     旧边 generate_draft→assembly_* / write_report→node_06 不存在;
-    storyline_join 的 END 出边保留(无 plan 不进 assembly)。
-    QC 关:storyline_join 只剩 generate_draft/END 两个条件目标,assembly 零边。
+    storyline_join 没有 END 出边(边核验 R2 第二步:join 恒写出真值 plan)。
+    QC 关:storyline_join 只剩 generate_draft 一个条件目标,assembly 零边。
     """
     _, compiled_on = _compiled(monkeypatch)
     edges_on = _edge_set(compiled_on)

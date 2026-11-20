@@ -328,8 +328,8 @@ def test_assembly_chain_moved_before_generate_draft(monkeypatch):
     # 旧边残留检查(P1-1 验收项)
     assert ("generate_draft", "assembly_discover_and_probe") not in pairs_on
     assert ("assembly_write_report", "node_06_human_reorder") not in pairs_on
-    # storyline_join 的 END 路由语义保留
-    assert ("storyline_join", "END") in pairs_on
+    # storyline_join 的 END 出口已删除(边核验 R2 第二步:join 恒写出真值 plan)
+    assert ("storyline_join", "END") not in pairs_on
 
     off = _make_schema(monkeypatch, qc=False)
     pairs_off = _edge_pairs(off)
@@ -355,8 +355,9 @@ def test_checkpoint3_node_removed_and_10b_17_direct(monkeypatch):
 
     # 2026-11-20 关卡①条件挂起:node_06 展示元数据改写(QC 降级复核),拓扑
     # 零变更,按 bump4 先例仅元数据文案也 bump(布局缓存失效)→ 11;
-    # 2026-11-20 第九期:新增 storyline_search_web_topic_en 节点(拓扑变更)→ 12
-    assert SCHEMA_VERSION == 12
+    # 2026-11-20 第九期:新增 storyline_search_web_topic_en 节点(拓扑变更)→ 12;
+    # 2026-11-21 边核验 R2 第二步:join 条件路由删除 END 出口(拓扑变更)→ 13
+    assert SCHEMA_VERSION >= 12  # 12 起英文线接入;之后的拓扑变更只会继续 bump
     assert CHECKPOINT_MARKS == ("①", "②")
 
 

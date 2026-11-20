@@ -125,7 +125,7 @@ class WorkflowState(TypedDict, total=False):
     video_input_paths: NotRequired[list[str]]
 
     # 步骤 4(阶段3 auto-only 收敛后唯一保留的旧人工步骤字段:
-    # node_05_generate_draft 兜底读取 + _route_after_storyline_join 判断仍依赖)
+    # node_05_generate_draft 兜底读取仍依赖)
     shot_plan: Optional[dict]
 
     # 步骤 5(依赖阶段 B 的加密/版本状态)

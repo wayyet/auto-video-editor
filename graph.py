@@ -215,27 +215,24 @@ from storyline_capabilities.ai_transition_client import is_ai_transition_enabled
 # assembly_write_report 交棒 generate_draft)
 # ---------------------------------------------------------------------------
 def _route_after_storyline_join(state: WorkflowState) -> str:
-    """storyline_join 之后的条件路由。
+    """storyline_join 之后的条件路由(只在 QC 两种姿态之间选路,没有 END 出口)。
 
-    - 有 ``storyline_plan``(join_storyline 已反序列化到 state):
-      - ``ASSEMBLY_QC_GATE_ENABLED=True`` → ``assembly_discover_and_probe``
-        (assembly 六节点先完成候选编辑计划的 QC/修复,再交棒 generate_draft)
-      - ``False`` → ``generate_draft``(应急直连,QC 关闭姿态)
-    - 否则 → ``END``(空 plan 与 qa_gate 失败强制 continue 的语义一致;
-      没有可生成的有效计划时不进入 assembly)
-    - ``shot_plan`` 是 node_05 generate_draft 的旧 checkpoint / 测试兜底输入,
-      保留读取兼容(human 路径删除后正常运行不再产生该键)。
+    - ``ASSEMBLY_QC_GATE_ENABLED=True`` → ``assembly_discover_and_probe``
+      (assembly 六节点先完成候选编辑计划的 QC/修复,再交棒 generate_draft)
+    - ``False`` → ``generate_draft``(应急直连,QC 关闭姿态)
+
+    join 恒写出真值 ``storyline_plan``(时间线文件缺失 / 空值 / 损坏 → 占位时间线;
+    合约非法 → 仍写出原值,交 node_05 校验),所以不存在"无 plan 走 END"的分支;
+    clips=0 的空时间线由 node_05 的空 storyline fail-closed 拦截。
 
     运行时读 ``config.ASSEMBLY_QC_GATE_ENABLED``(属性访问,单测
     monkeypatch 生效;与 _build_state_graph 内接线块的读法一致)。
     """
-    if state.get("storyline_plan") or state.get("shot_plan"):
-        import config as _config
+    import config as _config
 
-        if _config.ASSEMBLY_QC_GATE_ENABLED:
-            return "assembly_discover_and_probe"
-        return "generate_draft"
-    return "__end__"
+    if _config.ASSEMBLY_QC_GATE_ENABLED:
+        return "assembly_discover_and_probe"
+    return "generate_draft"
 
 
 # ---------------------------------------------------------------------------
@@ -869,7 +866,8 @@ def _build_state_graph():
     )
 
     # join → assembly 前置通道(QC 开)/ generate_draft(QC 关)条件边
-    # (2026-11-15 第六期 P1-1:QC 开时成功流量先进 assembly 链;END 语义保留)
+    # (2026-11-15 第六期 P1-1:QC 开时成功流量先进 assembly 链;
+    # 边核验 R2 第二步:删除 END 出口 —— join 恒写出真值 plan,该出口在设计上是死分支)
     if _config.ASSEMBLY_QC_GATE_ENABLED:
         g.add_conditional_edges(
             "storyline_join",
@@ -877,14 +875,13 @@ def _build_state_graph():
             {
                 "assembly_discover_and_probe": "assembly_discover_and_probe",
                 "generate_draft": "generate_draft",
-                END: END,
             },
         )
     else:
         g.add_conditional_edges(
             "storyline_join",
             _route_after_storyline_join,
-            {"generate_draft": "generate_draft", END: END},
+            {"generate_draft": "generate_draft"},
         )
 
     # 兼容默认 graph 入边(notebook / 旧脚本可能直接 invoke 但不在测试范围)

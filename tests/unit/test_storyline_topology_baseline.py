@@ -94,7 +94,8 @@ _STORYLINE_BARRIERS_BASE: set[tuple[frozenset[str], str]] = {
 #: 2026-11-15 第六期 P1-1:assembly 前移后 JOIN 成功路由多一个 assembly 目标
 #: —— QC 开启时的默认档,_deterministic_flags fixture 固定 QC=True)
 _QA_CONDITIONAL_EXITS = {_GC, _JOIN}
-_JOIN_CONDITIONAL_EXITS = {"generate_draft", "__end__", "assembly_discover_and_probe"}
+#: 边核验 R2 第二步:END 出口已删除(join 恒写出真值 plan)
+_JOIN_CONDITIONAL_EXITS = {"generate_draft", "assembly_discover_and_probe"}
 
 
 def _build():

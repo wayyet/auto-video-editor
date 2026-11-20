@@ -84,7 +84,9 @@ WORKFLOW_ID = "auto_video_editor_main"
 #: 2026-11-20 关卡①条件挂起:node_06 展示名/描述/入边标签改写(QC 降级才
 #: 挂起复核),拓扑零变更(先例 bump4:仅元数据文案也 bump,使浏览器布局
 #: 缓存里的旧显示信息失效)→ bump 11。
-SCHEMA_VERSION = 12
+#: 2026-11-21 边核验 R2 第二步:storyline_join 条件路由删除 END 出口(join 恒写出
+#: 真值 storyline_plan,该出口在设计上是死分支;拓扑变更)→ bump 13。
+SCHEMA_VERSION = 13
 
 #: 关卡编号全集(阶段3 删除关卡⓪后剩 ①②③;2026-11-15 关卡③删除 → ①②;
 #: 2026-11-20 起关卡① 仅 QC 降级时挂起复核,编号与恢复契约不变)
@@ -351,7 +353,7 @@ _NODE_META: dict[str, dict[str, Any]] = {
     "storyline_join": {
         "name": "剧情结果汇合",
         "group": "storyline_render",
-        "description": "反序列化规划产物并写入 storyline_plan;assembly QC 开进 assembly 前置链,QC 关直连 generate_draft;无 plan 则 END",
+        "description": "反序列化规划产物并写入 storyline_plan(时间线缺失/空值时用占位时间线);QC 开进 assembly 前置链,QC 关直连 generate_draft",
     },
 }
 
@@ -394,7 +396,6 @@ _EDGE_LABELS: dict[tuple[str, str], str] = {
     ("storyline_plan_timeline_ai_transition", "storyline_qa_gate"): "最终时间线单源(AI 开)",
     ("storyline_qa_gate", "storyline_group_clips"): "QA 未过,重试",
     ("storyline_qa_gate", "storyline_join"): "QA 通过/失败/空 plan(边治理阶段5 直连)",
-    ("storyline_join", "END"): "无规划产物",
     ("join_before_delivery", "export_final_video"): "QA gate 通过",
     ("join_before_delivery", "delivery_qa_repair"): "required 缺失,定向修复",
     ("join_before_delivery", "delivery_qa_failed"): "复检仍失败,终止",
