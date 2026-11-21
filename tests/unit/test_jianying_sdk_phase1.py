@@ -26,8 +26,6 @@ from jianying_sdk import (
 from jianying_sdk._sdk_loader import sdk
 from jianying_sdk import resource_registry
 from jianying_sdk.compiler import (
-    TRACK_STICKERS,
-    TRACK_SUBTITLES,
     TRACK_VIDEO_MAIN,
 )
 
@@ -62,9 +60,10 @@ def test_compile_minimal_spec_shape() -> None:
     assert (canvas["width"], canvas["height"]) == (1080, 1920)
     assert payload["fps"] == 30
 
+    # 阶段2 起轨道按需创建:无字幕/贴纸计划的最小草稿只有主视频轨
     tracks = payload["tracks"]
-    assert [t["name"] for t in tracks] == [TRACK_VIDEO_MAIN, TRACK_SUBTITLES, TRACK_STICKERS]
-    assert [t["type"] for t in tracks] == ["video", "text", "sticker"]
+    assert [t["name"] for t in tracks] == [TRACK_VIDEO_MAIN]
+    assert [t["type"] for t in tracks] == ["video"]
     for track in tracks:
         assert track["segments"] == []
     # SDK 模板素材桶存在且为空(无孤儿素材)

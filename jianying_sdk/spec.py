@@ -146,12 +146,41 @@ class StickerSpec(BaseModel):
     source_subtitle_id: str | None = None
 
 
+class AudioClipSpec(BaseModel):
+    """音频片段(BGM / 配音 / 人工音频;编译为 SDK AudioSegment)。
+
+    - 音频轨可有多条(自动 BGM 轨 / node_08 权威配音轨 / 人工添加),提取器
+      按时间线位置铺进同一条 SDK 音频轨(音轨间无渲染层级语义,合并无损)。
+    - ``fade_in_us``/``fade_out_us`` 来自 ``materials.audio_fades``(node_13)。
+    """
+
+    audio_id: str
+    source_path: str
+    target_start_us: int
+    target_duration_us: int
+    source_start_us: int = 0
+    source_duration_us: int = 0
+    speed: float = 1.0
+    volume: float = 1.0
+    role: Literal["bgm", "voiceover", "manual"] = "manual"
+    fade_in_us: int = 0
+    fade_out_us: int = 0
+    name: str = ""
+
+
 class TimelineSection(BaseModel):
-    """时间线快照来源与片段列表(阶段2)。"""
+    """时间线快照来源与片段列表(阶段2)。
+
+    ``blocked_features`` 记录提取时发现的 **SDK 无法忠实重建**的人工高级特征
+    (§7.2 字段保留矩阵);编译器见非空即抛 :class:`UnsupportedManualFeatureError`
+    暂停编译并保留原草稿,绝不静默生成缺效果的重建稿。
+    """
 
     source_draft_path: str | None = None
     source_snapshot_sha256: str | None = None
     clips: list[TimelineClipSpec] = Field(default_factory=list)
+    audio_clips: list[AudioClipSpec] = Field(default_factory=list)
+    blocked_features: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class CompileMeta(BaseModel):
@@ -182,6 +211,7 @@ class DraftBuildSpec(BaseModel):
 
 
 __all__ = [
+    "AudioClipSpec",
     "CanvasSpec",
     "CompileMeta",
     "DraftBuildSpec",

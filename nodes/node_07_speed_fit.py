@@ -201,7 +201,9 @@ def speed_fit(state: WorkflowState) -> dict:
         # copytree 副作用)。仍递增重试计数便于联调断言(Week 3 兼容 Week 2 测试期望)。
         retry = dict(state.get("retry_counts") or {})
         retry["node_07"] = retry.get("node_07", 0) + 1
-        update: dict = {**state, "retry_counts": retry}
+        log = list(state.get("status_log", []) or [])
+        _write_build_spec_snapshot(draft, draft_path, state, log)
+        update: dict = {**state, "retry_counts": retry, "status_log": log}
         update["snapshot2_path"] = _produce_snapshot2(draft_path)
         return update
 
@@ -231,6 +233,7 @@ def speed_fit(state: WorkflowState) -> dict:
     write_ok = bool(write_result.get("ok"))
     if write_ok:
         snapshot2_path: str = _produce_snapshot2(draft_path)
+        _write_build_spec_snapshot(draft, draft_path, state, log)
     else:
         snapshot2_path = None
         log.append("node_07_speed_fit_write_failed")
@@ -239,6 +242,50 @@ def speed_fit(state: WorkflowState) -> dict:
     if snapshot2_path:
         update["snapshot2_path"] = snapshot2_path
     return update
+
+
+# ---------------------------------------------------------------------------
+# 第10期阶段2:DraftBuildSpec 基线时间线快照(node_07 是权威时点)
+# ---------------------------------------------------------------------------
+def _write_build_spec_snapshot(
+    draft: dict,
+    draft_path: Path,
+    state: WorkflowState,
+    log: list[str],
+) -> None:
+    """把当前草稿时间线提取为 DraftBuildSpec 基线(迁移设计文档 §5.1/§9阶段2)。
+
+    - 提取失败/写失败**降级不阻断**(error_tag 进 log):SDK 编译是后端切换
+      后的新链路,基线缺失只会让 node_11 编译时重新提取,不破坏旧链路;
+    - blocked_features(人工高级效果)原样入 spec,由编译器在编译时统一拒绝;
+    - 语言恒 zh(node_07 在英文 fork 之前,英文 spec 由 fork 侧独立建立)。
+    """
+    try:
+        from jianying_sdk.timeline_extractor import canvas_of, extract_timeline_snapshot
+        from nodes._draft_build_spec import replace_spec_sections
+
+        canonical_plan = state.get("storyline_plan")
+        report = extract_timeline_snapshot(
+            draft,
+            draft_dir=draft_path.parent,
+            canonical_plan=canonical_plan if isinstance(canonical_plan, dict) else None,
+        )
+        spec = replace_spec_sections(
+            draft_path.parent,
+            job_id=str(state.get("session_id") or ""),
+            language="zh",
+            canvas=canvas_of(draft),
+            timeline=report.section,
+        )
+        log.append(
+            "node_07_build_spec_updated:"
+            f"clips={len(spec.timeline.clips)},"
+            f"audio={len(spec.timeline.audio_clips)},"
+            f"blocked={len(spec.timeline.blocked_features)}"
+        )
+        log.extend(report.warnings)
+    except Exception as exc:  # noqa: BLE001 — spec 快照是增强路径,绝不阻断 node_07
+        log.append(f"[node_07] 构建说明快照失败(不阻断): {exc!r}")
 
 
 # ---------------------------------------------------------------------------
