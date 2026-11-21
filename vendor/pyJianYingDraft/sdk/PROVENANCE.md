@@ -35,5 +35,18 @@
 |---|---|---|
 | 2026-11-21 | (无) | 原样引入,零修改 |
 
+## 版本核查记录
+
+| 日期 | 结论 |
+|---|---|
+| 2026-11-21 | 核查上游 main 分支(共 221 commits):最新提交即 `1e22847`(0.3.1 版本
+  bump,2026-10-14),此后无新提交 —— **本目录锁定的就是上游最新分支 + 最新发布版**。
+  维持钉版,不浮动 main。升级 SOP:换 commit → 重跑
+  `scripts/build_sdk_compatibility.py` 资源交叉表 → 跑
+  `tests/unit/test_jianying_sdk_phase1~7.py` 全部单测 → GUI 实证重验(vendor 换资源
+  后旧 GUI 实证对新二进制不成立)→ 在本表登记。升级触发条件:①上游修复已知限制
+  (花字 effect_id/resource_id 双 ID 分离接口、「快门」「水墨」枚举);②需要支持
+  剪映 10.8 新版草稿(FallbackLoader)。 |
+
 约束(迁移设计文档 §8.3):扩展 SDK(如花字 effect_id/resource_id 双 ID 接口)必须
 在此表登记补丁差异并配回归测试;禁止跟随上游浮动 main。
