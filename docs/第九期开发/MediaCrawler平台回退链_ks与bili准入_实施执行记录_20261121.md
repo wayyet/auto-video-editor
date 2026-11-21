@@ -87,7 +87,7 @@ git diff 显示:该文件被**故意修改**并带注释:
 
 首跑发现:ks/bili 的 Playwright 启动写死 `channel="chrome"`(kuaishou/core.py:410/414、bilibili/core.py:538/543),**本机无 Google Chrome**(只有 Edge;dy/xhs 走 Playwright 自带 chromium 所以不受影响)→ ks 首跑崩溃于 `Chromium distribution 'chrome' is not found`。用户拍板 MC 补丁用 Edge:4 处 `channel="chrome"` → `channel="msedge"`(均带 `[2026-11-21 auto-video-editor 接入固定]` 注释)。
 
-**同日用户追加减决策:xhs/dy 也统一 `channel="msedge"`**(原为无 channel=自带 chromium)—— xhs/core.py:430 区持久化上下文+443 非持久化回退、douyin/core.py:344 区+357,各加 channel + 注释。**MC 本地故意修改清单现为 7 个文件**(git status 实测):base_config.py(CDP 方案B)+ 四平台 core.py(全部 msedge)+ tools/cdp_browser.py(独立会话补丁:`httpx.AsyncClient(trust_env=False)` —— 系统代理会拦 localhost CDP 请求报 502)+ media_platform/douyin/login.py(独立会话补丁:弹层守卫,扫码窗口从约1分钟扩到 600s),git pull 前须统一处理。
+**同日用户追加减决策:xhs/dy 也统一 `channel="msedge"`**(原为无 channel=自带 chromium)—— xhs/core.py:430 区持久化上下文+443 非持久化回退、douyin/core.py:344 区+357,各加 channel + 注释。**随后用户第三项指令:Playwright 全量统一 msedge + 删除本地自带 Chromium** —— tieba/weibo/zhihu 三平台 6 行 channel="chrome"→"msedge"(全库 grep 确认 channel="chrome" 清零,msedge 共 14 处=7平台×2路径);删除 `%LOCALAPPDATA%\ms-playwright\` 下 `chromium-1228` 与 `chromium_headless_shell-1228` 两个目录(保留 ffmpeg-1011/winldd-1007)。**删除前安全审计**:MC 代码无任何自带 Chromium 引用;CDP 启动器 browser_launcher.py:45 只探测系统 Chrome/Edge 标准路径(本机=Edge),与 Chromium 无关。**删除后双冒烟验证 PASS**:dy 18.1s/14条、xhs 99.3s/9条(两个原 Chromium 用户平台,证明无隐藏依赖)。⚠️ ms-playwright 是本机全局共享缓存,其他项目若需 chromium 可 `playwright install chromium` 一键重装。**MC 本地故意修改清单现为 10 个文件**(git status 实测):base_config.py(CDP 方案B)+ **七平台 core.py 全部 msedge** + tools/cdp_browser.py(独立会话补丁:`httpx.AsyncClient(trust_env=False)` —— 系统代理会拦 localhost CDP 请求报 502)+ media_platform/douyin/login.py(独立会话补丁:弹层守卫,扫码窗口从约1分钟扩到 600s),git pull 前须统一处理。
 
 ### 6.1 验收脚本
 
@@ -162,5 +162,5 @@ $env:STORYLINE_WEB_TOPIC_ENGINE = "bing_html"
 
 1. bili search_by_keywords 的任务收集段有 `except Exception` 包裹(源码实测),但**搜索链整体异常边界仍须真机观察** —— 不能以详情任务捕获推导全链隔离(教训沿用 dy);
 2. 域名白名单使"任意外部 URL 绕过域名校验"被关闭;未来平台(如 wb 多域)接入时须先补其允许域枚举;
-3. MC 本地故意修改清单(全部带注释,git pull 上游前须处理,git status 实测 7 文件):`config/base_config.py`(CDP 方案B)+ 四平台 core.py 全部 channel=msedge + `tools/cdp_browser.py`(trust_env=False)+ `media_platform/douyin/login.py`(弹层守卫);
+3. MC 本地故意修改清单(全部带注释,git pull 上游前须处理,git status 实测 10 文件):`config/base_config.py`(CDP 方案B)+ 七平台 core.py 全部 channel=msedge + `tools/cdp_browser.py`(trust_env=False)+ `media_platform/douyin/login.py`(弹层守卫);
 4. 推送 GitHub 走 sync-github,由用户触发。
