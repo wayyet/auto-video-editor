@@ -124,11 +124,17 @@ def _build_clips(
     refs: dict[str, Any],
     *,
     video_material_factory: VideoMaterialFactory | None = None,
-) -> list[TimelineClipSpec]:
-    """时间线视频片段 → SDK VideoSegment(顺序 = spec.order/target start)。"""
+) -> list[tuple]:
+    """时间线视频片段 → SDK VideoSegment(顺序 = spec.order/target start)。
+
+    返回 ``(TimelineClipSpec, segment)`` 对;**暂不 add_segment** —— SDK 在
+    ``add_segment`` 时才把 transition/effects/ animations 注册进素材桶,效果
+    必须先挂后注册(阶段4/5 顺序约束,与字幕装饰同款)。调用方在效果挂完后
+    统一 add_segment。
+    """
     jy = sdk()
-    clips = sorted(spec.timeline.clips, key=lambda c: (c.order, c.target_start_us))
-    for clip in clips:
+    built: list[tuple] = []
+    for clip in sorted(spec.timeline.clips, key=lambda c: (c.order, c.target_start_us)):
         transform = (clip.clip_settings or {}).get("transform") or {}
         crop = (clip.clip_settings or {}).get("crop")
         if video_material_factory is not None:
@@ -143,8 +149,8 @@ def _build_clips(
             volume=float(clip.volume),
             clip_settings=clip_settings,
         )
-        script.add_segment(segment, refs["video"])
-    return clips
+        built.append((clip, segment))
+    return built
 
 
 def _build_clip_settings(jy, transform: dict[str, Any]):
@@ -317,15 +323,141 @@ def _apply_text_decorations(
     return applied
 
 
+def _build_transitions(
+    script,
+    spec: DraftBuildSpec,
+    built_clips: list[tuple],
+    degradations: list[dict[str, Any]],
+) -> int:
+    """原生转场 → **前一片段** ``add_transition``(阶段5,§4.5/§6.3 边界映射)。
+
+    旧实现把转场 material ref 绑定 ``segments[i+1]`` 是行为差异;SDK 语义是
+    转场属于边界**左侧**片段,编译器禁止沿用旧挂法。时长沿用 node_09 的
+    "不超过相邻两段较短者" 钳制(spec 值已钳制,此处再钳一次防越界)。
+    """
+    jy = sdk()
+    from jianying_sdk import resource_registry
+
+    clips_sorted = [clip for clip, _seg in built_clips]
+    applied = 0
+    for trans in sorted(spec.transitions, key=lambda t: t.boundary_index):
+        i = int(trans.boundary_index)
+        if i < 0 or i + 1 >= len(clips_sorted):
+            degradations.append({
+                "kind": "transition", "boundary_index": i,
+                "reason": "boundary_out_of_range",
+            })
+            continue
+        resolved = resource_registry.resolve_transition(trans.effect_id, require_supported=True)
+        if resolved is None:
+            degradations.append({
+                "kind": "transition", "boundary_index": i,
+                "effect_id": trans.effect_id,
+                "reason": "unsupported_missing_in_sdk_or_unverified",
+            })
+            continue
+        left_seg = built_clips[i][1]
+        right = clips_sorted[i + 1]
+        neighbor_min = min(
+            int(clips_sorted[i].target_duration_us), int(right.target_duration_us)
+        )
+        duration_us = int(trans.duration_us)
+        if neighbor_min > 0:
+            duration_us = min(duration_us, neighbor_min)
+        if duration_us <= 0:
+            degradations.append({
+                "kind": "transition", "boundary_index": i,
+                "reason": "non_positive_duration",
+            })
+            continue
+        # 同一片段已有转场时 SDK 抛 ValueError → 视为降级(spec 重放/重复边界防呆)
+        try:
+            left_seg.add_transition(resolved.member, duration=duration_us)
+        except ValueError as exc:
+            degradations.append({
+                "kind": "transition", "boundary_index": i,
+                "reason": f"sdk_rejected: {exc}",
+            })
+            continue
+        applied += 1
+    return applied
+
+
+def _build_video_effects(
+    spec: DraftBuildSpec,
+    seg_by_clip_id: dict[str, Any],
+    degradations: list[dict[str, Any]],
+) -> int:
+    """视频特效 → ``VideoSegment.add_effect``(阶段5,§6.4;强度 0-100)。"""
+    from jianying_sdk import resource_registry
+
+    applied = 0
+    for vfx in spec.video_effects:
+        segment = seg_by_clip_id.get(vfx.clip_id)
+        if segment is None:
+            degradations.append({
+                "kind": "video_effect", "clip_id": vfx.clip_id,
+                "reason": "clip_not_found",
+            })
+            continue
+        resolved = resource_registry.resolve_video_effect(vfx.effect_id, require_supported=True)
+        if resolved is None:
+            degradations.append({
+                "kind": "video_effect", "clip_id": vfx.clip_id,
+                "effect_id": vfx.effect_id,
+                "reason": "unsupported_or_unverified",
+            })
+            continue
+        meta = resolved.member.value
+        params = [float(min(max(vfx.intensity, 0.0), 100.0))] if getattr(meta, "params", None) else None
+        segment.add_effect(resolved.member, params)
+        applied += 1
+    return applied
+
+
+def _build_video_animations(
+    spec: DraftBuildSpec,
+    seg_by_clip_id: dict[str, Any],
+    degradations: list[dict[str, Any]],
+) -> int:
+    """视频动画(in/out/group)→ ``VideoSegment.add_animation``(阶段5,§6.4)。"""
+    from jianying_sdk import resource_registry
+
+    applied = 0
+    for anim in spec.video_animations:
+        segment = seg_by_clip_id.get(anim.clip_id)
+        if segment is None:
+            degradations.append({
+                "kind": "video_animation", "clip_id": anim.clip_id,
+                "reason": "clip_not_found",
+            })
+            continue
+        resolved = resource_registry.resolve_video_animation(anim.effect_id, require_supported=False)
+        if resolved is None or resolved.anim_kind != anim.kind:
+            degradations.append({
+                "kind": "video_animation", "clip_id": anim.clip_id,
+                "effect_id": anim.effect_id,
+                "reason": "unsupported_or_kind_mismatch",
+            })
+            continue
+        try:
+            segment.add_animation(
+                resolved.member,
+                int(anim.duration_us) if anim.duration_us else None,
+            )
+        except ValueError as exc:
+            degradations.append({
+                "kind": "video_animation", "clip_id": anim.clip_id,
+                "reason": f"sdk_rejected: {exc}",
+            })
+            continue
+        applied += 1
+    return applied
+
+
 def _assert_no_unimplemented_sections(spec: DraftBuildSpec) -> None:
-    """阶段边界守卫:效果/贴纸/转场编译未交付前,非空 spec 不产出半成品。"""
+    """阶段边界守卫:贴纸编译未交付前,非空 spec 不产出半成品。"""
     pending = []
-    if spec.transitions:
-        pending.append("transitions(阶段5)")
-    if spec.video_effects:
-        pending.append("video_effects(阶段5)")
-    if spec.video_animations:
-        pending.append("video_animations(阶段5)")
     if spec.stickers:
         pending.append("stickers(阶段6)")
     if pending:
@@ -362,14 +494,22 @@ def compile_spec(
 
     script = new_script(spec)
     refs = append_base_tracks(script, spec)
-    clips = _build_clips(
+    built_clips = _build_clips(
         script, spec, refs, video_material_factory=video_material_factory
     )
+    # 阶段5:转场(前段挂载)/视频特效/视频动画 —— 先挂效果,再统一落轨
+    # (SDK 在 add_segment 时注册 transition/effects/动画素材)
+    degradations: list[dict[str, Any]] = []
+    transitions_applied = _build_transitions(script, spec, built_clips, degradations)
+    seg_by_clip_id = {clip.clip_id: seg for clip, seg in built_clips}
+    video_effects_applied = _build_video_effects(spec, seg_by_clip_id, degradations)
+    video_animations_applied = _build_video_animations(spec, seg_by_clip_id, degradations)
+    for _clip, _seg in built_clips:
+        script.add_segment(_seg, refs["video"])
     audio_clips = _build_audio_clips(
         script, spec, refs, audio_material_factory=audio_material_factory
     )
     built_subs = _build_subtitles(script, spec, refs)
-    degradations: list[dict[str, Any]] = []
     decorations_applied = _apply_text_decorations(
         script, spec, refs, built_subs, degradations
     )
@@ -382,12 +522,15 @@ def compile_spec(
 
     duration_us = int(script.duration or 0)
     counts = {
-        "video_clips": len(clips),
+        "video_clips": len(built_clips),
         "audio_clips": len(audio_clips),
         "subtitles": len(built_subs),
         "text_decorations_applied": decorations_applied,
+        "transitions_applied": transitions_applied,
+        "video_effects_applied": video_effects_applied,
+        "video_animations_applied": video_animations_applied,
         "tracks": {
-            TRACK_VIDEO_MAIN: len(clips),
+            TRACK_VIDEO_MAIN: len(built_clips),
             TRACK_AUDIO: len(audio_clips),
             TRACK_SUBTITLES: len(built_subs),
         },

@@ -429,6 +429,96 @@ def _inject_fx_into(
     return warnings, summary
 
 
+def _emit_fx_spec(draft_dir: Path, draft: dict, log: list[str]) -> None:
+    """转场/视频特效构建计划 → DraftBuildSpec(第10期阶段5,SDK 编译数据源)。
+
+    从**本轮注入后的草稿**自洽导出(单一事实源):转场条目按我方 id 模式
+    ``transition-{k}`` 反解边界序号(旧实现挂 ``segments[k]`` 后一段,spec 按
+    边界语义记录 from/to,SDK 编译时换前段挂载);特效按 ``vfx-{k}`` 反解段序。
+    ``video_animations`` 置空(资源池待操作员 GUI 实证后另案配置,编译机制
+    已就绪)。失败降级不阻断。
+    """
+    try:
+        from jianying_sdk.spec import TransitionSpec, VideoEffectSpec
+        from nodes._draft_build_spec import replace_spec_sections
+
+        materials = draft.get("materials") or {}
+        videos_by_id = {
+            str(v.get("id")): v
+            for v in materials.get("videos") or []
+            if isinstance(v, dict) and v.get("id")
+        }
+
+        def _clip_id_of(seg: dict) -> str:
+            mat = videos_by_id.get(str(seg.get("material_id") or ""))
+            return str((mat or {}).get("material_name") or "") or str(seg.get("id") or "")
+
+        segments = _sorted_video_segments(find_video_track(draft))
+        transitions_bucket = {
+            str(t.get("id")): t
+            for t in materials.get("transitions") or []
+            if isinstance(t, dict)
+        }
+        vfx_bucket = {
+            str(v.get("id")): v
+            for v in materials.get("video_effects") or []
+            if isinstance(v, dict)
+        }
+
+        transitions: list[TransitionSpec] = []
+        for idx, seg in enumerate(segments):
+            for ref in seg.get("extra_material_refs") or []:
+                ref_str = str(ref)
+                if OUR_TRANSITION_PATTERN.match(ref_str) is None:
+                    continue
+                boundary = int(ref_str.removeprefix("transition-")) - 1
+                if boundary < 0 or boundary + 1 >= len(segments):
+                    continue
+                mat = transitions_bucket.get(ref_str)
+                if mat is None:
+                    continue
+                transitions.append(TransitionSpec(
+                    boundary_index=boundary,
+                    from_clip_id=_clip_id_of(segments[boundary]),
+                    to_clip_id=_clip_id_of(segments[boundary + 1]),
+                    effect_id=str(mat.get("effect_id") or ""),
+                    resource_id=str(mat.get("resource_id") or ""),
+                    name=str(mat.get("name") or ""),
+                    duration_us=int(mat.get("duration") or 0),
+                    is_overlap=bool(mat.get("is_overlap") or False),
+                ))
+
+        video_effects: list[VideoEffectSpec] = []
+        for idx, seg in enumerate(segments):
+            for ref in seg.get("extra_material_refs") or []:
+                ref_str = str(ref)
+                if OUR_VIDEO_EFFECT_PATTERN.match(ref_str) is None:
+                    continue
+                mat = vfx_bucket.get(ref_str)
+                if mat is None:
+                    continue
+                video_effects.append(VideoEffectSpec(
+                    clip_id=_clip_id_of(seg),
+                    effect_id=str(mat.get("effect_id") or ""),
+                    resource_id=str(mat.get("resource_id") or ""),
+                    name=str(mat.get("name") or ""),
+                    intensity=float(mat.get("value") or 0.0) * 100.0,
+                ))
+
+        replace_spec_sections(
+            draft_dir,
+            transitions=transitions,
+            video_effects=video_effects,
+            video_animations=[],  # 视频动画池待操作员 GUI 实证(编译机制已就绪)
+        )
+        log.append(
+            f"[node_09] 效果构建计划已入 spec:"
+            f"transitions={len(transitions)},video_effects={len(video_effects)}"
+        )
+    except Exception as exc:  # noqa: BLE001 — spec 是增强路径,绝不阻断 node_09
+        log.append(f"[node_09] 效果 spec 写入失败(不阻断): {exc!r}")
+
+
 def inject_fx(state: WorkflowState, config: Optional[RunnableConfig] = None) -> dict:
     """读取草稿 → 消费转场计划 → 在剪辑边界原生绑定转场/特效 → 原子写回。
 
@@ -490,6 +580,8 @@ def inject_fx(state: WorkflowState, config: Optional[RunnableConfig] = None) -> 
             required_transitions,
             opening_boost=opening_boost,
         )
+        # 第10期阶段5:效果构建计划同步入 spec(双稿各自独立,SDK 编译数据源)
+        _emit_fx_spec(Path(draft_file).parent, draft, status_log)
         error_log.extend(warnings)
         if summary.get("not_applicable"):
             status_log.append(f"node_09_inject_fx_{tag}_not_applicable")
