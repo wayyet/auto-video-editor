@@ -1469,6 +1469,96 @@ def search_web_topic(
             max_results=max_results,
         )
 
+        # ---- 登录预检闸门(2026-11-21 第10期审查修订版 §3/§4.3) ----
+        # 用户拍板:每次实际调用 MC 前,对 platform_chain 逐平台验证登录;
+        # 未登录就地弹二维码扫码复检;全部通过才进检索链。闸门失败 = 不跑链、
+        # 不回退 Bing(fail-closed),不得伪装成 NETWORK_ERROR/NO_RESULTS。
+        # 仅 cache miss 才走到这里(节点层缓存命中提前返回,不触 MC)。
+        login_gate_enabled = bool(opts.get("login_gate_enabled"))
+        login_gate_timeout = int(opts.get("login_gate_timeout_seconds") or 750)
+        login_gate_total_raw = opts.get("login_gate_total_timeout_seconds")
+        login_gate_total = int(login_gate_total_raw) if login_gate_total_raw else 0
+        notify = opts.get("notify")
+        login_preflight: Optional[dict[str, Any]] = None
+        if login_gate_enabled:
+            gate_started = time.monotonic()
+            gate_deadline = (
+                gate_started + login_gate_total if login_gate_total > 0 else None
+            )
+            gate_results: list[dict[str, Any]] = []
+            gate_failed_platforms: list[str] = []
+            for gate_platform in platform_chain:
+                per_platform_timeout = login_gate_timeout
+                if gate_deadline is not None:
+                    remaining_budget = gate_deadline - time.monotonic()
+                    if remaining_budget <= 30:
+                        # 总预算不足以再完成一次有意义的探测:fail-closed
+                        gate_results.append(
+                            {
+                                "platform": str(gate_platform),
+                                "state": _mc_client.MC_LOGIN_STATE_CHECK_ERROR,
+                                "login_attempted": False,
+                                "elapsed_ms": 0,
+                                "message": "gate_total_budget_exhausted",
+                            }
+                        )
+                        gate_failed_platforms.append(str(gate_platform))
+                        break
+                    per_platform_timeout = min(
+                        per_platform_timeout, int(remaining_budget)
+                    )
+                gate_state, _gate_err, gate_message, gate_diag = (
+                    _mc_client.verify_login(
+                        platform=str(gate_platform),
+                        project_root=str(opts.get("project_root")),
+                        timeout_seconds=per_platform_timeout,
+                        cdp_port=int(opts.get("cdp_port") or 9222),
+                        lock_dir=opts.get("lock_dir"),
+                        interactive=True,
+                        on_event=(lambda ev: notify(ev)) if callable(notify) else None,
+                    )
+                )
+                gate_results.append(
+                    {
+                        "platform": str(gate_platform),
+                        "state": gate_state,
+                        "login_attempted": bool(gate_diag.get("login_attempted")),
+                        "elapsed_ms": int(gate_diag.get("elapsed_ms") or 0),
+                        "message": str(gate_message or "")[:200],
+                    }
+                )
+                if gate_state != _mc_client.MC_LOGIN_STATE_LOGGED_IN:
+                    gate_failed_platforms.append(str(gate_platform))
+            login_preflight = {
+                "enabled": True,
+                "verdict": "pass" if not gate_failed_platforms else "failed",
+                "platform_chain": list(platform_chain),
+                "results": gate_results,
+                "failed_platforms": gate_failed_platforms,
+                "elapsed_ms": int((time.monotonic() - gate_started) * 1000),
+            }
+            if login_preflight["verdict"] != "pass":
+                failed_names = ", ".join(
+                    f"{_mc_client.platform_label(p)}({p})"
+                    for p in gate_failed_platforms
+                )
+                gate_doc = _result(
+                    items=[],
+                    error_code="LOGIN_GATE_FAILED",
+                    message=(
+                        f"MediaCrawler 登录预检未通过: {failed_names}; "
+                        "已阻断平台链与 Bing 回退(在弹出的浏览器窗口完成扫码后重试)"
+                    ),
+                    diagnostics={"login_preflight": login_preflight},
+                )
+                gate_doc["request_hash"] = effective_request_hash
+                gate_doc["provider"] = "mediacrawler"
+                gate_doc["requested_provider"] = "mediacrawler"
+                gate_doc["engine"] = (
+                    f"MediaCrawler({_mc_client.platform_label(str(mc_platform))})"
+                )
+                return gate_doc
+
         attempts: list[dict[str, Any]] = []
         selected_items: list[dict[str, Any]] = []
         selected_platform = ""
@@ -1564,6 +1654,10 @@ def search_web_topic(
             # primary 保持 = 主平台(首次尝试)诊断,兼容既有页面与断言(§4.4)
             "primary": (attempts[0].get("diagnostics") or {}) if attempts else {},
         }
+        # 登录预检留痕(第10期审查修订版 §4.3):向后兼容可选字段,读侧 .get 兼容;
+        # 闸门禁用时保持既有产物形状逐字不变
+        if login_preflight is not None:
+            diagnostics["login_preflight"] = login_preflight
 
         if selected_platform:
             # MC 某平台成功:provider 恒 mediacrawler(source 不因平台伪造),

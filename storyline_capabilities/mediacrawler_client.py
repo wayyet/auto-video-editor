@@ -65,13 +65,15 @@ import contextlib
 import datetime as _dt
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 # 适配器语义版本(字段映射/CLI 形态/错误分类变化时手动 bump;进 request_hash)。
 MEDIACRAWLER_ADAPTER_VERSION: str = "1"
@@ -123,6 +125,24 @@ _AUTH_HINT_MARKERS: tuple[str, ...] = (
     "请先登录",
     "check_login_state",
 )
+
+# ---- 登录预检闸门(2026-11-21 第10期审查修订版 §4.1/§4.2) ----
+# MC 侧检查脚本名(位于 <project_root>/check_login.py;本地新增,上游无此文件)。
+MC_CHECK_LOGIN_SCRIPT: str = "check_login.py"
+# NDJSON 协议版本:check_login.py stdout 每行 {"protocol_version":1,...};
+# 版本不一致按 CHECK_ERROR 处理,不得推断为登录成功。
+MC_LOGIN_PROTOCOL_VERSION: int = 1
+# 三态登录检查结果(审查修订版 §2.7:pong False ≠ 确定未登录,异常与认证失败必须分开)。
+MC_LOGIN_STATE_LOGGED_IN: str = "LOGGED_IN"
+MC_LOGIN_STATE_NOT_LOGGED_IN: str = "NOT_LOGGED_IN"
+MC_LOGIN_STATE_CHECK_ERROR: str = "CHECK_ERROR"
+MC_LOGIN_STATES: tuple[str, ...] = (
+    MC_LOGIN_STATE_LOGGED_IN,
+    MC_LOGIN_STATE_NOT_LOGGED_IN,
+    MC_LOGIN_STATE_CHECK_ERROR,
+)
+# stderr tail 落 diagnostics 的上限(与 _tail 默认一致,预检诊断不带绝对路径)。
+MC_LOGIN_DIAG_TAIL_CHARS: int = 2048
 
 # 平台代码全集(展示/校验参考;生产白名单以 config._MC_PLATFORM_WHITELIST 为准,
 # 首期仅 xhs —— 审查 P2-04:字段映射假定小红书记录结构。不 import config,
@@ -523,5 +543,237 @@ def search_notes(
             shutil.rmtree(run_dir, ignore_errors=True)
             diagnostics["raw_dir_deleted"] = True
         return records, None, "", diagnostics
+    finally:
+        release_cdp_lock(lock_path)
+
+
+def _run_subprocess_streaming(
+    cmd: list[str],
+    cwd: str,
+    timeout_seconds: int,
+    on_event: Optional[Callable[[dict[str, Any]], None]] = None,
+) -> tuple[Optional[dict[str, Any]], list[dict[str, Any]], str, Optional[str], Optional[int]]:
+    """NDJSON 流式子进程执行(第10期审查修订版 §2.8/阶段2)。
+
+    与阻塞式 ``_run_subprocess()`` 的区别:stdout 逐行实时解析协议消息并即时
+    转发 progress 事件(扫码等待期间 UI 可实时显示,而非结束后补发);stderr
+    由独立线程并行排空,避免 pipe 缓冲区写满死锁。
+
+    返回 ``(result_msg, events, stderr_tail, timeout_flag, returncode)``:
+    - ``result_msg`` = 协议终态 dict(type=="result")或 None(缺失终态一律
+      归 CHECK_ERROR,不得推断登录成功);
+    - ``events`` = 收到的 progress 消息列表(已按协议版本过滤);
+    - 超时按进程树终止(复用 ``_kill_process_tree`` 纪律)。
+    """
+    proc = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    stdout_q: "queue.Queue[Optional[str]]" = queue.Queue()
+    stderr_chunks: list[str] = []
+
+    def _read_stream(pipe: Any, sink: Any, is_stderr: bool) -> None:
+        try:
+            for line in pipe:
+                sink(line)
+        except Exception:
+            pass
+        finally:
+            if not is_stderr:
+                stdout_q.put(None)  # EOF 哨兵
+
+    stdout_thread = threading.Thread(
+        target=_read_stream, args=(proc.stdout, stdout_q.put, False), daemon=True
+    )
+    stderr_thread = threading.Thread(
+        target=_read_stream,
+        args=(proc.stderr, lambda line: stderr_chunks.append(line), True),
+        daemon=True,
+    )
+    stdout_thread.start()
+    stderr_thread.start()
+
+    result_msg: Optional[dict[str, Any]] = None
+    events: list[dict[str, Any]] = []
+    timeout_flag: Optional[str] = None
+    deadline = time.monotonic() + max(int(timeout_seconds), 1)
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timeout_flag = f"timeout after {timeout_seconds}s (process tree killed)"
+                break
+            try:
+                item = stdout_q.get(timeout=min(remaining, 1.0))
+            except queue.Empty:
+                continue
+            if item is None:
+                break  # stdout EOF(进程自然退出)
+            line = item.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue  # 协议外 stdout 噪音:忽略,不判定
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("protocol_version") != MC_LOGIN_PROTOCOL_VERSION:
+                continue
+            if msg.get("type") == "progress":
+                events.append(msg)
+                if on_event is not None:
+                    # 观测通道不得改变主流程:回调异常吞掉(§4.3)
+                    try:
+                        on_event(msg)
+                    except Exception:
+                        pass
+            elif msg.get("type") == "result":
+                result_msg = msg
+                break
+    finally:
+        if timeout_flag is not None:
+            _kill_process_tree(proc.pid)
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            _kill_process_tree(proc.pid)
+            proc.wait(timeout=10)
+        with contextlib.suppress(Exception):
+            proc.stdout.close()
+        with contextlib.suppress(Exception):
+            proc.stderr.close()
+        stdout_thread.join(timeout=5)
+        stderr_thread.join(timeout=5)
+
+    stderr_tail = "".join(stderr_chunks)[-MC_LOGIN_DIAG_TAIL_CHARS:]
+    return result_msg, events, stderr_tail, timeout_flag, proc.returncode
+
+
+def verify_login(
+    *,
+    platform: str,
+    project_root: str,
+    timeout_seconds: int,
+    cdp_port: int = 9222,
+    lock_dir: Optional[Path] = None,
+    interactive: bool = True,
+    on_event: Optional[Callable[[dict[str, Any]], None]] = None,
+) -> tuple[str, Optional[str], str, dict[str, Any]]:
+    """单平台登录预检(第10期审查修订版 §4.2)。
+
+    以子进程运行 MC 侧 ``check_login.py``(生产同路径探针 + 可选扫码登录),
+    返回 ``(state, error_code, message, diagnostics)``:
+
+    - state: ``LOGGED_IN``(明确登录证据)/ ``NOT_LOGGED_IN``(明确未登录)
+      / ``CHECK_ERROR``(网络/接口/页面/协议/超时异常,fail-closed 不弹码);
+    - error_code: LOGGED_IN → None;NOT_LOGGED_IN → AUTH_REQUIRED;
+      CHECK_ERROR → NETWORK_ERROR(复用既有错误码域;闸门层据此聚合为
+      ``LOGIN_GATE_FAILED``,不得伪装成检索失败);
+    - 仅当收到合法终态 JSON 且 state==LOGGED_IN 才判登录通过;缺终态 JSON、
+      协议版本/平台名/状态值非法、超时、锁忙、preflight 失败一律 CHECK_ERROR。
+    - 与 search_notes 共用同一把 CDP 锁(预检与检索互斥);锁在检查结束即
+      释放,闸门与后续搜索之间存在交错窗口——登录态不会因另一任务爬取而
+      失效,且 search_notes 会再次加锁防并发访问,该窗口按审查修订版 §4.2
+      记录为已知可接受。
+    """
+    root = resolve_root(project_root)
+    diagnostics: dict[str, Any] = {
+        "platform": str(platform),
+        "adapter_version": MEDIACRAWLER_ADAPTER_VERSION,
+        "interactive": bool(interactive),
+        "timeout_seconds": int(timeout_seconds),
+        "cdp_port": int(cdp_port),
+        "returncode": None,
+        "events": [],
+        "login_attempted": False,
+    }
+
+    ok, reason = preflight(project_root)
+    if not ok:
+        return MC_LOGIN_STATE_CHECK_ERROR, "NETWORK_ERROR", reason, diagnostics
+
+    script_path = root / MC_CHECK_LOGIN_SCRIPT
+    if not script_path.is_file():
+        return MC_LOGIN_STATE_CHECK_ERROR, "NETWORK_ERROR", (
+            f"{MC_CHECK_LOGIN_SCRIPT} 不存在({root});本地 MC 检出版本过旧,"
+            "需要同步第10期登录预检脚本"
+        ), diagnostics
+
+    stale_seconds = max(MC_LOCK_MIN_STALE_SECONDS, int(timeout_seconds) + 120)
+    lock_path = acquire_cdp_lock(lock_dir, cdp_port, stale_seconds)
+    if lock_path is None:
+        diagnostics["cdp_lock_busy"] = True
+        return MC_LOGIN_STATE_CHECK_ERROR, "NETWORK_ERROR", (
+            f"MediaCrawler busy: another task holds the CDP lock (port {cdp_port})"
+        ), diagnostics
+
+    try:
+        cmd = [
+            str(_resolve_python_exe(root)),
+            MC_CHECK_LOGIN_SCRIPT,
+            "--platform", str(platform),
+        ]
+        if not interactive:
+            cmd.append("--no-interactive")
+        try:
+            (
+                result_msg,
+                events,
+                stderr_tail,
+                timeout_flag,
+                returncode,
+            ) = _run_subprocess_streaming(
+                cmd,
+                cwd=str(root),
+                timeout_seconds=timeout_seconds,
+                on_event=on_event,
+            )
+        except OSError as exc:
+            return MC_LOGIN_STATE_CHECK_ERROR, "NETWORK_ERROR", (
+                f"MediaCrawler login check launch failed: {exc}"
+            ), diagnostics
+
+        diagnostics["returncode"] = returncode
+        diagnostics["timeout"] = timeout_flag
+        diagnostics["events"] = [str(e.get("event") or "") for e in events]
+        diagnostics["stderr_tail"] = _tail(_redact(stderr_tail), MC_LOGIN_DIAG_TAIL_CHARS)
+
+        if timeout_flag is not None:
+            return MC_LOGIN_STATE_CHECK_ERROR, "NETWORK_ERROR", (
+                f"MediaCrawler login check timed out: {timeout_flag}"
+            ), diagnostics
+        if result_msg is None:
+            # 子进程崩溃 / sys.exit() 逃逸 / 协议缺失:一律 CHECK_ERROR(§2.9)
+            return MC_LOGIN_STATE_CHECK_ERROR, "NETWORK_ERROR", (
+                "MediaCrawler login check produced no terminal JSON "
+                f"(returncode={returncode}); see diagnostics.stderr_tail"
+            ), diagnostics
+
+        if str(result_msg.get("platform") or "") != str(platform):
+            return MC_LOGIN_STATE_CHECK_ERROR, "NETWORK_ERROR", (
+                f"login check platform mismatch: {result_msg.get('platform')!r}"
+            ), diagnostics
+        state = str(result_msg.get("state") or "")
+        if state not in MC_LOGIN_STATES:
+            return MC_LOGIN_STATE_CHECK_ERROR, "NETWORK_ERROR", (
+                f"login check protocol state invalid: {state!r}"
+            ), diagnostics
+
+        diagnostics["login_attempted"] = bool(result_msg.get("login_attempted"))
+        diagnostics["login_state_detail"] = str(result_msg.get("detail") or "")[:500]
+        diagnostics["elapsed_ms"] = int(result_msg.get("elapsed_ms") or 0)
+        message = str(result_msg.get("detail") or "")
+        if state == MC_LOGIN_STATE_LOGGED_IN:
+            return MC_LOGIN_STATE_LOGGED_IN, None, message, diagnostics
+        if state == MC_LOGIN_STATE_NOT_LOGGED_IN:
+            return MC_LOGIN_STATE_NOT_LOGGED_IN, "AUTH_REQUIRED", message, diagnostics
+        return MC_LOGIN_STATE_CHECK_ERROR, "NETWORK_ERROR", message, diagnostics
     finally:
         release_cdp_lock(lock_path)

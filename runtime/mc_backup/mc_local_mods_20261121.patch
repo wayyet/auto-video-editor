@@ -1,0 +1,187 @@
+diff --git a/config/base_config.py b/config/base_config.py
+index 20aaa6e..2f4f7fc 100644
+--- a/config/base_config.py
++++ b/config/base_config.py
+@@ -80,7 +80,10 @@ BROWSER_LAUNCH_TIMEOUT = 60
+ # 用户需要在 Chrome 中开启远程调试：chrome://inspect/#remote-debugging
+ # 或者使用命令行参数启动 Chrome：--remote-debugging-port=9222
+ # 这种方式反检测效果最好，因为直接使用用户真实浏览器的所有 Cookie、扩展和浏览历史
+-CDP_CONNECT_EXISTING = True
++# [2026-11-20 auto-video-editor 接入固定] 改为 False(方案B):由 MediaCrawler 自启
++# 独立 Chrome + 专用 profile(browser_data/cdp_xhs_user_data_dir),与用户日常
++# 浏览器完全隔离,不要求远程调试预配置;首次运行需扫码登录一次。上游默认 True。
++CDP_CONNECT_EXISTING = False
+ 
+ # 程序结束时是否自动关闭浏览器
+ # 设置为 False 可以保持浏览器运行，方便调试
+diff --git a/media_platform/bilibili/core.py b/media_platform/bilibili/core.py
+index b34cfde..e21b8d8 100644
+--- a/media_platform/bilibili/core.py
++++ b/media_platform/bilibili/core.py
+@@ -535,12 +535,12 @@ class BilibiliCrawler(AbstractCrawler):
+                     "height": 1080
+                 },
+                 user_agent=user_agent,
+-                channel="chrome",  # Use system's stable Chrome version
++                channel="msedge",  # [2026-11-21 auto-video-editor 接入固定] 本机无 Google Chrome,改用系统 Edge(Chromium 内核);上游默认 chrome
+             )
+             return browser_context
+         else:
+             # type: ignore
+-            browser = await chromium.launch(headless=headless, proxy=playwright_proxy, channel="chrome")
++            browser = await chromium.launch(headless=headless, proxy=playwright_proxy, channel="msedge")  # [2026-11-21 auto-video-editor 接入固定] 同上,用 Edge
+             browser_context = await browser.new_context(viewport={"width": 1920, "height": 1080}, user_agent=user_agent)
+             return browser_context
+ 
+diff --git a/media_platform/douyin/core.py b/media_platform/douyin/core.py
+index 10380a6..f3b7967 100644
+--- a/media_platform/douyin/core.py
++++ b/media_platform/douyin/core.py
+@@ -351,10 +351,11 @@ class DouYinCrawler(AbstractCrawler):
+                     "height": 1080
+                 },
+                 user_agent=user_agent,
++                channel="msedge",  # [2026-11-21 auto-video-editor 接入固定] 四平台统一用系统 Edge(Chromium 内核);原为 Playwright 自带 chromium(用户指示)
+             )  # type: ignore
+             return browser_context
+         else:
+-            browser = await chromium.launch(headless=headless, proxy=playwright_proxy)  # type: ignore
++            browser = await chromium.launch(headless=headless, proxy=playwright_proxy, channel="msedge")  # [2026-11-21 auto-video-editor 接入固定] 同上,用 Edge
+             browser_context = await browser.new_context(viewport={"width": 1920, "height": 1080}, user_agent=user_agent)
+             return browser_context
+ 
+diff --git a/media_platform/douyin/login.py b/media_platform/douyin/login.py
+index 4b76d11..1dae758 100644
+--- a/media_platform/douyin/login.py
++++ b/media_platform/douyin/login.py
+@@ -116,9 +116,25 @@ class DouYinLogin(AbstractLogin):
+             await self.context_page.wait_for_selector(dialog_selector, timeout=1000 * 10)
+         except Exception as e:
+             utils.logger.error(f"[DouYinLogin.popup_login_dialog] login dialog box does not pop up automatically, error: {e}")
++            # douyin re-renders the login overlay under another id
++            # (login-full-panel-*) which can break the wait above; if any
++            # overlay is already visible the QR is up - clicking the
++            # underlying button would only be intercepted by the overlay
++            try:
++                overlay_visible = await self.context_page.locator(
++                    "xpath=//div[@id='login-panel-new'] | //div[starts-with(@id,'login-full-panel')]"
++                ).first.is_visible()
++            except Exception:
++                overlay_visible = False
++            if overlay_visible:
++                utils.logger.info("[DouYinLogin.popup_login_dialog] login overlay already visible, skip manual click")
++                return
+             utils.logger.info("[DouYinLogin.popup_login_dialog] login dialog box does not pop up automatically, we will manually click the login button")
+             login_button_ele = self.context_page.locator("xpath=//p[text() = '登录']")
+-            await login_button_ele.click()
++            try:
++                await login_button_ele.click()
++            except Exception as click_err:
++                utils.logger.warning(f"[DouYinLogin.popup_login_dialog] manual login button click failed, continue: {click_err}")
+             await asyncio.sleep(0.5)
+ 
+     async def login_by_qrcode(self):
+diff --git a/media_platform/kuaishou/core.py b/media_platform/kuaishou/core.py
+index d290689..f330b70 100644
+--- a/media_platform/kuaishou/core.py
++++ b/media_platform/kuaishou/core.py
+@@ -407,11 +407,11 @@ class KuaishouCrawler(AbstractCrawler):
+                 proxy=playwright_proxy,  # type: ignore
+                 viewport={"width": 1920, "height": 1080},
+                 user_agent=user_agent,
+-                channel="chrome",  # Use system's stable Chrome version
++                channel="msedge",  # [2026-11-21 auto-video-editor 接入固定] 本机无 Google Chrome,改用系统 Edge(Chromium 内核);上游默认 chrome
+             )
+             return browser_context
+         else:
+-            browser = await chromium.launch(headless=headless, proxy=playwright_proxy, channel="chrome")  # type: ignore
++            browser = await chromium.launch(headless=headless, proxy=playwright_proxy, channel="msedge")  # [2026-11-21 auto-video-editor 接入固定] 同上,用 Edge
+             browser_context = await browser.new_context(
+                 viewport={"width": 1920, "height": 1080}, user_agent=user_agent
+             )
+diff --git a/media_platform/tieba/core.py b/media_platform/tieba/core.py
+index 940ab9f..e4f3ddc 100644
+--- a/media_platform/tieba/core.py
++++ b/media_platform/tieba/core.py
+@@ -628,11 +628,11 @@ class TieBaCrawler(AbstractCrawler):
+                 proxy=playwright_proxy,  # type: ignore
+                 viewport={"width": 1920, "height": 1080},
+                 user_agent=user_agent,
+-                channel="chrome",  # Use system's stable Chrome version
++                channel="msedge",  # [2026-11-21 auto-video-editor 接入固定] 全平台统一系统 Edge(Chromium 内核),本地自带 chromium 已删除;上游默认 chrome
+             )
+             return browser_context
+         else:
+-            browser = await chromium.launch(headless=headless, proxy=playwright_proxy, channel="chrome")  # type: ignore
++            browser = await chromium.launch(headless=headless, proxy=playwright_proxy, channel="msedge")  # [2026-11-21 auto-video-editor 接入固定] 同上,用 Edge
+             browser_context = await browser.new_context(
+                 viewport={"width": 1920, "height": 1080}, user_agent=user_agent
+             )
+diff --git a/media_platform/weibo/core.py b/media_platform/weibo/core.py
+index 6a35056..cf6172c 100644
+--- a/media_platform/weibo/core.py
++++ b/media_platform/weibo/core.py
+@@ -399,11 +399,11 @@ class WeiboCrawler(AbstractCrawler):
+                     "height": 1080
+                 },
+                 user_agent=user_agent,
+-                channel="chrome",  # Use system's Chrome stable version
++                channel="msedge",  # [2026-11-21 auto-video-editor 接入固定] 全平台统一系统 Edge(Chromium 内核),本地自带 chromium 已删除;上游默认 chrome
+             )
+             return browser_context
+         else:
+-            browser = await chromium.launch(headless=headless, proxy=playwright_proxy, channel="chrome")  # type: ignore
++            browser = await chromium.launch(headless=headless, proxy=playwright_proxy, channel="msedge")  # [2026-11-21 auto-video-editor 接入固定] 同上,用 Edge
+             browser_context = await browser.new_context(viewport={"width": 1920, "height": 1080}, user_agent=user_agent)
+             return browser_context
+ 
+diff --git a/media_platform/xhs/core.py b/media_platform/xhs/core.py
+index 8110907..8d11784 100644
+--- a/media_platform/xhs/core.py
++++ b/media_platform/xhs/core.py
+@@ -437,10 +437,11 @@ class XiaoHongShuCrawler(AbstractCrawler):
+                     "height": 1080
+                 },
+                 user_agent=user_agent,
++                channel="msedge",  # [2026-11-21 auto-video-editor 接入固定] 四平台统一用系统 Edge(Chromium 内核);原为 Playwright 自带 chromium(用户指示)
+             )
+             return browser_context
+         else:
+-            browser = await chromium.launch(headless=headless, proxy=playwright_proxy)  # type: ignore
++            browser = await chromium.launch(headless=headless, proxy=playwright_proxy, channel="msedge")  # [2026-11-21 auto-video-editor 接入固定] 同上,用 Edge
+             browser_context = await browser.new_context(viewport={"width": 1920, "height": 1080}, user_agent=user_agent)
+             return browser_context
+ 
+diff --git a/media_platform/zhihu/core.py b/media_platform/zhihu/core.py
+index 7b21e3b..dc2d85c 100644
+--- a/media_platform/zhihu/core.py
++++ b/media_platform/zhihu/core.py
+@@ -445,11 +445,11 @@ class ZhihuCrawler(AbstractCrawler):
+                 proxy=playwright_proxy,  # type: ignore
+                 viewport={"width": 1920, "height": 1080},
+                 user_agent=user_agent,
+-                channel="chrome",  # Use system Chrome stable version
++                channel="msedge",  # [2026-11-21 auto-video-editor 接入固定] 全平台统一系统 Edge(Chromium 内核),本地自带 chromium 已删除;上游默认 chrome
+             )
+             return browser_context
+         else:
+-            browser = await chromium.launch(headless=headless, proxy=playwright_proxy, channel="chrome")  # type: ignore
++            browser = await chromium.launch(headless=headless, proxy=playwright_proxy, channel="msedge")  # [2026-11-21 auto-video-editor 接入固定] 同上,用 Edge
+             browser_context = await browser.new_context(
+                 viewport={"width": 1920, "height": 1080}, user_agent=user_agent
+             )
+diff --git a/tools/cdp_browser.py b/tools/cdp_browser.py
+index a31893e..c8a8d72 100644
+--- a/tools/cdp_browser.py
++++ b/tools/cdp_browser.py
+@@ -291,7 +291,9 @@ class CDPBrowserManager:
+         Get browser WebSocket connection URL
+         """
+         try:
+-            async with httpx.AsyncClient() as client:
++            # trust_env=False: never route localhost CDP traffic through system
++            # proxy env (HTTP_PROXY etc.) - proxying 127.0.0.1:9223 returns 502
++            async with httpx.AsyncClient(trust_env=False) as client:
+                 response = await client.get(
+                     f"http://localhost:{debug_port}/json/version", timeout=10
+                 )

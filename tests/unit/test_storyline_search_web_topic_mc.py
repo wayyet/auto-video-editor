@@ -790,3 +790,191 @@ def test_chain_hash_changes_with_ks_bili_membership() -> None:
     assert full != mediacrawler_request_provider(("xhs", "dy"), rev)
     assert full != mediacrawler_request_provider(("xhs", "dy", "ks"), rev)
     assert full != mediacrawler_request_provider(("xhs", "dy", "bili", "ks"), rev)
+
+
+# ---------------------------------------------------------------------------
+# 登录预检闸门(第10期审查修订版 §3/§4.3;stub 边界=_mc_client.verify_login)
+# ---------------------------------------------------------------------------
+def _gate_options(chain=("xhs", "dy"), **over) -> dict:
+    """带闸门配置的 provider_options(默认链 xhs→dy)。"""
+    options = _mc_options(platform=chain[0])
+    options["fallback_platforms"] = tuple(chain[1:])
+    options["login_gate_enabled"] = True
+    options["login_gate_timeout_seconds"] = 750
+    options["login_gate_total_timeout_seconds"] = 3000
+    options.update(over)
+    return options
+
+
+def _patch_verify(monkeypatch, behavior: dict) -> list[str]:
+    """替换 _mc_client.verify_login:behavior[platform] = (state, error, message)
+    或 callable(**kwargs) -> 四元组;返回调用顺序记录。"""
+    calls: list[str] = []
+
+    def fake_verify_login(*, platform, **kwargs):  # noqa: ANN001
+        calls.append(str(platform))
+        spec = behavior[str(platform)]
+        if callable(spec):
+            return spec(platform=str(platform), **kwargs)
+        state, error_code, message = spec
+        diag = {
+            "platform": str(platform),
+            # 语义对齐真实适配器:仅 NOT_LOGGED_IN(扫码后仍未登录)才 attempt=True
+            "login_attempted": state == "NOT_LOGGED_IN",
+            "elapsed_ms": 1234,
+        }
+        return state, error_code, message, diag
+
+    monkeypatch.setattr(cap_mod._mc_client, "verify_login", fake_verify_login)
+    return calls
+
+
+def _patch_search_recorder(monkeypatch) -> list[str]:
+    """替换 search_notes 为记录器:闸门失败路径必须零调用。"""
+    calls: list[str] = []
+
+    def fake(**kwargs):  # noqa: ANN001
+        calls.append(str(kwargs.get("platform")))
+        return [], "NO_RESULTS", "should not be called", dict(_MC_OK_DIAG)
+
+    monkeypatch.setattr(cap_mod._mc_client, "search_notes", fake)
+    return calls
+
+
+def _patch_bing_recorder(monkeypatch) -> list[str]:
+    calls: list[str] = []
+
+    def fake(**kw):  # noqa: ANN001
+        calls.append("bing")
+        return [], "NETWORK_ERROR", {}
+
+    monkeypatch.setattr(cap_mod, "_bing_html_search", fake)
+    return calls
+
+
+def test_gate_pass_runs_chain_and_records_preflight(monkeypatch) -> None:
+    verify_calls = _patch_verify(
+        monkeypatch,
+        {"xhs": ("LOGGED_IN", None, ""), "dy": ("LOGGED_IN", None, "")},
+    )
+    search_calls: list[str] = []
+
+    def fake_search(**kwargs):  # noqa: ANN001
+        search_calls.append(str(kwargs.get("platform")))
+        return [_mc_note(1), _mc_note(2)], None, "", dict(_MC_OK_DIAG)
+
+    monkeypatch.setattr(cap_mod._mc_client, "search_notes", fake_search)
+    res = _mc_call(provider_options=_gate_options())
+    assert res["status"] == "ok"
+    # 闸门逐平台串行,xhs 通过后链路照常(主平台成功即停)
+    assert verify_calls == ["xhs", "dy"]
+    assert search_calls == ["xhs"]
+    preflight = res["diagnostics"]["login_preflight"]
+    assert preflight["verdict"] == "pass"
+    assert preflight["platform_chain"] == ["xhs", "dy"]
+    assert preflight["failed_platforms"] == []
+    assert [r["platform"] for r in preflight["results"]] == ["xhs", "dy"]
+    assert all(r["state"] == "LOGGED_IN" for r in preflight["results"])
+
+
+def test_gate_not_logged_in_after_scan_blocks_chain_and_bing(monkeypatch) -> None:
+    """扫码复检仍未登录 → LOGIN_GATE_FAILED;零 search_notes、零 Bing。"""
+    _patch_verify(
+        monkeypatch,
+        {
+            "xhs": ("LOGGED_IN", None, ""),
+            "dy": ("NOT_LOGGED_IN", "AUTH_REQUIRED", "scan did not complete"),
+        },
+    )
+    search_calls = _patch_search_recorder(monkeypatch)
+    bing_calls = _patch_bing_recorder(monkeypatch)
+    res = _mc_call(provider_options=_gate_options())
+    assert res["status"] == "failed"
+    assert res["error_code"] == "LOGIN_GATE_FAILED"
+    assert "dy" in res["message"]
+    assert search_calls == [] and bing_calls == []
+    preflight = res["diagnostics"]["login_preflight"]
+    assert preflight["verdict"] == "failed"
+    assert preflight["failed_platforms"] == ["dy"]
+    assert preflight["results"][-1]["login_attempted"] is True
+    # 契约字段保留(§4.3):request_hash/provider/requested_provider/engine
+    assert res["request_hash"] == build_request_hash(
+        query="夏季防晒",
+        provider=mediacrawler_request_provider(("xhs", "dy"), _MC_REV),
+        max_results=10,
+    )
+    assert res["provider"] == "mediacrawler"
+    assert res["requested_provider"] == "mediacrawler"
+    assert res["engine"] == "MediaCrawler(小红书)"
+
+
+def test_gate_check_error_fail_closed_without_qr(monkeypatch) -> None:
+    """CHECK_ERROR(网络/接口异常)不得触发扫码,fail-closed 阻断(§3.4)。"""
+    _patch_verify(
+        monkeypatch,
+        {"xhs": ("CHECK_ERROR", "NETWORK_ERROR", "nav http 502")},
+    )
+    search_calls = _patch_search_recorder(monkeypatch)
+    bing_calls = _patch_bing_recorder(monkeypatch)
+    res = _mc_call(provider_options=_gate_options(chain=("xhs",)))
+    assert res["error_code"] == "LOGIN_GATE_FAILED"
+    assert search_calls == [] and bing_calls == []
+    result_row = res["diagnostics"]["login_preflight"]["results"][0]
+    assert result_row["state"] == "CHECK_ERROR"
+    assert result_row["login_attempted"] is False
+
+
+def test_gate_disabled_skips_verify_login(monkeypatch) -> None:
+    """闸门禁用(键缺省/false)→ 零 verify_login 调用,原链路行为不变。"""
+    verify_calls = _patch_verify(monkeypatch, {"xhs": ("LOGGED_IN", None, "")})
+    _patch_mc(monkeypatch, [_mc_note(1)])
+    res = _mc_call(provider_options=_mc_options())
+    assert verify_calls == []
+    assert res["status"] == "ok"
+    assert "login_preflight" not in res["diagnostics"]
+
+
+def test_gate_checks_every_chain_platform_in_order(monkeypatch) -> None:
+    """主平台已登录也继续检查 fallback(§3.4:每个平台都要通过)。"""
+    verify_calls = _patch_verify(
+        monkeypatch,
+        {"xhs": ("LOGGED_IN", None, ""), "dy": ("LOGGED_IN", None, "")},
+    )
+    _patch_mc(monkeypatch, [_mc_note(1)])
+    _mc_call(provider_options=_gate_options(chain=("xhs", "dy")))
+    assert verify_calls == ["xhs", "dy"]
+
+
+def test_gate_total_budget_exhaustion_fail_closed(monkeypatch) -> None:
+    """整链总预算耗尽:剩余平台记 CHECK_ERROR(budget exhausted),闸门失败。"""
+    verify_calls = _patch_verify(monkeypatch, {"xhs": ("LOGGED_IN", None, "")})
+    _patch_search_recorder(monkeypatch)
+    _patch_bing_recorder(monkeypatch)
+    res = _mc_call(
+        provider_options=_gate_options(chain=("xhs", "dy"), login_gate_total_timeout_seconds=30)
+    )
+    assert res["error_code"] == "LOGIN_GATE_FAILED"
+    # 预算开局即耗尽:连第一个平台都不启动探测
+    assert verify_calls == []
+    preflight = res["diagnostics"]["login_preflight"]
+    assert preflight["results"][0]["message"] == "gate_total_budget_exhausted"
+
+
+def test_gate_notify_callback_receives_progress_events(monkeypatch) -> None:
+    """notify 经 verify_login(on_event=...) 透传;回调异常被隔离不阻断闸门。"""
+    seen: list[dict] = []
+
+    def verify_with_event(*, platform, on_event=None, **kwargs):  # noqa: ANN001
+        if on_event is not None:
+            on_event({"protocol_version": 1, "type": "progress", "event": "login_waiting", "platform": platform})
+            on_event({"protocol_version": 1, "type": "progress", "event": "login_finished", "platform": platform})
+            on_event({"protocol_version": 1, "type": "progress", "event": "boom", "platform": platform})
+        return ("LOGGED_IN", None, "", {"login_attempted": False, "elapsed_ms": 1})
+
+    _patch_verify(monkeypatch, {"xhs": verify_with_event})
+    _patch_mc(monkeypatch, [_mc_note(1)])
+    res = _mc_call(provider_options=_gate_options(chain=("xhs",), notify=seen.append))
+    assert res["status"] == "ok"
+    # 能力层全量透传协议事件(含未知事件名);按 event 名过滤发生在节点层
+    # _notify_login_gate,由 test_node_login_gate_* 与其标签用例覆盖
+    assert [e["event"] for e in seen] == ["login_waiting", "login_finished", "boom"]

@@ -84,3 +84,24 @@ def test_config_chain_accepts_ks_and_bili_combos() -> None:
         "dy",
         "bili",
     )
+
+
+# ---------------------------------------------------------------------------
+# MC 登录预检闸门配置(第10期审查修订版 §5)
+# ---------------------------------------------------------------------------
+def test_config_login_gate_defaults() -> None:
+    """闸门默认开启;单平台 750s(≥MC 登录 600s 扫码窗口+清理余量);总预算 3000s。"""
+    assert config_mod.STORYLINE_WEB_TOPIC_MC_LOGIN_GATE is True
+    assert config_mod.STORYLINE_WEB_TOPIC_MC_LOGIN_GATE_TIMEOUT == 750
+    assert 60 <= config_mod.STORYLINE_WEB_TOPIC_MC_LOGIN_GATE_TIMEOUT <= 1500
+    assert config_mod.STORYLINE_WEB_TOPIC_MC_LOGIN_GATE_TOTAL_TIMEOUT == 3000
+
+
+def test_config_login_gate_timeouts_independent_of_search_budgets() -> None:
+    """闸门预算与搜索预算(MC_TIMEOUT/MC_CHAIN_TIMEOUT)相互独立不共享。"""
+    assert config_mod.STORYLINE_WEB_TOPIC_MC_LOGIN_GATE_TIMEOUT != (
+        config_mod.STORYLINE_WEB_TOPIC_MC_TIMEOUT
+    )
+    assert config_mod.STORYLINE_WEB_TOPIC_MC_LOGIN_GATE_TOTAL_TIMEOUT != (
+        config_mod.STORYLINE_WEB_TOPIC_MC_CHAIN_TIMEOUT
+    )

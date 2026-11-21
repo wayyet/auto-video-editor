@@ -1,0 +1,69 @@
+2026-11-21 14:06:40 MediaCrawler INFO (core.py:83) - [XiaoHongShuCrawler] Launching browser using CDP mode
+2026-11-21 14:06:41 MediaCrawler INFO (cdp_browser.py:221) - [CDPBrowserManager] Detected browser: Microsoft Edge (Microsoft Edge 158.0.4370.33)
+2026-11-21 14:06:41 MediaCrawler INFO (cdp_browser.py:224) - [CDPBrowserManager] Browser path: C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe
+2026-11-21 14:06:41 MediaCrawler INFO (cdp_browser.py:264) - [CDPBrowserManager] User data directory: C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\browser_data\cdp_xhs_user_data_dir
+2026-11-21 14:06:41 MediaCrawler INFO (browser_launcher.py:163) - [BrowserLauncher] Launching browser: C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe
+2026-11-21 14:06:41 MediaCrawler INFO (browser_launcher.py:164) - [BrowserLauncher] Debug port: 9222
+2026-11-21 14:06:41 MediaCrawler INFO (browser_launcher.py:165) - [BrowserLauncher] Headless mode: False
+2026-11-21 14:06:41 MediaCrawler INFO (browser_launcher.py:195) - [BrowserLauncher] Waiting for browser to be ready on port 9222...
+2026-11-21 14:06:41 MediaCrawler INFO (browser_launcher.py:204) - [BrowserLauncher] Browser is ready on port 9222
+2026-11-21 14:06:42 MediaCrawler INFO (cdp_browser.py:238) - [CDPBrowserManager] CDP port 9222 is accessible
+2026-11-21 14:06:42 MediaCrawler INFO (cdp_browser.py:88) - [CDPBrowserManager] SIGINT handler already exists, skipping registration to avoid override
+2026-11-21 14:06:42 MediaCrawler INFO (cdp_browser.py:93) - [CDPBrowserManager] SIGTERM handler already exists, skipping registration to avoid override
+2026-11-21 14:06:42 MediaCrawler INFO (cdp_browser.py:96) - [CDPBrowserManager] Cleanup handlers registered
+2026-11-21 14:06:43 MediaCrawler INFO (cdp_browser.py:304) - [CDPBrowserManager] Got browser WebSocket URL: ws://localhost:9222/devtools/browser/2ffcc92e-9b7d-4cbf-b1e9-a738f53a55b1
+2026-11-21 14:06:43 MediaCrawler INFO (cdp_browser.py:369) - [CDPBrowserManager] Connecting to browser via CDP: ws://localhost:9222/devtools/browser/2ffcc92e-9b7d-4cbf-b1e9-a738f53a55b1
+2026-11-21 14:06:43 MediaCrawler INFO (cdp_browser.py:373) - [CDPBrowserManager] Successfully connected to browser
+2026-11-21 14:06:43 MediaCrawler INFO (cdp_browser.py:374) - [CDPBrowserManager] Browser contexts count: 1
+2026-11-21 14:06:43 MediaCrawler INFO (cdp_browser.py:399) - [CDPBrowserManager] Using existing browser context
+2026-11-21 14:06:43 MediaCrawler INFO (core.py:466) - [XiaoHongShuCrawler] CDP browser info: {'version': '158.0.4370.33', 'contexts_count': 1, 'debug_port': 9222, 'is_connected': True}
+2026-11-21 14:06:49 MediaCrawler INFO (core.py:386) - [XiaoHongShuCrawler.create_xhs_client] Begin create Xiaohongshu API client ...
+2026-11-21 14:06:49 MediaCrawler INFO (client.py:269) - [XiaoHongShuClient.pong] Begin to check login state...
+2026-11-21 14:06:55 MediaCrawler ERROR (client.py:276) - [XiaoHongShuClient.pong] Check login state failed: , and try to login again...
+2026-11-21 14:06:55 MediaCrawler INFO (client.py:280) - [XiaoHongShuClient.pong] Login state result: False
+2026-11-21 14:06:55 MediaCrawler INFO (login.py:89) - [XiaoHongShuLogin.begin] Begin login xiaohongshu ...
+2026-11-21 14:06:55 MediaCrawler INFO (login.py:169) - [XiaoHongShuLogin.login_by_qrcode] Begin login xiaohongshu by qrcode ...
+2026-11-21 14:07:25 MediaCrawler INFO (login.py:178) - [XiaoHongShuLogin.login_by_qrcode] login failed , have not found qrcode please check ....
+2026-11-21 14:07:55 MediaCrawler INFO (cdp_browser.py:499) - [CDPBrowserManager] Browser connection disconnected
+2026-11-21 14:07:55 MediaCrawler INFO (browser_launcher.py:255) - [BrowserLauncher] Closing browser process...
+2026-11-21 14:07:56 MediaCrawler INFO (browser_launcher.py:287) - [BrowserLauncher] Browser process closed
+Traceback (most recent call last):
+  File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\main.py", line 161, in <module>
+    run(main, async_cleanup, cleanup_timeout_seconds=15.0, on_first_interrupt=_force_stop)
+  File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\tools\app_runner.py", line 109, in run
+    asyncio.run(_runner())
+  File "C:\Users\wayyet\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\asyncio\runners.py", line 190, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\wayyet\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\wayyet\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\asyncio\base_events.py", line 654, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\tools\app_runner.py", line 96, in _runner
+    await app_main()
+  File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\main.py", line 114, in main
+    await crawler.start()
+  File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\media_platform\xhs\core.py", line 116, in start
+    await login_obj.begin()
+  File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\media_platform\xhs\login.py", line 91, in begin
+    await self.login_by_qrcode()
+  File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\media_platform\xhs\login.py", line 182, in login_by_qrcode
+    await login_button_ele.click()
+  File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\.venv\Lib\site-packages\playwright\async_api\_generated.py", line 17692, in click
+    await self._impl_obj.click(
+  File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\.venv\Lib\site-packages\playwright\_impl\_locator.py", line 163, in click
+    return await self._frame._click(self._selector, strict=True, **params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\.venv\Lib\site-packages\playwright\_impl\_frame.py", line 591, in _click
+    await self._channel.send("click", self._timeout, locals_to_params(locals()))
+  File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 69, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 563, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.TimeoutError: Locator.click: Timeout 30000ms exceeded.
+Call log:
+  - waiting for locator("//*[@id='app']/div[1]/div[2]/div[1]/ul/div[1]/button")
+

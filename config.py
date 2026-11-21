@@ -226,6 +226,48 @@ STORYLINE_WEB_TOPIC_MC_HEADLESS: bool = (
     in ("1", "true", "yes")
 )
 
+# 1.2.1) MC 登录预检闸门(2026-11-21 第10期审查修订版 §5):每次实际调用 MC
+#   平台链检索前,对 platform_chain 逐平台验证登录;未登录就地弹二维码扫码复检,
+#   全部通过才进检索链;闸门失败 = 不跑链、不回退 Bing(LOGIN_GATE_FAILED)。
+#   - 只检查运行时解析出的实际链(主平台+fallback);白名单/准入边界不变;
+#   - 三态结果(LOGGED_IN/NOT_LOGGED_IN/CHECK_ERROR),CHECK_ERROR 不弹码;
+#   - cache hit 不触 MC,不预检;
+#   - 三个值都是进程启动时读取的模块常量,修改后须重启工作流进程。
+_raw_mc_login_gate = (
+    os.environ.get("STORYLINE_WEB_TOPIC_MC_LOGIN_GATE", "true").strip().lower()
+)
+STORYLINE_WEB_TOPIC_MC_LOGIN_GATE: bool = _raw_mc_login_gate not in (
+    "0",
+    "false",
+    "off",
+    "no",
+)
+
+# 单平台预检/扫码子进程超时(秒):MC 登录流程扫码等待约 600s,还要浏览器启动、
+# Cookie 刷新、最终探测与资源清理,750s 为审查修订版建议初值(§5),真机标定后可调。
+_raw_mc_login_gate_timeout = int(
+    os.environ.get("STORYLINE_WEB_TOPIC_MC_LOGIN_GATE_TIMEOUT", "750").strip() or "750"
+)
+if not 60 <= _raw_mc_login_gate_timeout <= 1500:
+    raise ValueError(
+        f"STORYLINE_WEB_TOPIC_MC_LOGIN_GATE_TIMEOUT={_raw_mc_login_gate_timeout} "
+        "超出范围 60..1500(秒)"
+    )
+STORYLINE_WEB_TOPIC_MC_LOGIN_GATE_TIMEOUT: int = _raw_mc_login_gate_timeout
+
+# 整条平台链登录预检的总预算(秒);0 = 禁用总预算(最坏等待 = 平台数×单平台超时)。
+# 与搜索侧 MC_TIMEOUT/MC_CHAIN_TIMEOUT 相互独立,不共享、不叠加。
+_raw_mc_login_gate_total = int(
+    os.environ.get("STORYLINE_WEB_TOPIC_MC_LOGIN_GATE_TOTAL_TIMEOUT", "3000").strip()
+    or "3000"
+)
+if _raw_mc_login_gate_total != 0 and not 60 <= _raw_mc_login_gate_total <= 7200:
+    raise ValueError(
+        f"STORYLINE_WEB_TOPIC_MC_LOGIN_GATE_TOTAL_TIMEOUT={_raw_mc_login_gate_total} "
+        "非法(0=禁用;或范围 60..7200 秒)"
+    )
+STORYLINE_WEB_TOPIC_MC_LOGIN_GATE_TOTAL_TIMEOUT: int = _raw_mc_login_gate_total
+
 STORYLINE_WEB_TOPIC_SOCKS5_PROXY: str = os.environ.get(
     "STORYLINE_WEB_TOPIC_SOCKS5_PROXY", ""
 ).strip()

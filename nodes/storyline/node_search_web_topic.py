@@ -52,7 +52,13 @@ _ERROR_STATUS_TAGS: dict[str, str] = {
     "PARSE_ERROR": "storyline_search_web_topic_failed",
     "IRRELEVANT_RESULTS": "storyline_search_web_topic_failed",
     "UNKNOWN_PROVIDER": "storyline_search_web_topic_failed",
+    # 第10期审查修订版 §4.4:登录预检闸门失败(fail-closed,不跑链不 Bing)
+    "LOGIN_GATE_FAILED": "storyline_search_web_topic_login_gate_failed",
 }
+
+# 登录闸门失败/检查错误产物不得被缓存复用(第10期审查修订版 §3.5):操作者
+# 扫码修复登录态后再次进入节点必须重新执行闸门,不得命中上一次的失败产物。
+_NON_REUSABLE_ERROR_CODES = frozenset({"LOGIN_GATE_FAILED", "LOGIN_CHECK_ERROR"})
 
 # 产物四态(能力层 _result 的取值域);cache_hit 复用时结构校验以此为有效域。
 _KNOWN_STATUSES = ("ok", "no_results", "failed", "cache_hit")
@@ -67,6 +73,45 @@ FALLBACK_STATUS_TAG = "storyline_search_web_topic_fallback_bing"
 # MC 平台回退成功时的状态标签(2026-11-21 审查修订版 §4.4:xhs 失败 → dy
 # 成功属**同 Provider 内平台切换**,不复用 fallback_bing 标签伪装跨 Provider 回退)。
 PLATFORM_FALLBACK_STATUS_TAG = "storyline_search_web_topic_fallback_platform"
+
+
+def _emit_monitor_event(event: str, *, detail: dict | None = None) -> None:
+    """经 LangGraph custom stream 上报节点级观测事件(runner 归一为 node.progress)。
+
+    node_05_generate_draft 同款先例:图运行时外调用 get_stream_writer() 会
+    RuntimeError —— 观测事件绝不影响主流程,任何异常吞掉。
+    """
+    try:
+        from langgraph.config import get_stream_writer
+
+        writer = get_stream_writer()
+        if callable(writer):
+            writer(
+                {
+                    "monitor_event": "progress",
+                    "node_id": "storyline_search_web_topic",
+                    "detail": {"event": event, **(detail or {})},
+                }
+            )
+    except Exception:  # noqa: BLE001 — 观测通道失败不阻断工作流
+        pass
+
+
+def _notify_login_gate(event: dict) -> None:
+    """MC 适配器 NDJSON 进度事件 → 节点观测事件(第10期审查修订版 §4.4)。
+
+    实时转发(流式子进程逐行回调,非结束后补发):login_waiting = 二维码
+    已弹出等待扫码;login_finished = 扫码流程结束。只含平台与阶段,不含
+    Cookie/Token/二维码内容。
+    """
+    event_name = str(event.get("event") or "")
+    platform = str(event.get("platform") or "")
+    labels = {
+        "login_waiting": "登录预检等待扫码",
+        "login_finished": "扫码登录流程结束",
+    }
+    if event_name in labels:
+        _emit_monitor_event(labels[event_name], detail={"platform": platform})
 
 
 def _load_reusable_cache(
@@ -86,6 +131,9 @@ def _load_reusable_cache(
     """
     doc = _read_json_artifact(state, "storyline_web_topic_artifact")
     if not isinstance(doc, dict):
+        return None
+    # 登录闸门失败不可复用(第10期审查修订版 §3.5):扫码后重进必须重跑闸门
+    if str(doc.get("error_code") or "") in _NON_REUSABLE_ERROR_CODES:
         return None
     if doc.get("query_hash") != query_hash:
         return None
@@ -166,6 +214,15 @@ def storyline_search_web_topic_node(state: WorkflowState) -> dict:
             "timeout_seconds": int(config.STORYLINE_WEB_TOPIC_MC_TIMEOUT),
             "headless": bool(config.STORYLINE_WEB_TOPIC_MC_HEADLESS),
             "mc_revision": mc_revision,
+            # 第10期审查修订版 §4.4:登录预检闸门配置与进度回调透传
+            "login_gate_enabled": bool(config.STORYLINE_WEB_TOPIC_MC_LOGIN_GATE),
+            "login_gate_timeout_seconds": int(
+                config.STORYLINE_WEB_TOPIC_MC_LOGIN_GATE_TIMEOUT
+            ),
+            "login_gate_total_timeout_seconds": int(
+                config.STORYLINE_WEB_TOPIC_MC_LOGIN_GATE_TOTAL_TIMEOUT
+            ),
+            "notify": _notify_login_gate,
         }
         # 2026-11-21 审查修订版 §3.4:hash 编入**完整有序平台链**(与能力层
         # 同一函数;链成员/顺序变化必 miss 缓存)
@@ -226,6 +283,17 @@ def storyline_search_web_topic_node(state: WorkflowState) -> dict:
     # 保证 QA 回路缓存命中判断成立(§4.5;旧桩返回体兼容)。
     if isinstance(result, dict):
         result.setdefault("request_hash", request_hash)
+        # 登录闸门结果观测事件(第10期审查修订版 §4.4):等待扫码事件由
+        # notify 实时转发;此处补发闸门终局,便于监控页对账
+        gate_preflight = (result.get("diagnostics") or {}).get("login_preflight")
+        if isinstance(gate_preflight, dict):
+            _emit_monitor_event(
+                "登录预检闸门结果",
+                detail={
+                    "verdict": gate_preflight.get("verdict"),
+                    "failed_platforms": gate_preflight.get("failed_platforms") or [],
+                },
+            )
 
     out_path.write_text(
         json.dumps(result, ensure_ascii=False, default=str), encoding="utf-8"
@@ -240,7 +308,11 @@ def storyline_search_web_topic_node(state: WorkflowState) -> dict:
         "storyline_web_topic_artifact": str(out_path),
         "status_log": append_status_tag(state, *tags),
     }
-    if tags[0] == "storyline_search_web_topic_failed":
+    if tags[0] in (
+        "storyline_search_web_topic_failed",
+        # 第10期审查修订版 §4.4:闸门失败同样要 error_log 留痕
+        "storyline_search_web_topic_login_gate_failed",
+    ):
         update["error_log"] = append_error(
             state,
             node_kind="search_web_topic",

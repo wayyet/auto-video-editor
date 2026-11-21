@@ -1044,3 +1044,124 @@ def test_node_mc_cache_hit_when_everything_unchanged(
     assert calls["n"] == 1  # cache_hit
     doc = json.loads(Path(out2["storyline_web_topic_artifact"]).read_text(encoding="utf-8"))
     assert doc["status"] == "cache_hit"
+
+
+# ---------------------------------------------------------------------------
+# 登录预检闸门节点层(第10期审查修订版 §4.4)
+# ---------------------------------------------------------------------------
+def test_node_login_gate_failed_maps_tag_and_error_log(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """LOGIN_GATE_FAILED → 固定标签 login_gate_failed + error_log 留痕。"""
+
+    def fake_gate_failed(**kwargs: Any) -> dict:
+        return {
+            "status": "failed",
+            "search_web_topic": [],
+            "preview_urls": [],
+            "error_code": "LOGIN_GATE_FAILED",
+            "message": "MediaCrawler 登录预检未通过: 抖音(dy)",
+            "diagnostics": {
+                "login_preflight": {
+                    "verdict": "failed",
+                    "failed_platforms": ["dy"],
+                    "results": [],
+                }
+            },
+        }
+
+    monkeypatch.setattr(node_mod, "cap_topic", fake_gate_failed)
+    _patch_engine_config(monkeypatch)
+
+    out = storyline_search_web_topic_node(
+        _state(tmp_path, storyline_targets={"query": "夏季防晒"})
+    )
+
+    assert out["status_log"] == ["storyline_search_web_topic_login_gate_failed"]
+    assert any(
+        "[storyline:search_web_topic] LOGIN_GATE_FAILED" in e for e in out["error_log"]
+    )
+    doc = json.loads(
+        Path(out["storyline_web_topic_artifact"]).read_text(encoding="utf-8")
+    )
+    assert doc["error_code"] == "LOGIN_GATE_FAILED"
+    # 失败产物写盘后,同 hash 再进节点不得复用(§3.5):应重新调用 cap_topic
+    calls = {"n": 0}
+
+    def counting(**kwargs: Any) -> dict:
+        calls["n"] += 1
+        return fake_gate_failed(**kwargs)
+
+    monkeypatch.setattr(node_mod, "cap_topic", counting)
+    storyline_search_web_topic_node(
+        {
+            **_state(tmp_path, storyline_targets={"query": "夏季防晒"}),
+            "storyline_web_topic_artifact": out["storyline_web_topic_artifact"],
+        }
+    )
+    assert calls["n"] == 1
+
+
+def test_load_reusable_cache_excludes_login_gate_errors(tmp_path: Path) -> None:
+    """缓存读取直测:LOGIN_GATE_FAILED/LOGIN_CHECK_ERROR 产物一律不可复用。"""
+    query = "夏季防晒"
+    request_hash = build_request_hash(query=query, provider="fake", max_results=10)
+
+    def _artifact_doc(error_code: str) -> dict:
+        doc = _ok_result(query)
+        doc["request_hash"] = request_hash
+        doc["status"] = "failed"
+        doc["error_code"] = error_code
+        return doc
+
+    for error_code in ("LOGIN_GATE_FAILED", "LOGIN_CHECK_ERROR"):
+        p = tmp_path / f"storyline_{error_code}.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(_artifact_doc(error_code), ensure_ascii=False), encoding="utf-8")
+        state = {"storyline_web_topic_artifact": str(p)}
+        assert (
+            node_mod._load_reusable_cache(
+                state,
+                _ok_result(query)["query_hash"],
+                request_hash,
+            )
+            is None
+        )
+    # 对照:普通 failed 产物仍按既有策略复用(行为不变)
+    p = tmp_path / "storyline_network_error.json"
+    p.write_text(
+        json.dumps(_artifact_doc("NETWORK_ERROR"), ensure_ascii=False), encoding="utf-8"
+    )
+    state = {"storyline_web_topic_artifact": str(p)}
+    cached = node_mod._load_reusable_cache(
+        state, _ok_result(query)["query_hash"], request_hash
+    )
+    assert cached is not None and cached["error_code"] == "NETWORK_ERROR"
+
+
+def test_node_mc_branch_passes_gate_config_and_notify(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """MC 分支把闸门开关/双预算/notify 回调透传给能力层(§4.4)。"""
+    captured: dict = {}
+    monkeypatch.setattr(
+        node_mod, "cap_topic", _fake_cap_topic(captured, items=[{"url": "https://xhs.com/1", "title": "t", "snippet": "s", "source": "mediacrawler"}])
+    )
+    _patch_mc_engine_config(monkeypatch)
+    monkeypatch.setattr(node_mod.config, "STORYLINE_WEB_TOPIC_MC_LOGIN_GATE", True)
+    monkeypatch.setattr(
+        node_mod.config, "STORYLINE_WEB_TOPIC_MC_LOGIN_GATE_TIMEOUT", 750
+    )
+    monkeypatch.setattr(
+        node_mod.config, "STORYLINE_WEB_TOPIC_MC_LOGIN_GATE_TOTAL_TIMEOUT", 3000
+    )
+
+    storyline_search_web_topic_node(
+        _state(tmp_path, storyline_targets={"query": "夏季防晒"})
+    )
+
+    opts = captured["provider_options"]
+    assert opts["login_gate_enabled"] is True
+    assert opts["login_gate_timeout_seconds"] == 750
+    assert opts["login_gate_total_timeout_seconds"] == 3000
+    assert callable(opts["notify"])

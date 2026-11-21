@@ -1,0 +1,59 @@
+2026-11-21 13:46:42 MediaCrawler INFO (core.py:85) - [KuaishouCrawler] Launching browser using CDP mode
+2026-11-21 13:46:43 MediaCrawler INFO (cdp_browser.py:221) - [CDPBrowserManager] Detected browser: Microsoft Edge (Microsoft Edge 158.0.4370.33)
+2026-11-21 13:46:43 MediaCrawler INFO (cdp_browser.py:224) - [CDPBrowserManager] Browser path: C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe
+2026-11-21 13:46:43 MediaCrawler INFO (cdp_browser.py:264) - [CDPBrowserManager] User data directory: C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\browser_data\cdp_ks_user_data_dir
+2026-11-21 13:46:43 MediaCrawler INFO (browser_launcher.py:163) - [BrowserLauncher] Launching browser: C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe
+2026-11-21 13:46:43 MediaCrawler INFO (browser_launcher.py:164) - [BrowserLauncher] Debug port: 9223
+2026-11-21 13:46:43 MediaCrawler INFO (browser_launcher.py:165) - [BrowserLauncher] Headless mode: False
+2026-11-21 13:46:43 MediaCrawler INFO (browser_launcher.py:195) - [BrowserLauncher] Waiting for browser to be ready on port 9223...
+2026-11-21 13:46:44 MediaCrawler INFO (browser_launcher.py:204) - [BrowserLauncher] Browser is ready on port 9223
+2026-11-21 13:46:45 MediaCrawler INFO (cdp_browser.py:238) - [CDPBrowserManager] CDP port 9223 is accessible
+2026-11-21 13:46:45 MediaCrawler INFO (cdp_browser.py:88) - [CDPBrowserManager] SIGINT handler already exists, skipping registration to avoid override
+2026-11-21 13:46:45 MediaCrawler INFO (cdp_browser.py:93) - [CDPBrowserManager] SIGTERM handler already exists, skipping registration to avoid override
+2026-11-21 13:46:45 MediaCrawler INFO (cdp_browser.py:96) - [CDPBrowserManager] Cleanup handlers registered
+2026-11-21 13:46:47 MediaCrawler ERROR (cdp_browser.py:311) - [CDPBrowserManager] Failed to get WebSocket URL: HTTP 502: 
+2026-11-21 13:46:47 MediaCrawler ERROR (cdp_browser.py:379) - [CDPBrowserManager] CDP connection failed: HTTP 502: 
+2026-11-21 13:46:47 MediaCrawler ERROR (cdp_browser.py:137) - [CDPBrowserManager] CDP browser launch failed: HTTP 502: 
+2026-11-21 13:46:47 MediaCrawler INFO (browser_launcher.py:255) - [BrowserLauncher] Closing browser process...
+2026-11-21 13:46:48 MediaCrawler INFO (browser_launcher.py:287) - [BrowserLauncher] Browser process closed
+2026-11-21 13:46:48 MediaCrawler ERROR (core.py:446) - [KuaishouCrawler] CDP mode launch failed, fallback to standard mode: HTTP 502: 
+2026-11-21 13:46:48 MediaCrawler INFO (core.py:396) - [KuaishouCrawler.launch_browser] Begin create browser context ...
+Traceback (most recent call last):
+  File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\main.py", line 161, in <module>
+    run(main, async_cleanup, cleanup_timeout_seconds=15.0, on_first_interrupt=_force_stop)
+  File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\tools\app_runner.py", line 109, in run
+    asyncio.run(_runner())
+  File "C:\Users\wayyet\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\asyncio\runners.py", line 190, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\wayyet\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\wayyet\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\asyncio\base_events.py", line 654, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\tools\app_runner.py", line 96, in _runner
+    await app_main()
+  File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\main.py", line 114, in main
+    await crawler.start()
+  File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\media_platform\kuaishou\core.py", line 86, in start
+    self.browser_context = await self.launch_browser_with_cdp(
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\media_platform\kuaishou\core.py", line 451, in launch_browser_with_cdp
+    return await self.launch_browser(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\media_platform\kuaishou\core.py", line 403, in launch_browser
+    browser_context = await chromium.launch_persistent_context(
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\.venv\Lib\site-packages\playwright\async_api\_generated.py", line 16845, in launch_persistent_context
+    await self._impl_obj.launch_persistent_context(
+  File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\.venv\Lib\site-packages\playwright\_impl\_browser_type.py", line 165, in launch_persistent_context
+    result = await self._channel.send_return_as_dict(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 83, in send_return_as_dict
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\wayyet\OneDrive\Downloads\开发代码\kuaishou\MediaCrawler\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 563, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.Error: BrowserType.launch_persistent_context: Chromium distribution 'chrome' is not found at C:\Users\wayyet\AppData\Local\Google\Chrome\Application\chrome.exe
+Run "playwright install chrome"

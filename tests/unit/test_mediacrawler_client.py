@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -656,3 +657,224 @@ def test_bili_nonzero_exit_ordinary_error_stays_network_error(
     )
     items, error, _, _ = mc.search_notes(**_mc_kwargs_platform(env, "bili"))
     assert items == [] and error == "NETWORK_ERROR"
+
+
+# ---------------------------------------------------------------------------
+# 登录预检 verify_login(第10期审查修订版 §4.2;stub 边界=_run_subprocess_streaming)
+# ---------------------------------------------------------------------------
+def _vl_env(tmp_path: Path) -> dict[str, Any]:
+    env = _mc_env(tmp_path)
+    # verify_login 额外要求 MC 侧检查脚本存在
+    (Path(env["root"]) / mc.MC_CHECK_LOGIN_SCRIPT).write_text(
+        "# fake check_login.py stub\n", encoding="utf-8"
+    )
+    return env
+
+
+def _vl_kwargs(env: dict[str, Any], platform: str = "xhs", **over: Any) -> dict:
+    kw: dict[str, Any] = {
+        "platform": platform,
+        "project_root": env["root"],
+        "timeout_seconds": 750,
+        "lock_dir": env["lock_dir"],
+    }
+    kw.update(over)
+    return kw
+
+
+def _fake_stream(
+    result_msg: dict[str, Any] | None,
+    *,
+    events: list[dict[str, Any]] | None = None,
+    stderr: str = "",
+    returncode: int = 0,
+    timeout: bool = False,
+):
+    """构造 _run_subprocess_streaming 替身:转发事件 + 返回协议终态。"""
+
+    def fake_stream(cmd, cwd, timeout_seconds, on_event=None):  # noqa: ANN001
+        forwarded = [
+            ev
+            for ev in events or []
+            if ev.get("protocol_version") == mc.MC_LOGIN_PROTOCOL_VERSION
+        ]
+        for ev in forwarded:
+            if on_event is not None:
+                on_event(ev)
+        if timeout:
+            return (
+                None,
+                list(events or []),
+                stderr,
+                f"timeout after {timeout_seconds}s (process tree killed)",
+                None,
+            )
+        return result_msg, forwarded, stderr, None, returncode
+
+    return fake_stream
+
+
+def _result_msg(platform: str = "xhs", state: str = "LOGGED_IN", **over: Any) -> dict:
+    msg = {
+        "protocol_version": mc.MC_LOGIN_PROTOCOL_VERSION,
+        "type": "result",
+        "platform": platform,
+        "state": state,
+        "login_attempted": state != "LOGGED_IN",
+        "elapsed_ms": 12345,
+        "detail": "probe detail",
+    }
+    msg.update(over)
+    return msg
+
+
+def test_verify_login_logged_in_passes(tmp_path: Path, monkeypatch) -> None:
+    env = _vl_env(tmp_path)
+    monkeypatch.setattr(
+        mc, "_run_subprocess_streaming", _fake_stream(_result_msg(state="LOGGED_IN"))
+    )
+    state, error, message, diag = mc.verify_login(**_vl_kwargs(env))
+    assert state == "LOGGED_IN" and error is None
+    assert diag["login_attempted"] is False
+    assert diag["elapsed_ms"] == 12345
+
+
+def test_verify_login_not_logged_in_is_auth_required(tmp_path: Path, monkeypatch) -> None:
+    env = _vl_env(tmp_path)
+    monkeypatch.setattr(
+        mc,
+        "_run_subprocess_streaming",
+        _fake_stream(_result_msg(state="NOT_LOGGED_IN"), returncode=1),
+    )
+    state, error, _, _ = mc.verify_login(**_vl_kwargs(env))
+    assert state == "NOT_LOGGED_IN" and error == "AUTH_REQUIRED"
+
+
+def test_verify_login_timeout_is_check_error(tmp_path: Path, monkeypatch) -> None:
+    env = _vl_env(tmp_path)
+    monkeypatch.setattr(mc, "_run_subprocess_streaming", _fake_stream(None, timeout=True))
+    state, error, message, diag = mc.verify_login(**_vl_kwargs(env))
+    assert state == "CHECK_ERROR" and error == "NETWORK_ERROR"
+    assert "timed out" in message and diag["timeout"] is not None
+
+
+def test_verify_login_missing_terminal_json_is_check_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """SystemExit(0) 逃逸/协议缺失:退出码 0 也不得判 PASS(审查修订版 §2.9)。"""
+    env = _vl_env(tmp_path)
+    monkeypatch.setattr(
+        mc, "_run_subprocess_streaming", _fake_stream(None, returncode=0)
+    )
+    state, error, message, _ = mc.verify_login(**_vl_kwargs(env))
+    assert state == "CHECK_ERROR" and error == "NETWORK_ERROR"
+    assert "terminal JSON" in message
+
+
+def test_verify_login_platform_mismatch_is_check_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env = _vl_env(tmp_path)
+    monkeypatch.setattr(
+        mc, "_run_subprocess_streaming", _fake_stream(_result_msg(platform="dy"))
+    )
+    state, _, message, _ = mc.verify_login(**_vl_kwargs(env, platform="xhs"))
+    assert state == "CHECK_ERROR" and "mismatch" in message
+
+
+def test_verify_login_invalid_state_is_check_error(tmp_path: Path, monkeypatch) -> None:
+    env = _vl_env(tmp_path)
+    monkeypatch.setattr(
+        mc, "_run_subprocess_streaming", _fake_stream(_result_msg(state="MAYBE"))
+    )
+    state, _, message, _ = mc.verify_login(**_vl_kwargs(env))
+    assert state == "CHECK_ERROR" and "invalid" in message
+
+
+def test_verify_login_lock_busy_is_check_error(tmp_path: Path, monkeypatch) -> None:
+    env = _vl_env(tmp_path)
+    # 预占同一把 CDP 锁
+    held = mc.acquire_cdp_lock(Path(env["lock_dir"]), 9222, 3000)
+    assert held is not None
+    try:
+        state, error, message, diag = mc.verify_login(**_vl_kwargs(env))
+        assert state == "CHECK_ERROR" and error == "NETWORK_ERROR"
+        assert diag["cdp_lock_busy"] is True
+        assert "busy" in message
+    finally:
+        mc.release_cdp_lock(held)
+
+
+def test_verify_login_preflight_failure_is_check_error(tmp_path: Path) -> None:
+    # 空目录:preflight(根目录缺失)失败 → CHECK_ERROR,不启动子进程
+    env = {"root": str(tmp_path / "empty_mc"), "lock_dir": tmp_path / "locks"}
+    state, error, _, _ = mc.verify_login(**_vl_kwargs(env))
+    assert state == "CHECK_ERROR" and error == "NETWORK_ERROR"
+
+
+def test_verify_login_missing_script_is_check_error(tmp_path: Path) -> None:
+    env = _mc_env(tmp_path)  # 不写 check_login.py
+    state, error, message, _ = mc.verify_login(**_vl_kwargs(env))
+    assert state == "CHECK_ERROR" and "check_login.py" in message
+
+
+def test_verify_login_passes_interactive_and_event_flags(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env = _vl_env(tmp_path)
+    captured: dict[str, Any] = {}
+
+    def fake_stream(cmd, cwd, timeout_seconds, on_event=None):  # noqa: ANN001
+        captured["cmd"] = list(cmd)
+        captured["interactive_expected"] = "--no-interactive" not in cmd
+        for ev in [{"protocol_version": 1, "type": "progress", "event": "login_waiting", "platform": "xhs"}]:
+            if on_event is not None:
+                on_event(ev)
+        return _result_msg(), [], "", None, 0
+
+    monkeypatch.setattr(mc, "_run_subprocess_streaming", fake_stream)
+    seen: list[dict] = []
+    mc.verify_login(**_vl_kwargs(env, interactive=False, on_event=seen.append))
+    assert "--no-interactive" in captured["cmd"]
+    assert [e["event"] for e in seen] == ["login_waiting"]
+
+
+def test_verify_login_records_events_in_diagnostics(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env = _vl_env(tmp_path)
+    events = [
+        {"protocol_version": 1, "type": "progress", "event": "probing", "platform": "xhs"},
+        {"protocol_version": 1, "type": "progress", "event": "login_waiting", "platform": "xhs"},
+        {"protocol_version": 2, "type": "progress", "event": "alien", "platform": "xhs"},
+    ]
+    monkeypatch.setattr(
+        mc, "_run_subprocess_streaming", _fake_stream(_result_msg(), events=events)
+    )
+    _, _, _, diag = mc.verify_login(**_vl_kwargs(env, on_event=lambda ev: None))
+    # 协议版本不符的噪音被过滤
+    assert diag["events"] == ["probing", "login_waiting"]
+
+
+def test_streaming_runner_isolates_on_event_exceptions(tmp_path: Path) -> None:
+    """on_event 回调异常被吞掉,不阻断协议读取与终态判定(审查修订版 §4.3)。"""
+    child_lines = [
+        "import sys, json, time",
+        "for ev in ('login_waiting', 'boom'):",
+        "    sys.stdout.write(json.dumps({'protocol_version':1,'type':'progress','event':ev,'platform':'xhs'}) + chr(10))",
+        "    sys.stdout.flush()",
+        "    time.sleep(0.05)",
+        "sys.stdout.write(json.dumps({'protocol_version':1,'type':'result','platform':'xhs','state':'LOGGED_IN','login_attempted':False,'elapsed_ms':1,'detail':''}) + chr(10))",
+        "sys.stdout.flush()",
+    ]
+    script = tmp_path / "emit_events.py"
+    script.write_text(chr(10).join(child_lines) + chr(10), encoding="utf-8")
+    result, events, _, timeout_flag, returncode = mc._run_subprocess_streaming(
+        [sys.executable, str(script)],
+        cwd=str(tmp_path),
+        timeout_seconds=30,
+        on_event=lambda ev: (_ for _ in ()).throw(RuntimeError("callback blew up")),
+    )
+    assert timeout_flag is None and returncode == 0
+    assert [e["event"] for e in events] == ["login_waiting", "boom"]
+    assert result is not None and result["state"] == "LOGGED_IN"
