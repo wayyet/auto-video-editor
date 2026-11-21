@@ -131,6 +131,15 @@ export function normalizeContentDetails(payload) {
               reason: wt.fallback.reason ?? null,
             }
           : null,
+      // 2026-11-21 审查修订版 §5.5:平台回退(xhs→dy)成功时的切换过程透传
+      platformFallback:
+        wt.platform_fallback && typeof wt.platform_fallback === "object"
+          ? {
+              fromPlatform: wt.platform_fallback.from_platform ?? null,
+              toPlatform: wt.platform_fallback.to_platform ?? null,
+              reason: wt.platform_fallback.reason ?? null,
+            }
+          : null,
     },
     // 2026-11-20 第九期:英文线独立视图模型(不与中文线共享字段;审查 §8.3)
     webTopicEn: {

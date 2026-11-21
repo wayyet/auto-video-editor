@@ -631,6 +631,8 @@ def _patch_mc_engine_config(
     timeout: int = 600,
     headless: bool = False,
     revision: str = _MC_REVISION,
+    fallback_platforms: tuple = (),
+    chain_timeout: int = 600,
 ) -> None:
     _patch_engine_config(monkeypatch, engine="mediacrawler")
     monkeypatch.setattr(node_mod.config, "STORYLINE_WEB_TOPIC_MC_PLATFORM", "xhs")
@@ -640,6 +642,16 @@ def _patch_mc_engine_config(
     monkeypatch.setattr(node_mod.config, "STORYLINE_WEB_TOPIC_MC_MAX_NOTES", max_notes)
     monkeypatch.setattr(node_mod.config, "STORYLINE_WEB_TOPIC_MC_TIMEOUT", timeout)
     monkeypatch.setattr(node_mod.config, "STORYLINE_WEB_TOPIC_MC_HEADLESS", headless)
+    # 2026-11-21 审查修订版:平台链默认桩=()(单平台,既有用例语义不变);
+    # 平台链行为由显式传入 fallback_platforms 的独立用例覆盖。
+    monkeypatch.setattr(
+        node_mod.config,
+        "STORYLINE_WEB_TOPIC_MC_FALLBACK_PLATFORMS",
+        fallback_platforms,
+    )
+    monkeypatch.setattr(
+        node_mod.config, "STORYLINE_WEB_TOPIC_MC_CHAIN_TIMEOUT", chain_timeout
+    )
     monkeypatch.setattr(node_mod, "detect_revision", lambda root: revision)
 
 
@@ -760,6 +772,140 @@ def test_node_mc_cache_miss_when_revision_changes(
     _patch_mc_engine_config(monkeypatch, revision="bbbbbbbbbbbb")
     storyline_search_web_topic_node(state2)
     assert calls["n"] == 2  # revision 变化 → 缓存失效
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-21 审查修订版:平台回退链(节点层透传/hash/状态标签)
+# ---------------------------------------------------------------------------
+def test_node_mc_chain_options_and_chain_hash(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """平台链透传 provider_options;hash 编入完整有序平台链(§3.4)。"""
+    captured: dict = {}
+    monkeypatch.setattr(
+        node_mod, "cap_topic", _fake_cap_topic(captured, items=[{"url": "https://dy.com/1", "title": "t", "snippet": "s", "source": "mediacrawler"}])
+    )
+    _patch_mc_engine_config(
+        monkeypatch, fallback_platforms=("dy",), chain_timeout=750
+    )
+
+    out = storyline_search_web_topic_node(
+        _state(tmp_path, storyline_targets={"query": "夏季防晒"})
+    )
+
+    opts = captured["provider_options"]
+    assert opts["fallback_platforms"] == ("dy",)
+    assert opts["chain_timeout_seconds"] == 750
+    doc = json.loads(Path(out["storyline_web_topic_artifact"]).read_text(encoding="utf-8"))
+    expected = build_request_hash(
+        query="夏季防晒",
+        provider=mediacrawler_request_provider(("xhs", "dy"), _MC_REVISION),
+        max_results=7,
+    )
+    assert doc["request_hash"] == expected
+    # 与单平台 hash 不同(链变化必 miss 缓存)
+    assert expected != build_request_hash(
+        query="夏季防晒",
+        provider=mediacrawler_request_provider(("xhs",), _MC_REVISION),
+        max_results=7,
+    )
+
+
+def test_node_mc_platform_fallback_gets_dedicated_tag(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """xhs 失败 → dy 成功:done + fallback_platform 标签,不伪装 fallback_bing。"""
+    captured: dict = {}
+
+    def fake_platform_fallback(**kwargs: Any) -> dict:
+        captured.update(kwargs)
+        result = _ok_result(kwargs["query"])
+        result["selected_platform"] = "dy"
+        result["platform_fallback"] = {
+            "from_platform": "xhs",
+            "to_platform": "dy",
+            "reason": "NETWORK_ERROR",
+        }
+        return result
+
+    monkeypatch.setattr(node_mod, "cap_topic", fake_platform_fallback)
+    _patch_mc_engine_config(monkeypatch, fallback_platforms=("dy",))
+    out = storyline_search_web_topic_node(
+        _state(tmp_path, storyline_targets={"query": "夏季防晒"})
+    )
+    assert out["status_log"] == [
+        "storyline_search_web_topic_done",
+        "storyline_search_web_topic_fallback_platform",
+    ]
+    assert "error_log" not in out
+
+
+def test_node_mc_cache_hit_mirrors_platform_fallback_tag(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """cache_hit 的标签与首次执行一致(含平台回退留痕,审查修订版 §4.4)。"""
+    calls = {"n": 0}
+
+    def fake_platform_fallback(**kwargs: Any) -> dict:
+        calls["n"] += 1
+        result = _ok_result(kwargs["query"])
+        result["selected_platform"] = "dy"
+        result["platform_fallback"] = {
+            "from_platform": "xhs",
+            "to_platform": "dy",
+            "reason": "NETWORK_ERROR",
+        }
+        return result
+
+    monkeypatch.setattr(node_mod, "cap_topic", fake_platform_fallback)
+    _patch_mc_engine_config(monkeypatch, fallback_platforms=("dy",))
+    state = _state(tmp_path, storyline_targets={"query": "夏季防晒"})
+    out1 = storyline_search_web_topic_node(state)
+    assert out1["status_log"] == [
+        "storyline_search_web_topic_done",
+        "storyline_search_web_topic_fallback_platform",
+    ]
+
+    state2 = {
+        **state,
+        "storyline_web_topic_artifact": out1["storyline_web_topic_artifact"],
+    }
+    monkeypatch.setattr(
+        node_mod, "cap_topic", lambda **kw: (_ for _ in ()).throw(
+            AssertionError("cache_hit 不应再次执行检索")
+        )
+    )
+    out2 = storyline_search_web_topic_node(state2)
+    assert calls["n"] == 1
+    assert out2["status_log"] == [
+        "storyline_search_web_topic_done",
+        "storyline_search_web_topic_fallback_platform",
+    ]
+
+
+def test_node_mc_cache_miss_when_chain_changes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """回退链成员变化 → request_hash 变化 → 缓存 miss(审查修订版 §3.4)。"""
+    calls = {"n": 0}
+
+    def _counting(**kwargs: Any) -> dict:
+        calls["n"] += 1
+        return _ok_result(kwargs["query"])
+
+    monkeypatch.setattr(node_mod, "cap_topic", _counting)
+    _patch_mc_engine_config(monkeypatch, fallback_platforms=("dy",))
+    state = _state(tmp_path, storyline_targets={"query": "夏季防晒"})
+    out1 = storyline_search_web_topic_node(state)
+    assert calls["n"] == 1
+
+    state2 = {
+        **state,
+        "storyline_web_topic_artifact": out1["storyline_web_topic_artifact"],
+    }
+    _patch_mc_engine_config(monkeypatch, fallback_platforms=())
+    storyline_search_web_topic_node(state2)
+    assert calls["n"] == 2  # 链从 (xhs,dy) 变为 (xhs,) → 缓存失效
 
 
 def test_node_mc_cache_hit_when_everything_unchanged(

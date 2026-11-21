@@ -64,6 +64,10 @@ SKIPPED_STATUS_TAG = "storyline_search_web_topic_skipped"
 # 不标 failed,但必须留痕,防止使用者误读来源)。
 FALLBACK_STATUS_TAG = "storyline_search_web_topic_fallback_bing"
 
+# MC 平台回退成功时的状态标签(2026-11-21 审查修订版 §4.4:xhs 失败 → dy
+# 成功属**同 Provider 内平台切换**,不复用 fallback_bing 标签伪装跨 Provider 回退)。
+PLATFORM_FALLBACK_STATUS_TAG = "storyline_search_web_topic_fallback_platform"
+
 
 def _load_reusable_cache(
     state: WorkflowState, query_hash: str, request_hash: str
@@ -101,6 +105,20 @@ def _status_tag_for(result: dict) -> str:
     )
 
 
+def _status_tags_for(result: dict) -> list[str]:
+    """产物 → 状态标签列表(2026-11-21 审查修订版 §4.4):done 时按回退类型
+    追加 —— Bing 回退成功 → fallback_bing;平台回退成功(xhs→dy)→
+    fallback_platform;两类互斥且只取其一。缓存命中与实时路径共用本函数,
+    保证 cache_hit 的标签与首次执行一致(含回退留痕)。"""
+    tags = [_status_tag_for(result)]
+    if tags[0] == "storyline_search_web_topic_done" and isinstance(result, dict):
+        if result.get("fallback"):
+            tags.append(FALLBACK_STATUS_TAG)
+        elif result.get("platform_fallback"):
+            tags.append(PLATFORM_FALLBACK_STATUS_TAG)
+    return tags
+
+
 def storyline_search_web_topic_node(state: WorkflowState) -> dict:
     outputs_root = _resolve_outputs_root(state)
     out_dir = outputs_root / "storyline"
@@ -134,17 +152,26 @@ def storyline_search_web_topic_node(state: WorkflowState) -> dict:
     hash_provider = engine
     if engine == "mediacrawler":
         mc_platform = str(config.STORYLINE_WEB_TOPIC_MC_PLATFORM)
+        mc_fallback_platforms = tuple(config.STORYLINE_WEB_TOPIC_MC_FALLBACK_PLATFORMS)
         max_results = int(config.STORYLINE_WEB_TOPIC_MC_MAX_NOTES)
         mc_revision = detect_revision(config.STORYLINE_WEB_TOPIC_MC_PROJECT_ROOT)
         provider_options = {
             "platform": mc_platform,
+            # 2026-11-21 审查修订版 P2/P3:平台回退链(顺序即执行顺序)与
+            # 整链时间预算透传给能力层
+            "fallback_platforms": mc_fallback_platforms,
+            "chain_timeout_seconds": int(config.STORYLINE_WEB_TOPIC_MC_CHAIN_TIMEOUT),
             "project_root": config.STORYLINE_WEB_TOPIC_MC_PROJECT_ROOT,
             "save_root": str(out_dir / "web_topic_mc"),
             "timeout_seconds": int(config.STORYLINE_WEB_TOPIC_MC_TIMEOUT),
             "headless": bool(config.STORYLINE_WEB_TOPIC_MC_HEADLESS),
             "mc_revision": mc_revision,
         }
-        hash_provider = mediacrawler_request_provider(mc_platform, mc_revision)
+        # 2026-11-21 审查修订版 §3.4:hash 编入**完整有序平台链**(与能力层
+        # 同一函数;链成员/顺序变化必 miss 缓存)
+        hash_provider = mediacrawler_request_provider(
+            (mc_platform, *mc_fallback_platforms), mc_revision
+        )
         query = normalize_query(query)
         if not query:
             # 规整后为空(如检索词全由逗号/空白组成)→ 与空检索词同款软跳过
@@ -172,7 +199,7 @@ def storyline_search_web_topic_node(state: WorkflowState) -> dict:
             )
             return {
                 "storyline_web_topic_artifact": str(out_path),
-                "status_log": append_status_tag(state, _status_tag_for(cached)),
+                "status_log": append_status_tag(state, *_status_tags_for(cached)),
             }
 
     try:
@@ -206,20 +233,14 @@ def storyline_search_web_topic_node(state: WorkflowState) -> dict:
 
     # 2026-11-10 阶段2:成功 / 无结果 / 失败三类分别落固定标签,error_log 只记失败。
     # 2026-11-20 审查阶段4:MC 回退 Bing 成功=检索成功(不标 failed),但追加
-    # fallback 标签留痕;message 里的 MC 失败原因随产物落盘可查。
-    tag = _status_tag_for(result)
-    tags = [tag]
-    if (
-        tag == "storyline_search_web_topic_done"
-        and isinstance(result, dict)
-        and result.get("fallback")
-    ):
-        tags.append(FALLBACK_STATUS_TAG)
+    # fallback 标签留痕;2026-11-21 审查修订版 §4.4:平台回退(xhs→dy)成功
+    # 追加 fallback_platform 标签;两类与缓存命中路径共用 _status_tags_for。
+    tags = _status_tags_for(result)
     update: dict = {
         "storyline_web_topic_artifact": str(out_path),
         "status_log": append_status_tag(state, *tags),
     }
-    if tag == "storyline_search_web_topic_failed":
+    if tags[0] == "storyline_search_web_topic_failed":
         update["error_log"] = append_error(
             state,
             node_kind="search_web_topic",

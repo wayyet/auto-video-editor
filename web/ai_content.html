@@ -268,6 +268,11 @@
         if (sec.fallback && sec.fallback.reason) {
           rows.push(el("div", { class: "hint", text: `回退说明:${sec.fallback.reason}` }));
         }
+        // 2026-11-21 审查修订版 §5.5:平台回退(xhs→dy)成功时明示切换过程
+        // (不能只显示 MediaCrawler(抖音) 而丢失"小红书失败后改用抖音"的链路)
+        if (sec.platformFallback && sec.platformFallback.reason) {
+          rows.push(el("div", { class: "hint", text: `平台回退说明:${sec.platformFallback.reason}` }));
+        }
         rows.push(reasonNote(sec.reason));
         body.append(...rows.filter(Boolean));
       },

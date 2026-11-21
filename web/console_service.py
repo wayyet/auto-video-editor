@@ -1082,6 +1082,9 @@ def _web_topic_section(
         # 2026-11-20 审查阶段5:MC 回退 Bing 时透传回退状态与原因(审查 P2-07:
         # 不能只显示 Bing 而隐藏 MC 失败;reason 用产物 message,已脱敏限长)
         "fallback": None,
+        # 2026-11-21 审查修订版 §5.5:平台回退(xhs→dy)成功时明示切换过程
+        # (不能只显示 MediaCrawler(抖音) 而丢失"小红书失败后改用抖音"的链路)
+        "platform_fallback": None,
     }
     doc, err = _read_json_file(task_dir / "storyline" / "search_web_topic.json")
     if err == "invalid":
@@ -1113,6 +1116,18 @@ def _web_topic_section(
             if isinstance(fallback_raw, dict)
             else None
         )
+        # 2026-11-21 审查修订版 §4.4/§5.5:同 Provider 内平台切换(xhs→dy),
+        # 与跨 Provider 的 fallback 互斥;reason 同样取产物 message(已脱敏)。
+        pf_raw = doc.get("platform_fallback")
+        platform_fallback = (
+            {
+                "from_platform": _clamp_str(pf_raw.get("from_platform"), 32),
+                "to_platform": _clamp_str(pf_raw.get("to_platform"), 32),
+                "reason": _clamp_str(doc.get("message"), 300),
+            }
+            if isinstance(pf_raw, dict)
+            else None
+        )
         return {
             **base,
             "engine": engine_label,
@@ -1122,6 +1137,7 @@ def _web_topic_section(
             "entries": _normalize_topic_entries(doc.get("search_web_topic")),
             "reason": reason,
             "fallback": fallback,
+            "platform_fallback": platform_fallback,
         }
     if _WEB_TOPIC_SKIPPED_TAG in status_log:
         return {**base, "status": "skipped", "reason": "本次任务跳过网页检索(检索开关关闭或检索词为空)"}
