@@ -530,3 +530,103 @@ def test_check_text_flowers_no_flowers_returns_empty() -> None:
     from draft_ops.draft_integrity import check_text_flowers
 
     assert check_text_flowers(_minimal_draft(), "zh") == []
+
+
+# ---------------------------------------------------------------------------
+# SDK 编译稿 QA 口径(2026-11-22 链转正锁定)
+# ---------------------------------------------------------------------------
+def _sdk_compiled_draft_dir(tmp_path, subtitle_count: int = 2):
+    """构造"已编译"草稿目录:spec.subtitles + compile 回执(compiled)。"""
+    import json
+    from pathlib import Path as _Path
+
+    from jianying_sdk.spec import SubtitleSpec
+    from nodes._draft_build_spec import load_build_spec, replace_spec_sections, write_build_spec
+
+    draft_dir = _Path(tmp_path) / "sdk_draft"
+    draft_dir.mkdir()
+    (draft_dir / "draft_content.json").write_text(
+        json.dumps({"canvas_config": {"width": 1080, "height": 1920}}), encoding="utf-8"
+    )
+    replace_spec_sections(draft_dir, subtitles=[
+        SubtitleSpec(
+            subtitle_id=f"text-zh-{i + 1}", text=f"第{i + 1}句",
+            start_us=i * 1_000_000, end_us=(i + 1) * 1_000_000, language="zh",
+        )
+        for i in range(subtitle_count)
+    ])
+    spec = load_build_spec(draft_dir)
+    spec.compile.last_result = {"status": "compiled", "counts": {"subtitles": subtitle_count}}
+    write_build_spec(draft_dir, spec)
+    return draft_dir
+
+
+def test_build_qa_categories_sdk_compiled_subtitles_passed(tmp_path) -> None:
+    """SDK 编译稿(文本 material id 是 uuid)→ subtitles_zh 以 spec 编译回执判定 passed。"""
+    draft_dir = _sdk_compiled_draft_dir(tmp_path)
+    # 编译稿形态:materials.texts 是 uuid id(无 text-zh- 前缀)
+    compiled = {
+        "materials": {"texts": [{"id": "0F1E-UUID-A", "type": "text"}, {"id": "0F1E-UUID-B", "type": "text"}]},
+        "tracks": [],
+    }
+    categories, new_issues, gate_failed = build_qa_categories(
+        _cat_state(
+            voiceover_summary={"provider": "jianying", "written": 2},
+            draft_path=str(draft_dir / "draft_content.json"),
+        ),
+        zh_draft=compiled,
+        en_draft=None,
+        deep_issues=[],
+    )
+    cat = categories["subtitles_zh"]
+    assert cat["status"] == CAT_PASSED, cat
+    assert cat["counts"]["texts"] == 2
+    assert cat["counts"]["source"] == "sdk_compile"
+    assert not gate_failed
+
+
+def test_build_qa_categories_compile_failure_keeps_legacy_judgement(tmp_path) -> None:
+    """编译回执 failed → 不放行:无前缀字幕 + 有旁白仍按 legacy 口径报 failed。"""
+    draft_dir = _sdk_compiled_draft_dir(tmp_path)
+    from nodes._draft_build_spec import load_build_spec, write_build_spec
+
+    spec = load_build_spec(draft_dir)
+    spec.compile.last_result = {"status": "failed", "note": "boom"}
+    write_build_spec(draft_dir, spec)
+    categories, new_issues, _gate = build_qa_categories(
+        _cat_state(
+            voiceover_summary={"provider": "jianying", "written": 2},
+            draft_path=str(draft_dir / "draft_content.json"),
+        ),
+        zh_draft={"materials": {"texts": []}, "tracks": []},
+        en_draft=None,
+        deep_issues=[],
+    )
+    assert categories["subtitles_zh"]["status"] == CAT_FAILED
+
+
+def test_tail_chain_sticker_track_binding_accepted() -> None:
+    """SDK 编译稿贴纸落独立 sticker 轨 → 不再误报「贴纸未挂到任何视频段」。"""
+    from nodes.node_join_before_delivery import _tail_chain_structured
+
+    draft = {
+        "materials": {
+            "stickers": [{"id": "sdk-sticker-1", "type": "sticker", "resource_id": "7325648367747338802"}],
+            "transitions": [{"id": "sdk-transition-1", "type": "transition"}],
+            "video_effects": [],
+        },
+        "tracks": [
+            {"type": "video", "segments": [{
+                "id": "v1", "material_id": "m1",
+                "target_timerange": {"start": 0, "duration": 5_000_000},
+                "extra_material_refs": ["sdk-transition-1"],
+            }]},
+            {"type": "sticker", "segments": [{
+                "id": "st1", "material_id": "sdk-sticker-1",
+                "target_timerange": {"start": 0, "duration": 1_500_000},
+            }]},
+        ],
+    }
+    issues = _tail_chain_structured(draft, "zh", "中文主草稿")
+    sticker_issues = [i for i in issues if i.get("category") == "stickers"]
+    assert sticker_issues == [], f"独立贴纸轨不得误报: {sticker_issues}"

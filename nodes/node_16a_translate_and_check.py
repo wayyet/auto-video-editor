@@ -42,9 +42,8 @@ from jy_common.translate_client import (
 from nodes.node_16_translate_subtitles import (
     _compute_source_fingerprint,
     _marker_exists,
-    _read_segments_from_draft,
+    _read_segments_from_marker,
     _save_marker,
-    _write_marker,
     write_srt_from_segments,
 )
 from nodes.storyline._common import load_web_topic_en_reference
@@ -172,8 +171,9 @@ def node_16a_translate_and_check(state: WorkflowState) -> dict:
         prompt_version=prompt_version,
         reference_sha256=reference_sha256,
     ):
-        # 已有有效 marker,跳过翻译调用,直接读草稿(可能含人工修正)
-        segments_en = _read_segments_from_draft(draft_dir_p)
+        # 已有有效 marker,跳过翻译调用,直接读 marker 内上次译文
+        # (2026-11-22 SDK 链转正:legacy 读草稿路径已退役,见 _read_segments_from_marker)
+        segments_en = _read_segments_from_marker(draft_dir_p)
     else:
         # 真实客户端失败 → TranslationError 上抛(fail-closed,marker 未写);
         # 上抛前先落盘取证(trace.raw_head = 模型原始输出,2026-11-20 形状
@@ -195,8 +195,10 @@ def node_16a_translate_and_check(state: WorkflowState) -> dict:
             dst.setdefault("start_ms", src.get("start_ms", 0))
             dst.setdefault("end_ms", src.get("end_ms", 0))
             dst.setdefault("index", src.get("index", i))
-        # 写入 draft(materials.texts[i].text_en)与 marker
-        _write_marker(draft_dir_p, translated)
+        # 2026-11-22 SDK 链转正:legacy 的 _write_marker(往 draft
+        # materials.texts[i].text_en 补英文)已退役 —— 该通道只服务已退休的
+        # node_16 草稿回读路径;英文文本经 state.subtitle_segments_en 由
+        # node_08b 发射进 spec。翻译指纹 marker(_save_marker)保留。
         _save_marker(
             draft_dir_p,
             translated,

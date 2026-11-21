@@ -184,50 +184,10 @@ def make_text_segment(
     }
 
 
-def build_text_track(text_materials: list[dict[str, Any]]) -> dict[str, Any]:
-    """由 material 列表(含私有 target_timerange/style)构造原生 text 轨道。
-
-    幂等约定:调用方负责**整轨替换**(与 materials.texts 整表替换同口径),
-    重放得到同一结果。
-    """
-    segments: list[dict[str, Any]] = []
-    for i, mat in enumerate(text_materials):
-        if not isinstance(mat, dict):
-            continue
-        tr = mat.get("target_timerange") or {}
-        start_us = int(tr.get("start") or 0)
-        duration_us = int(tr.get("duration") or 0)
-        if duration_us <= 0:
-            continue
-        segments.append(
-            make_text_segment(
-                index=i,
-                material_id=str(mat.get("id") or ""),
-                start_us=start_us,
-                duration_us=duration_us,
-                style=mat.get("style"),
-            )
-        )
-    return {
-        "attribute": 0,
-        "flag": 0,
-        "id": "track-text-1",
-        "is_default_name": True,
-        "name": "",
-        "segments": segments,
-        "type": "text",
-    }
-
-
-def sync_text_track(draft: dict[str, Any], text_materials: list[dict[str, Any]]) -> None:
-    """把 text 轨道**整轨替换**为与 materials.texts 一致的形状(就地修改 draft)。
-
-    幂等:重放(整表替换 texts + 整轨替换 track)得到同一结果;其余轨道不动。
-    """
-    tracks = draft.setdefault("tracks", []) or []
-    kept = [t for t in tracks if isinstance(t, dict) and t.get("type") != "text"]
-    kept.append(build_text_track(text_materials))
-    draft["tracks"] = kept
+# 2026-11-22 SDK 链转正:legacy 的 build_text_track / sync_text_track(原生
+# text 轨道构造/整轨替换)已删除 —— 字幕经 subtitle_specs_from_materials 进
+# DraftBuildSpec,node_11 SDK 编译统一落轨;开场钩子 node_09b 的标题轨自拼
+# 不经此模块轨道函数(见其模块 docstring)。
 
 
 def subtitle_specs_from_materials(
@@ -275,9 +235,8 @@ def subtitle_specs_from_materials(
 
 
 __all__ = [
-    "build_text_track",
+    "canvas_width_from_draft",
     "make_text_material",
     "make_text_segment",
     "subtitle_specs_from_materials",
-    "sync_text_track",
 ]

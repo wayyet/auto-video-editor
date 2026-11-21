@@ -78,8 +78,17 @@ def _segments() -> list[dict]:
     ]
 
 
+def _spec_of(draft_dir: Path):
+    """读取 node_08b 发射的字幕构建计划(spec sidecar;缺失即失败)。"""
+    from nodes._draft_build_spec import load_build_spec
+
+    spec = load_build_spec(draft_dir)
+    assert spec is not None, "spec sidecar 应已发射"
+    return spec
+
+
 def test_node_08b_applies_storyline_style_to_en_texts(tmp_path: Path) -> None:
-    """有推荐 → 字号/颜色/位置真实落草稿(渲染路径已核实),状态日志记说明。"""
+    """有推荐 → 字号/颜色/位置进 spec.style(编译器换算落草稿),状态日志记说明。"""
     from nodes.node_08_add_subtitles import _JIANYING_DEFAULT_STYLE
 
     en_file = _write_en_draft(tmp_path)
@@ -104,17 +113,13 @@ def test_node_08b_applies_storyline_style_to_en_texts(tmp_path: Path) -> None:
     assert "node_08b_add_subtitles_en_done" in out["status_log"]
     assert any("[node_08b] 字幕样式:" in entry for entry in out["status_log"])
 
-    draft = json.loads(en_file.read_text(encoding="utf-8"))
-    texts = draft["materials"]["texts"]
-    assert len(texts) == 2
-    style = texts[0]["style"]
+    spec = _spec_of(en_file.parent)
+    assert len(spec.subtitles) == 2
+    style = spec.subtitles[0].style
     assert style["size"] == 10.0  # 48/24 = 2.0 → 触顶夹取
     assert style["transform_y"] == 0.8
     assert style["color"] == [1.0, 0.0, 0.0]
     assert style["bold"] == _JIANYING_DEFAULT_STYLE["bold"]
-    # 原生 content JSON 同步了 size(渲染路径)
-    content = json.loads(texts[0]["content"])
-    assert content["styles"][0]["size"] == 10.0
 
 
 def test_node_08b_without_plan_keeps_default_style(tmp_path: Path) -> None:
@@ -131,8 +136,7 @@ def test_node_08b_without_plan_keeps_default_style(tmp_path: Path) -> None:
     }
     out = add_subtitles_en(state)
 
-    draft = json.loads(en_file.read_text(encoding="utf-8"))
-    style = draft["materials"]["texts"][0]["style"]
+    style = _spec_of(en_file.parent).subtitles[0].style
     assert style["size"] == _JIANYING_DEFAULT_STYLE["size"]
     assert style["color"] == _JIANYING_DEFAULT_STYLE["color"]
     assert style["transform_y"] == _JIANYING_DEFAULT_STYLE["transform_y"]
@@ -160,8 +164,7 @@ def test_node_08b_font_unavailable_note_only(tmp_path: Path) -> None:
     }
     out = add_subtitles_en(state)
 
-    draft = json.loads(en_file.read_text(encoding="utf-8"))
-    style = draft["materials"]["texts"][0]["style"]
+    style = _spec_of(en_file.parent).subtitles[0].style
     assert style["size"] == 5.0 and style["transform_y"] == -0.8
     assert any("NoSuchFont-Bold.ttf" in e and "不存在" in e for e in out["status_log"])
 
@@ -204,7 +207,7 @@ def test_node_08b_missing_status_skips_formal_write(tmp_path: Path) -> None:
 
 
 def test_node_08b_real_status_writes_normal(tmp_path: Path) -> None:
-    """translation_status=real → 正常写入(契约锚定,防门禁误伤)。"""
+    """translation_status=real → 正常发射(契约锚定,防门禁误伤)。"""
     en_file = _write_en_draft(tmp_path)
     state = {
         "draft_dir_en_branch": str(en_file.parent),
@@ -216,8 +219,7 @@ def test_node_08b_real_status_writes_normal(tmp_path: Path) -> None:
     out = add_subtitles_en(state)
 
     assert "node_08b_add_subtitles_en_done" in out["status_log"]
-    draft = json.loads(en_file.read_text(encoding="utf-8"))
-    assert len(draft["materials"]["texts"]) == 2
+    assert len(_spec_of(en_file.parent).subtitles) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -231,10 +233,10 @@ _EN157 = (
 
 
 def test_node_08b_long_en_text_wrapped(tmp_path: Path) -> None:
-    """157 字符英文 cue → content 内嵌 \\n 每行不超宽;text_en 私有键保持原文。
+    """157 字符英文 cue → spec.wrap_content 内嵌换行每行不超宽;spec.text 保持原文。
 
     真机 en_branch_console-31a8a8e9edd2 实证:该 cue 单行 ≈2760px(2.6 倍
-    1080 画布宽)。折行只发生在渲染口径;16a marker/SRT 消费的 text_en 不变。
+    1080 画布宽)。折行只发生在渲染口径;SRT/翻译指纹消费的 text_en 不变。
     """
     from jy_common.subtitle_wrap import line_units, max_line_units
 
@@ -251,11 +253,13 @@ def test_node_08b_long_en_text_wrapped(tmp_path: Path) -> None:
     out = add_subtitles_en(state)
 
     assert "node_08b_add_subtitles_en_done" in out["status_log"]
-    draft = json.loads(en_file.read_text(encoding="utf-8"))
-    text = draft["materials"]["texts"][0]
-    content = json.loads(text["content"])
-    assert "\n" in content["text"], "size 5.0(容量 26 单位)下 157 字符必须折行"
-    assert content["text"].replace("\n", " ") == _EN157, "词边界折行可无损还原"
-    assert text["text_en"] == _EN157, "私有键保持原文(16a marker/SRT 语义)"
-    for line in content["text"].split("\n"):
+    sub = _spec_of(en_file.parent).subtitles[0]
+    NL = chr(10)
+    wrapped = sub.wrap_content or ""
+    assert NL in wrapped, "size 5.0(容量 26 单位)下 157 字符必须折行"
+    assert wrapped.replace(NL, " ") == _EN157, "词边界折行可无损还原"
+    assert sub.text == _EN157, "原文保持(SRT/翻译指纹语义)"
+    for line in wrapped.split(NL):
         assert line_units(line) <= max_line_units(5.0, 1080)
+
+

@@ -1,13 +1,16 @@
-"""节点 9 转场 + 视频特效单测 — 池轮换、克制点缀、幂等清理、降级。
+"""节点 9 转场 + 视频特效单测 — 池轮换、克制点缀、构建计划发射(SDK 链转正版)。
 
-2026-11-17 池化重写后的口径(核验报告 §6.4-§6.7 / §8.3):
+2026-11-22 SDK 链转正:node_09 不再改写草稿,观察点从草稿 materials 移到
+DraftBuildSpec(transitions/video_effects 段);转场挂载语义为**前段**
+(SDK 约定,boundary_index + from/to clip 表达)。池轮换/克制点缀/降级语义
+保持 2026-11-17 池化重写口径(核验报告 §6.4-§6.7 / §8.3):
 - 语义 → transition_semantic_map 池 key → transition_pools 池内 sha256 确定性
   轮换(禁 python hash()、不含 zh/en tag,跨 PYTHONHASHSEED 稳定,双语一致);
 - 未收录语义回退 pool_gentle;all-cut + required → 边界 0 保底 fade;
 - 视频特效克制点缀:0-based 位点 {0, n-1} ∪ {i∈[1,n-2] 且 i%3==0},按挂载
-  序号轮换白名单,intensity 钳制 [0,1],空白名单 fail-closed 不写;
+  序号轮换白名单,intensity 钳制 [0,1](spec 侧 0-100),空白名单 fail-closed;
 - 边界 = max(视频段数 - 1, 0);1 段 → not_applicable;资源未解析 → degraded;
-- 重放幂等(字节级)+ 我方旧产物清理,人工转场不受影响。
+- 模板库缺失 → 降级通过 + 响亮报错(交付 QA 闸门兜底)。
 """
 
 from __future__ import annotations
@@ -21,7 +24,6 @@ from pathlib import Path
 
 import pytest
 
-from draft_ops.draft_integrity import check_track_references
 from jy_common.template_library import TemplateLibrary
 from nodes.node_09_inject_fx import (
     _boundary_semantics_plan,
@@ -82,6 +84,15 @@ def _state(**overrides) -> dict:
     return base
 
 
+def _spec_of(draft_file: Path):
+    """读取 node_09 发射的构建计划(spec sidecar;缺失即失败)。"""
+    from nodes._draft_build_spec import load_build_spec
+
+    spec = load_build_spec(draft_file.parent)
+    assert spec is not None, "spec sidecar 应已发射"
+    return spec
+
+
 def _stub_lib(
     pools: dict[str, list[str]] | None = None,
     effects: list[dict] | None = None,
@@ -134,42 +145,34 @@ def _use_stub_lib(monkeypatch: pytest.MonkeyPatch, lib: TemplateLibrary) -> None
 # ---------------------------------------------------------------- 转场池轮换
 
 
-def test_inject_fx_binds_transitions_to_boundaries(tmp_draft: Path) -> None:
-    """3 段无计划 → 2 个转场(pool_gentle 轮换),挂后一段;特效挂首/尾段。"""
+def test_inject_fx_plans_transitions_for_boundaries(tmp_draft: Path) -> None:
+    """3 段无计划 → 2 个转场(pool_gentle 轮换,边界 0/1);特效挂首/尾段;草稿零写入。"""
     state = _state(draft_path=str(tmp_draft))
     out = inject_fx(state)
 
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    transitions = draft["materials"]["transitions"]
-    segments = draft["tracks"][0]["segments"]
-    video_effects = draft["materials"]["video_effects"]
-
-    assert len(transitions) == 2
-    for t in transitions:
-        assert t["type"] == "transition"
-        assert _VIP_ID_PATTERN.match(t["resource_id"])
-        assert t["name"] in POOL_GENTLE
-        assert int(t["duration"]) > 0
-    # 绑定:边界 i 的转场挂在 segments[i+1]
-    assert "transition-1" in segments[1]["extra_material_refs"]
-    assert "transition-2" in segments[2]["extra_material_refs"]
-    assert not any(
-        str(r).startswith("transition-") for r in segments[0].get("extra_material_refs", [])
-    )
-    assert check_track_references(draft, "zh") == []
+    spec = _spec_of(tmp_draft)
+    assert len(spec.transitions) == 2
+    for i, t in enumerate(spec.transitions):
+        assert t.boundary_index == i
+        assert t.from_clip_id == f"s{i + 1}" and t.to_clip_id == f"s{i + 2}"
+        assert _VIP_ID_PATTERN.match(t.resource_id)
+        assert t.name in POOL_GENTLE
+        assert t.duration_us > 0
     # 克制点缀:3 段 → 位点 {0, 2},按挂载序号轮换白名单前两名
-    assert [e["name"] for e in video_effects] == ["柔和辉光", "金色辉光"]
-    assert "vfx-1" in segments[0]["extra_material_refs"]
-    assert "vfx-3" in segments[2]["extra_material_refs"]
+    assert [v.name for v in spec.video_effects] == ["柔和辉光", "金色辉光"]
+    assert {v.clip_id for v in spec.video_effects} == {"s1", "s3"}
+    # 草稿零写入(SDK 链:node_11 编译才落草稿)
+    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
+    assert draft["materials"].get("transitions", []) == []
+    assert draft["materials"].get("video_effects", []) == []
     assert "node_09_inject_fx_done" in out["status_log"]
 
 
 def test_inject_fx_ignores_shot_plan(tmp_draft: Path) -> None:
-    """阶段3任务4:不再依赖 shot_plan —— 不传它,注入行为不变。"""
+    """阶段3任务4:不再依赖 shot_plan —— 不传它,计划行为不变。"""
     state = _state(draft_path=str(tmp_draft))
     out = inject_fx(state)
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    assert len(draft["materials"]["transitions"]) == 2
+    assert len(_spec_of(tmp_draft).transitions) == 2
     assert "node_09_inject_fx_done" in out["status_log"]
 
 
@@ -186,11 +189,10 @@ def test_inject_fx_consumes_transition_semantics_fade(tmp_draft: Path) -> None:
         },
     )
     inject_fx(state)
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    transitions = draft["materials"]["transitions"]
-    assert len(transitions) == 2
-    assert all(t["name"] in POOL_GENTLE for t in transitions)
-    assert all(_VIP_ID_PATTERN.match(t["resource_id"]) for t in transitions)
+    spec = _spec_of(tmp_draft)
+    assert len(spec.transitions) == 2
+    assert all(t.name in POOL_GENTLE for t in spec.transitions)
+    assert all(_VIP_ID_PATTERN.match(t.resource_id) for t in spec.transitions)
 
 
 def test_inject_fx_semantic_zoom_maps_pool_zoom(tmp_draft: Path) -> None:
@@ -206,8 +208,7 @@ def test_inject_fx_semantic_zoom_maps_pool_zoom(tmp_draft: Path) -> None:
         },
     )
     inject_fx(state)
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    assert all(t["name"] in POOL_ZOOM for t in draft["materials"]["transitions"])
+    assert all(t.name in POOL_ZOOM for t in _spec_of(tmp_draft).transitions)
 
 
 def test_inject_fx_unknown_semantic_falls_back_to_gentle(tmp_draft: Path) -> None:
@@ -223,8 +224,7 @@ def test_inject_fx_unknown_semantic_falls_back_to_gentle(tmp_draft: Path) -> Non
         },
     )
     inject_fx(state)
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    assert all(t["name"] in POOL_GENTLE for t in draft["materials"]["transitions"])
+    assert all(t.name in POOL_GENTLE for t in _spec_of(tmp_draft).transitions)
 
 
 def test_inject_fx_pool_rotation_locks_formula(tmp_draft: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -233,8 +233,7 @@ def test_inject_fx_pool_rotation_locks_formula(tmp_draft: Path, monkeypatch: pyt
     _use_stub_lib(monkeypatch, _stub_lib(pools={"pool_gentle": pool}))
     state = _state(draft_path=str(tmp_draft))
     inject_fx(state)
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    names = [t["name"] for t in draft["materials"]["transitions"]]
+    names = [t.name for t in _spec_of(tmp_draft).transitions]
     seed0 = _stable_pool_seed("draft", 0, "pool_gentle")
     seed1 = _stable_pool_seed("draft", 1, "pool_gentle")
     assert names[0] == pool[(0 + seed0) % len(pool)]
@@ -242,16 +241,18 @@ def test_inject_fx_pool_rotation_locks_formula(tmp_draft: Path, monkeypatch: pyt
 
 
 def test_inject_fx_deterministic_across_pythonhashseed(tmp_draft: Path) -> None:
-    """同输入在不同 PYTHONHASHSEED 子进程下输出一致(核验报告 §8.3)。"""
+    """同输入在不同 PYTHONHASHSEED 子进程下 spec 计划一致(核验报告 §8.3)。"""
     code = (
         "import sys, json\n"
         f"sys.path.insert(0, {str(REPO)!r})\n"
         "from nodes.node_09_inject_fx import inject_fx\n"
         f"state = {{'draft_path': {str(tmp_draft)!r}, 'status_log': [], 'error_log': []}}\n"
         "inject_fx(state)\n"
-        f"d = json.load(open({str(tmp_draft)!r}, encoding='utf-8'))\n"
-        "names = [t['name'] for t in d['materials']['transitions']]"
-        " + [e['name'] for e in d['materials']['video_effects']]\n"
+        "spec = json.load(open(r"
+        + repr(str(tmp_draft.parent / '.autovideo_draft_build_spec.json'))
+        + ", encoding='utf-8'))\n"
+        "names = [t['name'] for t in spec['transitions']]"
+        " + [v['name'] for v in spec['video_effects']]\n"
         "print(json.dumps(names, ensure_ascii=False))\n"
     )
     outputs = []
@@ -291,14 +292,8 @@ def test_inject_fx_dual_draft_same_seed_via_config(tmp_path: Path) -> None:
     state = _state(draft_path=str(zh_draft), draft_dir_en_branch=str(en_draft.parent))
     out = inject_fx(state, {"configurable": {"thread_id": tid}})
 
-    zh_names = [
-        t["name"]
-        for t in json.loads(zh_draft.read_text(encoding="utf-8"))["materials"]["transitions"]
-    ]
-    en_names = [
-        t["name"]
-        for t in json.loads(en_draft.read_text(encoding="utf-8"))["materials"]["transitions"]
-    ]
+    zh_names = [t.name for t in _spec_of(zh_draft).transitions]
+    en_names = [t.name for t in _spec_of(en_draft).transitions]
     assert len(zh_names) == len(en_names) == 2
     assert zh_names == en_names
     # seed 来自 resolver 解析出的 thread_id(公式镜像,boundary 0-based)
@@ -318,13 +313,9 @@ def test_inject_fx_session_id_fallback_matches_formula(tmp_path: Path) -> None:
     sid = "console-via-session"
     state = _state(draft_path=str(zh_draft), session_id=sid)
     inject_fx(state)  # 不传 config
-    names = [
-        t["name"]
-        for t in json.loads(zh_draft.read_text(encoding="utf-8"))["materials"]["transitions"]
-    ]
-    for i, name in enumerate(names):
+    for i, t in enumerate(_spec_of(zh_draft).transitions):
         seed = _stable_pool_seed(sid, i, "pool_gentle")
-        assert name == POOL_GENTLE[(i + seed) % len(POOL_GENTLE)]
+        assert t.name == POOL_GENTLE[(i + seed) % len(POOL_GENTLE)]
 
 
 # ---------------------------------------------------------------- 硬切与 all-cut 保底
@@ -343,21 +334,16 @@ def test_inject_fx_all_cut_with_required_falls_back(tmp_draft: Path) -> None:
         },
     )
     out = inject_fx(state)
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    transitions = draft["materials"]["transitions"]
+    transitions = _spec_of(tmp_draft).transitions
     # 边界 0 保底产出一个 pool_gentle 转场;边界 1 仍是硬切
     assert len(transitions) == 1
-    assert transitions[0]["name"] in POOL_GENTLE
-    assert "transition-1" in draft["tracks"][0]["segments"][1]["extra_material_refs"]
-    assert not any(
-        str(r).startswith("transition-")
-        for r in draft["tracks"][0]["segments"][2].get("extra_material_refs", [])
-    )
+    assert transitions[0].boundary_index == 0
+    assert transitions[0].name in POOL_GENTLE
     assert "node_09_inject_fx_zh_all_cut_fallback" in out["status_log"]
 
 
 def test_inject_fx_all_cut_without_required_keeps_hard_cuts(tmp_draft: Path) -> None:
-    """用户显式不要求转场 → 允许全硬切,零转场素材,无保底(§6.7)。"""
+    """用户显式不要求转场 → 允许全硬切,零转场计划,无保底(§6.7)。"""
     state = _state(
         draft_path=str(tmp_draft),
         required_features={"transitions": False},
@@ -370,17 +356,12 @@ def test_inject_fx_all_cut_without_required_keeps_hard_cuts(tmp_draft: Path) -> 
         },
     )
     out = inject_fx(state)
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    assert draft["materials"]["transitions"] == []
-    assert all(
-        not any(str(r).startswith("transition-") for r in s.get("extra_material_refs", []))
-        for s in draft["tracks"][0]["segments"]
-    )
+    assert _spec_of(tmp_draft).transitions == []
     assert "node_09_inject_fx_zh_all_cut_fallback" not in out["status_log"]
 
 
 def test_inject_fx_mixed_cut_writes_only_transition_boundaries(tmp_draft: Path) -> None:
-    """部分硬切部分转场:硬切边界不写素材,转场边界正常;不触发保底(§6.7)。"""
+    """部分硬切部分转场:硬切边界不进计划,转场边界正常;不触发保底(§6.7)。"""
     state = _state(
         draft_path=str(tmp_draft),
         storyline_plan={
@@ -392,15 +373,11 @@ def test_inject_fx_mixed_cut_writes_only_transition_boundaries(tmp_draft: Path) 
         },
     )
     out = inject_fx(state)
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    transitions = draft["materials"]["transitions"]
+    transitions = _spec_of(tmp_draft).transitions
     assert len(transitions) == 1
-    assert transitions[0]["name"] in POOL_GENTLE
-    assert "transition-2" in draft["tracks"][0]["segments"][2]["extra_material_refs"]
-    assert not any(
-        str(r).startswith("transition-")
-        for r in draft["tracks"][0]["segments"][1].get("extra_material_refs", [])
-    )
+    assert transitions[0].boundary_index == 1
+    assert transitions[0].from_clip_id == "s2" and transitions[0].to_clip_id == "s3"
+    assert transitions[0].name in POOL_GENTLE
     assert "node_09_inject_fx_zh_all_cut_fallback" not in out["status_log"]
 
 
@@ -451,14 +428,14 @@ def test_inject_fx_not_applicable_single_segment(tmp_path: Path) -> None:
     draft_path = _write_draft(tmp_path / "draft" / "draft_content.json", _draft([_seg("s1", 0)]))
     state = _state(draft_path=str(draft_path))
     out = inject_fx(state)
-    draft = json.loads(draft_path.read_text(encoding="utf-8"))
-    assert draft["materials"]["transitions"] == []
-    assert [e["name"] for e in draft["materials"]["video_effects"]] == ["柔和辉光"]
+    spec = _spec_of(draft_path)
+    assert spec.transitions == []
+    assert [v.name for v in spec.video_effects] == ["柔和辉光"]
     assert "node_09_inject_fx_zh_not_applicable" in out["status_log"]
 
 
 def test_inject_fx_effect_rotation_by_mount_sequence(
-    tmp_draft: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """7 段 → 位点 {0,3,6},特效按挂载序号轮换白名单(非段索引取模)。"""
     effects = [
@@ -471,35 +448,32 @@ def test_inject_fx_effect_rotation_by_mount_sequence(
         _draft([_seg(f"s{i}", i * 10_000_000) for i in range(7)]),
     )
     inject_fx(_state(draft_path=str(draft_path)))
-    draft = json.loads(draft_path.read_text(encoding="utf-8"))
-    effects_written = {m["id"]: m["name"] for m in draft["materials"]["video_effects"]}
-    assert effects_written == {"vfx-1": "特效甲", "vfx-4": "特效乙", "vfx-7": "特效丙"}
+    effects_planned = {v.clip_id: v.name for v in _spec_of(draft_path).video_effects}
+    assert effects_planned == {"s0": "特效甲", "s3": "特效乙", "s6": "特效丙"}
 
 
 def test_inject_fx_effect_intensity_clamped(
     tmp_draft: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """intensity 钳制 [0,1](核验报告 §6.6)。"""
+    """intensity 钳制 [0,1] → spec 换算 0-100(核验报告 §6.6)。"""
     effects = [
         {"name": "特效高", "style_tag": "default", "intensity": 1.5},
         {"name": "特效负", "style_tag": "default", "intensity": -0.2},
     ]
     _use_stub_lib(monkeypatch, _stub_lib(effects=effects))
     inject_fx(_state(draft_path=str(tmp_draft)))
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    values = {m["id"]: m["value"] for m in draft["materials"]["video_effects"]}
-    assert values["vfx-1"] == 1.0
-    assert values["vfx-3"] == 0.0  # 3 段位点 {0,2} → 第 2 次挂载在 vfx-3(特效负)
+    values = {v.clip_id: v.intensity for v in _spec_of(tmp_draft).video_effects}
+    assert values["s1"] == 100.0
+    assert values["s3"] == 0.0  # 3 段位点 {0,2} → 第 2 次挂载在 s3(特效负)
 
 
 def test_inject_fx_empty_whitelist_fail_closed(
     tmp_draft: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """空白名单 → fail-closed 不注入特效,只记 status 说明,不刷 error_log(§6.6)。"""
+    """空白名单 → fail-closed 零特效计划,只记 status 说明,不刷 error_log(§6.6)。"""
     _use_stub_lib(monkeypatch, _stub_lib(effects=[]))
     out = inject_fx(_state(draft_path=str(tmp_draft)))
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    assert draft["materials"]["video_effects"] == []
+    assert _spec_of(tmp_draft).video_effects == []
     assert not any("视频特效" in e for e in out["error_log"])
     assert "node_09_inject_fx_zh_vfx_whitelist_empty" in out["status_log"]
     assert "node_09_inject_fx_done" in out["status_log"]
@@ -508,7 +482,7 @@ def test_inject_fx_empty_whitelist_fail_closed(
 def test_inject_fx_effect_names_not_resolved_degrades(
     tmp_draft: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """白名单非空但资源库解析失败 → degraded 不写入,error_log 留痕。"""
+    """白名单非空但资源库解析失败 → degraded 零计划,error_log 留痕。"""
     lib = TemplateLibrary(
         {"video_effects": [{"name": "幽灵特效", "style_tag": "default", "intensity": 0.5}]},
         fx_lib={"transitions": [], "video_effects": []},
@@ -516,8 +490,7 @@ def test_inject_fx_effect_names_not_resolved_degrades(
     )
     _use_stub_lib(monkeypatch, lib)
     out = inject_fx(_state(draft_path=str(tmp_draft)))
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    assert draft["materials"]["video_effects"] == []
+    assert _spec_of(tmp_draft).video_effects == []
     assert any("degraded" in e for e in out["error_log"])
 
 
@@ -525,7 +498,7 @@ def test_inject_fx_effect_names_not_resolved_degrades(
 
 
 def test_inject_fx_handles_missing_template(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """模板库缺失时,降级通过 — status_log 标记 + error_log 警告,不动草稿。"""
+    """模板库缺失 → 降级通过:error_log 响亮留痕 + 零计划(交付 QA 闸门兜底)。"""
     from jy_common import template_library as tl_mod
 
     empty_lib = tl_mod.TemplateLibrary({"_missing": True, "_path": "/nope.json"})
@@ -541,12 +514,12 @@ def test_inject_fx_handles_missing_template(tmp_path: Path, monkeypatch: pytest.
 
     assert "node_09_inject_fx_no_template" in out["status_log"]
     assert any("模板库缺失" in e for e in out["error_log"])
-    draft_after = json.loads(draft_path.read_text(encoding="utf-8"))
-    assert not draft_after["materials"].get("transitions")
+    # spec 不发射(node_09 早退),草稿不动
+    assert not (draft_path.parent / ".autovideo_draft_build_spec.json").exists()
 
 
 def test_inject_fx_handles_missing_fx_resource(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """fx_resource_library 缺失(只有白名单):转场/特效 degraded 不写入,不抛异常。"""
+    """fx_resource_library 缺失(只有白名单):转场/特效 degraded 零计划,不抛异常。"""
     from jy_common import template_library as tl_mod
 
     def fake_loader(**_kwargs):
@@ -569,46 +542,49 @@ def test_inject_fx_handles_missing_fx_resource(tmp_path: Path, monkeypatch: pyte
     state = _state(draft_path=str(draft_path))
     out = inject_fx(state)
     assert "node_09_inject_fx_done" in out["status_log"]
-    draft_after = json.loads(draft_path.read_text(encoding="utf-8"))
-    assert draft_after["materials"]["transitions"] == []
+    spec = _spec_of(draft_path)
+    assert spec.transitions == []
+    assert spec.video_effects == []
     assert any("degraded" in e for e in out["error_log"])
 
 
 def test_inject_fx_replay_is_byte_identical(tmp_draft: Path) -> None:
-    """重放两次:materials 条数不变,整份草稿字节级一致(幂等三件套)。"""
+    """重放两次:草稿字节级一致(零写入)+ spec 计划字节级一致(确定性轮换)。"""
     state = _state(draft_path=str(tmp_draft))
     inject_fx(state)
-    first = tmp_draft.read_bytes()
+    first_draft = tmp_draft.read_bytes()
+    spec_file = tmp_draft.parent / ".autovideo_draft_build_spec.json"
+    first_spec = spec_file.read_bytes()
 
     inject_fx(state)
     second = tmp_draft.read_bytes()
 
-    assert first == second
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    assert len(draft["materials"]["transitions"]) == 2
-    assert len(draft["materials"]["video_effects"]) == 2
+    assert tmp_draft.read_bytes() == first_draft, "草稿零写入"
+    assert spec_file.read_bytes() == first_spec, "spec 计划重放稳定"
+    assert len(_spec_of(tmp_draft).transitions) == 2
+    assert len(_spec_of(tmp_draft).video_effects) == 2
 
 
 def test_inject_fx_cleans_stale_after_boundary_shrink(tmp_draft: Path) -> None:
-    """3 段注入后裁成 2 段再重放:旧转场/特效素材与引用被清掉,不留悬空。"""
+    """3 段发射后裁成 2 段再重放:spec 计划随边界收缩(段整体替换=幂等清理)。"""
     state = _state(draft_path=str(tmp_draft))
     inject_fx(state)
+    assert len(_spec_of(tmp_draft).transitions) == 2
 
     draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
     draft["tracks"][0]["segments"] = draft["tracks"][0]["segments"][:2]
     tmp_draft.write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
 
     inject_fx(state)
-    draft2 = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    assert len(draft2["materials"]["transitions"]) == 1
-    # 2 段 → 位点 {0,1}:vfx-1/vfx-2 续用,旧 vfx-3 被清理
-    assert {m["id"] for m in draft2["materials"]["video_effects"]} == {"vfx-1", "vfx-2"}
-    assert check_track_references(draft2, "zh") == []
-    assert "transition-2" not in str(draft2["tracks"][0]["segments"][1].get("extra_material_refs"))
+    spec = _spec_of(tmp_draft)
+    assert len(spec.transitions) == 1
+    # 2 段 → 位点 {0,1}:首尾两段续用,旧 s3 计划消失
+    assert {v.clip_id for v in spec.video_effects} == {"s1", "s2"}
+    assert all(t.boundary_index == 0 for t in spec.transitions)
 
 
 def test_inject_fx_preserves_human_transitions(tmp_draft: Path) -> None:
-    """人工在剪映加的转场(uuid id)不落我方模式 → 素材与引用都保留。"""
+    """人工在剪映加的转场(uuid id):node_09 零写入,草稿原样保留;计划只含我方条目。"""
     human_transition = {
         "id": "4F1A2B3C-0000-1111-2222-333344445555",
         "type": "transition",
@@ -624,15 +600,17 @@ def test_inject_fx_preserves_human_transitions(tmp_draft: Path) -> None:
 
     draft2 = json.loads(tmp_draft.read_text(encoding="utf-8"))
     ids = [t["id"] for t in draft2["materials"]["transitions"]]
-    assert human_transition["id"] in ids
+    assert ids == [human_transition["id"]], "人工素材不被触碰"
     assert human_transition["id"] in draft2["tracks"][0]["segments"][1]["extra_material_refs"]
+    spec = _spec_of(tmp_draft)
+    assert len(spec.transitions) == 2, "spec 只记录计划边界(人工 uuid 不进计划)"
 
 
 # ---------------------------------------------------------------- 双语草稿
 
 
 def test_inject_fx_applies_to_en_draft_when_present(tmp_draft: Path, tmp_path: Path) -> None:
-    """K2=B:英文分支草稿同步注入,且逐边界转场名/特效名与中文一致(§4.9 seed 不含 tag)。"""
+    """K2=B:英文分支草稿同步发射,且逐边界转场名/特效名与中文一致(§4.9 seed 不含 tag)。"""
     zh = tmp_draft
     en_file = tmp_path / "en_branch" / "draft_content.json"
     en_file.parent.mkdir(parents=True, exist_ok=True)
@@ -644,14 +622,11 @@ def test_inject_fx_applies_to_en_draft_when_present(tmp_draft: Path, tmp_path: P
     )
     out = inject_fx(state)
 
-    zh_draft = json.loads(zh.read_text(encoding="utf-8"))
-    en_draft = json.loads(en_file.read_text(encoding="utf-8"))
-
-    zh_names = [t["name"] for t in zh_draft["materials"]["transitions"]]
-    en_names = [t["name"] for t in en_draft["materials"]["transitions"]]
+    zh_names = [t.name for t in _spec_of(zh).transitions]
+    en_names = [t.name for t in _spec_of(en_file).transitions]
     assert zh_names and zh_names == en_names
-    zh_vfx = [e["name"] for e in zh_draft["materials"]["video_effects"]]
-    en_vfx = [e["name"] for e in en_draft["materials"]["video_effects"]]
+    zh_vfx = [v.name for v in _spec_of(zh).video_effects]
+    en_vfx = [v.name for v in _spec_of(en_file).video_effects]
     assert zh_vfx == en_vfx
     assert "node_09_inject_fx_done" in out["status_log"]
     assert "node_09_inject_fx_en_done" in out["status_log"]
@@ -666,7 +641,7 @@ def test_inject_fx_degrades_when_en_draft_missing(tmp_draft: Path, tmp_path: Pat
     assert "node_09_inject_fx_done" in out["status_log"]
     assert "node_09_inject_fx_en_done" not in out["status_log"]
     assert any("英文草稿不存在" in e for e in out["error_log"])
-    assert len(json.loads(zh.read_text(encoding="utf-8"))["materials"]["transitions"]) > 0
+    assert len(_spec_of(zh).transitions) > 0
 
 
 # ---------------------------------------------------------------- 开场转场加强(第八期阶段3,设计文档 §6.3)
@@ -690,13 +665,11 @@ def test_inject_fx_opening_boost_real_lib_boundary0_whip(tmp_draft: Path) -> Non
         },
     )
     out = inject_fx(state)
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    transitions = draft["materials"]["transitions"]
+    transitions = _spec_of(tmp_draft).transitions
 
     assert len(transitions) == 2
-    assert transitions[0]["name"] in POOL_WHIP  # 边界 0 = 强动势池
-    assert transitions[1]["name"] in POOL_GENTLE  # 边界 1 = 原 fade 语义
-    assert "transition-1" in draft["tracks"][0]["segments"][1]["extra_material_refs"]
+    assert transitions[0].name in POOL_WHIP  # 边界 0 = 强动势池
+    assert transitions[1].name in POOL_GENTLE  # 边界 1 = 原 fade 语义
     assert "node_09_inject_fx_opening_boost_requested" in out["status_log"]
     assert "node_09_inject_fx_zh_opening_boost_applied" in out["status_log"]
     assert "node_09_inject_fx_zh_all_cut_fallback" not in out["status_log"]
@@ -720,11 +693,10 @@ def test_inject_fx_opening_boost_empty_semantics_still_applies(
     )
     out = inject_fx(state)
 
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    transitions = draft["materials"]["transitions"]
+    transitions = _spec_of(tmp_draft).transitions
     assert len(transitions) == 2
-    assert transitions[0]["name"] in ("甩镜一", "甩镜二")  # 边界 0 = whip
-    assert transitions[1]["name"] in ("柔切一", "柔切二")  # 边界 1 缺省语义 → gentle 回退
+    assert transitions[0].name in ("甩镜一", "甩镜二")  # 边界 0 = whip
+    assert transitions[1].name in ("柔切一", "柔切二")  # 边界 1 缺省语义 → gentle 回退
     assert "node_09_inject_fx_zh_opening_boost_applied" in out["status_log"]
 
 
@@ -743,7 +715,7 @@ def test_inject_fx_opening_boost_not_applicable_single_segment(
     state = _state(draft_path=str(single), storyline_targets=_boost_request())
     out = inject_fx(state)
 
-    assert json.loads(single.read_text(encoding="utf-8"))["materials"]["transitions"] == []
+    assert _spec_of(single).transitions == []
     assert "node_09_inject_fx_opening_boost_requested" in out["status_log"]
     assert "node_09_inject_fx_zh_opening_boost_not_applicable" in out["status_log"]
     assert "node_09_inject_fx_zh_opening_boost_applied" not in out["status_log"]
@@ -763,10 +735,9 @@ def test_inject_fx_opening_boost_negation_does_not_trigger(tmp_draft: Path) -> N
         },
     )
     out = inject_fx(state)
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    transitions = draft["materials"]["transitions"]
+    transitions = _spec_of(tmp_draft).transitions
     assert len(transitions) == 2
-    assert all(t["name"] in POOL_GENTLE for t in transitions)
+    assert all(t.name in POOL_GENTLE for t in transitions)
     assert "node_09_inject_fx_opening_boost_requested" not in out["status_log"]
     assert "node_09_inject_fx_zh_opening_boost_applied" not in out["status_log"]
 
@@ -789,10 +760,9 @@ def test_inject_fx_no_markers_keeps_legacy_behavior(tmp_draft: Path) -> None:
         },
     )
     out = inject_fx(state)
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    transitions = draft["materials"]["transitions"]
+    transitions = _spec_of(tmp_draft).transitions
     assert len(transitions) == 2
-    assert all(t["name"] in POOL_GENTLE for t in transitions)
+    assert all(t.name in POOL_GENTLE for t in transitions)
     assert "node_09_inject_fx_opening_boost_requested" not in out["status_log"]
 
 
@@ -810,16 +780,11 @@ def test_inject_fx_opening_boost_overrides_all_cut_plan(tmp_draft: Path) -> None
         },
     )
     out = inject_fx(state)
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    transitions = draft["materials"]["transitions"]
+    transitions = _spec_of(tmp_draft).transitions
 
     assert len(transitions) == 1
-    assert transitions[0]["name"] in POOL_WHIP
-    assert "transition-1" in draft["tracks"][0]["segments"][1]["extra_material_refs"]
-    assert not any(
-        str(r).startswith("transition-")
-        for r in draft["tracks"][0]["segments"][2].get("extra_material_refs", [])
-    )
+    assert transitions[0].boundary_index == 0
+    assert transitions[0].name in POOL_WHIP
     assert "node_09_inject_fx_zh_all_cut_fallback" not in out["status_log"]
     assert "node_09_inject_fx_zh_opening_boost_applied" in out["status_log"]
 
@@ -827,7 +792,7 @@ def test_inject_fx_opening_boost_overrides_all_cut_plan(tmp_draft: Path) -> None
 def test_inject_fx_opening_boost_degraded_when_whip_pool_missing(
     tmp_draft: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """pool_whip 缺失 → 边界 0 degraded 不写入;不得记 applied(§6.3 不假成功)。"""
+    """pool_whip 缺失 → 边界 0 degraded 不进计划;不得记 applied(§6.3 不假成功)。"""
     lib = _stub_lib(
         pools={"pool_gentle": ["柔切一", "柔切二"]},
         sem_map={"whip": "pool_whip", "fade": "pool_gentle", "cut": None},
@@ -846,11 +811,11 @@ def test_inject_fx_opening_boost_degraded_when_whip_pool_missing(
     )
     out = inject_fx(state)
 
-    draft = json.loads(tmp_draft.read_text(encoding="utf-8"))
-    transitions = draft["materials"]["transitions"]
-    # 边界 0 degraded 不写;边界 1 fade 语义正常写
+    transitions = _spec_of(tmp_draft).transitions
+    # 边界 0 degraded 不进;边界 1 fade 语义正常进
     assert len(transitions) == 1
-    assert transitions[0]["name"] in ("柔切一", "柔切二")
+    assert transitions[0].boundary_index == 1
+    assert transitions[0].name in ("柔切一", "柔切二")
     assert "node_09_inject_fx_zh_opening_boost_applied" not in out["status_log"]
     assert "node_09_inject_fx_zh_opening_boost_degraded" in out["status_log"]
     assert any("opening boost" in w for w in out["error_log"])
@@ -872,8 +837,8 @@ def test_inject_fx_opening_boost_zh_en_same_boundary0_name(
     )
     out = inject_fx(state)
 
-    zh_name = json.loads(zh.read_text(encoding="utf-8"))["materials"]["transitions"][0]["name"]
-    en_name = json.loads(en_file.read_text(encoding="utf-8"))["materials"]["transitions"][0]["name"]
+    zh_name = _spec_of(zh).transitions[0].name
+    en_name = _spec_of(en_file).transitions[0].name
     assert zh_name == en_name
     assert zh_name in POOL_WHIP
     assert "node_09_inject_fx_zh_opening_boost_applied" in out["status_log"]
@@ -883,7 +848,7 @@ def test_inject_fx_opening_boost_zh_en_same_boundary0_name(
 def test_inject_fx_opening_boost_replay_byte_identical(
     tmp_draft: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """重放幂等:同一任务二次注入,草稿字节级一致(确定性轮换不被 boost 破坏)。"""
+    """重放幂等:同一任务二次发射,spec 字节级一致(确定性轮换不被 boost 破坏)。"""
     lib = _stub_lib(
         pools={"pool_gentle": ["柔切一", "柔切二"], "pool_whip": ["甩镜一", "甩镜二"]},
         sem_map={"whip": "pool_whip", "fade": "pool_gentle", "cut": None},
@@ -892,6 +857,6 @@ def test_inject_fx_opening_boost_replay_byte_identical(
     state = _state(draft_path=str(tmp_draft), storyline_targets=_boost_request())
 
     inject_fx(state)
-    first = tmp_draft.read_text(encoding="utf-8")
+    first = (tmp_draft.parent / ".autovideo_draft_build_spec.json").read_bytes()
     inject_fx({**state, "status_log": [], "error_log": []})
-    assert tmp_draft.read_text(encoding="utf-8") == first
+    assert (tmp_draft.parent / ".autovideo_draft_build_spec.json").read_bytes() == first

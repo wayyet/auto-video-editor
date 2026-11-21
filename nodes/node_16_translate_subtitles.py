@@ -164,6 +164,27 @@ def _read_segments_from_draft(draft_dir: Path) -> list[SubtitleSegment]:
     return out
 
 
+def _read_segments_from_marker(draft_dir: Path) -> list[SubtitleSegment]:
+    """marker 命中路径的译文读取源(2026-11-22 SDK 链转正)。
+
+    legacy 的 :func:`_read_segments_from_draft`(读 en 草稿 materials.texts)
+    随六段 legacy 原生字幕写入退役;且英文分支 fork 自快照②(早于 node_08),
+    ``materials.texts`` 本就为空 —— 该路径此前已读空。``subtitle_en.json`` 的
+    ``segments`` 段即上次翻译全文(_save_marker 落盘),直接取用。
+    """
+    marker = draft_dir / "subtitle_en.json"
+    if not marker.exists():
+        return []
+    try:
+        data = json.loads(marker.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    segs = data.get("segments") if isinstance(data, dict) else None
+    if not isinstance(segs, list):
+        return []
+    return [dict(s) for s in segs if isinstance(s, dict)]
+
+
 def _write_marker(draft_dir: Path, segments: list[SubtitleSegment]) -> None:
     """写 subtitle_en.json marker(中断前可重放操作)。
 

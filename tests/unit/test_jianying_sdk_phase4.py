@@ -283,48 +283,28 @@ def test_compile_decoration_for_missing_subtitle_degrades() -> None:
 # node_10 spec 发射(hermetic 缓存下动画必选中;花字默认关)
 # ---------------------------------------------------------------------------
 def test_apply_text_fx_emits_spec(tmp_path: Path) -> None:
+    """2026-11-22 SDK 链转正:装饰对象来自 spec.subtitles;草稿不被 node_10 改写。"""
     from config import TEXT_FLOWER_ENABLED
     from nodes.node_10_inject_text_fx import apply_text_fx
+    from nodes._draft_build_spec import load_build_spec, replace_spec_sections
 
-    draft = {
-        "canvas_config": {"width": 1080, "height": 1920},
-        "duration": 4_000_000,
-        "materials": {
-            "videos": [], "audios": [], "speeds": [], "canvases": [],
-            "sound_channel_mappings": [], "vocal_separations": [],
-            "texts": [
-                {
-                    "id": "text-zh-1", "content": json.dumps({"styles": [], "text": "你好"}),
-                    "target_timerange": {"start": 0, "duration": 2_000_000},
-                    "style": dict(_ZH_STYLE), "track_name": "Subtitles_zh", "text_zh": "你好",
-                },
-                {
-                    "id": "manual-uuid-text", "content": "人工字幕",
-                    "target_timerange": {"start": 2_000_000, "duration": 2_000_000},
-                },
-            ],
-        },
-        "tracks": [{
-            "type": "text", "id": "track-text-1", "segments": [{
-                "id": "ts1", "material_id": "text-zh-1",
-                "target_timerange": {"start": 0, "duration": 2_000_000},
-                "extra_material_refs": [],
-            }],
-        }],
-    }
     draft_path = tmp_path / "draft_content.json"
-    draft_path.write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
+    draft_bytes = json.dumps({"canvas_config": {"width": 1080, "height": 1920}}, ensure_ascii=False)
+    draft_path.write_text(draft_bytes, encoding="utf-8")
+
+    # 字幕对象来源 = spec(node_08 已发射,subtitle_id 即我方口径)
+    replace_spec_sections(tmp_path, subtitles=[SubtitleSpec(
+        subtitle_id="text-zh-1", text="你好", start_us=0, end_us=2_000_000,
+        language="zh", style=dict(_ZH_STYLE),
+    )])
 
     assert TEXT_FLOWER_ENABLED in (True, False)
     log, summary = apply_text_fx(
-        draft_path, [], node_tag="node_10",
+        tmp_path, [], node_tag="node_10",
         done_tag="node_10_inject_text_fx_done", job_id="sess-p4",
     )
-    # 动画写入(hermetic 缓存使 intro 池可用)
-    assert summary["animations_written"] == 1
-    # spec 发射:只有我方字幕,人工 uuid 文本不进装饰计划
-    from nodes._draft_build_spec import load_build_spec
-
+    # 动画选取(hermetic 缓存使 intro 池可用)
+    assert summary["animations_selected"] == 1
     spec = load_build_spec(tmp_path)
     assert spec is not None
     assert [d.subtitle_id for d in spec.text_decorations] == ["text-zh-1"]
@@ -334,41 +314,37 @@ def test_apply_text_fx_emits_spec(tmp_path: Path) -> None:
     if not TEXT_FLOWER_ENABLED:
         assert deco.text_effect is None
     assert any("文本装饰计划已入 spec" in tag for tag in log)
+    assert any("node_10_inject_text_fx_done" in tag for tag in log)
+    # 草稿不被本节点改写
+    assert draft_path.read_text(encoding="utf-8") == draft_bytes
 
 
 def test_apply_text_fx_degradation_keeps_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """非破坏性降级(审查 P1-01):本轮零选取 → spec 既有装饰段原样保留。"""
     import nodes.node_10_inject_text_fx as node10
     from nodes.node_10_inject_text_fx import apply_text_fx
-
-    draft = {
-        "canvas_config": {"width": 1080, "height": 1920},
-        "duration": 2_000_000,
-        "materials": {"videos": [], "audios": [], "speeds": [], "canvases": [],
-                      "sound_channel_mappings": [], "vocal_separations": [],
-                      "texts": [{"id": "text-zh-1", "content": "你好"}]},
-        "tracks": [],
-    }
-    draft_path = tmp_path / "draft_content.json"
-    draft_path.write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
-
-    # 既有 spec 装饰段(上一轮写入)
     from nodes._draft_build_spec import load_build_spec, replace_spec_sections
 
+    (tmp_path / "draft_content.json").write_text(
+        json.dumps({"canvas_config": {"width": 1080, "height": 1920}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    # 既有 spec 装饰段(上一轮写入)
     old = [TextDecorationSpec(
         subtitle_id="text-zh-1",
         animations=[TextAnimationEntry(kind="in", effect_id="old-fx", resource_id="old-fx")],
     )]
     replace_spec_sections(tmp_path, text_decorations=old)
 
-    # 让动画选取降级(空池)
+    # 让动画选取降级(空池);花字经 select_text_flower 空库自然降级
     monkeypatch.setattr(node10, "_pick_intro_animation", lambda lib, job_id="": (None, {}))
 
     log, summary = apply_text_fx(
-        draft_path, [], node_tag="node_10",
+        tmp_path, [], node_tag="node_10",
         done_tag="node_10_inject_text_fx_done", job_id="sess-p4",
     )
-    assert summary["animations_written"] == 0
+    assert summary["animations_selected"] == 0
     spec = load_build_spec(tmp_path)
     assert [d.subtitle_id for d in spec.text_decorations] == ["text-zh-1"]
     assert spec.text_decorations[0].animations[0].effect_id == "old-fx"

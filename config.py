@@ -498,17 +498,11 @@ JIANYING_CACHE_ROOT: str = (
 # ---------------------------------------------------------------------------
 # 草稿构建后端(2026-11-21 第10期效果模块迁移,设计文档 §11.1 灰度开关)
 # ---------------------------------------------------------------------------
-# pyjianyingdraft = 效果节点只写 DraftBuildSpec 计划,node_11 统一以
-#   pyJianYingDraft SDK 编译重建草稿(vendor/pyJianYingDraft/sdk)—— 2026-11-22
-#   起转正为默认(用户拍板:六效果段灰度开;六段 legacy 链保留待测试全绿后退役)。
-# legacy = 各效果节点直接改写 draft_content.json(迁移前行为,现为回退链)。
-# 回滚方式:显式设 env DRAFT_BUILDER_BACKEND=legacy 并重启服务(config 仍读 env)。
+# 2026-11-22 六效果段灰度开 → 自动化测试全绿 → legacy 链退役:
+# ``DRAFT_BUILDER_BACKEND`` 开关已删除,唯一构建链 = 效果节点发射
+# DraftBuildSpec + node_11 以 pyJianYingDraft SDK 编译重建草稿。
 # 失败纪律:SDK 编译失败/blocked_features 非空时不覆盖当前有效草稿(fail-closed),
-# 保留编译前产物并记 error_log;禁止静默回退 legacy(设计文档 §13.2)。
-DRAFT_BUILDER_BACKEND: str = (
-    os.environ.get("DRAFT_BUILDER_BACKEND", "pyjianyingdraft").strip().lower()
-    or "pyjianyingdraft"
-)
+# 保留编译前快照并记 error_log;紧急回滚 = git revert 退役提交后重启服务。
 
 # ---------------------------------------------------------------------------
 # 原生花字通道(2026-11-21 第九期,审查修订版执行计划阶段 2)

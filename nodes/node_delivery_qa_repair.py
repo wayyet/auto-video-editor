@@ -38,6 +38,43 @@ from state import WorkflowState
 DELIVERY_QA_MAX_REPAIRS = 1
 
 
+def _recompile_drafts(state: WorkflowState) -> None:
+    """SDK 链(2026-11-22):spec 重发射后必须重编译,草稿才会真实更新。
+
+    修复动作里 ``inject_fx`` / ``inject_text_fx(10/10b)`` 只发射 DraftBuildSpec
+    (六段 legacy 原生写入已退役);此处对中英两份草稿各调一次
+    ``compile_and_publish_draft``(指纹一致会自然跳过,重放安全)。
+    ``inject_sticker``(node_11)自身就是编译汇合入口,不需要本步骤。
+    编译失败直接上抛(fail-closed;下一轮 join 复检会如实反映草稿现状)。
+    """
+    from pathlib import Path
+
+    from jianying_sdk.pipeline import compile_and_publish_draft
+
+    canonical_plan = state.get("storyline_plan")
+    plan = canonical_plan if isinstance(canonical_plan, dict) else None
+    job_id = str(state.get("session_id") or "")
+
+    draft_path = state.get("draft_path")
+    if draft_path:
+        compile_and_publish_draft(
+            Path(draft_path).parent,
+            Path(draft_path),
+            job_id=job_id,
+            canonical_plan=plan,
+            audit_node="delivery_qa_recompile_zh",
+        )
+    en_dir = state.get("draft_dir_en_branch")
+    if en_dir and (Path(en_dir) / "draft_content.json").exists():
+        compile_and_publish_draft(
+            Path(en_dir),
+            Path(en_dir) / "draft_content.json",
+            job_id=job_id,
+            canonical_plan=plan,
+            audit_node="delivery_qa_recompile_en",
+        )
+
+
 def _build_dispatch() -> dict[str, Callable[[WorkflowState], dict]]:
     """required 类别 → 幂等修复动作(重跑尾链节点函数,副作用自落盘)。
 
@@ -49,14 +86,20 @@ def _build_dispatch() -> dict[str, Callable[[WorkflowState], dict]]:
     from nodes.node_11_inject_sticker import inject_sticker
     from nodes.node_13_adjust_volume import adjust_volume
 
+    def _transitions(state: WorkflowState) -> dict:
+        inject_fx(state)
+        _recompile_drafts(state)  # spec 重发射后重编译,草稿才真实更新
+        return {}
+
     def _text_animation(state: WorkflowState) -> dict:
-        # 动画对两份草稿各自写入;英文分支未生成时 10b 内部自带降级跳过
+        # 装饰对两份草稿 spec 各自发射;英文分支未生成时 10b 内部自带降级跳过
         inject_text_fx(state)
         inject_text_fx_en(state)
+        _recompile_drafts(state)
         return {}
 
     return {
-        "transitions": inject_fx,
+        "transitions": _transitions,
         "text_animation": _text_animation,
         "stickers": inject_sticker,
         "volume_fades": adjust_volume,

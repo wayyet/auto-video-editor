@@ -58,13 +58,18 @@ def _seed(
     draft_dir.mkdir(parents=True)
     dur = 35_000_000
     draft_file = draft_dir / "draft_content.json"
-    segment: dict = {"id": "s1", "target_timerange": {"start": 0, "duration": dur}}
+    # 2026-11-22 SDK 链转正:段必须带 material 联结(提取器 dangling 即阻断编译)
+    segment: dict = {
+        "id": "s1", "material_id": "v1",
+        "target_timerange": {"start": 0, "duration": dur},
+    }
     if storyline_plan is not None:
         segment["source_timerange"] = {"start": 0, "duration": dur}
     draft_file.write_text(json.dumps({
         "canvas_config": {"width": 1080, "height": 1920},
         "duration": dur,
-        "materials": {"videos": [{"id": "v1", "path": "C:/tmp/fake.mp4"}]},
+        "materials": {"videos": [{"id": "v1", "path": "C:/tmp/fake.mp4",
+                                  "material_name": "clip_0001"}]},
         "tracks": [{"type": "video", "fps": 30, "segments": [segment]}],
     }, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setenv("AUTO_VIDEO_EDITOR_DRAFT_DIR", str(draft_dir))
@@ -224,9 +229,11 @@ def test_english_branch_skips_cleanly_without_source_subtitles(tmp_path, monkeyp
 
 
 def test_english_draft_gets_subtitles_and_text_fx(tmp_path, monkeypatch, real_mode_translator):
-    """有源字幕(模拟旧线程恢复时 state 已带 asr_segments_zh)→ 英文字幕照常写入。
+    """有源字幕(模拟旧线程恢复时 state 已带 asr_segments_zh)→ 英文字幕照常落稿。
 
-    node_08 不写也不清该键(B1 §3.3 取"缺省"),state 里的段经 {**state} 透传给 16a。
+    2026-11-22 SDK 链转正:字幕/动画由 node_11 SDK 编译统一落稿,文本 material
+    id 是 SDK uuid —— 按显示文本与轨段绑定关系断言(不再有 text-en- 前缀 id 与
+    私有 track_name/text_en 键)。
     """
     _, _, final = _drive(_seed(tmp_path, monkeypatch, asr_segments_zh=[
         {"index": 0, "start_ms": 0, "end_ms": 2_000, "text_zh": "你好"},
@@ -235,20 +242,17 @@ def test_english_draft_gets_subtitles_and_text_fx(tmp_path, monkeypatch, real_mo
     en = json.loads((Path(final["draft_dir_en_branch"]) / "draft_content.json").read_text(encoding="utf-8"))
     texts = en["materials"]["texts"]
     assert len(texts) == len(final["subtitle_segments_en"]) > 0
-    assert all(t["track_name"] == "Subtitles_en" for t in texts)
-    # 2026-11-07 文本链原生升级:content 是原生 styles JSON 字符串,显示文本经
-    # text_display_text 还原后仍与 text_en 一致;material 带原生必填键。
-    assert all(text_display_text(t) == t["text_en"] for t in texts)
+    # 编译稿显示文本经 text_display_text 还原,与 16a 翻译产物一致
+    expected_en = [s["text_en"] for s in final["subtitle_segments_en"]]
+    assert [text_display_text(t) for t in texts] == expected_en
     assert all(t["type"] == "text" for t in texts)
-    # 字幕铺上原生 text 轨道(关卡③ 人工可见可改),轨道段与 texts 一一对应
+    # 字幕轨(SDK 重建)+ 轨段与 materials 一一对应
     text_tracks = [t for t in en["tracks"] if t.get("type") == "text"]
     assert len(text_tracks) == 1
     assert len(text_tracks[0]["segments"]) == len(texts)
-    assert all(
-        seg["material_id"] == mat["id"]
-        for seg, mat in zip(text_tracks[0]["segments"], texts)
-    )
-    # 10b 的花字已生效(阶段 4:原生 material_animations + text 轨段引用绑定)
+    ids = {t["id"] for t in texts}
+    assert all(seg["material_id"] in ids for seg in text_tracks[0]["segments"])
+    # 10b 的动画生效:SDK add_animation → material_animations 条目 + text 轨段 refs
     anim_ids = {a["id"] for a in (en["materials"].get("material_animations") or [])}
     assert anim_ids, "英文草稿应有 material_animations"
     en_text_segs = [s for t in en["tracks"] if t.get("type") == "text" for s in t["segments"]]
@@ -256,10 +260,9 @@ def test_english_draft_gets_subtitles_and_text_fx(tmp_path, monkeypatch, real_mo
         any(r in anim_ids for r in (s.get("extra_material_refs") or []))
         for s in en_text_segs
     )
-    # 中文草稿不受英文节点影响;B1 ASR 移除后 node_08 不再产中文字幕
+    # 中文草稿不受英文节点影响(B1 ASR 移除后 node_08 不产中文字幕,编译稿无文本)
     zh = json.loads(Path(final["draft_path"]).read_text(encoding="utf-8"))
     assert not (zh.get("materials", {}).get("texts") or [])
-    assert not [t for t in zh.get("tracks", []) if t.get("track_name") == "Subtitles_en"]
 
 
 # ---------------------------------------------------------------------------
@@ -309,18 +312,17 @@ def test_tail_chain_applies_to_both_drafts(tmp_path, monkeypatch):
 
 
 def test_zh_draft_gets_native_subtitles(tmp_path, monkeypatch):
-    """阶段 1(2026-11-09 效果缺失修复):有旁白 → node_08 把中文旁白逐句写成
-    原生 text 素材 + text 轨道(计划 §8 阶段 1 集成验收:materials.texts > 0、
-    text track 存在、每段 material_id 都存在)。
+    """有旁白 → 中文字幕落稿(2026-11-22 SDK 链转正:node_08 发射 spec、
+    node_11 SDK 编译统一落轨;materials.texts > 0、text track 存在、每段
+    material_id 都存在;文本 material id 是 SDK uuid,按显示文本断言)。
 
     storyline 链在集成桩下(fake 媒体)产出空 clips 并经 join 覆盖 storyline_plan、
     经 generate_script 覆盖 storyline_script_artifact(写到共享 outputs 目录)。
     这里把 join 的时间线读取替换为种子 plan、把 generate_script 替换为"保留种子
     script 产物"(join 的 Pydantic 校验等其余逻辑照常),使 generate_draft →
-    node_08 走真实全链;被测对象是 05→07→08 的落草稿行为,不是 stub 链本身。
+    node_08 走真实全链;被测对象是 05→07→08→11 的落稿行为,不是 stub 链本身。
     """
     import nodes.storyline.join_storyline as join_mod
-
 
     plan = {
         "schema_version": "1.0", "job_id": "reorder", "created_at_ms": 0,
@@ -349,8 +351,6 @@ def test_zh_draft_gets_native_subtitles(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     monkeypatch.setattr(join_mod, "_read_timeline_dict", lambda state: plan)
-    # graph.py 是 `from ... import storyline_generate_script_node` 符号直连,
-    # patch 必须打在 graph 模块的绑定上(join 走模块属性查找所以不受此影响)。
     monkeypatch.setattr(
         "graph.storyline_generate_script_node",
         lambda state: {
@@ -365,13 +365,19 @@ def test_zh_draft_gets_native_subtitles(tmp_path, monkeypatch):
 
     zh = json.loads(Path(final["draft_path"]).read_text(encoding="utf-8"))
     texts = zh.get("materials", {}).get("texts") or []
-    # 逐句:你好。/世界;hook-title-1 = 开场大字标题(node_09b,第四期阶段 3,默认开)
-    subtitle_ids = [t["id"] for t in texts if str(t["id"]).startswith("text-zh-")]
-    assert subtitle_ids == ["text-zh-1", "text-zh-2"]
+    # SDK 编译稿:字幕轨(name=subtitles)+ 开场标题轨(node_09b 编译后落稿);
+    # 文本 material id 是 uuid,按轨道归属 + 显示文本断言(逐句:你好。/世界)
     text_tracks = [t for t in zh.get("tracks", []) if t.get("type") == "text"]
-    assert len(text_tracks) == 2  # 字幕轨(track-text-1)+ 开场标题轨(track-text-hook)
-    ids = {t["id"] for t in texts}
-    assert all(seg["material_id"] in ids for seg in text_tracks[0]["segments"])
-    # state 侧段落(供阶段 2 的 node_16a 英文翻译消费)
+    assert len(text_tracks) == 2
+    texts_by_id = {t["id"]: t for t in texts}
+    subtitle_track = next(t for t in text_tracks if t.get("name") == "subtitles")
+    hook_track = next(t for t in text_tracks if t.get("name") != "subtitles")
+    assert [text_display_text(texts_by_id[s["material_id"]]) for s in subtitle_track["segments"]] == [
+        "你好。", "世界",
+    ]
+    assert len(hook_track["segments"]) == 1, "开场标题轨恰 1 段(node_09b)"
+    # state 侧段落(供 node_16a 英文翻译消费)
     segs = final.get("subtitle_segments_zh") or []
     assert [s["text_zh"] for s in segs] == ["你好。", "世界"]
+
+

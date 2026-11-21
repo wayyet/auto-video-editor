@@ -27,7 +27,7 @@ from jianying_sdk.spec import (
     VideoEffectSpec,
 )
 from jianying_sdk.timeline_extractor import canvas_of, extract_timeline_snapshot
-from nodes.node_09_inject_fx import _inject_fx_into, _sorted_video_segments
+from nodes.node_09_inject_fx import _plan_fx_into, _sorted_video_segments
 from jy_common.template_library import load_resource_libraries
 from tests.unit.test_jianying_sdk_phase2 import (
     _audio_factory,
@@ -295,8 +295,8 @@ def test_inject_fx_emits_spec(tmp_path: Path) -> None:
         fx_resource="templates/fx_resource_library.json",
         text_resource="templates/text_resource_library.json",
     )
-    warnings, summary = _inject_fx_into(
-        loaded, template_lib, ["fade", "zoom", "cut"], "node_09_zh",
+    trans_plan, fx_plan, warnings, summary = _plan_fx_into(
+        loaded, template_lib, ["fade", "zoom", "cut"],
         job_id="sess-p5", required_transitions=False,
     )
     assert summary["transitions_written"] >= 2  # fade/zoom 语义命中,cut 硬切
@@ -305,7 +305,9 @@ def test_inject_fx_emits_spec(tmp_path: Path) -> None:
     from nodes.node_09_inject_fx import _emit_fx_spec
 
     log: list[str] = []
-    _emit_fx_spec(tmp_path, loaded, log)
+    _emit_fx_spec(tmp_path, loaded, trans_plan, fx_plan, log)
+    # 2026-11-22 SDK 链转正:node_09 不再改写草稿(纯计算 + spec 发射)
+    assert json.loads(draft_path.read_text(encoding="utf-8"))["materials"]["transitions"] == []
     assert any("效果构建计划已入 spec" in tag for tag in log)
 
     spec = load_build_spec(tmp_path)

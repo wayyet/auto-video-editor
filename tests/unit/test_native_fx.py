@@ -1,31 +1,22 @@
 """jy_common/native_fx.py 单测 — 原生 FX 素材构造器的形态与确定性。
 
-字段 schema 的"待实机复核"部分只锁存在性,不锁取值(取值以剪映 GUI diff 为准,
-见 docs/第三期开发 计划文档 §8 阶段 3/4/5 逆向行动项)。
+2026-11-22 SDK 链转正:转场/贴纸/花字的 legacy 构造器已退役(改走 DraftBuildSpec
+→ node_11 SDK 编译),对应测试一并删除;保留构造器 = 开场钩子(node_09b)与
+node_13 仍在用的视频特效/文本动画/音频淡入淡出 + 全仓共用判据。
+
+字段 schema 的"待实机复核"部分只锁存在性,不锁取值(取值以剪映 GUI diff 为准)。
 """
 
 from __future__ import annotations
 
 from jy_common.native_fx import (
     OUR_AUDIO_FADE_PREFIX,
-    OUR_TEXT_ANIMATION_PREFIX,
-    is_19_digit_resource_id,
     build_native_audio_fade_material,
-    build_native_sticker_material,
     build_native_text_animation_material,
-    build_native_transition_material,
     build_native_video_effect_material,
+    is_19_digit_resource_id,
+    text_animation_cache_available,
 )
-
-_TRANSITION_META = {
-    "name": "叠化",
-    "is_vip": False,
-    "resource_id": "6724845717472416269",
-    "effect_id": "322577",
-    "md5": "2d641adc4bb63e37e3a0067d8c8cc3c3",
-    "default_duration_s": 0.5,
-    "is_overlap": True,
-}
 
 _VFX_META = {
     "name": "抖动模糊",
@@ -42,21 +33,6 @@ def test_is_19_digit_resource_id() -> None:
     assert not is_19_digit_resource_id("12345")
     assert not is_19_digit_resource_id(None)
     assert not is_19_digit_resource_id(6724845717472416269)
-
-
-def test_transition_material_shape() -> None:
-    m = build_native_transition_material(
-        material_id="transition-1", meta=_TRANSITION_META, duration_us=500_000
-    )
-    assert m["id"] == "transition-1"
-    assert m["type"] == "transition"
-    assert m["duration"] == 500_000
-    assert m["name"] == "叠化"
-    assert m["resource_id"] == "6724845717472416269"
-    assert m["effect_id"] == "322577"
-    assert m["is_overlap"] is True
-    # 待实机复核字段存在即可
-    assert "category_id" in m and "category_name" in m
 
 
 def test_video_effect_material_shape() -> None:
@@ -96,19 +72,6 @@ def test_text_animation_material_shape() -> None:
     assert m2["animations"][0]["duration"] == 250_000
 
 
-def test_sticker_material_shape() -> None:
-    m = build_native_sticker_material(
-        material_id="sticker-text-zh-1",
-        resource_id="7325648367747338802",
-        duration_us=1_500_000,
-        name="赞",
-    )
-    assert m["id"] == "sticker-text-zh-1"
-    assert m["type"] == "sticker"
-    assert m["resource_id"] == "7325648367747338802"
-    assert m["duration"] == 1_500_000
-
-
 def test_audio_fade_material_shape() -> None:
     m = build_native_audio_fade_material(
         material_id="audio-fade-seg1", fade_in_us=2_000_000, fade_out_us=3_000_000
@@ -127,13 +90,8 @@ def test_audio_fade_material_shape() -> None:
 
 
 def test_our_id_prefixes_are_stable() -> None:
-    """我方前缀常量与构造器约定一致(清理逻辑依赖这一点)。"""
-    assert OUR_TEXT_ANIMATION_PREFIX == "text-anim-"
+    """我方前缀常量与构造器约定一致(node_13 清理逻辑依赖这一点)。"""
     assert OUR_AUDIO_FADE_PREFIX == "audio-fade-"
-    anim = build_native_text_animation_material(
-        material_id="text-anim-a", anim_meta={"name": "x", "resource_id": "1"}
-    )
-    assert anim["id"].startswith(OUR_TEXT_ANIMATION_PREFIX)
     fade = build_native_audio_fade_material(material_id="audio-fade-b", fade_in_us=0, fade_out_us=0)
     assert fade["id"].startswith(OUR_AUDIO_FADE_PREFIX)
 
@@ -143,8 +101,6 @@ def test_our_id_prefixes_are_stable() -> None:
 
 def test_text_animation_cache_available_boundaries(tmp_path) -> None:
     """缓存判定:目录不存在/是文件而非目录/空 effect_id/空 md5/空根 → 一律 False。"""
-    from jy_common.native_fx import text_animation_cache_available
-
     root = tmp_path / "cache"
     root.mkdir()
     meta_ok = {"effect_id": "E1", "md5": "M1"}

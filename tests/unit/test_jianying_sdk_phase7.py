@@ -206,15 +206,14 @@ def test_pipeline_corrupt_spec_treated_as_missing(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# node_11 后端开关接线
+# node_11 编译汇合(2026-11-22 SDK 链转正:唯一链,开关已删除)
 # ---------------------------------------------------------------------------
-def test_node_11_sdk_backend_compiles(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_node_11_sdk_backend_compiles(tmp_path: Path) -> None:
     draft = _base_draft()
     _companion_materials(draft)
     (tmp_path / "draft_content.json").write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
     _write_spec_with_subtitles(tmp_path)
 
-    monkeypatch.setattr("config.DRAFT_BUILDER_BACKEND", "pyjianyingdraft")
     from nodes.node_11_inject_sticker import inject_sticker
 
     state = {
@@ -230,31 +229,8 @@ def test_node_11_sdk_backend_compiles(tmp_path: Path, monkeypatch: pytest.Monkey
     assert len(next(t for t in payload["tracks"] if t["type"] == "video")["segments"]) == 2
 
 
-def test_node_11_legacy_backend_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    draft = _base_draft()
-    _companion_materials(draft)
-    (tmp_path / "draft_content.json").write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
-    _write_spec_with_subtitles(tmp_path)
-
-    monkeypatch.setattr("config.DRAFT_BUILDER_BACKEND", "legacy")
-    from nodes.node_11_inject_sticker import inject_sticker
-
-    state = {
-        "draft_path": str(tmp_path / "draft_content.json"),
-        "session_id": "sess-p7",
-        "status_log": [],
-        "error_log": [],
-    }
-    out = inject_sticker(state)
-    assert not any("node_11_compile" in tag for tag in out["status_log"])
-    payload = json.loads((tmp_path / "draft_content.json").read_text(encoding="utf-8"))
-    # legacy:草稿仍是原生形态(node_11 未做 SDK 重建)
-    assert payload["tracks"][0]["segments"][0]["material_id"] == "v1"
-    assert payload["materials"]["texts"] == []
-
-
-def test_node_11_sdk_backend_failure_degrades(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """SDK 编译管线异常 → node_11 兜底捕获,legacy 草稿保留,节点不崩。"""
+def test_node_11_compile_failure_degrades(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """SDK 编译管线异常 → node_11 兜底捕获,草稿保留编译前快照,节点不崩。"""
     draft = _base_draft()
     _companion_materials(draft)
     (tmp_path / "draft_content.json").write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
@@ -262,7 +238,6 @@ def test_node_11_sdk_backend_failure_degrades(tmp_path: Path, monkeypatch: pytes
 
     import jianying_sdk.pipeline as pipeline
 
-    monkeypatch.setattr("config.DRAFT_BUILDER_BACKEND", "pyjianyingdraft")
     monkeypatch.setattr(
         pipeline, "compile_and_publish_draft",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
@@ -278,26 +253,25 @@ def test_node_11_sdk_backend_failure_degrades(tmp_path: Path, monkeypatch: pytes
     out = inject_sticker(state)
     assert any("node_11_compile_zh:failed" in tag for tag in out["status_log"])
     assert any("SDK 编译失败" in e for e in out["error_log"])
-    # legacy 草稿未被 SDK 覆盖
+    # 草稿未被 SDK 覆盖(编译前快照原样)
     payload = json.loads((tmp_path / "draft_content.json").read_text(encoding="utf-8"))
     assert payload["tracks"][0]["segments"][0]["material_id"] == "v1"
 
 
-def test_config_default_backend_is_sdk() -> None:
-    """2026-11-22 六效果段灰度开:未设 env 时 config 默认 pyjianyingdraft。
+def test_config_backend_switch_removed() -> None:
+    """2026-11-22 legacy 链退役:DRAFT_BUILDER_BACKEND 开关已删除,唯一链 = SDK。
 
-    用子进程隔离 —— config 在模块导入时读 env,进程内 reload 会波及同进程
-    其他模块已绑定的属性;env 覆盖回滚路径(DRAFT_BUILDER_BACKEND=legacy)
-    由 test_node_11_legacy_backend_untouched 与钉 legacy 的 node_11 单测锁定。
+    用子进程隔离验证(config 在模块导入时读 env,进程内检查会受既有导入缓存影响)。
     """
     import os
     import subprocess
     import sys
 
-    env = {k: v for k, v in os.environ.items() if k != "DRAFT_BUILDER_BACKEND"}
+    env = dict(os.environ)
     env["PYTHONIOENCODING"] = "utf-8"
     proc = subprocess.run(
-        [sys.executable, "-c", "import config; print(config.DRAFT_BUILDER_BACKEND)"],
+        [sys.executable, "-c",
+         "import config; print(hasattr(config, 'DRAFT_BUILDER_BACKEND'))"],
         capture_output=True,
         text=True,
         env=env,
@@ -305,4 +279,4 @@ def test_config_default_backend_is_sdk() -> None:
         cwd=str(Path(__file__).resolve().parents[2]),
     )
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == "pyjianyingdraft"
+    assert proc.stdout.strip() == "False"

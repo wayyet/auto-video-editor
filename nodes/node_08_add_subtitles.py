@@ -53,7 +53,6 @@ from assembly_capabilities.run_context import RunContext
 from nodes._draft_io import apply_and_write, load_draft
 from nodes._dual_draft import ZH_VOICEOVER_TRACK_NAME as _ZH_VOICEOVER_TRACK_NAME
 from nodes._subtitle_texts import (
-    build_text_track,
     canvas_width_from_draft,
     make_text_material,
 )
@@ -135,13 +134,13 @@ _STORYLINE_POSITION_TO_Y: dict[str, float] = {
 
 
 # ---------------------------------------------------------------------------
-# 阶段 1(2026-11-09,效果缺失修复计划):中文旁白字幕原生落草稿
+# 阶段 1(2026-11-09,效果缺失修复计划):中文旁白字幕
+# 2026-11-22 SDK 链转正:字幕不再原生落草稿,本节点产出 material 形态后经
+# subtitle_specs_from_materials 转为 DraftBuildSpec.subtitles(SDK 编译数据源)
 # ---------------------------------------------------------------------------
-#: 本节点拥有的 text material id 前缀(_sync_zh_text_materials 只清理它)
+#: 本节点拥有的字幕 material id 前缀(spec subtitle_id 口径)
 _ZH_ID_PREFIX = "text-zh"
-#: 本节点拥有的 text 轨 id(_subtitle_texts.build_text_track 的固定 id)
-_ZH_TRACK_ID = "track-text-1"
-#: 本节点写入的私有轨名(仅日志/人读用;剪映原生轨 name 恒为 "")
+#: 私有轨名(仅进 material 私有键/日志;剪映原生轨 name 恒为 "")
 _ZH_TRACK_NAME = "Subtitles_zh"
 
 #: 句子边界:在 。!?;!?;\n 之后切(lookbehind,标点留在前句)
@@ -396,37 +395,11 @@ def _build_zh_subtitles(
     return materials, segments, notes
 
 
-def _sync_zh_text_materials(draft: dict, materials: list[dict]) -> None:
-    """定向替换 materials.texts:只清理/替换本节点的 ``text-zh-`` 前缀条目,
-    人工在剪映加的其他文本素材原样保留(自动节点不覆盖人工编辑)。"""
-    mats = draft.setdefault("materials", {})
-    existing = mats.get("texts") or []
-    foreign = [
-        t
-        for t in existing
-        if isinstance(t, dict) and not str(t.get("id") or "").startswith(_ZH_ID_PREFIX)
-    ]
-    mats["texts"] = foreign + list(materials)
-
-
-def _sync_zh_text_track(draft: dict, materials: list[dict]) -> None:
-    """定向替换本节点的 text 轨(id=track-text-1);其余 text 轨(人工)保留。"""
-    tracks = draft.setdefault("tracks", []) or []
-    kept = [
-        t
-        for t in tracks
-        if not (
-            isinstance(t, dict)
-            and t.get("type") == "text"
-            and str(t.get("id") or "") == _ZH_TRACK_ID
-        )
-    ]
-    kept.append(build_text_track(materials))
-    draft["tracks"] = kept
-
-
 # ---------------------------------------------------------------------------
 # 阶段 2(2026-11-09 效果缺失修复):中文 TTS 落草稿(权威配音轨重写)
+# 2026-11-22 SDK 链转正:legacy 字幕原生写入(_sync_zh_text_materials /
+# _sync_zh_text_track)已删除 —— 字幕经 _emit_subtitle_spec 进 DraftBuildSpec,
+# node_11 SDK 编译统一落轨;配音轨(音频)仍由本节点权威原生重写。
 # ---------------------------------------------------------------------------
 #: 本节点拥有的配音轨名 —— 2026-11-17 P0 起权威定义移至
 #: ``nodes/_dual_draft.ZH_VOICEOVER_TRACK_NAME``(node_fork 清理/node_12 镜像
@@ -875,22 +848,19 @@ def _emit_subtitle_spec(
     log: list[str],
     node_tag: str,
 ) -> None:
-    """字幕构建计划 → DraftBuildSpec.subtitles(第10期阶段3,SDK 编译数据源)。
+    """字幕构建计划 → DraftBuildSpec.subtitles(SDK 编译数据源;失败 fail-closed)。
 
-    spec 是旁路产物:写入失败**降级不阻断**(legacy 原生写入链不受影响;
-    SDK 编译后端启用时由 QA/审计发现 spec 缺失)。英文分支 fork 复制的 spec
-    带 zh 身份,``set_spec_language`` 由分支节点显式接管。
+    2026-11-22 SDK 链转正:本函数是字幕进草稿的**唯一**通道(legacy 原生
+    文本轨写入已退役)。空输入=清空 spec 字幕段(重放幂等)。英文分支 fork
+    复制的 spec 带 zh 身份,``set_spec_language`` 由分支节点显式接管。
     """
-    try:
-        from nodes._draft_build_spec import replace_spec_sections, set_spec_language
-        from nodes._subtitle_texts import subtitle_specs_from_materials
+    from nodes._draft_build_spec import replace_spec_sections, set_spec_language
+    from nodes._subtitle_texts import subtitle_specs_from_materials
 
-        specs = subtitle_specs_from_materials(text_materials, language=language)
-        replace_spec_sections(draft_dir, subtitles=specs)
-        set_spec_language(draft_dir, language)
-        log.append(f"[{node_tag}] 字幕构建计划已入 spec:{len(specs)} 条(language={language})")
-    except Exception as exc:  # noqa: BLE001 — spec 是增强路径,绝不阻断字幕节点
-        log.append(f"[{node_tag}] 字幕 spec 写入失败(不阻断): {exc!r}")
+    specs = subtitle_specs_from_materials(text_materials, language=language)
+    replace_spec_sections(draft_dir, subtitles=specs)
+    set_spec_language(draft_dir, language)
+    log.append(f"[{node_tag}] 字幕构建计划已入 spec:{len(specs)} 条(language={language})")
 
 
 def add_subtitles(state: WorkflowState) -> dict:
@@ -934,9 +904,6 @@ def add_subtitles(state: WorkflowState) -> dict:
     # 区间从当前草稿视频段按源范围反推,关卡①人工调序与压缩后的时间变化天然被
     # 吸收。空输入(无旁白/无 plan)→ 不写草稿,仅记 notes(常态跳过路径)。
     zh_materials, zh_segments, zh_notes = _build_zh_subtitles(draft, state, _style)
-    if zh_materials:
-        _sync_zh_text_materials(draft, zh_materials)
-        _sync_zh_text_track(draft, zh_materials)
 
     # 阶段 2(2026-11-09 效果缺失修复):中文配音权威轨重写 —— 读 voiceover.json
     # 有效段,按当前草稿组区间重铺(自愈 node_07 压缩/关卡①调序导致的错位);
@@ -953,14 +920,15 @@ def add_subtitles(state: WorkflowState) -> dict:
             done_tag="node_08_add_subtitles_done",
         )
     )
+    # 2026-11-22 SDK 链转正:字幕构建计划发射(空产物=清空 spec 字幕段,重放幂等);
+    # 失败 fail-closed(SDK 链无 legacy 兜底,§13.2 禁静默缺段)
+    _emit_subtitle_spec(
+        draft_path.parent, zh_materials, language="zh", log=log, node_tag="node_08"
+    )
     if zh_materials:
         log.append(
-            f"[node_08] 中文字幕已落草稿:{len(zh_materials)} 条(text 轨 track-text-1,"
-            f"样式=scout+storyline 叠加)"
-        )
-        # 第10期阶段3:字幕构建计划同步入 spec(SDK 编译数据源;legacy 行为不变)
-        _emit_subtitle_spec(
-            draft_path.parent, zh_materials, language="zh", log=log, node_tag="node_08"
+            f"[node_08] 中文字幕构建计划已入 spec:{len(zh_materials)} 条"
+            f"(样式=scout+storyline 叠加)"
         )
     # 9 工具迁移 §6.4 step 1:成功调 scout → 把侦察报告落到 state;失败 → 不写
     if scout_report is not None:

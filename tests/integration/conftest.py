@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import socket
+from pathlib import Path
 import uuid
 from typing import Callable
 from urllib.parse import urlparse, urlunparse
@@ -229,3 +230,71 @@ def real_mode_translator():
     )
     yield
     set_default_client(MockTranslateClient())
+
+
+@pytest.fixture(autouse=True)
+def _stub_sdk_materials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SDK 编译素材替身(2026-11-22 SDK 链转正;与 test_jianying_sdk_phase7 同款)。
+
+    集成用例的草稿 media 是夹具假路径,真实 pyJianYingDraft VideoMaterial 会以
+    pymediainfo 探测真实文件;替身跳过探测,让 node_11 编译链路确定性走通
+    (MediaInfo 探测本身由 unit phase1-7 覆盖,不在此重复)。仅测进程内生效。
+    """
+    from jianying_sdk._sdk_loader import ensure_sdk_on_path
+
+    ensure_sdk_on_path()
+
+    from pyJianYingDraft.local_materials import CropSettings
+    import pyJianYingDraft
+    from pyJianYingDraft import AudioMaterial, VideoMaterial
+
+    # 本地替身(必须继承真类:SDK add_segment 做 isinstance 校验;phase2 同款);
+    # 时长放大到 1h,任意夹具 timerange 都能落进素材时长内(SDK 会校验
+    # 截取范围 <= 素材时长;phase2 定长 30s 会被 35s 夹具拒绝)。
+    class _StubVideoMaterial(VideoMaterial):
+        def __init__(self, path: str, material_name: str | None = None, crop_settings=None):
+            self.material_name = material_name or Path(path).name
+            self.material_id = "stubvid-" + Path(path).name.replace(".", "-")
+            self.path = path
+            self.duration = 3_600_000_000
+            self.width = 1080
+            self.height = 1920
+            self.crop_settings = crop_settings
+            self.crop_ratio = "free"
+            self.crop_scale = 1.0
+            self.type = "local"
+
+        def export_json(self) -> dict:
+            crop = self.crop_settings.export_json() if self.crop_settings else CropSettings().export_json()
+            return {
+                "category_name": "local", "crop": crop, "crop_ratio": "free",
+                "crop_scale": 1.0, "duration": self.duration, "height": self.height,
+                "id": self.material_id, "local_material_id": "", "material_id": self.material_id,
+                "material_name": self.material_name, "media_path": "", "path": self.path,
+                "type": self.type, "width": self.width,
+            }
+
+    class _StubAudioMaterial(AudioMaterial):
+        def __init__(self, path: str, material_name: str | None = None):
+            self.material_name = material_name or Path(path).name
+            self.material_id = "stubaud-" + Path(path).name.replace(".", "-")
+            self.path = path
+            self.duration = 3_600_000_000
+
+        def export_json(self) -> dict:
+            return {
+                "category_id": "", "category_name": "local", "duration": self.duration,
+                "id": self.material_id, "material_id": self.material_id,
+                "material_name": self.material_name, "path": self.path, "type": "extract_music",
+            }
+
+    monkeypatch.setattr(
+        pyJianYingDraft, "VideoMaterial",
+        lambda path, material_name=None, crop_settings=None: _StubVideoMaterial(
+            path, material_name, crop_settings
+        ),
+    )
+    monkeypatch.setattr(
+        pyJianYingDraft, "AudioMaterial",
+        lambda path, material_name=None: _StubAudioMaterial(path, material_name),
+    )

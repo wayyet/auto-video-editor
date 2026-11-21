@@ -606,6 +606,15 @@ def _zh_draft() -> dict:
     }
 
 
+def _spec_of(draft_file: Path):
+    """读取 node_08 发射的字幕构建计划(spec sidecar;缺失即失败)。"""
+    from nodes._draft_build_spec import load_build_spec
+
+    spec = load_build_spec(draft_file.parent)
+    assert spec is not None, "spec sidecar 应已发射"
+    return spec
+
+
 def _zh_state(draft_path: Path, tmp_path: Path, narration_g1: str, narration_g2: str) -> dict:
     script_file = tmp_path / "script.json"
     script_file.write_text(
@@ -634,7 +643,7 @@ def _write_draft(tmp_path: Path, draft: dict) -> Path:
 
 
 def test_zh_subtitles_written_from_narration(tmp_path: Path) -> None:
-    """有旁白 → materials.texts 原生条目 + text 轨段(material_id 可解析)+ state 段落。"""
+    """有旁白 → spec 字幕计划(subtitle_id/text/wrap 齐全)+ state 段落;草稿零写入。"""
     draft_file = _write_draft(tmp_path, _zh_draft())
     state = _zh_state(draft_file, tmp_path, "第一句。第二句!", "第三句")
 
@@ -648,18 +657,13 @@ def test_zh_subtitles_written_from_narration(tmp_path: Path) -> None:
     assert (segs[1]["start_ms"], segs[1]["end_ms"]) == (1500, 3000)
     assert (segs[2]["start_ms"], segs[2]["end_ms"]) == (3000, 7000)
 
-    draft = json.loads(draft_file.read_text(encoding="utf-8"))
-    texts = draft["materials"]["texts"]
-    assert [t["id"] for t in texts] == ["text-zh-1", "text-zh-2", "text-zh-3"]
-    # 原生 content JSON(text 字段回显句子)
-    for t, expect in zip(texts, ["第一句。", "第二句!", "第三句"]):
-        assert json.loads(t["content"])["text"] == expect
-    # text 轨段引用完整
-    text_tracks = [t for t in draft["tracks"] if t["type"] == "text"]
-    assert len(text_tracks) == 1
-    assert [s["material_id"] for s in text_tracks[0]["segments"]] == [
-        "text-zh-1", "text-zh-2", "text-zh-3",
-    ]
+    # 2026-11-22 SDK 链转正:字幕进 spec(唯一通道),草稿不再有文本轨
+    spec = _spec_of(draft_file)
+    assert [s.subtitle_id for s in spec.subtitles] == ["text-zh-1", "text-zh-2", "text-zh-3"]
+    for s, expect in zip(spec.subtitles, ["第一句。", "第二句!", "第三句"]):
+        assert s.text == expect
+        assert s.wrap_content, "折行渲染文本已发射"
+    assert [t for t in json.loads(draft_file.read_text(encoding="utf-8"))["tracks"] if t["type"] == "text"] == []
 
 
 def test_zh_subtitles_replay_is_idempotent(tmp_path: Path) -> None:
@@ -674,7 +678,7 @@ def test_zh_subtitles_replay_is_idempotent(tmp_path: Path) -> None:
 
 
 def test_zh_subtitles_long_sentence_wrapped(tmp_path: Path) -> None:
-    """2026-11-18 折行:39 字长句 → content 内嵌 \\n 且每行不超宽;state 段保持原文。
+    """2026-11-18 折行:39 字长句 → spec.wrap_content 内嵌换行且每行不超宽;state 段保持原文。
 
     真机 AutoVideo_console-31a8a8e9edd2 实证:该长句单行 ≈1524px 超出 1080
     画布被两端裁剪。修复后渲染文本折行,但 state 段(text_zh)仍是原文 ——
@@ -693,12 +697,10 @@ def test_zh_subtitles_long_sentence_wrapped(tmp_path: Path) -> None:
     assert out["subtitle_segments_zh"][0]["text_zh"] == long_sentence, (
         "state 段保持原文(16a 翻译指纹不变)"
     )
-    draft = json.loads(draft_file.read_text(encoding="utf-8"))
-    content = json.loads(draft["materials"]["texts"][0]["content"])
-    assert "\n" in content["text"], "默认样式 size 5.0(容量 26 单位)下 38.1 单位必须折行"
-    assert content["text"].replace("\n", "") == long_sentence, "折行不丢字符"
-    assert content["styles"][0]["range"] == [0, len(content["text"])]
-    for line in content["text"].split("\n"):
+    wrapped = _spec_of(draft_file).subtitles[0].wrap_content or ""
+    assert "\n" in wrapped, "默认样式 size 5.0(容量 26 单位)下 38.1 单位必须折行"
+    assert wrapped.replace("\n", "") == long_sentence, "折行不丢字符"
+    for line in wrapped.split("\n"):
         assert line_units(line) <= max_line_units(5.0, 1080)
     first = draft_file.read_text(encoding="utf-8")
     add_subtitles(state)
@@ -730,8 +732,7 @@ def test_zh_subtitles_written_without_voiceover_id_via_subtitle_style(tmp_path: 
     assert len(segs) == 3
     assert (segs[0]["start_ms"], segs[0]["end_ms"]) == (0, 1500)
     assert (segs[2]["start_ms"], segs[2]["end_ms"]) == (3000, 7000)
-    draft = json.loads(draft_file.read_text(encoding="utf-8"))
-    assert [t["id"] for t in draft["materials"]["texts"]] == [
+    assert [s.subtitle_id for s in _spec_of(draft_file).subtitles] == [
         "text-zh-1", "text-zh-2", "text-zh-3",
     ]
 
@@ -806,7 +807,7 @@ def test_zh_subtitles_survive_segment_reorder(tmp_path: Path) -> None:
 
 
 def test_zh_subtitles_preserves_foreign_texts_and_replaces_own(tmp_path: Path) -> None:
-    """人工文本素材/轨道保留;本节点旧产物(text-zh-*/track-text-1)被定向替换。"""
+    """node_08 零改写草稿:人工文本与我方旧产物原样;spec 只含本轮新计划。"""
     draft = _zh_draft()
     draft["materials"]["texts"] = [
         {"id": "manual-1", "type": "text", "content": "人工标题",
@@ -831,22 +832,14 @@ def test_zh_subtitles_preserves_foreign_texts_and_replaces_own(tmp_path: Path) -
 
     after = json.loads(draft_file.read_text(encoding="utf-8"))
     texts = {t["id"]: t for t in after["materials"]["texts"]}
-    # 人工文本条目原样保留(内容/时间未被触碰)
+    # 2026-11-22 SDK 链转正:node_08 零改写草稿 —— 人工文本与我方旧产物都原样
     assert texts["manual-1"]["content"] == "人工标题"
     assert texts["manual-1"]["target_timerange"] == {"start": 0, "duration": 1_000_000}
-    # 我方旧条目(text-zh-9)被新产物整体替换,不再残留
-    assert "text-zh-9" not in texts
-    zh_ids = [i for i in texts if i.startswith("text-zh-")]
-    assert len(zh_ids) == 2, f"应恰好 2 条我方新字幕,实际 {sorted(texts)}"
-    # track-text-1 重建:只指向新产物,旧段(old1)不残留;人工轨道原样
-    tracks = {t.get("id"): t for t in after["tracks"]}
-    assert [t["id"] for t in after["tracks"] if t["type"] == "text"] == ["track-manual", "track-text-1"]
-    assert {s["material_id"] for s in tracks["track-manual"]["segments"]} == {"manual-1"}
-    zh_segs = tracks["track-text-1"]["segments"]
-    assert {s["material_id"] for s in zh_segs} == set(zh_ids)
-    assert all(s["id"] != "old1" for s in zh_segs)
-    # 字幕句数正确:两组各 1 句旁白 → 2 条字幕(state 段落与草稿条目同数)
-    assert len(zh_segs) == 2
+    assert "text-zh-9" in texts, "草稿不被 node_08 触碰(旧产物清退由编译重建承担)"
+    # spec 只含本轮新计划(旧 text-zh-9 不进 spec)
+    spec = _spec_of(draft_file)
+    assert [s.subtitle_id for s in spec.subtitles] == ["text-zh-1", "text-zh-2"]
+    # 字幕句数正确:两组各 1 句旁白 → 2 条字幕(state 段落与 spec 条目同数)
     assert len(out["subtitle_segments_zh"]) == 2
     assert "node_08_add_subtitles_done" in out["status_log"]
 

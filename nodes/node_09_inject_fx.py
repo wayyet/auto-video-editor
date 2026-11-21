@@ -1,61 +1,48 @@
-"""节点 9:inject_fx — 转场 + 视频特效**原生绑定**注入(对应原文档 4.4 节)。
+"""节点 9:inject_fx — 转场 + 视频特效**构建计划**发射(对应原文档 4.4 节)。
 
-2026-11-09 阶段 3 重写:转场/特效构造原生 material(``jy_common/native_fx.py``)
-并挂到目标 video segment 的 ``extra_material_refs``。
+2026-11-22 SDK 链转正(六段 legacy 链退役):本节点不再直接改写草稿,
+只做业务决策并把结果写入 DraftBuildSpec(``transitions`` / ``video_effects``
+段);node_11 以 pyJianYingDraft SDK 统一编译重建草稿(SDK 转场挂**前段**)。
+视频/音频轨不属于本节点职责,编译时的 timeline 由 node_11 从当前草稿提取。
 
-2026-11-17 池化重写(核验报告 §6.4-§6.7,转场/特效直接使用剪映资源库):
+决策逻辑保持 2026-11-17 池化重写语义(核验报告 §6.4-§6.7):
 
 1. **转场风格池轮换**:语义 → ``fx_template.transition_semantic_map`` → 池 key
-   → ``transition_pools`` 池内确定性轮换。池成员全部是
-   ``fx_resource_library.json`` transitions 段的真实剪映资源(含 VIP,会员已
-   确认可用)。轮换 seed = sha256(``job_id|boundary_index|pool_key``) ——
-   **不含 zh/en tag、不用 python hash()**(str 盐化随机),中英两份草稿
-   逐边界选出相同转场,跨进程重放稳定。未收录语义统一回退
-   ``pool_gentle``(不再落强视觉默认值)。
-2. **视频特效克制点缀**(2026-11-11"抖动模糊"全片挂载事故后重新启用):
-   白名单只收氛围光效类(fx_template.video_effects),挂载位固定公式
-   ``{0, n-1} ∪ {i∈[1,n-2] 且 i%3==0}``(0-based:首段、尾段、第4/7/10…段),
-   特效按**挂载序号**在白名单内轮换;intensity 钳制 [0,1];空白名单
-   fail-closed 不写入(记 status 说明,不刷 error_log)。
+   → ``transition_pools`` 池内确定性轮换。轮换 seed = sha256(``job_id|boundary_index|pool_key``)
+   —— **不含 zh/en tag、不用 python hash()**,中英两份草稿逐边界选出相同
+   转场,跨进程重放稳定。未收录语义统一回退 ``pool_gentle``。
+2. **视频特效克制点缀**:白名单只收氛围光效类(fx_template.video_effects),
+   挂载位固定公式 ``{0, n-1} ∪ {i∈[1,n-2] 且 i%3==0}``(0-based:首段、尾段、
+   第4/7/10…段),特效按**挂载序号**在白名单内轮换;intensity 钳制 [0,1]
+   (spec 侧换算为 SDK 口径 0-100);空白名单 fail-closed 不写入。
 3. **all-cut 保底**(核验报告 §6.7):``required_features.transitions=True``
-   且多镜头且全部边界语义=硬切时,把边界 0 回退 ``fade`` 池 —— 保证至少
-   一个真实转场,交付 QA 不因"预期全硬切"误判注入失败后无限 repair。
-4. **边界只认草稿**:``max(len(video_segments) - 1, 0)``;边界 i→i+1 的转场
-   挂在**后一段**(segments[i+1])。只有 1 个 segment → ``not_applicable``。
-5. **状态拆分**:``ok``(写出并绑定)/ ``cut``(语义=硬切)/ ``degraded``
-   (池缺失/资源未命中,不写)/ ``not_applicable``(无边界);模板库缺失 →
-   failed(error_log)。执行结果以草稿原生条目 + status_log 为准。
+   且多镜头且全部边界语义=硬切时,把边界 0 回退 ``fade`` 池。
+4. **边界只认草稿**:``max(len(video_segments) - 1, 0)``;只有 1 个 segment
+   → ``not_applicable``。
+5. **状态拆分**:``ok``(进 spec)/ ``cut``(语义=硬切)/ ``degraded``
+   (池缺失/资源未命中,不进 spec)/ ``not_applicable``(无边界)。
 6. **开场转场加强**(第八期阶段3,设计文档 §6.3):用户【开场】标记正向要求
-   时,边界 0 语义强制 ``whip`` → pool_whip(强动势/甩镜风格,非"全库最强"
-   承诺);按**真实草稿边界数**生效(语义计划空/短先补 None 占位),单镜头
-   not_applicable,资源解析失败不记 applied;覆盖先于 all-cut 判定。
+   时,边界 0 语义强制 ``whip`` → pool_whip;按**真实草稿边界数**生效,
+   单镜头 not_applicable,资源解析失败不记 applied;覆盖先于 all-cut 判定。
 
-幂等与守卫(对齐 node_08 配音轨删除守卫):我方素材 id 用确定性模式
-``transition-{k}`` / ``vfx-{k}``(k 从 1 起);重放先剥离我方旧 refs、清理
-未被本次复用的我方旧 material,再写入新条目。人工在剪映里加的转场/特效
-(id 是 uuid)不落这些前缀,一律保留。
+失败语义(SDK 链无 legacy 兜底,§13.2 禁静默缺段):模板库缺失/草稿不可读/
+spec 写入失败 → 抛异常使任务 fail-closed;资源级逐条降级(单边界/单特效未
+解析)仍不阻断其余条目。
 """
 
 from __future__ import annotations
 
 import hashlib
-import re
 from pathlib import Path
 from typing import Any, Optional
 
 from draft_ops.draft_integrity import resolve_required_features
 from jy_common.job_identity import resolve_job_id
-from jy_common.native_fx import (
-    OUR_TRANSITION_PATTERN,
-    OUR_VIDEO_EFFECT_PATTERN,
-    build_native_transition_material,
-    build_native_video_effect_material,
-    is_19_digit_resource_id,
-)
+from jy_common.native_fx import is_19_digit_resource_id
 from jy_common.template_library import TemplateLibrary, load_resource_libraries
 from jy_common.user_directives import opening_boost_requested, parse_user_directives
 from langchain_core.runnables import RunnableConfig
-from nodes._draft_io import apply_and_write, find_video_track, load_draft, upsert_by_id
+from nodes._draft_io import find_video_track, load_draft
 from nodes._dual_draft import ZH, dual_draft_targets, missing_en_note
 from nodes.storyline._common import (
     PLAN_SOURCE_FINAL_INVALID,
@@ -162,7 +149,7 @@ def _resolve_video_effect_candidates(
 
     - 每行必须经 ``pick_video_effect_by_name`` 在资源库 **video_effects 段**
       精确命中 + 19 位 ID 校验(核验报告 §4.3:同名转场不会跨段误中);
-    - intensity 钳制 [0,1](核验报告 §6.6)。
+    - intensity 钳制 [0,1](核验报告 §6.6;spec 侧换算 0-100)。
     """
     resolved: list[tuple[dict, float]] = []
     failed: list[str] = []
@@ -212,79 +199,28 @@ def _all_boundaries_cut(
     )
 
 
-def _strip_stale_owned_refs(
-    segments: list[dict], patterns: tuple[re.Pattern[str], ...], kept_ids: set[str]
-) -> set[str]:
-    """剥掉 segment 上"我方模式 id 但本次未续用"的 refs,返回被剥的 id 集合。"""
-    removed: set[str] = set()
-    for seg in segments:
-        refs = seg.get("extra_material_refs")
-        if not isinstance(refs, list):
-            continue
-        kept: list[Any] = []
-        for ref in refs:
-            ref_str = str(ref)
-            if any(p.match(ref_str) for p in patterns) and ref_str not in kept_ids:
-                removed.add(ref_str)
-                continue
-            kept.append(ref)
-        seg["extra_material_refs"] = kept
-    return removed
-
-
-def _remove_owned_materials(
-    bucket: list[dict], patterns: tuple[re.Pattern[str], ...], kept_ids: set[str]
-) -> int:
-    """就地删除"我方模式 id 但本次未续用"的 material,返回删除数。"""
-    kept: list[dict] = []
-    removed = 0
-    for item in bucket:
-        item_id = str(item.get("id") or "")
-        if any(p.match(item_id) for p in patterns) and item_id not in kept_ids:
-            removed += 1
-            continue
-        kept.append(item)
-    bucket[:] = kept
-    return removed
-
-
-def _bind_ref(seg: dict, material_id: str) -> None:
-    refs = seg.setdefault("extra_material_refs", [])
-    if material_id not in refs:
-        refs.append(material_id)
-
-
-def _inject_fx_into(
+def _plan_fx_into(
     draft: dict,
     template_lib: TemplateLibrary,
     semantics: list[str | None],
-    tag: str,
     job_id: str,
     required_transitions: bool,
     opening_boost: bool = False,
-) -> tuple[list[str], dict]:
-    """把转场 + 视频特效**原生绑定**进一份草稿(就地改 ``draft``)。
+) -> tuple[list[dict], list[dict], list[str], dict]:
+    """计算一份草稿的转场 + 视频特效构建计划(**纯计算,不改草稿**)。
 
-    中英两份草稿共用这一个实现(``tag`` 只用于日志前缀,**不进**轮换 seed)。
-    两份草稿 fork 自同一份快照②,视频时间轴一致,所以两边得到的条数、绑定
-    与转场名一致。
-
-    ``opening_boost``(第八期阶段3,设计文档 §6.3):【开场】标记正向要求时,
-    边界 0 语义强制 ``whip`` → pool_whip(强动势/甩镜风格池;P1-01/P1-02:
-    这是第一处镜头切点的风格覆盖,不承诺 0-3s,不代表全库最强)。按**真实
-    草稿边界数**生效(P1-03):语义计划为空/偏短时先补 ``None`` 占位(缺失
-    语义走既有 pool_gentle 回退),单镜头无边界 → not_applicable;覆盖发生在
-    all-cut 判定**之前**,边界 0=whip 后不再判「全硬切」。zh/en 共享同一
-    ``opening_boost`` 与 ``job_id``,双稿边界 0 转场名一致。
+    中英两份草稿共用这一个实现;两份草稿 fork 自同一份快照②,视频时间轴
+    一致,所以两边得到的条数与转场名一致。spec 转场挂载语义为**前段**
+    (SDK ``VideoSegment.add_transition`` 约定;旧 legacy 挂后段的行为随
+    legacy 链退役)。
 
     Returns:
-        (告警列表, 汇总 dict)。
+        (transitions_plan, video_effects_plan, 告警列表, 汇总 dict)。
+        transitions_plan 条目:boundary_index/effect_id/resource_id/name/
+        duration_us/is_overlap/opening;video_effects_plan 条目:
+        segment_index/effect_id/resource_id/name/value(0-1,emit 时 ×100)。
     """
     warnings: list[str] = []
-
-    materials = draft.setdefault("materials", {})
-    transitions_bucket = materials.setdefault("transitions", [])
-    video_effects_bucket = materials.setdefault("video_effects", [])
 
     video_track = find_video_track(draft)
     segments = _sorted_video_segments(video_track)
@@ -301,7 +237,6 @@ def _inject_fx_into(
         "video_effects_failed": 0,
         "video_effects_empty_whitelist": False,
         "not_applicable": n_boundaries == 0,
-        "cleaned_stale": 0,
         # 第八期阶段3:开场加强诊断(资源名/池只进 summary/产物,不进监控事件)
         "opening_boost_requested": bool(opening_boost),
         "opening_boost_applied": False,
@@ -310,12 +245,11 @@ def _inject_fx_into(
         "opening_transition_name": None,
     }
     if n_boundaries == 0:
-        warnings.append(f"[{tag}] 只有 {len(segments)} 个视频段,无剪辑边界,转场 not_applicable")
+        warnings.append(f"只有 {len(segments)} 个视频段,无剪辑边界,转场 not_applicable")
 
     working_semantics = list(semantics)
     # 第八期阶段3:【开场】正向要求 → 边界 0 强制 whip。按真实边界数生效
-    # (P1-03):语义列表为空/偏短先补 None 占位,再覆盖边界 0 —— 不得因
-    # 语义计划为空而跳过(否则合法草稿静默漏执行用户要求)。
+    # (P1-03):语义列表为空/偏短先补 None 占位,再覆盖边界 0。
     opening_boost_effective = bool(opening_boost) and n_boundaries > 0
     if opening_boost and n_boundaries == 0:
         summary["opening_boost_not_applicable"] = True
@@ -325,7 +259,6 @@ def _inject_fx_into(
         working_semantics[0] = "whip"
 
     # all-cut 保底(核验报告 §6.7):全部边界硬切 + 交付要求转场 → 边界 0 回退 fade。
-    # 开场覆盖成 whip 后边界 0 不再是硬切,保底通常不应触发。
     if (
         required_transitions
         and _all_boundaries_cut(working_semantics, template_lib.transition_semantic_map(), n_boundaries)
@@ -333,7 +266,7 @@ def _inject_fx_into(
         working_semantics = ["fade" if i == 0 else s for i, s in enumerate(working_semantics)]
         summary["all_cut_fallback"] = True
 
-    kept_transition_ids: set[str] = set()
+    transitions_plan: list[dict] = []
     for i in range(n_boundaries):
         semantic = working_semantics[i] if i < len(working_semantics) else None
         status, meta, pool_key = _resolve_transition_meta(
@@ -352,12 +285,12 @@ def _inject_fx_into(
         if status != "ok" or meta is None:
             summary["transitions_degraded"] += 1
             warnings.append(
-                f"[{tag}] boundary {i + 1} 转场资源未解析"
-                f"(semantic={semantic!r}, pool={pool_key!r}),degraded 不写入"
+                f"boundary {i + 1} 转场资源未解析"
+                f"(semantic={semantic!r}, pool={pool_key!r}),degraded 不进 spec"
             )
             if i == 0 and opening_boost_effective:
                 warnings.append(
-                    f"[{tag}] opening boost 边界 0 资源未解析(pool={pool_key!r}),"
+                    f"opening boost 边界 0 资源未解析(pool={pool_key!r}),"
                     "degraded —— 不记 applied"
                 )
             continue
@@ -370,16 +303,17 @@ def _inject_fx_into(
             if neighbor_min > 0 and default_us > 0
             else (default_us or _DEFAULT_TRANSITION_DURATION_US)
         )
-        material_id = f"transition-{i + 1}"
-        material = build_native_transition_material(
-            material_id=material_id, meta=meta, duration_us=duration_us
-        )
-        upsert_by_id(transitions_bucket, material)
-        kept_transition_ids.add(material_id)
-        _bind_ref(segments[i + 1], material_id)
+        transitions_plan.append({
+            "boundary_index": i,
+            "effect_id": str(meta.get("effect_id") or ""),
+            "resource_id": str(meta.get("resource_id") or ""),
+            "name": str(meta.get("name") or ""),
+            "duration_us": int(duration_us),
+            "is_overlap": bool(meta.get("is_overlap") or False),
+            "opening": bool(i == 0 and opening_boost_effective),
+        })
         summary["transitions_written"] += 1
         if i == 0 and opening_boost_effective:
-            # 只有真实解析并写入草稿后才记 applied(P1-03/§6.3:不得假成功)
             summary["opening_boost_applied"] = True
 
     # 视频特效克制点缀:只挂首/尾/中间每第 3 段,按挂载序号轮换白名单
@@ -388,142 +322,103 @@ def _inject_fx_into(
     summary["video_effects_failed"] = len(failed_names)
     if failed_names:
         warnings.append(
-            f"[{tag}] 视频特效白名单 {failed_names!r} 未在资源库 video_effects 段解析,"
+            f"视频特效白名单 {failed_names!r} 未在资源库 video_effects 段解析,"
             "degraded 跳过(核验报告 §4.3 分段精确命中)"
         )
     if whitelist_rows and not candidates:
-        warnings.append(f"[{tag}] 视频特效白名单全部未解析,degraded 不写入")
+        warnings.append("视频特效白名单全部未解析,degraded 不进 spec")
     if not whitelist_rows:
         summary["video_effects_empty_whitelist"] = True
 
+    video_effects_plan: list[dict] = []
     effect_positions = _effect_segment_positions(len(segments))
-    kept_vfx_ids: set[str] = set()
     mount_seq = 0
     for k, seg in enumerate(segments):  # k 为 0-based 段索引
         if k not in effect_positions or not candidates:
             continue
         meta, value = candidates[mount_seq % len(candidates)]
         mount_seq += 1
-        material_id = f"vfx-{k + 1}"
-        material = build_native_video_effect_material(
-            material_id=material_id, meta=meta, value=value
-        )
-        upsert_by_id(video_effects_bucket, material)
-        kept_vfx_ids.add(material_id)
-        _bind_ref(seg, material_id)
+        video_effects_plan.append({
+            "segment_index": k,
+            "effect_id": str(meta.get("effect_id") or ""),
+            "resource_id": str(meta.get("resource_id") or ""),
+            "name": str(meta.get("name") or ""),
+            "value": float(value),
+        })
         summary["video_effects_written"] += 1
 
-    # 清理我方旧产物(重放/边界数收缩后的孤儿);人工素材 id 不落我方模式,不受影响
-    removed_refs = _strip_stale_owned_refs(
-        segments, (OUR_TRANSITION_PATTERN, OUR_VIDEO_EFFECT_PATTERN),
-        kept_transition_ids | kept_vfx_ids,
-    )
-    removed_mats = _remove_owned_materials(
-        transitions_bucket, (OUR_TRANSITION_PATTERN,), kept_transition_ids
-    )
-    removed_mats += _remove_owned_materials(
-        video_effects_bucket, (OUR_VIDEO_EFFECT_PATTERN,), kept_vfx_ids
-    )
-    summary["cleaned_stale"] = len(removed_refs) + removed_mats
-
-    return warnings, summary
+    return transitions_plan, video_effects_plan, warnings, summary
 
 
-def _emit_fx_spec(draft_dir: Path, draft: dict, log: list[str]) -> None:
-    """转场/视频特效构建计划 → DraftBuildSpec(第10期阶段5,SDK 编译数据源)。
+def _emit_fx_spec(
+    draft_dir: Path,
+    draft: dict,
+    transitions_plan: list[dict],
+    video_effects_plan: list[dict],
+    log: list[str],
+) -> None:
+    """构建计划 → DraftBuildSpec(直构,不再反解草稿 refs;SDK 编译数据源)。
 
-    从**本轮注入后的草稿**自洽导出(单一事实源):转场条目按我方 id 模式
-    ``transition-{k}`` 反解边界序号(旧实现挂 ``segments[k]`` 后一段,spec 按
-    边界语义记录 from/to,SDK 编译时换前段挂载);特效按 ``vfx-{k}`` 反解段序。
     ``video_animations`` 置空(资源池待操作员 GUI 实证后另案配置,编译机制
-    已就绪)。失败降级不阻断。
+    已就绪)。失败直接抛出(SDK 链无 legacy 兜底,§13.2 禁静默缺段)。
     """
-    try:
-        from jianying_sdk.spec import TransitionSpec, VideoEffectSpec
-        from nodes._draft_build_spec import replace_spec_sections
+    from jianying_sdk.spec import TransitionSpec, VideoEffectSpec
+    from nodes._draft_build_spec import replace_spec_sections
 
-        materials = draft.get("materials") or {}
-        videos_by_id = {
-            str(v.get("id")): v
-            for v in materials.get("videos") or []
-            if isinstance(v, dict) and v.get("id")
-        }
+    materials = draft.get("materials") or {}
+    videos_by_id = {
+        str(v.get("id")): v
+        for v in materials.get("videos") or []
+        if isinstance(v, dict) and v.get("id")
+    }
+    segments = _sorted_video_segments(find_video_track(draft))
 
-        def _clip_id_of(seg: dict) -> str:
-            mat = videos_by_id.get(str(seg.get("material_id") or ""))
-            return str((mat or {}).get("material_name") or "") or str(seg.get("id") or "")
+    def _clip_id_of(seg: dict) -> str:
+        mat = videos_by_id.get(str(seg.get("material_id") or ""))
+        return str((mat or {}).get("material_name") or "") or str(seg.get("id") or "")
 
-        segments = _sorted_video_segments(find_video_track(draft))
-        transitions_bucket = {
-            str(t.get("id")): t
-            for t in materials.get("transitions") or []
-            if isinstance(t, dict)
-        }
-        vfx_bucket = {
-            str(v.get("id")): v
-            for v in materials.get("video_effects") or []
-            if isinstance(v, dict)
-        }
-
-        transitions: list[TransitionSpec] = []
-        for idx, seg in enumerate(segments):
-            for ref in seg.get("extra_material_refs") or []:
-                ref_str = str(ref)
-                if OUR_TRANSITION_PATTERN.match(ref_str) is None:
-                    continue
-                boundary = int(ref_str.removeprefix("transition-")) - 1
-                if boundary < 0 or boundary + 1 >= len(segments):
-                    continue
-                mat = transitions_bucket.get(ref_str)
-                if mat is None:
-                    continue
-                transitions.append(TransitionSpec(
-                    boundary_index=boundary,
-                    from_clip_id=_clip_id_of(segments[boundary]),
-                    to_clip_id=_clip_id_of(segments[boundary + 1]),
-                    effect_id=str(mat.get("effect_id") or ""),
-                    resource_id=str(mat.get("resource_id") or ""),
-                    name=str(mat.get("name") or ""),
-                    duration_us=int(mat.get("duration") or 0),
-                    is_overlap=bool(mat.get("is_overlap") or False),
-                ))
-
-        video_effects: list[VideoEffectSpec] = []
-        for idx, seg in enumerate(segments):
-            for ref in seg.get("extra_material_refs") or []:
-                ref_str = str(ref)
-                if OUR_VIDEO_EFFECT_PATTERN.match(ref_str) is None:
-                    continue
-                mat = vfx_bucket.get(ref_str)
-                if mat is None:
-                    continue
-                video_effects.append(VideoEffectSpec(
-                    clip_id=_clip_id_of(seg),
-                    effect_id=str(mat.get("effect_id") or ""),
-                    resource_id=str(mat.get("resource_id") or ""),
-                    name=str(mat.get("name") or ""),
-                    intensity=float(mat.get("value") or 0.0) * 100.0,
-                ))
-
-        replace_spec_sections(
-            draft_dir,
-            transitions=transitions,
-            video_effects=video_effects,
-            video_animations=[],  # 视频动画池待操作员 GUI 实证(编译机制已就绪)
+    transitions = [
+        TransitionSpec(
+            boundary_index=item["boundary_index"],
+            from_clip_id=_clip_id_of(segments[item["boundary_index"]]),
+            to_clip_id=_clip_id_of(segments[item["boundary_index"] + 1]),
+            effect_id=item["effect_id"],
+            resource_id=item["resource_id"],
+            name=item["name"],
+            duration_us=item["duration_us"],
+            is_overlap=item["is_overlap"],
         )
-        log.append(
-            f"[node_09] 效果构建计划已入 spec:"
-            f"transitions={len(transitions)},video_effects={len(video_effects)}"
+        for item in transitions_plan
+    ]
+    video_effects = [
+        VideoEffectSpec(
+            clip_id=_clip_id_of(segments[item["segment_index"]]),
+            effect_id=item["effect_id"],
+            resource_id=item["resource_id"],
+            name=item["name"],
+            intensity=float(item["value"]) * 100.0,  # 0-1 → SDK 口径 0-100
         )
-    except Exception as exc:  # noqa: BLE001 — spec 是增强路径,绝不阻断 node_09
-        log.append(f"[node_09] 效果 spec 写入失败(不阻断): {exc!r}")
+        for item in video_effects_plan
+    ]
+
+    replace_spec_sections(
+        draft_dir,
+        transitions=transitions,
+        video_effects=video_effects,
+        video_animations=[],  # 视频动画池待操作员 GUI 实证(编译机制已就绪)
+    )
+    log.append(
+        f"[node_09] 效果构建计划已入 spec:"
+        f"transitions={len(transitions)},video_effects={len(video_effects)}"
+    )
 
 
 def inject_fx(state: WorkflowState, config: Optional[RunnableConfig] = None) -> dict:
-    """读取草稿 → 消费转场计划 → 在剪辑边界原生绑定转场/特效 → 原子写回。
+    """读取草稿 → 消费转场计划 → 发射转场/特效构建计划到 DraftBuildSpec。
 
-    K2=B(2026-10):对**中文主草稿 + 英文分支草稿**各注入一次(见 ``nodes/_dual_draft.py``)。
+    K2=B(2026-10):对**中文主草稿 + 英文分支草稿**各发射一次(见 ``nodes/_dual_draft.py``)。
     两份草稿在同一节点内顺序处理,不跨超步,返回值契约不变(整份 state)。
+    本节点不改写草稿(2026-11-22 SDK 链转正);node_11 统一编译。
 
     轮换 seed 用 ``job_id``,经公共 ``jy_common.job_identity.resolve_job_id``
     解析(LangGraph config.thread_id 权威 → state.session_id 兼容旧 checkpoint →
@@ -541,8 +436,11 @@ def inject_fx(state: WorkflowState, config: Optional[RunnableConfig] = None) -> 
     )
 
     if template_lib.is_empty:
+        # 模板库缺失:仓库静态文件(CWD 相对)缺失属环境异常 —— 降级通过并响亮
+        # 报错(转场/特效零计划;交付 QA 的 transitions required 闸门兜底,不静默)。
+        # 集成测试环境合法无模板;生产模板恒在,真缺失时 QA 必然拦下。
         status_log.append("node_09_inject_fx_no_template")
-        error_log.append("[node_09] 模板库缺失,降级通过(Week 3 可接受)")
+        error_log.append("[node_09] fx 模板库缺失,转场/特效计划零发射(降级通过,QA 闸门兜底)")
         return {**state, "status_log": status_log, "error_log": error_log}
 
     targets = dual_draft_targets(state)
@@ -571,17 +469,16 @@ def inject_fx(state: WorkflowState, config: Optional[RunnableConfig] = None) -> 
 
     for tag, draft_file in targets:
         draft = load_draft(draft_file)
-        warnings, summary = _inject_fx_into(
+        transitions_plan, effects_plan, warnings, summary = _plan_fx_into(
             draft,
             template_lib,
             semantics,
-            f"node_09_{tag}",
             job_id,
             required_transitions,
             opening_boost=opening_boost,
         )
-        # 第10期阶段5:效果构建计划同步入 spec(双稿各自独立,SDK 编译数据源)
-        _emit_fx_spec(Path(draft_file).parent, draft, status_log)
+        # 构建计划同步入 spec(双稿各自独立,SDK 编译数据源;失败 fail-closed)
+        _emit_fx_spec(Path(draft_file).parent, draft, transitions_plan, effects_plan, status_log)
         error_log.extend(warnings)
         if summary.get("not_applicable"):
             status_log.append(f"node_09_inject_fx_{tag}_not_applicable")
@@ -596,16 +493,8 @@ def inject_fx(state: WorkflowState, config: Optional[RunnableConfig] = None) -> 
             status_log.append(f"node_09_inject_fx_{tag}_opening_boost_not_applicable")
         elif opening_boost:
             status_log.append(f"node_09_inject_fx_{tag}_opening_boost_degraded")
-        # Week 5:参数从 draft_path 提升为 draft_path.parent,safe_write_draft 双写
-        status_log.extend(
-            apply_and_write(
-                draft_file,
-                draft,
-                "node_09",
-                done_tag=(
-                    "node_09_inject_fx_done" if tag == ZH else "node_09_inject_fx_en_done"
-                ),
-            )
+        status_log.append(
+            "node_09_inject_fx_done" if tag == ZH else "node_09_inject_fx_en_done"
         )
 
     if len(targets) == 1 and en_file is not None:

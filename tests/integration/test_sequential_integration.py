@@ -45,15 +45,18 @@ def _seed_draft(draft_dir: Path, duration_us: int = 60_000_000) -> Path:
     segments = []
     cursor = 0
     for i in range(6):
+        # 2026-11-22 SDK 链转正:段必须带 material 联结(提取器 dangling 即阻断编译)
         segments.append({
             "id": f"seg-{i + 1}",
+            "material_id": "v1",
             "target_timerange": {"start": cursor, "duration": seg_dur},
         })
         cursor += seg_dur
     draft = {
         "canvas_config": {"width": 1080, "height": 1920},
         "duration": duration_us,
-        "materials": {"videos": [{"id": "v1"}]},
+        "materials": {"videos": [{"id": "v1", "path": "C:/tmp/fake.mp4",
+                                  "material_name": "clip_0001"}]},
         "tracks": [{"type": "video", "fps": 30, "segments": segments}],
     }
     draft_file.write_text(json.dumps(draft, ensure_ascii=False, indent=2), encoding="utf-8")

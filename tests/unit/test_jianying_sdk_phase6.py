@@ -151,21 +151,33 @@ def _sticker_draft(text_id: str = "text-zh-1") -> dict:
     }
 
 
-def test_node_11_emits_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """真实 19 位 ID:原生写入照旧 + spec 记录计划(SDK 编译落独立轨)。"""
-    from nodes.node_11_inject_sticker import _inject_sticker_into, _emit_sticker_spec
+def _seed_spec_subtitles(tmp_path: Path, text: str = "真棒,给你点赞") -> None:
+    """2026-11-22 SDK 链转正:node_11 的字幕对象来源 = spec.subtitles(node_08 发射)。"""
+    from jianying_sdk.spec import SubtitleSpec
+    from nodes._draft_build_spec import replace_spec_sections
 
-    draft = _sticker_draft()
+    replace_spec_sections(tmp_path, subtitles=[SubtitleSpec(
+        subtitle_id="text-zh-1", text=text,
+        start_us=500_000, end_us=2_000_000, language="zh",
+    )])
+
+
+def test_node_11_emits_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """真实 19 位 ID:spec 记录计划(SDK 编译落独立轨);草稿不被 node_11 改写。"""
+    from nodes.node_11_inject_sticker import _emit_sticker_spec
+
+    _seed_spec_subtitles(tmp_path)
+    (tmp_path / "draft_content.json").write_text(
+        json.dumps({"canvas_config": {"width": 1080, "height": 1920}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
     monkeypatch.setattr(
         "nodes.node_11_inject_sticker.resolve_sticker_resource_id",
         lambda text: _REAL_ID,
     )
-    warnings, summary = _inject_sticker_into(draft, "node_11_zh")
+    summary, warnings = _emit_sticker_spec(tmp_path, "node_11_zh")
     assert summary["written"] == 1
-
-    log: list[str] = []
-    _emit_sticker_spec(tmp_path, draft, log)
-    assert any("贴纸计划已入 spec:1 条" in tag for tag in log)
+    assert summary["matched"] == 1
 
     from nodes._draft_build_spec import load_build_spec
 
@@ -177,41 +189,50 @@ def test_node_11_emits_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     assert s.start_us == 500_000
     assert s.duration_us == 1_500_000
     assert s.source_subtitle_id == "text-zh-1"
+    assert s.sticker_id == "sticker-text-zh-1"
+    # 草稿不被 node_11 改写(编译前)
+    payload = json.loads((tmp_path / "draft_content.json").read_text(encoding="utf-8"))
+    assert payload.get("materials", {}).get("stickers", []) == []
 
 
 def test_node_11_placeholder_no_spec_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """占位 ID:fail-closed 不落草稿,spec 也不得携带占位条目(§6.6)。"""
-    from nodes.node_11_inject_sticker import _inject_sticker_into, _emit_sticker_spec
+    """占位 ID:fail-closed 不进 spec(§6.6)。"""
+    from nodes.node_11_inject_sticker import _emit_sticker_spec
 
-    draft = _sticker_draft()
+    _seed_spec_subtitles(tmp_path)
     monkeypatch.setattr(
         "nodes.node_11_inject_sticker.resolve_sticker_resource_id",
         lambda text: "PLACEHOLDER_X",
     )
-    warnings, summary = _inject_sticker_into(draft, "node_11_zh")
+    summary, warnings = _emit_sticker_spec(tmp_path, "node_11_zh")
     assert summary["written"] == 0
     assert summary["degraded_placeholder"] == 1
+    assert warnings, "fail-closed 必须留回填指引告警"
 
-    log: list[str] = []
-    _emit_sticker_spec(tmp_path, draft, log)
     from nodes._draft_build_spec import load_build_spec
 
     spec = load_build_spec(tmp_path)
     assert spec.stickers == []
 
 
-def test_node_11_manual_sticker_not_in_spec(tmp_path: Path) -> None:
-    """人工贴纸(uuid id)不由 spec 管理,原样保留在草稿不进计划。"""
+def test_node_11_manual_sticker_not_in_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """人工贴纸(uuid id)不由 spec 管理:计划只含我方确定性 id 条目。"""
     from nodes.node_11_inject_sticker import _emit_sticker_spec
 
-    draft = _sticker_draft()
-    draft["materials"]["stickers"].append({
-        "id": "manual-uuid-sticker", "type": "sticker",
-        "resource_id": _REAL_ID, "duration": 999_999,
-    })
-    log: list[str] = []
-    _emit_sticker_spec(tmp_path, draft, log)
+    _seed_spec_subtitles(tmp_path)
+    (tmp_path / "draft_content.json").write_text(json.dumps({
+        "canvas_config": {"width": 1080, "height": 1920},
+        "materials": {"stickers": [{
+            "id": "manual-uuid-sticker", "type": "sticker",
+            "resource_id": _REAL_ID, "duration": 999_999,
+        }]},
+    }, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(
+        "nodes.node_11_inject_sticker.resolve_sticker_resource_id",
+        lambda text: _REAL_ID,
+    )
+    _emit_sticker_spec(tmp_path, "node_11_zh")
     from nodes._draft_build_spec import load_build_spec
 
     spec = load_build_spec(tmp_path)
-    assert spec.stickers == []
+    assert [s.sticker_id for s in spec.stickers] == ["sticker-text-zh-1"]
