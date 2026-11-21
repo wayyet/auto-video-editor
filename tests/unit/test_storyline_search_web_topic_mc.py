@@ -305,3 +305,303 @@ def test_map_mc_records_validity_rules() -> None:
     ]
     assert items[1]["snippet"] == "c4"
     assert all(it["source"] == "mediacrawler" for it in items)
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-21 审查修订版 §6.3:平台链执行矩阵(xhs → dy → Bing)
+# ---------------------------------------------------------------------------
+def _mc_aweme(idx: int = 1) -> dict:
+    """抖音记录真实形状(store/douyin:aweme_url 承载链接)。"""
+    return {
+        "aweme_id": str(idx),
+        "title": f"夏季防晒视频{idx}",
+        "desc": f"夏季防晒 描述{idx}",
+        "aweme_url": f"https://www.douyin.com/video/{idx}",
+        "nickname": f"作者{idx}",
+    }
+
+
+def _mc_chain_options(
+    fallback: tuple[str, ...] = ("dy",),
+    revision: str = _MC_REV,
+    chain_timeout: int = 600,
+    timeout: int = 600,
+) -> dict:
+    options = _mc_options(revision=revision)
+    options.update(
+        {
+            "fallback_platforms": fallback,
+            "chain_timeout_seconds": chain_timeout,
+            "timeout_seconds": timeout,
+        }
+    )
+    return options
+
+
+def _patch_mc_by_platform(monkeypatch, behavior: dict) -> list[dict]:
+    """按平台分派 search_notes 桩;behavior[platform]=(records, error, message)。
+
+    返回调用记录(断言"哪些平台被尝试/每平台超时预算")。
+    """
+    calls: list[dict] = []
+
+    def fake(**kwargs):
+        platform = str(kwargs.get("platform"))
+        calls.append({"platform": platform, "kwargs": dict(kwargs)})
+        rec, err, msg = behavior.get(platform, ([], "NETWORK_ERROR", "down"))
+        return (
+            list(rec),
+            err,
+            msg,
+            {"platform": platform, "returncode": 0 if err is None else 1},
+        )
+
+    monkeypatch.setattr(cap_mod._mc_client, "search_notes", fake)
+    return calls
+
+
+def _mc_chain_call(monkeypatch=None, options: dict | None = None, **overrides):
+    kwargs = dict(
+        query="夏季防晒",
+        max_results=10,
+        provider="mediacrawler",
+        provider_options=options if options is not None else _mc_chain_options(),
+    )
+    kwargs.update(overrides)
+    return search_web_topic(**kwargs)
+
+
+_BING_ONE = [
+    {"url": "https://e.com/1", "title": "t", "snippet": "", "source": "bing_html"}
+]
+
+
+def test_chain_primary_success_skips_fallback_and_bing(monkeypatch) -> None:
+    """§6.3-1:xhs 有效且相关 → 只调 xhs,不调 dy/Bing。"""
+    calls = _patch_mc_by_platform(monkeypatch, {"xhs": ([_mc_note(1)], None, "")})
+    _patch_bing(monkeypatch, _BING_ONE)
+    res = _mc_chain_call()
+    assert [c["platform"] for c in calls] == ["xhs"]
+    assert res["status"] == "ok" and res["provider"] == "mediacrawler"
+    assert res["engine"] == "MediaCrawler(小红书)"
+    assert res["selected_platform"] == "xhs"
+    assert "platform_fallback" not in res and "fallback" not in res
+    assert res["message"] == ""
+
+
+def test_chain_primary_fails_dy_succeeds_no_bing(monkeypatch) -> None:
+    """§6.3-2:xhs 进程失败 → dy 有效 → 返回 dy 且不调 Bing。"""
+    bing_calls: list[int] = []
+    monkeypatch.setattr(
+        cap_mod,
+        "_bing_html_search",
+        lambda **kw: bing_calls.append(1) or (_BING_ONE, None, {}),
+    )
+    calls = _patch_mc_by_platform(
+        monkeypatch,
+        {
+            "xhs": ([], "NETWORK_ERROR", "xhs down"),
+            "dy": ([_mc_aweme(1), _mc_aweme(2)], None, ""),
+        },
+    )
+    res = _mc_chain_call()
+    assert [c["platform"] for c in calls] == ["xhs", "dy"]
+    assert bing_calls == []  # dy 成功不调 Bing
+    assert res["status"] == "ok" and res["provider"] == "mediacrawler"
+    assert res["engine"] == "MediaCrawler(抖音)"
+    assert res["selected_platform"] == "dy"
+    # 同 Provider 内平台切换:platform_fallback 留痕,不得伪装跨 Provider fallback
+    pf = res["platform_fallback"]
+    assert pf == {"from_platform": "xhs", "to_platform": "dy", "reason": "NETWORK_ERROR"}
+    assert "fallback" not in res
+    # §6.3-15:平台回退 message 记录切换原因(页面"平台回退说明"数据源)
+    assert "MediaCrawler(小红书) NETWORK_ERROR" in res["message"]
+    assert "已切换 MediaCrawler(抖音)" in res["message"]
+
+
+def test_chain_dy_aweme_url_mapped_to_standard_url(monkeypatch) -> None:
+    """§6.3-8:dy 记录经 _map_mc_records 从 aweme_url 生成标准四键条目。"""
+    _patch_mc_by_platform(
+        monkeypatch,
+        {"xhs": ([], "NETWORK_ERROR", "down"), "dy": ([_mc_aweme(3)], None, "")},
+    )
+    res = _mc_chain_call()
+    assert res["search_web_topic"][0] == {
+        "url": "https://www.douyin.com/video/3",
+        "title": "夏季防晒视频3",
+        "snippet": "夏季防晒 描述3",
+        "source": "mediacrawler",
+    }
+
+
+def test_chain_primary_empty_records_dy_succeeds(monkeypatch) -> None:
+    """§6.3-3:xhs 无有效 JSON(空记录→NO_RESULTS)→ dy 有效接管。"""
+    calls = _patch_mc_by_platform(
+        monkeypatch, {"xhs": ([], None, ""), "dy": ([_mc_aweme(1)], None, "")}
+    )
+    res = _mc_chain_call()
+    assert [c["platform"] for c in calls] == ["xhs", "dy"]
+    assert res["engine"] == "MediaCrawler(抖音)"
+    assert res["diagnostics"]["attempts"][0]["error_code"] == "NO_RESULTS"
+
+
+def test_chain_primary_irrelevant_dy_relevant_wins(monkeypatch) -> None:
+    """§6.3-4:xhs 有结果但相关性不达标 → dy 相关性通过接管。"""
+    irrelevant = [
+        {
+            "note_url": "https://www.xiaohongshu.com/explore/1",
+            "title": "completely unrelated topic",
+            "desc": "nothing to do",
+        }
+    ]
+    calls = _patch_mc_by_platform(
+        monkeypatch,
+        {"xhs": (irrelevant, None, ""), "dy": ([_mc_aweme(1)], None, "")},
+    )
+    res = _mc_chain_call()
+    assert [c["platform"] for c in calls] == ["xhs", "dy"]
+    assert res["diagnostics"]["attempts"][0]["error_code"] == "IRRELEVANT_RESULTS"
+    assert res["selected_platform"] == "dy"
+
+
+def test_chain_all_fail_falls_back_to_bing_once(monkeypatch) -> None:
+    """§6.3-5/6:全链失败 → attempts 保留逐平台原因,Bing 只调一次。"""
+    bing_calls: list[int] = []
+    monkeypatch.setattr(
+        cap_mod,
+        "_bing_html_search",
+        lambda **kw: bing_calls.append(1) or (_BING_ONE, None, {}),
+    )
+    _patch_mc_by_platform(
+        monkeypatch,
+        {
+            "xhs": ([], "NETWORK_ERROR", "xhs down"),
+            "dy": ([], "AUTH_REQUIRED", "scan-login may be required"),
+        },
+    )
+    res = _mc_chain_call()
+    assert bing_calls == [1]
+    assert res["status"] == "ok" and res["provider"] == "bing_html"
+    assert res["engine"] == "Bing(MediaCrawler 回退)"
+    attempts = res["diagnostics"]["attempts"]
+    assert [(a["platform"], a["error_code"]) for a in attempts] == [
+        ("xhs", "NETWORK_ERROR"),
+        ("dy", "AUTH_REQUIRED"),
+    ]
+    # 整链失败历史进 message(页面"回退说明"可读,审查修订版 §5.3)
+    assert "MediaCrawler(小红书) NETWORK_ERROR: xhs down" in res["message"]
+    assert "MediaCrawler(抖音) AUTH_REQUIRED" in res["message"]
+    assert "已回退 Bing" in res["message"]
+    # fallback 字段保持主平台语义(§4.4:只代表 MC→Bing 跨 Provider 回退)
+    assert res["fallback"]["from_platform"] == "xhs"
+    assert res["fallback"]["primary_error_code"] == "NETWORK_ERROR"
+    assert "platform_fallback" not in res
+
+
+def test_chain_empty_fallback_matches_legacy_behavior(monkeypatch) -> None:
+    """§6.3-7:fallback_platforms=() → 与既有 xhs→Bing 行为逐字一致。"""
+    calls = _patch_mc_by_platform(monkeypatch, {"xhs": ([], "NETWORK_ERROR", "down")})
+    _patch_bing(monkeypatch, _BING_ONE)
+    res = _mc_chain_call(options=_mc_chain_options(fallback=()))
+    assert [c["platform"] for c in calls] == ["xhs"]
+    assert res["fallback"]["primary_error_code"] == "NETWORK_ERROR"
+    assert res["diagnostics"]["platform_chain"] == ["xhs"]
+
+
+def test_chain_attempt_diagnostics_shape(monkeypatch) -> None:
+    """attempts 携带逐平台诊断;primary 保持主平台诊断(§4.4 兼容)。"""
+    _patch_mc_by_platform(
+        monkeypatch,
+        {"xhs": ([_mc_note(1), _mc_note(2)], None, ""), "dy": ([], "NETWORK_ERROR", "d")},
+    )
+    res = _mc_chain_call()
+    assert res["diagnostics"]["platform_chain"] == ["xhs", "dy"]
+    primary = res["diagnostics"]["primary"]
+    assert primary["relevance_matched"] == 2  # 主平台诊断原样保留
+    assert len(res["diagnostics"]["attempts"]) == 1
+    assert res["diagnostics"]["attempts"][0]["attempt_index"] == 0
+
+
+def test_chain_budget_exhausted_skips_next_platform(monkeypatch) -> None:
+    """§6.3-12:整链预算耗尽 → 不启动下一平台(TIME_BUDGET_EXHAUSTED),进 Bing。"""
+    seq = [1000.0, 1000.0, 5000.0]  # deadline → xhs remaining → dy remaining
+    tic = {"n": 0}
+
+    def fake_monotonic() -> float:
+        v = seq[min(tic["n"], len(seq) - 1)]
+        tic["n"] += 1
+        return v
+
+    monkeypatch.setattr(cap_mod.time, "monotonic", fake_monotonic)
+    calls = _patch_mc_by_platform(
+        monkeypatch, {"xhs": ([], "NETWORK_ERROR", "down")}
+    )
+    _patch_bing(monkeypatch, _BING_ONE)
+    res = _mc_chain_call(options=_mc_chain_options(chain_timeout=600))
+    assert [c["platform"] for c in calls] == ["xhs"]  # dy 从未启动
+    attempts = res["diagnostics"]["attempts"]
+    assert attempts[1] == {
+        "platform": "dy",
+        "attempt_index": 1,
+        "error_code": "TIME_BUDGET_EXHAUSTED",
+        "message": "chain time budget exhausted before this attempt started",
+    }
+    assert "TIME_BUDGET_EXHAUSTED" in res["message"]
+    assert res["fallback"]["primary_error_code"] == "NETWORK_ERROR"
+
+
+def test_chain_attempt_timeout_capped_by_remaining_budget(monkeypatch) -> None:
+    """第二平台的子进程超时 = min(单平台上限, 链剩余预算)(§3.5)。"""
+    calls = _patch_mc_by_platform(
+        monkeypatch,
+        {"xhs": ([], "NETWORK_ERROR", "down"), "dy": ([_mc_aweme(1)], None, "")},
+    )
+    res = _mc_chain_call(
+        options=_mc_chain_options(chain_timeout=600, timeout=600)
+    )
+    assert res["selected_platform"] == "dy"
+    # 两个平台拿到的 timeout_seconds 都 ≤ 各自剩余预算(桩内恒 600,不超限)
+    assert all(c["kwargs"]["timeout_seconds"] <= 600 for c in calls)
+
+
+def test_chain_programming_errors_fail_fast(monkeypatch) -> None:
+    """§6.3-13:provider_options 形状错误 raise,不伪装成平台不可用。"""
+    with pytest.raises(ValueError, match="project_root"):
+        _mc_chain_call(options={"platform": "xhs", "fallback_platforms": ("dy",)})
+
+
+def test_chain_auth_required_not_masked_as_no_results(monkeypatch) -> None:
+    """§6.3-14:登录失败(AUTH_REQUIRED)如实进入 attempts/message,不宣称无结果。"""
+    _patch_mc_by_platform(
+        monkeypatch,
+        {"xhs": ([], "NETWORK_ERROR", "down"), "dy": ([], "AUTH_REQUIRED", "login needed")},
+    )
+    _patch_bing(monkeypatch, _BING_ONE)
+    res = _mc_chain_call()
+    assert res["diagnostics"]["attempts"][1]["error_code"] == "AUTH_REQUIRED"
+    assert "AUTH_REQUIRED" in res["message"]
+
+
+def test_chain_hash_changes_with_chain_membership_or_order() -> None:
+    """§6.3-10:链成员/顺序变化必得不同 hash(缓存隔离,§3.4)。"""
+    rev = "09ed1ec62d8"
+    base = mediacrawler_request_provider(("xhs", "dy"), rev)
+    assert base != mediacrawler_request_provider(("xhs",), rev)
+    assert base != mediacrawler_request_provider(("xhs", "ks"), rev)
+    assert base != mediacrawler_request_provider(("dy", "xhs"), rev)
+    assert build_request_hash(query="q", provider=base, max_results=10) != build_request_hash(
+        query="q",
+        provider=mediacrawler_request_provider(("xhs", "ks"), rev),
+        max_results=10,
+    )
+
+
+def test_chain_hash_consistent_between_node_and_capability() -> None:
+    """§6.3-11:节点层与能力层用同一 helper → 同链同 revision 得同 hash。"""
+    assert mediacrawler_request_provider(("xhs", "dy"), "rev1") == (
+        mediacrawler_request_provider(["xhs", "dy"], "rev1")
+    )
+    # str 兼容形态 = 单平台链
+    assert mediacrawler_request_provider("xhs", "rev1") == (
+        mediacrawler_request_provider(("xhs",), "rev1")
+    )
