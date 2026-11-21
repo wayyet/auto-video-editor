@@ -108,10 +108,12 @@ STORYLINE_WEB_TOPIC_ENGINE: str = _raw_web_topic_engine
 #     CDP_CONNECT_EXISTING=False,自启独立 Chrome + 专用 profile
 #     (browser_data/cdp_xhs_user_data_dir),与用户日常浏览器隔离,
 #     首次使用需操作员扫码登录一次(非无头可见窗口);
-#   - 平台白名单(2026-11-21 审查修订版 P1-2):xhs 主平台 + dy 首个回退平台
-#     (dy 的物理输出目录 douyin/json、aweme_url 字段、关键词搜索路径均已按
-#     固定版本源码核实;真机验收留 P6)。其余平台按审查 §3.8 矩阵逐个准入
-#     (上游支持 7 个,不全开);
+#   - 平台白名单(2026-11-21 审查修订版 P1-2;ks/bili 准入修订版 §5 阶段2):
+#     xhs 主平台 + dy/ks/bili 已完成源码核查与 fixture/单测的回退平台
+#     (ks=kuaishou/json+video_url、bili=bili/json+video_url 均已按固定版本
+#     源码实测)。**白名单=可配置域,≠生产链已启用**:env 默认仍 "dy",
+#     ks/bili 进入生产链须操作员完成扫码登录+真机冒烟(§5 阶段5)后显式配置。
+#     wb/zhihu 等其余平台按审查 §3.8 矩阵逐个准入(上游支持 7 个,不全开);
 #   - 默认引擎已切 mediacrawler(审查 6.4 门禁 2026-11-20 全项通过后单独提交
 #     切换;回滚=显式设 STORYLINE_WEB_TOPIC_ENGINE=bing_html 并重启进程);
 #   - MAX_NOTES/TIMEOUT 有业务范围校验(审查 P2-02):超范围导入期报错,
@@ -120,7 +122,7 @@ STORYLINE_WEB_TOPIC_ENGINE: str = _raw_web_topic_engine
 #     整条平台链另有总预算 STORYLINE_WEB_TOPIC_MC_CHAIN_TIMEOUT(§3.5),
 #     预算耗尽不再启动下一平台,直接进 Bing;MC 内部 BROWSER_LAUNCH_TIMEOUT
 #     默认 60s,CDP 连接等待会先于外层超时失败。
-_MC_PLATFORM_WHITELIST = ("xhs", "dy")  # 审查修订版 P1-2:dy 已核实准入;其余逐个开放
+_MC_PLATFORM_WHITELIST = ("xhs", "dy", "ks", "bili")  # ks/bili 源码核查+单测过门;真机验收前默认链仍为 dy
 _raw_mc_platform = os.environ.get(
     "STORYLINE_WEB_TOPIC_MC_PLATFORM", "xhs"
 ).strip().lower()
