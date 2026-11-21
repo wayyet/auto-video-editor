@@ -14,6 +14,7 @@
 #              必须先于 7860 服务在线)。
 #   Phase 0.6/0.7  只读监控服务(monitor_fastapi:app,主 .venv)生命周期 + 健康检查
 #   Phase 2    scripts\run_workflow.py --production --skip-preflight
+#              (预热链 web_topic 引擎临时覆盖 bing_html —— 不触MC/不弹浏览器)
 #   Phase 3    验收(checkpoints / heartbeat / drafts / outputs)
 #
 # 关键设计:
@@ -30,6 +31,9 @@
 #     initial-state 的 required_features 全 False,交付 QA 不当闸门。真实
 #     任务的关卡挂起(仅 QC 降级① / BGM 缺失②)仍是预期行为,退出码 0,
 #     用 agent_gate status 或 scripts/resume_workflow.py --dry-run 查看挂起关卡
+#   - 预热链 web_topic 引擎临时覆盖为 bing_html(2026-11-21 改法B,弹浏览器根因
+#     处置):启动期间不触发 MC 登录预检闸门、不弹浏览器;覆盖仅存在于预热子进程
+#     环境(监控服务先启动继承不到,创建台真实任务不受影响,仍默认 mediacrawler)
 #   - 日志文件**单写者**:子进程输出顺序 Add-Content,禁止 Tee-Object
 #   - -WhatIf 严格零副作用:不建目录、不建日志文件、不起进程
 #
@@ -285,6 +289,7 @@ if ($WhatIf) {
     Write-Host "  Phase 0.6/0.7: 只读监控服务 monitor_fastapi(:$MonitorPort,主 .venv)—— 端口在听且健康 → 按 PID 归属+配置指纹判定:一致→复用;本项目所有但不一致→受控重启;归属不明→报冲突退出(23);端口空闲 → 起一个 uvicorn;占用但 HTTP≠200 → 报冲突退出(23)" -ForegroundColor Cyan
     Write-Host "              写 PID 文件:$MonitorPidFile" -ForegroundColor Cyan
     Write-Host "  Phase 2   : $VenvPy $RunScript --production --skip-preflight --thread-id $ThreadId --initial-state-json $StateJson" -ForegroundColor Cyan
+    Write-Host '              (预热链 web_topic 引擎临时覆盖 bing_html —— 不触MC/不弹浏览器;真实任务仍 mediacrawler)' -ForegroundColor DarkCyan
     if (-not $SkipPhase3) {
         Write-Host '  Phase 3   : checkpoints SQL(带 THREAD_ID)+ heartbeat + outputs/drafts 列目录' -ForegroundColor Cyan
     } else {
@@ -354,7 +359,8 @@ foreach ($name in @(
     'PYTHONUNBUFFERED',
     'PYTHONIOENCODING',
     'PYTHONUTF8',                # §6.6 中文路径标准处置:UTF-8 模式,subprocess text=True 按 UTF-8 解码(2026-11-06 ffprobe 空输出根因)
-    'AUTO_VIDEO_EDITOR_PREFLIGHT_SKIP_POSTGRES_START'
+    'AUTO_VIDEO_EDITOR_PREFLIGHT_SKIP_POSTGRES_START',
+    'STORYLINE_WEB_TOPIC_ENGINE' # 预热期临时切 bing_html(仅预热子进程,Phase 2 设/删);备份+还原防污染调用方会话
 )) {
     $envBackup[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
@@ -868,6 +874,15 @@ set PYTHONUNBUFFERED=1
     if ([string]::IsNullOrWhiteSpace($WorkflowLlmBackend)) { $WorkflowLlmBackend = 'mcode-cli' }
     Write-Phase ("    工作流 LLM 后端: {0}" -f $WorkflowLlmBackend) 'Cyan'
 
+    # 预热专用引擎覆盖(2026-11-21 弹浏览器根因处置,改法B):预热=每次启动自动跑
+    # video-001 全链,会走到 web_topic 节点的 MC 登录闸门(逐平台弹可见浏览器 goto
+    # xhs/dy 主页)。这里只对预热子进程临时把网页话题引擎切回 bing_html(纯 HTTP,
+    # 不开浏览器);监控服务已在 Phase 0.6/0.7 启动,继承不到此值,创建台真实任务
+    # 仍默认 mediacrawler。执行完立即删除(见下),exit 27 分支之前必已删除;
+    # finally(envBackup 名单)再兜底一层。
+    $env:STORYLINE_WEB_TOPIC_ENGINE = 'bing_html'
+    Write-Phase "    预热引擎覆盖: STORYLINE_WEB_TOPIC_ENGINE=bing_html(仅预热子进程,避开MC登录闸门/弹浏览器)" 'Cyan'
+
     $pyOutput = @()
     & $VenvPy $RunScript `
         --production `
@@ -882,6 +897,11 @@ set PYTHONUNBUFFERED=1
         Add-Content -Path $LogFile -Value "  $t" -Encoding UTF8 -ErrorAction SilentlyContinue
     }
     $pyExit = $LASTEXITCODE
+
+    # 无论成功/失败立即清除预热专用覆盖(必须在 exit 27 之前),防残留污染
+    # 调用方会话里后续手动启动的任何 python 进程;异常中断由 finally(envBackup
+    # 名单含本变量)兜底还原
+    Remove-Item Env:STORYLINE_WEB_TOPIC_ENGINE -ErrorAction SilentlyContinue
 
     if ($pyExit -eq 0) {
         Write-PhaseOk "run_workflow.py 退出码 0(跑完,或停在人工关卡等待放行 —— 用 agent_gate status 查看挂起关卡)"
