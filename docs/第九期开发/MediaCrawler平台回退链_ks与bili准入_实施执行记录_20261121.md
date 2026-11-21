@@ -81,16 +81,48 @@ git diff 显示:该文件被**故意修改**并带注释:
 | test_node_search_web_topic.py | ks/bili 接管的 fallback_platform 标签 + selected_platform/platform_fallback/engine 入 artifact + 部分准入(仅 bili)链与 hash | ✅ |
 | **全量 tests/unit** | — | **exit=0,约 2904 例零失败** |
 
-## 六、阶段5:操作员真机验收清单(前置:§2.1 CDP 结论已知)
+## 六、阶段5:真机验收执行记录(2026-11-21 已执行,四跑全 PASS)
 
-1. 确认运行配置 `CDP_CONNECT_EXISTING=False`(本机 MC 本地修改,勿被上游 pull 覆盖 —— **该文件带本地改动,MC 目录执行 git pull 前须 stash/处理**);
-2. 快手:首跑扫码登录一次 → 确认 `browser_data/cdp_ks_user_data_dir` 生成 → 关闭浏览器后会话复用;
-3. B站:同上(`cdp_bili_user_data_dir`);重点验证登录后二次 pong 通过、无 "登录流程结束后仍未登录" 出现;
-4. 两平台分别受控关键词搜索(串行,不并发 CDP):确认 JSON 落在实际目录(kuaishou/json、bili/json)、adapter 读回一致、AI明细页显示 `MediaCrawler(快手)`/`MediaCrawler(B站)` + 平台回退说明;
-5. 记录上游实际结果条数(≥20/页)与能力层最终条数(≤max_results)对照 —— **最小页大小 20**:ks/bili 搜索不足 20 条时会被抬到 20,`max_notes` 不是上游请求量上限;评论/媒体下载保持关闭(适配器恒传 false);
-6. 无登录态/超时情景:AUTH_REQUIRED 或 NETWORK_ERROR → Bing 兜底 → 任务不挂死;
-7. 浏览器进程/CDP 锁/失败目录 TTL 清理正常;
-8. 验收通过后操作员显式配置并重启:`STORYLINE_WEB_TOPIC_MC_FALLBACK_PLATFORMS="dy,ks"` → 观察;稳定后 `"dy,ks,bili"`。
+### 6.0 执行中新增:Edge 浏览器补丁(MC 本地修改,用户拍板)
+
+首跑发现:ks/bili 的 Playwright 启动写死 `channel="chrome"`(kuaishou/core.py:410/414、bilibili/core.py:538/543),**本机无 Google Chrome**(只有 Edge;dy/xhs 走 Playwright 自带 chromium 所以不受影响)→ ks 首跑崩溃于 `Chromium distribution 'chrome' is not found`。用户拍板 MC 补丁用 Edge:4 处 `channel="chrome"` → `channel="msedge"`(均带 `[2026-11-21 auto-video-editor 接入固定]` 注释)。**MC 本地故意修改清单从 1 个文件变为 3 个**(base_config.py + kuaishou/core.py + bilibili/core.py),git pull 前须统一处理。
+
+### 6.1 验收脚本
+
+新建 `scripts/verify_mc_ks_bili_login.py`(单平台单次真实检索,走生产同路径 `mediacrawler_client.search_notes`,前后快照 `browser_data/`,save_root=runtime/mc_login_verify/ 由适配器 TTL 兜底)。
+
+### 6.2 四跑证据(全串行,未并发 CDP)
+
+| 运行 | 判定 | 耗时 | 记录数 | 说明 |
+|---|---|---|---|---|
+| ks #1(扫码) | PASS | 55.5s | 18 | `output_file=kuaishou/json/...` 目录映射实测正确 |
+| ks #2(复用) | PASS | 18.5s | 14 | **无扫码无 AUTH_REQUIRED = 会话复用实证** |
+| bili #1(扫码) | PASS | 117.3s | **20** | `output_file=bili/json/...`;20 条正好印证**最小页大小 20**(审查 §2.4);登录后二次 pong 通过,无"登录流程结束后仍未登录" |
+| bili #2(复用) | PASS | 63.8s | 20 | 会话复用实证 |
+
+记录字段实测与审查 §2.1 一致(ks/bili 均含 `video_id/title/desc/video_url` + 平台特有字段,映射白名单四键会过滤无关字段)。
+
+### 6.3 Profile 目录事实修正(比原清单更精确)
+
+`browser_data/` 下实际生成**两类**目录,语义不同:
+
+- `cdp_<platform>_user_data_dir`(cdp_ks / cdp_bili):CDP manager 自启浏览器的 profile(cdp_browser.py:263 创建);
+- `<platform>_user_data_dir`(ks / bili):**两平台 core.py 的 Playwright `launch_persistent_context` 持久化上下文 —— 扫码登录 cookies 实际存这里**(config.USER_DATA_DIR % PLATFORM,无 cdp_ 前缀)。
+
+两类均已生成;会话复用已由第二次运行实证,不再依赖 cookies 文件位置推断。
+
+### 6.4 清单勾选
+
+1. ✅ CDP 模式确认:本机 `CDP_CONNECT_EXISTING=False`(方案B 本地修改),CDP 自启路径生效(cdp_ 目录实测生成);
+2. ✅ 快手扫码登录 + 会话复用(#1/#2);
+3. ✅ B站扫码登录 + 二次 pong 通过 + 会话复用(#1/#2);
+4. ✅ 受控搜索目录一致(kuaishou/json、bili/json 与适配器读取一致);AI明细页引擎名验证留工作流级冒烟(需 env 扩链后跑真实任务);
+5. ✅ 资源预算:最小页 20 实证(bili 20 条);评论/媒体下载保持关闭(适配器恒传 false);
+6. ⏳ 无登录态降级:未刻意破坏登录态测试(AUTH_REQUIRED 分类已有单测锁定;真机破坏性测试无必要);
+7. ✅ 浏览器进程/锁/清理:四跑结束浏览器正常退出、锁释放、save_root 运行目录由 TTL 兜底;
+8. ✅ 串行执行全程保持。
+
+**剩余操作项**:AI明细页工作流级冒烟(扩链后跑真实任务)→ 确认后操作员显式配置 `STORYLINE_WEB_TOPIC_MC_FALLBACK_PLATFORMS="dy,ks"` → 观察;稳定后 `"dy,ks,bili"`。
 
 ## 七、阶段6:回滚
 
@@ -119,12 +151,12 @@ $env:STORYLINE_WEB_TOPIC_ENGINE = "bing_html"
 - [x] CDP/Profile 结论与实际运行配置一致(§2.1 定案)
 - [x] 真实执行串行 + 资源预算记录(操作员执行,§6)
 - [x] 默认配置仍为 dy;扩链须操作员显式配置并重启
-- [ ] ks 真机登录+冒烟(操作员)
-- [ ] bili 真机登录+冒烟(操作员)
+- [x] ks 真机登录+冒烟(2026-11-21 四跑全 PASS,§6.2)
+- [x] bili 真机登录+冒烟(2026-11-21 四跑全 PASS,§6.2)
 
 ## 九、遗留与备注
 
 1. bili search_by_keywords 的任务收集段有 `except Exception` 包裹(源码实测),但**搜索链整体异常边界仍须真机观察** —— 不能以详情任务捕获推导全链隔离(教训沿用 dy);
 2. 域名白名单使"任意外部 URL 绕过域名校验"被关闭;未来平台(如 wb 多域)接入时须先补其允许域枚举;
-3. MC 本地 `config/base_config.py` 是带注释的故意修改 —— **MC 目录 git pull 上游前须处理该本地改动**(stash 或确认保留),否则会静默回到共享浏览器模式;
+3. MC 本地故意修改清单(全部带注释,git pull 上游前须处理):`config/base_config.py`(CDP 方案B)、`media_platform/kuaishou/core.py` 与 `media_platform/bilibili/core.py`(channel=msedge,§6.0);
 4. 推送 GitHub 走 sync-github,由用户触发。
