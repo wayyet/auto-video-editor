@@ -360,7 +360,8 @@ foreach ($name in @(
     'PYTHONIOENCODING',
     'PYTHONUTF8',                # §6.6 中文路径标准处置:UTF-8 模式,subprocess text=True 按 UTF-8 解码(2026-11-06 ffprobe 空输出根因)
     'AUTO_VIDEO_EDITOR_PREFLIGHT_SKIP_POSTGRES_START',
-    'STORYLINE_WEB_TOPIC_ENGINE' # 预热期临时切 bing_html(仅预热子进程,Phase 2 设/删);备份+还原防污染调用方会话
+    'STORYLINE_WEB_TOPIC_ENGINE',# 预热期临时切 bing_html(仅预热子进程,Phase 2 设/删);备份+还原防污染调用方会话
+    'STORYLINE_WEB_TOPIC_MC_FALLBACK_PLATFORMS' # 20261121 扩链:ks/bili 准入已过,显式启用(console-1d98fe3a7bec 定案;config 默认仍仅 dy)
 )) {
     $envBackup[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
@@ -392,6 +393,12 @@ if (-not $env:TTS_BACKEND) { $env:TTS_BACKEND = 'jianying' }
 # generate_voiceover 按 provider_name 取 params_schema 让 LLM 推断音色,
 # 取不到块名时 provider 折叠成 "stub",QA 会把配音误判 degraded。
 if (-not $env:STORYLINE_TTS_PROVIDER) { $env:STORYLINE_TTS_PROVIDER = 'jianying' }
+# MC 平台回退链(2026-11-21 console-1d98fe3a7bec 定案):ks/bili 准入已过
+# (源码核查+单测+真机),但"白名单=可配置域,≠生产链已启用"(config.py 注释),
+# 生产链启用须显式配置。默认扩为 dy,ks,bili;调用方显式设过则尊重其值。
+# 注意用 $null -eq 而非 -not:config.py 约定"空串=关闭平台回退"(回 xhs→Bing),
+# 显式空串是合法配置,不得被默认值覆盖。
+if ($null -eq $env:STORYLINE_WEB_TOPIC_MC_FALLBACK_PLATFORMS) { $env:STORYLINE_WEB_TOPIC_MC_FALLBACK_PLATFORMS = 'dy,ks,bili' }
 # STORYLINE_MODE 显式清除(human 模式已删;防调用方残留值让 config import 即报错)
 Remove-Item Env:STORYLINE_MODE -ErrorAction SilentlyContinue
 $env:THREAD_ID      = $ThreadId
