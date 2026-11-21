@@ -22,6 +22,14 @@ from nodes.node_11_inject_sticker import (
     _timerange_range,
     inject_sticker,
 )
+import config
+
+
+@pytest.fixture(autouse=True)
+def _pin_legacy_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    """2026-11-22 SDK 链转正:调 inject_sticker 的用例断言 legacy 原生绑定
+    行为,显式钉 legacy(config 默认已是 pyjianyingdraft);纯函数用例不受影响。"""
+    monkeypatch.setattr(config, "DRAFT_BUILDER_BACKEND", "legacy")
 
 
 # ---------------------------------------------------------------------------

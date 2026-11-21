@@ -86,7 +86,9 @@ WORKFLOW_ID = "auto_video_editor_main"
 #: 缓存里的旧显示信息失效)→ bump 11。
 #: 2026-11-21 边核验 R2 第二步:storyline_join 条件路由删除 END 出口(join 恒写出
 #: 真值 storyline_plan,该出口在设计上是死分支;拓扑变更)→ bump 13。
-SCHEMA_VERSION = 13
+#: 2026-11-22 SDK 链转正:node_09b_inject_opening_hook 从 node_09→node_11 之间
+#: 后移到 node_11→node_12 之间(钩子原生写入落在 SDK 编译后,拓扑变更)→ bump 14。
+SCHEMA_VERSION = 14
 
 #: 关卡编号全集(阶段3 删除关卡⓪后剩 ①②③;2026-11-15 关卡③删除 → ①②;
 #: 2026-11-20 起关卡① 仅 QC 降级时挂起复核,编号与恢复契约不变)

@@ -133,9 +133,9 @@ _SUFFIX = [
     ["node_10b_inject_text_fx_en"],
     ["node_17_inject_english_tts"],
     ["node_09_inject_fx"],
-    ["node_09b_inject_opening_hook"],
     ["node_11_inject_sticker"],
-    ["node_12_human_add_bgm"],  # 关卡② 挂起(BGM 缺失)
+    ["node_09b_inject_opening_hook"],
+    ["node_12_human_add_bgm"],  # 关卡② 挂起(BGM 缺失;09b 于 2026-11-22 后移到编译后)
 ]
 GOLDEN_STEPS = _PREFIX + _CYCLE + _SUFFIX
 

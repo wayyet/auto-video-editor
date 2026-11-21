@@ -12,10 +12,19 @@ from pathlib import Path
 import pytest
 
 import nodes.node_11_inject_sticker as node_11_mod
+import config
 from nodes.node_11_inject_sticker import inject_sticker
 
 
 _REAL_ID = "7325648367747338802"  # 19 位真实形态(模拟已回填)
+
+
+@pytest.fixture(autouse=True)
+def _pin_legacy_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    """2026-11-22 SDK 链转正(config 默认 pyjianyingdraft):本文件断言的是
+    legacy 原生贴纸写入行为(六段 legacy 链退役前仍存在),显式钉 legacy,
+    与 test_jianying_sdk_phase7 的双后端矩阵同一先例。"""
+    monkeypatch.setattr(config, "DRAFT_BUILDER_BACKEND", "legacy")
 
 
 @pytest.fixture

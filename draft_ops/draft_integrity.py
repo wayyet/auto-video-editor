@@ -903,6 +903,33 @@ def _our_text_ids(draft: dict | None, prefix: str) -> list[str]:
     ]
 
 
+def _sdk_compiled_subtitle_count(draft_dir: str | None) -> int | None:
+    """SDK 编译稿(2026-11-22 链转正)的字幕计数。
+
+    SDK 编译稿的文本 material id 是 uuid,``text-zh-`` 前缀计数恒 0;此处改读
+    草稿目录 spec sidecar 的编译回执 —— 只有 SDK 真正编译过(``compiled`` /
+    ``skipped_fingerprint``)才认 spec.subtitles 数,防止 legacy 稿被误放行。
+
+    Returns:
+        spec 已规划字幕数;``None`` = 非编译稿/无 spec/读取失败(调用方走
+        legacy 前缀口径)。
+    """
+    if not draft_dir:
+        return None
+    try:
+        from nodes._draft_build_spec import load_build_spec
+
+        spec = load_build_spec(Path(draft_dir))
+    except Exception:
+        return None
+    if spec is None:
+        return None
+    status = str((spec.compile.last_result or {}).get("status") or "")
+    if status not in ("compiled", "skipped_fingerprint"):
+        return None
+    return len(spec.subtitles or [])
+
+
 def _bgm_segment_count(draft: dict | None) -> int:
     """非配音音轨的段数(0 = 关卡② 未加 BGM / 镜像缺失)。"""
     if not draft:
@@ -988,13 +1015,26 @@ def build_qa_categories(
     required = resolve_required_features(state)
     en_checked = bool(state.get("draft_dir_en_branch"))
 
-    # 2) subtitles_zh:有旁白产物却无我方中文字幕 = node_08 该写没写
+    # 2) subtitles_zh:有旁白产物却无我方中文字幕 = node_08 该写没写。
+    #    2026-11-22 SDK 链转正:编译稿文本 material id 是 uuid,前缀计数恒 0;
+    #    此时改读草稿目录 spec sidecar 的编译回执(_sdk_compiled_subtitle_count)。
+    zh_draft_dir = str(Path(state["draft_path"]).parent) if state.get("draft_path") else None
     zh_texts = _our_text_ids(zh_draft, "text-zh-")
     has_narration = bool(state.get("voiceover_summary")) or bool(state.get("subtitle_segments_zh"))
     if zh_texts:
         if _status_of("subtitles_zh") == CAT_PASSED:
             categories["subtitles_zh"]["status"] = CAT_PASSED
         categories["subtitles_zh"]["counts"] = {"texts": len(zh_texts)}
+    elif (sdk_zh_count := _sdk_compiled_subtitle_count(zh_draft_dir)) is not None:
+        if sdk_zh_count:
+            if _status_of("subtitles_zh") == CAT_PASSED:
+                categories["subtitles_zh"]["status"] = CAT_PASSED
+            categories["subtitles_zh"]["counts"] = {"texts": sdk_zh_count, "source": "sdk_compile"}
+        elif has_narration:
+            _append_issue("subtitles_zh", "中文字幕", "SDK 编译稿 spec 字幕为 0 但有旁白产物(node_08 发射缺失?)")
+        else:
+            categories["subtitles_zh"]["status"] = CAT_NOT_APPLICABLE
+            categories["subtitles_zh"]["note"] = "无旁白产物"
     elif has_narration:
         _append_issue("subtitles_zh", "中文字幕", "有旁白产物但中文草稿无我方字幕(node_08 未写入?)")
     else:
@@ -1016,6 +1056,16 @@ def build_qa_categories(
         )
     elif en_texts:
         categories["subtitles_en"]["counts"] = {"texts": len(en_texts)}
+    elif (sdk_en_count := _sdk_compiled_subtitle_count(state.get("draft_dir_en_branch"))) is not None:
+        if sdk_en_count:
+            if _status_of("subtitles_en") == CAT_PASSED:
+                categories["subtitles_en"]["status"] = CAT_PASSED
+            categories["subtitles_en"]["counts"] = {"texts": sdk_en_count, "source": "sdk_compile"}
+        elif zh_texts:
+            _append_issue("subtitles_en", "英文字幕", "SDK 编译稿 spec 英文字幕为 0 但中文侧有字幕(node_16a/08b 发射缺失?)")
+        else:
+            categories["subtitles_en"]["status"] = CAT_NOT_APPLICABLE
+            categories["subtitles_en"]["note"] = "无中文字幕来源"
     elif zh_texts:
         _append_issue("subtitles_en", "英文字幕", "中文侧有字幕但英文分支无我方英文字幕(node_16a/08b 链降级?)")
     else:

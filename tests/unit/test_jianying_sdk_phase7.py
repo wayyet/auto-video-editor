@@ -281,3 +281,28 @@ def test_node_11_sdk_backend_failure_degrades(tmp_path: Path, monkeypatch: pytes
     # legacy 草稿未被 SDK 覆盖
     payload = json.loads((tmp_path / "draft_content.json").read_text(encoding="utf-8"))
     assert payload["tracks"][0]["segments"][0]["material_id"] == "v1"
+
+
+def test_config_default_backend_is_sdk() -> None:
+    """2026-11-22 六效果段灰度开:未设 env 时 config 默认 pyjianyingdraft。
+
+    用子进程隔离 —— config 在模块导入时读 env,进程内 reload 会波及同进程
+    其他模块已绑定的属性;env 覆盖回滚路径(DRAFT_BUILDER_BACKEND=legacy)
+    由 test_node_11_legacy_backend_untouched 与钉 legacy 的 node_11 单测锁定。
+    """
+    import os
+    import subprocess
+    import sys
+
+    env = {k: v for k, v in os.environ.items() if k != "DRAFT_BUILDER_BACKEND"}
+    env["PYTHONIOENCODING"] = "utf-8"
+    proc = subprocess.run(
+        [sys.executable, "-c", "import config; print(config.DRAFT_BUILDER_BACKEND)"],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=180,
+        cwd=str(Path(__file__).resolve().parents[2]),
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "pyjianyingdraft"

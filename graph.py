@@ -30,8 +30,8 @@
                    → node_17_inject_english_tts ───────────┤
                                                                 ▼
     ⇒ node_09_inject_fx              (汇合屏障:node_15 与 node_17 都完成才触发)
-    → node_09b_inject_opening_hook   (开场钩子:前 3 秒免费开场特效 + 大字标题,第四期阶段 3)
-    → node_11_inject_sticker         (尾链 09/09b/11/12/13 同时作用于中英两份草稿)
+    → node_11_inject_sticker         (尾链 09/11/09b/12/13 同时作用于中英两份草稿;SDK 编译汇合点)
+    → node_09b_inject_opening_hook   (开场钩子:前 3 秒免费开场特效 + 大字标题;编译后落稿,2026-11-22 后移)
     → node_12_human_add_bgm          ⏸ interrupt("②")
     → node_13_adjust_volume
     → join_before_delivery           (交付 QA 闸门 + required-feature gate,单前驱)
@@ -681,11 +681,13 @@ def _build_state_graph():
         "node_09_inject_fx",
     )
     # 尾链(K2=B:节点内部同时处理中文主草稿与英文分支草稿)
-    # 09b(开场钩子)插在 09 与 11 之间:必须在 node_08 之后(标题不随字幕轨同步
-    # 被删)、node_11 之前(node_11 跳过 hook-title- 前缀文字,标题不被贴贴纸)
-    g.add_edge("node_09_inject_fx", "node_09b_inject_opening_hook")
-    g.add_edge("node_09b_inject_opening_hook", "node_11_inject_sticker")
-    g.add_edge("node_11_inject_sticker", "node_12_human_add_bgm")
+    # 09b(开场钩子)2026-11-22 移到 node_11(SDK 编译)之后:钩子是原生写入、
+    # 无 spec 发射,若在编译前落稿会被提取器判 manual_text_track 阻断编译、
+    # 白名单放行又会被 SDK 重建静默丢弃;编译后落稿则原样保留(与 node_12/13
+    # 同层)。原"node_11 跳过 hook-title- 前缀文字"前提不复存在(贴纸已落完)。
+    g.add_edge("node_09_inject_fx", "node_11_inject_sticker")
+    g.add_edge("node_11_inject_sticker", "node_09b_inject_opening_hook")
+    g.add_edge("node_09b_inject_opening_hook", "node_12_human_add_bgm")
     g.add_edge("node_12_human_add_bgm", "node_13_adjust_volume")
     # 交付前 QA 闸门:单前驱,不再承担 fan-in
     g.add_edge("node_13_adjust_volume", "join_before_delivery")

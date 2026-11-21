@@ -133,11 +133,18 @@ def _tail_chain_structured(
     # 阶段 4:贴纸必须真实挂到视频段(material 在、引用悬空 = 挂载失败;
     # 根因分析 §D——不能只数 materials.stickers 数量)。
     if stickers:
+        # 合法绑定双口径(2026-11-22 SDK 链转正):legacy = 贴纸 material 被
+        # 视频段 extra_material_refs 引用;SDK 编译稿 = 贴纸落独立 sticker 轨,
+        # 轨段以 material_id 指向贴纸素材(视频段 refs 口径下会被误判未挂载)。
         bound_refs = {
             str(r)
             for track in (draft.get("tracks", []) or []) if track.get("type") == "video"
             for seg in (track.get("segments", []) or [])
             for r in (seg.get("extra_material_refs") or [])
+        } | {
+            str(seg.get("material_id"))
+            for track in (draft.get("tracks", []) or []) if track.get("type") == "sticker"
+            for seg in (track.get("segments", []) or [])
         }
         unbound = [
             str(m.get("id"))

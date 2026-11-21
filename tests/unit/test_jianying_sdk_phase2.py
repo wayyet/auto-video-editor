@@ -303,6 +303,34 @@ def test_extract_dangling_material_blocked() -> None:
     assert any(b["kind"] == "dangling_segment_material" for b in report.section.blocked_features)
 
 
+def test_extract_tolerates_legacy_effect_refs() -> None:
+    """SDK 链转正(2026-11-22):legacy 链挂视频段的转场/特效/贴纸/动画 refs
+    全部是我方效果桶条目、可由编译器按 spec 重建 —— 提取放行,不再阻断。"""
+    draft, _ = _native_draft(with_audio=False)
+    draft["materials"].update({
+        "transitions": [{"id": "transition-1", "type": "Transition", "name": "叠化"}],
+        "video_effects": [{"id": "vfx-1", "type": "video_effect", "name": "模糊"}],
+        "stickers": [{"id": "sticker-1", "resource_id": "1234567890123456789"}],
+        "material_animations": [{"id": "anim-1", "type": "animation", "name": "入场"}],
+        "texts": [], "effects": [],
+    })
+    segs = draft["tracks"][0]["segments"]
+    segs[0]["extra_material_refs"].extend(["transition-1", "vfx-1"])
+    segs[1]["extra_material_refs"].extend(["sticker-1", "anim-1"])
+    report = extract_timeline_snapshot(draft)
+    assert report.section.blocked_features == []
+    assert len(report.section.clips) == 2
+
+
+def test_extract_still_blocks_unknown_video_refs() -> None:
+    """我方效果桶放行后,未知 refs 的阻断语义保持不变(§7.2)。"""
+    draft, _ = _native_draft()
+    draft["tracks"][0]["segments"][0]["extra_material_refs"].append("manual-uuid-1")
+    report = extract_timeline_snapshot(draft)
+    kinds = [b["kind"] for b in report.section.blocked_features]
+    assert "unrecognized_segment_ref" in kinds
+
+
 def test_canvas_of_fallback() -> None:
     draft, _ = _native_draft()
     assert canvas_of(draft).fps == 30

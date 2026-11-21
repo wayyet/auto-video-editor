@@ -26,13 +26,6 @@ from typing import Any
 from jianying_sdk.spec import AudioClipSpec, CanvasSpec, TimelineClipSpec, TimelineSection
 from nodes._draft_io import find_video_track
 
-#: 我方链路产生的素材桶(非空不阻断;SDK 编译器全部可重建或由计划节重建)
-_KNOWN_BUCKETS: frozenset[str] = frozenset({
-    "videos", "audios", "texts", "transitions", "video_effects", "stickers",
-    "material_animations", "audio_fades", "speeds", "canvases",
-    "sound_channel_mappings", "vocal_separations", "effects",
-})
-
 #: 人工高级素材桶(非空 → blocked;SDK 无法按语义重建,§7.2)
 _ADVANCED_BUCKETS: tuple[str, ...] = (
     "masks", "chromas", "color_curves", "hsl", "log_color_wheels",
@@ -46,6 +39,13 @@ _ADVANCED_BUCKETS: tuple[str, ...] = (
 #: 我方视频段伴随素材桶(段上 extra_material_refs 只允许指向这些桶)
 _COMPANION_BUCKETS: tuple[str, ...] = (
     "speeds", "canvases", "sound_channel_mappings", "vocal_separations",
+)
+
+#: 我方效果桶(2026-11-22 SDK 链转正:legacy 链把转场/视频特效/贴纸 refs
+#: 挂在视频段 extra_material_refs 上,这些条目全部由 SDK 编译器按 spec 重建,
+#: 提取时放行不阻断;未知 refs 仍然阻断。)
+_OWN_EFFECT_BUCKETS: tuple[str, ...] = (
+    "transitions", "video_effects", "stickers", "material_animations",
 )
 
 _CROP_DEFAULT: dict[str, float] = {
@@ -294,9 +294,15 @@ def extract_timeline_snapshot(
         for v in (materials.get("videos") or [])
         if isinstance(v, dict) and v.get("id")
     }
-    known_ref_ids = {
+    companion_ref_ids = {
         str(m.get("id"))
         for bucket in _COMPANION_BUCKETS
+        for m in (materials.get(bucket) or [])
+        if isinstance(m, dict) and m.get("id")
+    }
+    video_ref_ids = companion_ref_ids | {
+        str(m.get("id"))
+        for bucket in _OWN_EFFECT_BUCKETS
         for m in (materials.get(bucket) or [])
         if isinstance(m, dict) and m.get("id")
     }
@@ -318,9 +324,9 @@ def extract_timeline_snapshot(
             if material is None:
                 blocked.append(_blocked("dangling_segment_material", segment_id=str(seg.get("id")), material_id=material_id))
                 continue
-            # 段引用核对:extra_material_refs 必须全部落在伴随桶
+            # 段引用核对:extra_material_refs 必须全部落在伴随桶/我方效果桶
             for ref in seg.get("extra_material_refs") or []:
-                if str(ref) not in known_ref_ids:
+                if str(ref) not in video_ref_ids:
                     blocked.append(_blocked(
                         "unrecognized_segment_ref",
                         segment_id=str(seg.get("id")), ref=str(ref),
@@ -395,7 +401,7 @@ def extract_timeline_snapshot(
         for f in (materials.get("audio_fades") or [])
         if isinstance(f, dict) and f.get("id")
     }
-    audio_ref_ids = set(fades_by_id) | known_ref_ids
+    audio_ref_ids = set(fades_by_id) | companion_ref_ids
     for track in draft.get("tracks") or []:
         if not isinstance(track, dict) or track.get("type") != "audio":
             continue
