@@ -83,15 +83,17 @@ git diff 显示:该文件被**故意修改**并带注释:
 
 ## 六、阶段5:真机验收执行记录(2026-11-21 已执行,四跑全 PASS)
 
-### 6.0 执行中新增:Edge 浏览器补丁(MC 本地修改,用户拍板)
+### 6.0 执行中新增:Edge 浏览器补丁(MC 本地修改,用户拍板,后扩至**四平台**)
 
-首跑发现:ks/bili 的 Playwright 启动写死 `channel="chrome"`(kuaishou/core.py:410/414、bilibili/core.py:538/543),**本机无 Google Chrome**(只有 Edge;dy/xhs 走 Playwright 自带 chromium 所以不受影响)→ ks 首跑崩溃于 `Chromium distribution 'chrome' is not found`。用户拍板 MC 补丁用 Edge:4 处 `channel="chrome"` → `channel="msedge"`(均带 `[2026-11-21 auto-video-editor 接入固定]` 注释)。**MC 本地故意修改清单从 1 个文件变为 3 个**(base_config.py + kuaishou/core.py + bilibili/core.py),git pull 前须统一处理。
+首跑发现:ks/bili 的 Playwright 启动写死 `channel="chrome"`(kuaishou/core.py:410/414、bilibili/core.py:538/543),**本机无 Google Chrome**(只有 Edge;dy/xhs 走 Playwright 自带 chromium 所以不受影响)→ ks 首跑崩溃于 `Chromium distribution 'chrome' is not found`。用户拍板 MC 补丁用 Edge:4 处 `channel="chrome"` → `channel="msedge"`(均带 `[2026-11-21 auto-video-editor 接入固定]` 注释)。
+
+**同日用户追加减决策:xhs/dy 也统一 `channel="msedge"`**(原为无 channel=自带 chromium)—— xhs/core.py:430 区持久化上下文+443 非持久化回退、douyin/core.py:344 区+357,各加 channel + 注释。**MC 本地故意修改清单现为 5 个文件**:base_config.py(方案B)+ 四平台 core.py(全部 msedge),git pull 前须统一处理。
 
 ### 6.1 验收脚本
 
-新建 `scripts/verify_mc_ks_bili_login.py`(单平台单次真实检索,走生产同路径 `mediacrawler_client.search_notes`,前后快照 `browser_data/`,save_root=runtime/mc_login_verify/ 由适配器 TTL 兜底)。
+新建 `scripts/verify_mc_ks_bili_login.py`(单平台单次真实检索,走生产同路径 `mediacrawler_client.search_notes`,前后快照 `browser_data/`,save_root=runtime/mc_login_verify/ 由适配器 TTL 兜底;choices 已扩至四平台)。
 
-### 6.2 四跑证据(全串行,未并发 CDP)
+### 6.2 六跑证据(全串行,未并发 CDP;后两跑=四平台 Edge 统一的冒烟)
 
 | 运行 | 判定 | 耗时 | 记录数 | 说明 |
 |---|---|---|---|---|
@@ -99,6 +101,8 @@ git diff 显示:该文件被**故意修改**并带注释:
 | ks #2(复用) | PASS | 18.5s | 14 | **无扫码无 AUTH_REQUIRED = 会话复用实证** |
 | bili #1(扫码) | PASS | 117.3s | **20** | `output_file=bili/json/...`;20 条正好印证**最小页大小 20**(审查 §2.4);登录后二次 pong 通过,无"登录流程结束后仍未登录" |
 | bili #2(复用) | PASS | 63.8s | 20 | 会话复用实证 |
+| xhs(Edge 冒烟) | PASS | 65.1s | 20 | **旧 chromium 登录态被 Edge 成功复用**(无扫码);`xhs/json/...` ✓ |
+| dy(Edge 冒烟) | PASS | 20.5s | 14 | `cdp_dy_user_data_dir` 已有登录态(并行会话遗留),无扫码;`douyin/json/...` ✓ |
 
 记录字段实测与审查 §2.1 一致(ks/bili 均含 `video_id/title/desc/video_url` + 平台特有字段,映射白名单四键会过滤无关字段)。
 
@@ -158,5 +162,5 @@ $env:STORYLINE_WEB_TOPIC_ENGINE = "bing_html"
 
 1. bili search_by_keywords 的任务收集段有 `except Exception` 包裹(源码实测),但**搜索链整体异常边界仍须真机观察** —— 不能以详情任务捕获推导全链隔离(教训沿用 dy);
 2. 域名白名单使"任意外部 URL 绕过域名校验"被关闭;未来平台(如 wb 多域)接入时须先补其允许域枚举;
-3. MC 本地故意修改清单(全部带注释,git pull 上游前须处理):`config/base_config.py`(CDP 方案B)、`media_platform/kuaishou/core.py` 与 `media_platform/bilibili/core.py`(channel=msedge,§6.0);
+3. MC 本地故意修改清单(全部带注释,git pull 上游前须处理):`config/base_config.py`(CDP 方案B)+ **四平台 core.py 全部 channel=msedge**(kuaishou/bilibili/xhs/douyin,§6.0);
 4. 推送 GitHub 走 sync-github,由用户触发。

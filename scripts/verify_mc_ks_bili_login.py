@@ -1,4 +1,4 @@
-"""ks/bili 准入真机验收脚本(P6 门槛4/9:扫码登录 + Profile 目录 + 会话复用)。
+"""MC 平台登录真机验收脚本(xhs/dy/ks/bili 全平台;P6 门槛:扫码登录 + Profile 目录 + 会话复用)。
 
 每次调用 = 单平台单次真实检索,走**生产同路径**
 (``storyline_capabilities.mediacrawler_client.search_notes``,参数取自 config),
@@ -49,7 +49,7 @@ def _snapshot_browser_dirs(mc_root: Path) -> set[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--platform", required=True, choices=("ks", "bili"))
+    parser.add_argument("--platform", required=True, choices=("xhs", "dy", "ks", "bili"))
     parser.add_argument("--query", default="青岛旅游攻略")
     parser.add_argument("--max-results", type=int, default=10)
     parser.add_argument("--timeout", type=int, default=600)
