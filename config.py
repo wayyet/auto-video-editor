@@ -99,7 +99,8 @@ STORYLINE_WEB_TOPIC_ENGINE: str = _raw_web_topic_engine
 # 1.2) MediaCrawler 子进程适配(2026-11-19 用户拍板;2026-11-20 按审查修订版加固):
 #   能力层经子进程调用本地 MediaCrawler 安装副本(revision 09ed1ec6 固定,
 #   https://github.com/NanmiCoder/MediaCrawler,非商业学习许可,外部安装、
-#   代码不入库)做社交平台关键词搜索;失败或 0 条自动回退 bing_html。
+#   代码不入库)做社交平台关键词搜索;主平台失败/0 条先按**平台回退链**依序
+#   换平台,全部失败才回退 bing_html(2026-11-21 审查修订版 §4.3)。
 #   同样是进程启动时读取的模块常量,修改后须重启。
 #   - 用途门禁 P0-01:已确认检索数据仅用于个人非商业学习/研究(2026-11-20
 #     用户确认);若用途变更须先取得版权方书面授权;
@@ -107,15 +108,19 @@ STORYLINE_WEB_TOPIC_ENGINE: str = _raw_web_topic_engine
 #     CDP_CONNECT_EXISTING=False,自启独立 Chrome + 专用 profile
 #     (browser_data/cdp_xhs_user_data_dir),与用户日常浏览器隔离,
 #     首次使用需操作员扫码登录一次(非无头可见窗口);
-#   - 平台首期只开放 xhs(审查 P2-04:字段映射假定小红书记录结构,其他平台
-#     须独立 fixture+真机验证后逐个开放;上游其实支持 7 个);
+#   - 平台白名单(2026-11-21 审查修订版 P1-2):xhs 主平台 + dy 首个回退平台
+#     (dy 的物理输出目录 douyin/json、aweme_url 字段、关键词搜索路径均已按
+#     固定版本源码核实;真机验收留 P6)。其余平台按审查 §3.8 矩阵逐个准入
+#     (上游支持 7 个,不全开);
 #   - 默认引擎已切 mediacrawler(审查 6.4 门禁 2026-11-20 全项通过后单独提交
 #     切换;回滚=显式设 STORYLINE_WEB_TOPIC_ENGINE=bing_html 并重启进程);
 #   - MAX_NOTES/TIMEOUT 有业务范围校验(审查 P2-02):超范围导入期报错,
 #     不带 ValueError 裸堆栈;
-#   - 超时语义(审查 P1-08):外层 timeout 只是子进程最大运行时间;MC 内部
-#     BROWSER_LAUNCH_TIMEOUT 默认 60s,CDP 连接等待会先于外层超时失败。
-_MC_PLATFORM_WHITELIST = ("xhs",)  # 审查 P2-04:首期仅 xhs;其余平台验证后逐个开放
+#   - 超时语义(审查 P1-08):外层 timeout 只是单平台子进程最大运行时间;
+#     整条平台链另有总预算 STORYLINE_WEB_TOPIC_MC_CHAIN_TIMEOUT(§3.5),
+#     预算耗尽不再启动下一平台,直接进 Bing;MC 内部 BROWSER_LAUNCH_TIMEOUT
+#     默认 60s,CDP 连接等待会先于外层超时失败。
+_MC_PLATFORM_WHITELIST = ("xhs", "dy")  # 审查修订版 P1-2:dy 已核实准入;其余逐个开放
 _raw_mc_platform = os.environ.get(
     "STORYLINE_WEB_TOPIC_MC_PLATFORM", "xhs"
 ).strip().lower()
@@ -123,9 +128,59 @@ if _raw_mc_platform not in _MC_PLATFORM_WHITELIST:
     raise ValueError(
         "STORYLINE_WEB_TOPIC_MC_PLATFORM="
         f"{_raw_mc_platform!r} 不在白名单 {_MC_PLATFORM_WHITELIST}"
-        "(首期仅开放 xhs;其他平台待独立验证后逐个开放)"
+        "(平台须按准入门槛逐个开放)"
     )
 STORYLINE_WEB_TOPIC_MC_PLATFORM: str = _raw_mc_platform
+
+
+def _parse_mc_platform_chain(
+    raw_value: str, whitelist: tuple[str, ...], primary_platform: str
+) -> tuple[str, ...]:
+    """解析平台回退链(2026-11-21 审查修订版 P2/§4.1/§6.2):逗号分隔、strip、
+    小写化;空串 = () 关闭回退;空项/未验证平台/重复/主平台重复一律在导入期
+    ValueError(配置错误不延迟到任务运行时)。顺序即实际执行顺序。
+    """
+    items: list[str] = []
+    seen: set[str] = set()
+    raw = str(raw_value or "").strip()
+    if not raw:
+        return ()  # 空串显式关闭平台回退(回滚=xhs→Bing 现行为)
+    for chunk in raw.split(","):
+        platform = chunk.strip().lower()
+        if not platform:
+            raise ValueError(
+                f"STORYLINE_WEB_TOPIC_MC_FALLBACK_PLATFORMS={raw_value!r} "
+                "含空项(逗号间不得留空;关闭平台回退请设空串)"
+            )
+        if platform not in whitelist:
+            raise ValueError(
+                f"STORYLINE_WEB_TOPIC_MC_FALLBACK_PLATFORMS={raw_value!r} "
+                f"包含未验证平台 {platform!r}(已验证白名单 {whitelist};"
+                "新平台须按准入门槛逐个开放)"
+            )
+        if platform == primary_platform:
+            raise ValueError(
+                f"STORYLINE_WEB_TOPIC_MC_FALLBACK_PLATFORMS={raw_value!r} "
+                f"包含主平台 {primary_platform!r}(该变量只配主平台之后的回退平台)"
+            )
+        if platform in seen:
+            raise ValueError(
+                f"STORYLINE_WEB_TOPIC_MC_FALLBACK_PLATFORMS={raw_value!r} "
+                f"重复平台 {platform!r}(顺序即执行顺序,不得重复)"
+            )
+        seen.add(platform)
+        items.append(platform)
+    return tuple(items)
+
+
+#   - 平台回退链(2026-11-21 审查修订版 P2):主平台失败/0 条/相关性不达标 →
+#     依序尝试回退平台 → 全部失败才回退 bing_html;空串=关闭(回滚=xhs→Bing)。
+_raw_mc_fallback_platforms = os.environ.get(
+    "STORYLINE_WEB_TOPIC_MC_FALLBACK_PLATFORMS", "dy"
+).strip()
+STORYLINE_WEB_TOPIC_MC_FALLBACK_PLATFORMS: tuple[str, ...] = _parse_mc_platform_chain(
+    _raw_mc_fallback_platforms, _MC_PLATFORM_WHITELIST, _raw_mc_platform
+)
 
 STORYLINE_WEB_TOPIC_MC_PROJECT_ROOT: str = os.environ.get(
     "STORYLINE_WEB_TOPIC_MC_PROJECT_ROOT",
@@ -151,6 +206,18 @@ if not 30 <= _raw_mc_timeout <= 900:
         f"STORYLINE_WEB_TOPIC_MC_TIMEOUT={_raw_mc_timeout} 超出范围 30..900(秒)"
     )
 STORYLINE_WEB_TOPIC_MC_TIMEOUT: int = _raw_mc_timeout
+
+_raw_mc_chain_timeout = int(
+    os.environ.get("STORYLINE_WEB_TOPIC_MC_CHAIN_TIMEOUT", "600").strip() or "600"
+)
+# 审查修订版 P1-4(§3.5):整条平台链的总预算。单平台 MC_TIMEOUT 只是单次上限,
+# 两平台链不加总预算会等成 1200s;deadline 耗尽后不再启动下一平台,直接进 Bing。
+if not 30 <= _raw_mc_chain_timeout <= 1800:
+    raise ValueError(
+        f"STORYLINE_WEB_TOPIC_MC_CHAIN_TIMEOUT={_raw_mc_chain_timeout} "
+        "超出范围 30..1800(秒)"
+    )
+STORYLINE_WEB_TOPIC_MC_CHAIN_TIMEOUT: int = _raw_mc_chain_timeout
 
 STORYLINE_WEB_TOPIC_MC_HEADLESS: bool = (
     os.environ.get("STORYLINE_WEB_TOPIC_MC_HEADLESS", "0").lower().strip()
