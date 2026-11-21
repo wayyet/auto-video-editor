@@ -14,6 +14,38 @@ index 20aaa6e..2f4f7fc 100644
  
  # 程序结束时是否自动关闭浏览器
  # 设置为 False 可以保持浏览器运行，方便调试
+diff --git a/media_platform/bilibili/client.py b/media_platform/bilibili/client.py
+index 0e50661..7b66434 100644
+--- a/media_platform/bilibili/client.py
++++ b/media_platform/bilibili/client.py
+@@ -166,6 +166,27 @@ class BilibiliClient(AbstractApiClient, ProxyRefreshMixin):
+             ping_flag = False
+         return ping_flag
+ 
++    async def probe_login_state(self) -> tuple[str, str]:
++        """Tri-state login probe for the login preflight gate.
++
++        Uses the same nav endpoint as pong(); pong() stays bool-compatible.
++        Returns (state, detail); state in LOGGED_IN | NOT_LOGGED_IN | CHECK_ERROR.
++        detail carries no cookie/token content.
++
++        [2026-11-21 auto-video-editor 接入固定] 登录预检闸门新增;上游无此方法。
++        """
++        try:
++            response = await self.get("/x/web-interface/nav")
++        except Exception as e:
++            return ("CHECK_ERROR", f"{type(e).__name__}: {e}")
++        if not isinstance(response, dict):
++            return ("CHECK_ERROR", "unexpected nav response type")
++        if response.get("isLogin"):
++            return ("LOGGED_IN", "nav isLogin=true")
++        if "isLogin" in response:
++            return ("NOT_LOGGED_IN", "nav isLogin=false")
++        return ("CHECK_ERROR", "nav response missing isLogin")
++
+     async def update_cookies(self, browser_context: BrowserContext, urls: Optional[list[str]] = None):
+         cookie_str, cookie_dict = await utils.convert_browser_context_cookies(
+             browser_context,
 diff --git a/media_platform/bilibili/core.py b/media_platform/bilibili/core.py
 index b34cfde..e21b8d8 100644
 --- a/media_platform/bilibili/core.py
@@ -33,6 +65,41 @@ index b34cfde..e21b8d8 100644
              browser_context = await browser.new_context(viewport={"width": 1920, "height": 1080}, user_agent=user_agent)
              return browser_context
  
+diff --git a/media_platform/douyin/client.py b/media_platform/douyin/client.py
+index c361528..e590bb8 100644
+--- a/media_platform/douyin/client.py
++++ b/media_platform/douyin/client.py
+@@ -171,6 +171,30 @@ class DouYinClient(AbstractApiClient, ProxyRefreshMixin):
+         )
+         return cookie_dict.get("LOGIN_STATUS") == "1"
+ 
++    async def probe_login_state(self, browser_context: BrowserContext) -> tuple[str, str]:
++        """Tri-state login probe for the login preflight gate.
++
++        Mirrors pong(browser_context) (localStorage first, cookie fallback) but
++        distinguishes definite logged-out evidence from page/browser errors.
++        Returns (state, detail); state in LOGGED_IN | NOT_LOGGED_IN | CHECK_ERROR.
++        detail carries no cookie/token content.
++
++        [2026-11-21 auto-video-editor 接入固定] 登录预检闸门新增;上游无此方法。
++        """
++        try:
++            local_storage = await self.playwright_page.evaluate("() => window.localStorage")
++            if local_storage.get("HasUserLogin", "") == "1":
++                return ("LOGGED_IN", "localStorage HasUserLogin=1")
++            _, cookie_dict = await utils.convert_browser_context_cookies(
++                browser_context,
++                urls=self.cookie_urls,
++            )
++            if cookie_dict.get("LOGIN_STATUS") == "1":
++                return ("LOGGED_IN", "cookie LOGIN_STATUS=1")
++            return ("NOT_LOGGED_IN", "neither HasUserLogin nor LOGIN_STATUS set")
++        except Exception as e:
++            return ("CHECK_ERROR", f"{type(e).__name__}: {e}")
++
+     async def update_cookies(self, browser_context: BrowserContext, urls: Optional[list[str]] = None):
+         cookie_str, cookie_dict = await utils.convert_browser_context_cookies(
+             browser_context,
 diff --git a/media_platform/douyin/core.py b/media_platform/douyin/core.py
 index 10380a6..f3b7967 100644
 --- a/media_platform/douyin/core.py
@@ -81,6 +148,44 @@ index 4b76d11..1dae758 100644
              await asyncio.sleep(0.5)
  
      async def login_by_qrcode(self):
+diff --git a/media_platform/kuaishou/client.py b/media_platform/kuaishou/client.py
+index 0f78040..7d44f13 100644
+--- a/media_platform/kuaishou/client.py
++++ b/media_platform/kuaishou/client.py
+@@ -210,6 +210,33 @@ class KuaiShouClient(AbstractApiClient, ProxyRefreshMixin):
+             ping_flag = False
+         return ping_flag
+ 
++    async def probe_login_state(self) -> tuple[str, str]:
++        """Tri-state login probe for the login preflight gate.
++
++        Uses the same GraphQL endpoint/payload as pong(); pong() stays bool-compatible.
++        Returns (state, detail); state in LOGGED_IN | NOT_LOGGED_IN | CHECK_ERROR.
++        detail carries no cookie/token content.
++
++        [2026-11-21 auto-video-editor 接入固定] 登录预检闸门新增;上游无此方法。
++        """
++        post_data = {
++            "operationName": "visionProfileUserList",
++            "variables": {
++                "ftype": 1,
++            },
++            "query": self.graphql.get("vision_profile_user_list"),
++        }
++        try:
++            res = await self.post("", post_data)
++        except Exception as e:
++            return ("CHECK_ERROR", f"{type(e).__name__}: {e}")
++        profile = res.get("visionProfileUserList") if isinstance(res, dict) else None
++        if isinstance(profile, dict):
++            if profile.get("result") == 1:
++                return ("LOGGED_IN", "graphql visionProfileUserList result=1")
++            return ("NOT_LOGGED_IN", f"graphql result={profile.get('result')!r}")
++        return ("CHECK_ERROR", "unexpected graphql response shape")
++
+     async def update_cookies(self, browser_context: BrowserContext, urls: Optional[list[str]] = None):
+         cookie_str, cookie_dict = await utils.convert_browser_context_cookies(
+             browser_context,
 diff --git a/media_platform/kuaishou/core.py b/media_platform/kuaishou/core.py
 index d290689..f330b70 100644
 --- a/media_platform/kuaishou/core.py
@@ -135,6 +240,40 @@ index 6a35056..cf6172c 100644
              browser_context = await browser.new_context(viewport={"width": 1920, "height": 1080}, user_agent=user_agent)
              return browser_context
  
+diff --git a/media_platform/xhs/client.py b/media_platform/xhs/client.py
+index f9d5193..c8b723e 100644
+--- a/media_platform/xhs/client.py
++++ b/media_platform/xhs/client.py
+@@ -280,6 +280,29 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
+         utils.logger.info(f"[XiaoHongShuClient.pong] Login state result: {ping_flag}")
+         return ping_flag
+ 
++    async def probe_login_state(self) -> tuple[str, str]:
++        """Tri-state login probe for the login preflight gate.
++
++        Uses the same underlying endpoint as pong(); pong() stays bool-compatible.
++        Returns (state, detail); state in:
++            LOGGED_IN     - definite login evidence
++            NOT_LOGGED_IN - definite logged-out evidence (API answered without success)
++            CHECK_ERROR   - network/API/transport error; must NOT trigger QR login
++        detail carries no cookie/token content.
++
++        [2026-11-21 auto-video-editor 接入固定] 登录预检闸门新增;上游无此方法。
++        """
++        try:
++            self_info: Optional[Dict] = await self.query_self()
++        except Exception as e:
++            return ("CHECK_ERROR", f"{type(e).__name__}: {e}")
++        if self_info and self_info.get("data", {}).get("result", {}).get("success"):
++            return ("LOGGED_IN", "selfinfo success")
++        if self_info is None:
++            # HTTP 非 200:传输层异常,不是"确定未登录"的回答
++            return ("CHECK_ERROR", "selfinfo http non-200")
++        return ("NOT_LOGGED_IN", "selfinfo answered without success flag")
++
+     async def update_cookies(self, browser_context: BrowserContext, urls: Optional[list[str]] = None):
+         """
+         Update cookies method provided by API client, usually called after successful login
 diff --git a/media_platform/xhs/core.py b/media_platform/xhs/core.py
 index 8110907..8d11784 100644
 --- a/media_platform/xhs/core.py
@@ -170,11 +309,243 @@ index 7b21e3b..dc2d85c 100644
              browser_context = await browser.new_context(
                  viewport={"width": 1920, "height": 1080}, user_agent=user_agent
              )
+diff --git a/tools/browser_launcher.py b/tools/browser_launcher.py
+index 6d272bd..70b81f3 100644
+--- a/tools/browser_launcher.py
++++ b/tools/browser_launcher.py
+@@ -41,6 +41,10 @@ class BrowserLauncher:
+         self.system = platform.system()
+         self.browser_process = None
+         self.debug_port = None
++        # [2026-11-21 auto-video-editor 接入固定] 记录本进程启动的专用 profile:
++        # Chromium 分离启动后 launcher 进程秒退,真浏览器进程与 Popen 句柄脱钩,
++        # cleanup 必须按 --user-data-dir 标记清理真浏览器(见 cleanup)。
++        self.user_data_dir = None
+ 
+     def detect_browser_paths(self) -> List[str]:
+         """
+@@ -144,6 +148,14 @@ class BrowserLauncher:
+             "--disable-infobars",  # Disable info bars
+         ]
+ 
++        # [2026-11-21 auto-video-editor 接入固定] 屏蔽系统代理:本机系统代理
++        # (127.0.0.1:3067)会劫持爬取浏览器流量,国内平台(douyin 等)经境外
++        # 出口加载 30s 超时 —— dy 探活/生产 NETWORK_ERROR 的网络层根因
++        # (受控实验:--no-proxy-server 后 douyin.com 200 直连成功)。
++        # 如确需走系统代理,设 MC_CDP_ALLOW_SYSTEM_PROXY=1 退出本行为。
++        if os.environ.get("MC_CDP_ALLOW_SYSTEM_PROXY", "").strip() not in ("1", "true", "True"):
++            args.append("--no-proxy-server")
++
+         # Headless mode
+         if headless:
+             args.extend([
+@@ -182,6 +194,7 @@ class BrowserLauncher:
+                 )
+ 
+             self.browser_process = process
++            self.user_data_dir = user_data_dir
+             return process
+ 
+         except Exception as e:
+@@ -195,7 +208,22 @@ class BrowserLauncher:
+         utils.logger.info(f"[BrowserLauncher] Waiting for browser to be ready on port {debug_port}...")
+ 
+         start_time = time.time()
++        detached_logged = False
+         while time.time() - start_time < timeout:
++            # [2026-11-21 auto-video-editor 接入固定] Chromium 分离启动:launcher
++            # 进程拉起真浏览器后立即 exit 0,真浏览器继续存活并开调试端口。
++            # 进程退出**不是**失败信号,只记一次日志,继续轮询端口 —— 把它当
++            # 失败会误杀正常启动(真失败=端口在整个超时窗口内不开)。
++            if (
++                not detached_logged
++                and self.browser_process is not None
++                and self.browser_process.poll() is not None
++            ):
++                detached_logged = True
++                utils.logger.info(
++                    "[BrowserLauncher] Launcher process exited (Chromium detach "
++                    "is normal); keep polling the debug port"
++                )
+             try:
+                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                     s.settimeout(1)
+@@ -238,18 +266,63 @@ class BrowserLauncher:
+         except Exception:
+             return "Unknown Browser", "Unknown Version"
+ 
++    def kill_stale_profile_browsers(self, user_data_dir: Optional[str]) -> None:
++        """[2026-11-21 auto-video-editor 接入固定] 按命令行标记清理占用指定
++        profile 的真浏览器进程(Windows)。
++
++        背景:Chromium 分离启动让 launcher 进程秒退、真浏览器与 Popen 句柄
++        脱钩,旧 cleanup() 见句柄已退就 return,真浏览器残留并独占 profile,
++        下一次 CDP 启动握手给它后秒退、调试端口永远不开 —— console-1d98fe3a7bec
++        两平台 60s 超时的根因。标记经环境变量传递,查询脚本自身命令行不含
++        标记字面量,避免自匹配;再排除自身 PID 双保险。只影响带本 profile
++        路径的进程,用户日常浏览器不受影响。注意:Edge 子进程命令行里路径是
++        **带引号**的(--user-data-dir="C:\\..."),带 ``--user-data-dir=`` 前缀
++        匹配会在引号处断开 —— 因此只匹配 profile 路径本身。
++        """
++        if not user_data_dir or self.system != "Windows":
++            return
++        ps_script = (
++            "Get-CimInstance Win32_Process | "
++            "Where-Object { $_.CommandLine -like ('*' + $env:MC_PROFILE_UD_MARKER + '*') "
++            "-and $_.ProcessId -ne $PID } | "
++            "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
++        )
++        try:
++            subprocess.run(
++                ["powershell", "-NoProfile", "-Command", ps_script],
++                stdout=subprocess.DEVNULL,
++                stderr=subprocess.DEVNULL,
++                timeout=15,
++                check=False,
++                env={**os.environ, "MC_PROFILE_UD_MARKER": str(user_data_dir)},
++            )
++            utils.logger.info(
++                "[BrowserLauncher] Profile-marker cleanup done (stale browsers holding the profile killed if any)"
++            )
++        except Exception as exc:
++            utils.logger.warning(f"[BrowserLauncher] Profile-marker cleanup failed: {exc}")
++
+     def cleanup(self):
+         """
+         Cleanup resources, close browser process
+         """
+         if not self.browser_process:
++            # [2026-11-21 auto-video-editor 接入固定] 句柄为空也可能有真浏览器
++            # 残留(分离启动),按 profile 标记兜底清理。
++            if self.user_data_dir:
++                self.kill_stale_profile_browsers(self.user_data_dir)
+             return
+ 
+         process = self.browser_process
+ 
+         if process.poll() is not None:
+-            utils.logger.info("[BrowserLauncher] Browser process already exited, no cleanup needed")
++            # [2026-11-21 auto-video-editor 接入固定] launcher 进程已退是
++            # Chromium 分离启动的常态,真浏览器可能仍活着占着 profile ——
++            # 不能直接 return,必须按标记清理真浏览器。
++            utils.logger.info("[BrowserLauncher] Launcher process already exited; killing any live browser holding the profile")
+             self.browser_process = None
++            if self.user_data_dir:
++                self.kill_stale_profile_browsers(self.user_data_dir)
+             return
+ 
+         utils.logger.info("[BrowserLauncher] Closing browser process...")
+@@ -270,6 +343,10 @@ class BrowserLauncher:
+                         errors='ignore'
+                     )
+                     process.wait(timeout=5)
++                # [2026-11-21 auto-video-editor 接入固定] taskkill /T 杀不到已脱钩
++                # 的真浏览器进程,按 profile 标记兜底。
++                if self.user_data_dir:
++                    self.kill_stale_profile_browsers(self.user_data_dir)
+             else:
+                 pgid = os.getpgid(process.pid)
+                 try:
 diff --git a/tools/cdp_browser.py b/tools/cdp_browser.py
-index a31893e..c8a8d72 100644
+index a31893e..b91f51b 100644
 --- a/tools/cdp_browser.py
 +++ b/tools/cdp_browser.py
-@@ -291,7 +291,9 @@ class CDPBrowserManager:
+@@ -33,6 +33,24 @@ from tools.browser_launcher import BrowserLauncher
+ from tools import utils
+ 
+ 
++def _resolve_browser_data_root() -> str:
++    """[2026-11-21 auto-video-editor 接入固定] CDP profile 根目录迁出 OneDrive 同步路径。
++
++    上游固定 <项目根>/browser_data(位于 OneDrive 同步盘);同步锁/句柄滞后
++    曾致 Edge CDP 启动频繁 60s 超时、进程"起了又退"(console-1d98fe3a7bec
++    两平台连挂的实证)。默认改落 %LOCALAPPDATA%/MediaCrawler/browser_data
++    (非同步盘);环境变量 MC_BROWSER_DATA_ROOT 可显式覆盖;无 LOCALAPPDATA
++    的环境维持上游行为。
++    """
++    env_root = os.environ.get("MC_BROWSER_DATA_ROOT", "").strip()
++    if env_root:
++        return env_root
++    local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
++    if local_app_data:
++        return os.path.join(local_app_data, "MediaCrawler", "browser_data")
++    return os.path.join(os.getcwd(), "browser_data")
++
++
+ class CDPBrowserManager:
+     """
+     CDP browser manager, responsible for launching and managing browsers connected via CDP
+@@ -256,26 +274,45 @@ class CDPBrowserManager:
+         user_data_dir = None
+         if config.SAVE_LOGIN_STATE:
+             user_data_dir = os.path.join(
+-                os.getcwd(),
+-                "browser_data",
++                _resolve_browser_data_root(),
+                 f"cdp_{config.USER_DATA_DIR % config.PLATFORM}",
+             )
+             os.makedirs(user_data_dir, exist_ok=True)
+             utils.logger.info(f"[CDPBrowserManager] User data directory: {user_data_dir}")
+ 
+         # Launch browser
+-        self.launcher.browser_process = self.launcher.launch_browser(
+-            browser_path=browser_path,
+-            debug_port=self.debug_port,
+-            headless=headless,
+-            user_data_dir=user_data_dir,
+-        )
++        # [2026-11-21 auto-video-editor 接入固定] 启动失败重试一次:首次失败后
++        # 清理占用本 profile 的残留浏览器进程(仅按 --user-data-dir 精确匹配,
++        # 不碰用户日常浏览器)并换新端口再试;两次都失败才抛错,由上层回退
++        # 标准模式。背景:闸门探活浏览器与爬取共用同一 profile,探活刚结束
++        # 爬取进程就"起了又退"(console-1d98fe3a7bec 实证,两平台各白等 60s)。
++        for attempt in (1, 2):
++            self.launcher.browser_process = self.launcher.launch_browser(
++                browser_path=browser_path,
++                debug_port=self.debug_port,
++                headless=headless,
++                user_data_dir=user_data_dir,
++            )
+ 
+-        # Wait for browser to be ready
+-        if not self.launcher.wait_for_browser_ready(
+-            self.debug_port, config.BROWSER_LAUNCH_TIMEOUT
+-        ):
+-            raise RuntimeError(f"Browser failed to start within {config.BROWSER_LAUNCH_TIMEOUT} seconds")
++            # Wait for browser to be ready
++            if self.launcher.wait_for_browser_ready(
++                self.debug_port, config.BROWSER_LAUNCH_TIMEOUT
++            ):
++                break
++            utils.logger.error(
++                f"[CDPBrowserManager] Browser launch attempt {attempt}/2 failed "
++                f"on port {self.debug_port}"
++            )
++            if attempt == 1:
++                self._cleanup_stale_profile_browsers(user_data_dir)
++                self.debug_port = self.launcher.find_available_port(self.debug_port + 1)
++                utils.logger.info(
++                    f"[CDPBrowserManager] Retrying browser launch on new port {self.debug_port}"
++                )
++        else:
++            raise RuntimeError(
++                f"Browser failed to start within {config.BROWSER_LAUNCH_TIMEOUT} seconds (retried once)"
++            )
+ 
+         # Extra wait for CDP service to fully start
+         await asyncio.sleep(1)
+@@ -286,12 +323,20 @@ class CDPBrowserManager:
+                 "[CDPBrowserManager] CDP connection test failed, but will continue to try connecting"
+             )
+ 
++    def _cleanup_stale_profile_browsers(self, user_data_dir: Optional[str]) -> None:
++        """[2026-11-21 auto-video-editor 接入固定] 清理占用本 profile 的残留
++        浏览器进程(实现统一收敛到 BrowserLauncher.kill_stale_profile_browsers)。
++        """
++        self.launcher.kill_stale_profile_browsers(user_data_dir)
++
+     async def _get_browser_websocket_url(self, debug_port: int) -> str:
+         """
          Get browser WebSocket connection URL
          """
          try:

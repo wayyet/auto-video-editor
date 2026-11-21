@@ -1,10 +1,17 @@
  M config/base_config.py
+ M media_platform/bilibili/client.py
  M media_platform/bilibili/core.py
+ M media_platform/douyin/client.py
  M media_platform/douyin/core.py
  M media_platform/douyin/login.py
+ M media_platform/kuaishou/client.py
  M media_platform/kuaishou/core.py
  M media_platform/tieba/core.py
  M media_platform/weibo/core.py
+ M media_platform/xhs/client.py
  M media_platform/xhs/core.py
  M media_platform/zhihu/core.py
+ M tools/browser_launcher.py
  M tools/cdp_browser.py
+?? check_login.py
+?? test/test_check_login_gate.py

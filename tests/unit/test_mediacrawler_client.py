@@ -660,6 +660,84 @@ def test_bili_nonzero_exit_ordinary_error_stays_network_error(
 
 
 # ---------------------------------------------------------------------------
+# [20261121 收紧] console-1d98fe3a7bec 事故回归:xhs 详情页解析失败曾被
+# stderr 里例行 pong 日志("Begin to check login state"/"Login state result:
+# True",每次运行必打)命中的裸 "login" 误判为 AUTH_REQUIRED。收紧后:
+# 例行成功日志不参与判定,JSONDecodeError → PARSE_ERROR,真实失败信号保留。
+# ---------------------------------------------------------------------------
+_XHS_ROUTINE_PONG_STDERR = (
+    "[XiaoHongShuClient.pong] Begin to check login state...\n"
+    "[XiaoHongShuClient.pong] Login state result: True\n"
+)
+
+
+def test_xhs_parse_crash_with_routine_pong_logs_is_parse_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """事故还原:登录 pong=True + 搜索成功后详情页 JSONDecodeError 重试耗尽
+    exit 1 → PARSE_ERROR(非 AUTH_REQUIRED)。"""
+    env = _mc_env(tmp_path)
+    stderr = (
+        _XHS_ROUTINE_PONG_STDERR
+        + "json.decoder.JSONDecodeError: Expecting value: line 1 column 32341\n"
+        + "tenacity.RetryError: RetryError[<Future at 0x1 state=finished raised "
+        "JSONDecodeError>]\n"
+    )
+    monkeypatch.setattr(
+        mc, "_run_subprocess", _fake_run([], returncode=1, stderr=stderr)
+    )
+    items, error, message, _ = mc.search_notes(**_mc_kwargs(env))
+    assert items == [] and error == "PARSE_ERROR"
+    assert "parsing crash" in message
+
+
+def test_xhs_routine_pong_success_alone_stays_network_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """反向守卫:stderr 只有例行 pong 成功日志时,非零退出仍为 NETWORK_ERROR
+    (旧裸 "login" 标记会误判 AUTH_REQUIRED)。"""
+    env = _mc_env(tmp_path)
+    monkeypatch.setattr(
+        mc,
+        "_run_subprocess",
+        _fake_run([], returncode=1, stderr=_XHS_ROUTINE_PONG_STDERR),
+    )
+    items, error, _, _ = mc.search_notes(**_mc_kwargs(env))
+    assert items == [] and error == "NETWORK_ERROR"
+
+
+def test_xhs_pong_false_is_auth_required(tmp_path: Path, monkeypatch) -> None:
+    """真实登录失败信号保留:pong 显式 False("Login state result: False")
+    → AUTH_REQUIRED。"""
+    env = _mc_env(tmp_path)
+    monkeypatch.setattr(
+        mc,
+        "_run_subprocess",
+        _fake_run(
+            [],
+            returncode=1,
+            stderr="[XiaoHongShuClient.pong] Login state result: False",
+        ),
+    )
+    items, error, _, _ = mc.search_notes(**_mc_kwargs(env))
+    assert items == [] and error == "AUTH_REQUIRED"
+
+
+def test_exit0_no_file_with_routine_pong_success_stays_no_results(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """exit 0 无结果文件 + 例行 pong 成功日志 → NO_RESULTS(非 AUTH_REQUIRED)。"""
+    env = _mc_env(tmp_path)
+    monkeypatch.setattr(
+        mc,
+        "_run_subprocess",
+        _fake_run([], write_results=False, stderr=_XHS_ROUTINE_PONG_STDERR),
+    )
+    items, error, _, _ = mc.search_notes(**_mc_kwargs(env))
+    assert items == [] and error == "NO_RESULTS"
+
+
+# ---------------------------------------------------------------------------
 # 登录预检 verify_login(第10期审查修订版 §4.2;stub 边界=_run_subprocess_streaming)
 # ---------------------------------------------------------------------------
 def _vl_env(tmp_path: Path) -> dict[str, Any]:

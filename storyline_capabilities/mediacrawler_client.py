@@ -45,13 +45,17 @@
   ``assembly_capabilities/ffproc.py`` 的 run_proc 纪律一致(Windows 父进程
   默认 ANSI 代码页,中文输出会被 GBK 解码打断);
 - 错误码复用 search_web_topic 既有域:``NETWORK_ERROR``(路径缺失/锁忙碌/
-  启动失败/超时/普通非零退出)、``PARSE_ERROR``(结果文件不可读)、
-  ``NO_RESULTS``(进程正常退出但无结果文件/记录)、``AUTH_REQUIRED``
-  (2026-11-21 审查修订版 P1:退出码 0 无结果文件,或非零退出且 stderr/
-  stdout 命中登录态启发式标记 —— MC 登录失败既可能走无参 ``sys.exit()``
-  退出码 0(伪装成"无搜索结果"),也可能走 ``sys.exit(1)``(B站 start()
-  登录后二次 pong 失败,伪装成网络故障);命中标记才归类,普通非零退出
-  仍为 NETWORK_ERROR);
+  启动失败/超时/普通非零退出)、``PARSE_ERROR``(结果文件不可读,或非零退出
+  且 stderr/stdout 含 ``JSONDecodeError`` 解析崩溃特征 —— 20261121
+  console-1d98fe3a7bec 实证:xhs 详情页 ``__INITIAL_STATE__`` 解析失败重试
+  耗尽 exit 1,曾被 stderr 里例行 pong 日志命中的裸 ``login`` 误判为
+  AUTH_REQUIRED)、``NO_RESULTS``(进程正常退出但无结果文件/记录)、
+  ``AUTH_REQUIRED``(2026-11-21 审查修订版 P1:退出码 0 无结果文件,或非零
+  退出且 stderr/stdout 命中登录态启发式标记 —— MC 登录失败既可能走无参
+  ``sys.exit()`` 退出码 0(伪装成"无搜索结果"),也可能走 ``sys.exit(1)``
+  (B站 start() 登录后二次 pong 失败,伪装成网络故障);标记只收**明确的
+  登录失败信号**(pong False/未登录提示),例行 pong 成功日志不得参与判定,
+  命中标记才归类,普通非零退出仍为 NETWORK_ERROR);
 - **平台代码 ≠ 物理输出目录**(2026-11-21 审查修订版 P1):MC 各平台 store
   的 ``AsyncFileWriter(platform=...)`` 决定目录名,与 CLI 平台代码不必相同
   (抖音代码 ``dy``,输出目录 ``douyin``),见 ``MC_OUTPUT_DIR_BY_PLATFORM``;
@@ -117,13 +121,32 @@ MC_STDERR_EVIDENCE_MAX_CHARS: int = 64 * 1024
 # 登录态启发式标记(审查修订版 §3.7):退出码 0 + 无结果文件时,脱敏后的
 # stderr/stdout 命中任一标记 → AUTH_REQUIRED(而非 NO_RESULTS)。保守清单,
 # 宁可漏判(NO_RESULTS 兜底)不可误伤正常空结果路径。
+#
+# [20261121 收紧] console-1d98fe3a7bec 实证:xhs 详情页解析失败(JSONDecodeError
+# → RetryError → exit 1)被 stderr 里**每次运行必打**的例行 pong 日志
+# ("[XiaoHongShuClient.pong] Begin to check login state..." /
+#  "Login state result: True")命中的裸 "login"/"qrcode" 误判为 AUTH_REQUIRED。
+# 标记只收明确的登录失败信号;匹配前输出已 .lower(),英文标记必须小写。
 _AUTH_HINT_MARKERS: tuple[str, ...] = (
-    "qrcode",
-    "login",
-    "登录",
-    "二维码",
+    # xhs/ks pong 显式 False(xhs client.py:280 "Login state result: {ping_flag}")
+    "login state result: false",
+    "not logged in",
+    "login required",
+    "login failed",
     "请先登录",
+    # bili 二次 pong 失败退出日志(bili core.py "登录流程结束后仍未登录")
+    "未登录",
+    "登录已过期",
+    "二维码",
+    "扫码",
     "check_login_state",
+)
+
+# 解析崩溃特征(20261121):非零退出 + stderr/stdout 含 JSONDecodeError →
+# PARSE_ERROR(内容解析失败),不再落到 NETWORK_ERROR 或被登录标记误伤。
+# 只认底层异常类型名,不认 tenacity.RetryError(它可能包裹网络重试)。
+_PARSE_CRASH_MARKERS: tuple[str, ...] = (
+    "jsondecodeerror",
 )
 
 # ---- 登录预检闸门(2026-11-21 第10期审查修订版 §4.1/§4.2) ----
@@ -476,7 +499,8 @@ def search_notes(
             # 非零退出也可能携带登录诊断(2026-11-21 ks/bili 准入 §2.5:B站
             # start() 登录后二次 pong() 失败走 sys.exit(1))——命中明确登录标记
             # 时归类 AUTH_REQUIRED;普通非零退出仍为 NETWORK_ERROR,不把所有
-            # 非零退出改判为登录失败。
+            # 非零退出改判为登录失败。标记表 20261121 已收紧(见
+            # _AUTH_HINT_MARKERS 注释):例行 pong 成功日志不再参与判定。
             joined = _redact(f"{proc.stderr or ''}\n{proc.stdout or ''}").lower()
             if any(marker in joined for marker in _AUTH_HINT_MARKERS):
                 return [], "AUTH_REQUIRED", (
@@ -484,6 +508,17 @@ def search_notes(
                     "stderr/stdout suggests login/QR-scan state not established "
                     f"(run_id={stamp}; platform={output_platform}); "
                     "scan-login may be required"
+                ), diagnostics
+            # 解析崩溃([20261121] console-1d98fe3a7bec 实证):xhs 登录/搜索均
+            # 成功,详情页 __INITIAL_STATE__ JSONDecodeError 重试耗尽 exit 1。
+            # 登录信号优先于解析信号(真登录墙也可能表现为解析失败),两者都
+            # 未命中才落 NETWORK_ERROR。
+            if any(marker in joined for marker in _PARSE_CRASH_MARKERS):
+                return [], "PARSE_ERROR", (
+                    f"MediaCrawler exited with code {proc.returncode} and "
+                    "stderr/stdout suggests a content parsing crash "
+                    "(JSONDecodeError), not a login problem "
+                    f"(run_id={stamp}; platform={output_platform})"
                 ), diagnostics
             return [], "NETWORK_ERROR", (
                 f"MediaCrawler exited with code {proc.returncode}; see diagnostics "
