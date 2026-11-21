@@ -108,6 +108,12 @@ def add_subtitles_en(state: WorkflowState) -> dict:
         "node_08b",
         done_tag="node_08b_add_subtitles_en_done",
     )
+    # 第10期阶段3:英文字幕构建计划同步入 spec(SDK 编译数据源;legacy 行为不变)
+    from nodes.node_08_add_subtitles import _emit_subtitle_spec
+
+    _emit_subtitle_spec(
+        Path(draft_dir_raw), texts, language="en", log=log, node_tag="node_08b"
+    )
     # P4:样式决策说明(scout 基础 + storyline 叠加)落 status_log,跑批日志可查
     for note in (*base_notes, *style_notes):
         log.append(f"[node_08b] 字幕样式:{note}")

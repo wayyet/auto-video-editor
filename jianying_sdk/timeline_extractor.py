@@ -127,6 +127,16 @@ def _blocked(kind: str, **detail: Any) -> dict[str, Any]:
     return {"kind": kind, **detail}
 
 
+#: 我方字幕 material id 前缀(node_08 ``text-zh`` / node_08b ``text-en``;
+#: 工作流链产物,编译时整轨重建,不算人工残留)
+_OUR_SUBTITLE_PREFIXES: tuple[str, ...] = ("text-zh-", "text-en-")
+
+
+def _is_our_subtitle_material(material_id: Any) -> bool:
+    mid = str(material_id or "")
+    return any(mid.startswith(prefix) for prefix in _OUR_SUBTITLE_PREFIXES)
+
+
 def extract_timeline_snapshot(
     draft: dict,
     *,
@@ -315,7 +325,9 @@ def extract_timeline_snapshot(
                 name=str(material.get("name") or material.get("material_name") or ""),
             ))
 
-    # 4. 文本 / 贴纸轨残留:不在 spec 计划内的文本段视为人工成果 → 阻断
+    # 4. 文本 / 贴纸轨残留:不在 spec 计划内的文本段视为人工成果 → 阻断。
+    #    我方字幕 material id 前缀(text-zh-N / text-en-N)是工作流链产物,
+    #    编译时会整轨重建,不算人工残留(阶段3)。
     subtitle_ids = {str(x) for x in (spec_subtitle_ids or [])}
     for track in draft.get("tracks") or []:
         if not isinstance(track, dict):
@@ -325,7 +337,11 @@ def extract_timeline_snapshot(
         if not segments:
             continue
         if ttype == "text":
-            manual = [s for s in segments if str(s.get("material_id") or "") not in subtitle_ids]
+            manual = [
+                s for s in segments
+                if str(s.get("material_id") or "") not in subtitle_ids
+                and not _is_our_subtitle_material(s.get("material_id"))
+            ]
             if manual:
                 blocked.append(_blocked(
                     "manual_text_track",

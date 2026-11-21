@@ -19,6 +19,7 @@ import config
 from jy_common.native_text import (
     TEXT_MATERIAL_TYPE,
     build_text_content_json,
+    native_content_text,
     text_check_flag,
 )
 from jy_common.subtitle_wrap import layout_warnings, wrap_subtitle_text
@@ -229,9 +230,54 @@ def sync_text_track(draft: dict[str, Any], text_materials: list[dict[str, Any]])
     draft["tracks"] = kept
 
 
+def subtitle_specs_from_materials(
+    text_materials: list[dict[str, Any]],
+    *,
+    language: str = "zh",
+) -> list["SubtitleSpec"]:
+    """本节点 materials.texts 条目 → SDK 编译计划(第10期阶段3)。
+
+    material 双形态里现成携带全部所需数据:id(subtitle_id)/
+    target_timerange(时间)/ style(私有键,style_mapper 输入)/ 原文私有键
+    (text_zh/text_en)/ content JSON(折行后的渲染文本)。SDK 编译器据此构建
+    ``TextSegment``;业务语义不变,只是草稿对象的构建职责移交给 SDK。
+
+    Returns:
+        ``SubtitleSpec`` 列表(时长非正的条目跳过;空输入返回空列表)。
+    """
+    from jianying_sdk.spec import SubtitleSpec
+
+    specs: list[SubtitleSpec] = []
+    for mat in text_materials:
+        if not isinstance(mat, dict):
+            continue
+        tr = mat.get("target_timerange") or {}
+        start_us = int(tr.get("start") or 0)
+        duration_us = int(tr.get("duration") or 0)
+        if duration_us <= 0:
+            continue
+        lang = "en" if language == "en" else "zh"
+        original = str(mat.get("text_en") if lang == "en" else mat.get("text_zh") or "")
+        if not original:
+            original = native_content_text(mat.get("content")) or ""
+        specs.append(
+            SubtitleSpec(
+                subtitle_id=str(mat.get("id") or f"subtitle-{len(specs) + 1}"),
+                text=original,
+                start_us=start_us,
+                end_us=start_us + duration_us,
+                language=lang,
+                style=mat.get("style"),
+                wrap_content=native_content_text(mat.get("content")),
+            )
+        )
+    return specs
+
+
 __all__ = [
     "build_text_track",
     "make_text_material",
     "make_text_segment",
+    "subtitle_specs_from_materials",
     "sync_text_track",
 ]

@@ -101,7 +101,8 @@ def replace_spec_sections(
 
     参数为 ``None`` 表示"本节点不拥有该段,不动";传列表(含空)表示
     "该段归本节点,全量替换"。``language``/``job_id`` 仅在新建时生效
-    (spec 身份字段,节点不得改写他人身份)。
+    (spec 身份字段,节点不得改写他人身份);例外:英文分支 fork 复制的
+    spec 带着中文身份,分支节点经 ``set_language`` 显式接管(阶段3)。
     """
     spec = load_build_spec(draft_dir)
     if spec is None:
@@ -128,6 +129,16 @@ def replace_spec_sections(
         spec.transitions = transitions
     if stickers is not None:
         spec.stickers = stickers
+    write_build_spec(draft_dir, spec)
+    return spec
+
+
+def set_spec_language(draft_dir: Path | str, language: str) -> DraftBuildSpec:
+    """分支节点接管 fork 复制的 spec 身份(en fork:zh → en)。"""
+    spec = load_build_spec(draft_dir)
+    if spec is None:
+        spec = DraftBuildSpec(job_id="", language="en" if language == "en" else "zh")
+    spec.language = "en" if language == "en" else "zh"
     write_build_spec(draft_dir, spec)
     return spec
 

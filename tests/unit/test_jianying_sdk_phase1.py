@@ -76,21 +76,23 @@ def test_compile_minimal_spec_shape() -> None:
 
 
 def test_compile_rejects_populated_spec_phase_boundary() -> None:
-    """阶段边界守卫:片段/字幕编译未交付前,非空 spec 不产出半成品草稿。"""
-    from jianying_sdk.spec import SubtitleSpec
+    """阶段边界守卫:装饰/效果编译未交付前,非空 spec 不产出半成品草稿。
+
+    字幕编译已在阶段3 交付;此处用尚未交付的 text_decorations 触发守卫。
+    """
+    from jianying_sdk.spec import SubtitleSpec, TextDecorationSpec
 
     spec = _minimal_spec()
-    spec.subtitles.append(
-        SubtitleSpec(
-            subtitle_id="sub-1",
-            text="你好",
-            start_us=0,
-            end_us=1_000_000,
-            language="zh",
-        )
-    )
+    spec.text_decorations.append(TextDecorationSpec(subtitle_id="sub-1"))
     with pytest.raises(NotImplementedError):
         compile_spec(spec)
+    # 字幕已可编译(阶段3),不再是守卫触发条件
+    spec2 = _minimal_spec()
+    spec2.subtitles.append(
+        SubtitleSpec(subtitle_id="sub-1", text="你好", start_us=0, end_us=1_000_000, language="zh")
+    )
+    result = compile_spec(spec2)
+    assert result.summary["counts"]["subtitles"] == 1
 
 
 def test_compile_fingerprint_skip_and_force() -> None:

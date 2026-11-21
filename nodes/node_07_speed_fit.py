@@ -232,8 +232,9 @@ def speed_fit(state: WorkflowState) -> dict:
     # 防御语义与写失败重试等价;写成功才产出快照②并放行。
     write_ok = bool(write_result.get("ok"))
     if write_ok:
-        snapshot2_path: str = _produce_snapshot2(draft_path)
+        # spec 先于快照②:英文分支 fork 复制快照②时把基线 spec 一并带走
         _write_build_spec_snapshot(draft, draft_path, state, log)
+        snapshot2_path: str = _produce_snapshot2(draft_path)
     else:
         snapshot2_path = None
         log.append("node_07_speed_fit_write_failed")

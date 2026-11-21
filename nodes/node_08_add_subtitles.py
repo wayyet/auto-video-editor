@@ -867,6 +867,32 @@ def _run_subtitle_scout(video_path: str) -> dict | None:
     return data
 
 
+def _emit_subtitle_spec(
+    draft_dir: Path,
+    text_materials: list[dict],
+    *,
+    language: str,
+    log: list[str],
+    node_tag: str,
+) -> None:
+    """字幕构建计划 → DraftBuildSpec.subtitles(第10期阶段3,SDK 编译数据源)。
+
+    spec 是旁路产物:写入失败**降级不阻断**(legacy 原生写入链不受影响;
+    SDK 编译后端启用时由 QA/审计发现 spec 缺失)。英文分支 fork 复制的 spec
+    带 zh 身份,``set_spec_language`` 由分支节点显式接管。
+    """
+    try:
+        from nodes._draft_build_spec import replace_spec_sections, set_spec_language
+        from nodes._subtitle_texts import subtitle_specs_from_materials
+
+        specs = subtitle_specs_from_materials(text_materials, language=language)
+        replace_spec_sections(draft_dir, subtitles=specs)
+        set_spec_language(draft_dir, language)
+        log.append(f"[{node_tag}] 字幕构建计划已入 spec:{len(specs)} 条(language={language})")
+    except Exception as exc:  # noqa: BLE001 — spec 是增强路径,绝不阻断字幕节点
+        log.append(f"[{node_tag}] 字幕 spec 写入失败(不阻断): {exc!r}")
+
+
 def add_subtitles(state: WorkflowState) -> dict:
     """读取草稿(不动字幕)→ scout 样式侦察 → 原子写回。
 
@@ -931,6 +957,10 @@ def add_subtitles(state: WorkflowState) -> dict:
         log.append(
             f"[node_08] 中文字幕已落草稿:{len(zh_materials)} 条(text 轨 track-text-1,"
             f"样式=scout+storyline 叠加)"
+        )
+        # 第10期阶段3:字幕构建计划同步入 spec(SDK 编译数据源;legacy 行为不变)
+        _emit_subtitle_spec(
+            draft_path.parent, zh_materials, language="zh", log=log, node_tag="node_08"
         )
     # 9 工具迁移 §6.4 step 1:成功调 scout → 把侦察报告落到 state;失败 → 不写
     if scout_report is not None:

@@ -208,11 +208,36 @@ def _build_audio_clips(
     return audio_clips
 
 
+def _build_subtitles(script, spec: DraftBuildSpec, refs: dict[str, Any]) -> list:
+    """字幕计划 → SDK TextSegment(样式经 style_mapper,折行文本为渲染口径)。"""
+    jy = sdk()
+    from jianying_sdk.style_mapper import subtitle_text_segment_kwargs
+
+    built = []
+    for sub in sorted(spec.subtitles, key=lambda s: (s.start_us, s.subtitle_id)):
+        duration_us = int(sub.end_us - sub.start_us)
+        if duration_us <= 0:
+            continue
+        kwargs = subtitle_text_segment_kwargs(sub)
+        clip_kwargs = kwargs.pop("clip_settings")
+        style_kwargs = kwargs.pop("style")
+        border_kwargs = kwargs.pop("border", None)
+        text = sub.wrap_content or sub.text
+        segment = jy.TextSegment(
+            text,
+            jy.Timerange(int(sub.start_us), duration_us),
+            style=jy.TextStyle(**style_kwargs),
+            border=jy.TextBorder(**border_kwargs) if border_kwargs else None,
+            clip_settings=jy.ClipSettings(**clip_kwargs),
+        )
+        script.add_segment(segment, refs["text"])
+        built.append(sub)
+    return built
+
+
 def _assert_no_unimplemented_sections(spec: DraftBuildSpec) -> None:
-    """阶段边界守卫:字幕/装饰/效果/贴纸/转场编译未交付前,非空 spec 不产出半成品。"""
+    """阶段边界守卫:装饰/效果/贴纸/转场编译未交付前,非空 spec 不产出半成品。"""
     pending = []
-    if spec.subtitles:
-        pending.append("subtitles(阶段3)")
     if spec.text_decorations:
         pending.append("text_decorations(阶段4)")
     if spec.transitions:
@@ -263,6 +288,7 @@ def compile_spec(
     audio_clips = _build_audio_clips(
         script, spec, refs, audio_material_factory=audio_material_factory
     )
+    subtitles = _build_subtitles(script, spec, refs)
 
     payload = json.loads(script.dumps())
     validate_sdk_payload(payload)
@@ -271,9 +297,11 @@ def compile_spec(
     counts = {
         "video_clips": len(clips),
         "audio_clips": len(audio_clips),
+        "subtitles": len(subtitles),
         "tracks": {
             TRACK_VIDEO_MAIN: len(clips),
             TRACK_AUDIO: len(audio_clips),
+            TRACK_SUBTITLES: len(subtitles),
         },
         "materials_total": sum(
             len(v) for v in payload.get("materials", {}).values() if isinstance(v, list)
