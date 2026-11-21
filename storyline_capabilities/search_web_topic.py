@@ -28,6 +28,7 @@ import datetime as _dt
 import hashlib
 import json
 import re
+import time
 import urllib.parse
 from html.parser import HTMLParser
 from pathlib import Path
@@ -255,7 +256,10 @@ def _parser_version_for(provider: str) -> str:
     """
     if provider.startswith("mediacrawler:"):
         parts = provider.split(":")
-        platform = parts[1] if len(parts) > 1 else "xhs"
+        # 2026-11-21 审查修订版 §3.4:provider 串携带完整平台链(xhs>dy),
+        # 解析器版本语义跟随主平台(链首)。
+        chain = parts[1] if len(parts) > 1 else "xhs"
+        platform = chain.split(">")[0] if chain else "xhs"
         return f"mc_{platform}_v{_mc_client.MEDIACRAWLER_ADAPTER_VERSION}"
     if provider.startswith("reach_mcp:"):
         # 动态键解析:适配器版本编入 hash(2026-11-20 审查 P2-01)——
@@ -270,14 +274,23 @@ def _locale_for(provider: str) -> str:
     return _PROVIDER_LOCALES.get(provider, "")
 
 
-def mediacrawler_request_provider(platform: str, mc_revision: str) -> str:
-    """mediacrawler 引擎的 request_hash provider 串(审查 P2-01/P2-04)。
+def mediacrawler_request_provider(
+    platform_chain: "str | list[str] | tuple[str, ...]", mc_revision: str
+) -> str:
+    """mediacrawler 引擎的 request_hash provider 串(审查 P2-01/P2-04;
+    2026-11-21 审查修订版 §3.4:平台链有序编入)。
 
-    平台与上游 revision 编入 → 换平台/换 MC 版本必得不同 hash(缓存隔离);
-    节点层与能力层用同一函数计算,两侧 hash 一致才命中缓存(§6.2:request_hash
-    以首选检索策略为准,回退成功也保留该 hash)。
+    **完整有序平台链**(主平台 + 回退平台,">" 连接)与上游 revision 一起编入
+    → 链成员/顺序/revision 任一变化必得不同 hash(缓存隔离)。节点层与能力层
+    用同一函数计算,两侧 hash 一致才命中缓存;回退成功保留该 hash(QA 重试幂等),
+    但"首选策略"指的是完整链而非第一个平台。接受 str(= 单平台链,兼容旧调用)。
     """
-    return f"mediacrawler:{platform}:{mc_revision or 'unknown'}"
+    if isinstance(platform_chain, str):
+        chain_items: list[str] = [platform_chain]
+    else:
+        chain_items = [str(p) for p in platform_chain]
+    chain = ">".join(chain_items)
+    return f"mediacrawler:{chain}:{mc_revision or 'unknown'}"
 
 
 def build_request_hash(*, query: str, provider: str, max_results: int) -> str:
@@ -1410,92 +1423,165 @@ def search_web_topic(
         # (2026-11-19 用户拍板;artifact 语义=审查文档 §6.2,回退状态矩阵=§6.4)。
         opts = dict(provider_options or {})
         mc_platform = str(opts.get("platform") or "xhs")
+        mc_fallback_platforms = tuple(
+            str(p) for p in (opts.get("fallback_platforms") or ())
+        )
         mc_revision = str(opts.get("mc_revision") or "unknown")
-        mc_label = _mc_client.platform_label(mc_platform)
+        mc_per_attempt_timeout = int(opts.get("timeout_seconds") or 600)
+        mc_chain_timeout = int(opts.get("chain_timeout_seconds") or 600)
         if not opts.get("project_root") or not opts.get("save_root"):
             raise ValueError(
                 "mediacrawler provider_options requires project_root and save_root"
             )
-        # request_hash 以**首选检索策略**为准(§6.2):平台+上游 revision 编入;
-        # 回退成功也保留该 hash(QA 重试幂等;换平台/换 MC 版本必 miss)。
+        platform_chain: tuple[str, ...] = (mc_platform, *mc_fallback_platforms)
+        # request_hash 以**首选检索策略(完整有序平台链)**为准(2026-11-21 审查
+        # 修订版 §3.4):链成员/顺序/上游 revision 编入;回退成功也保留该 hash
+        # (QA 重试幂等;换链/换 MC 版本必 miss)。
         effective_request_hash = build_request_hash(
             query=str(query),
-            provider=mediacrawler_request_provider(mc_platform, mc_revision),
+            provider=mediacrawler_request_provider(platform_chain, mc_revision),
             max_results=max_results,
         )
-        try:
-            mc_records, mc_error, mc_message, mc_diag = _mc_client.search_notes(
-                query=str(query),
-                max_results=max_results,
-                platform=mc_platform,
-                project_root=str(opts.get("project_root")),
-                save_root=str(opts.get("save_root")),
-                timeout_seconds=int(opts.get("timeout_seconds") or 600),
-                headless=bool(opts.get("headless") or False),
-                cdp_port=int(opts.get("cdp_port") or 9222),
-                lock_dir=opts.get("lock_dir"),
-            )
-        except (TypeError, ValueError) as exc:
-            # provider_options 形状错误属编程错误:节点层 TOOL_EXECUTION_FAILED 留痕
-            raise ValueError(f"mediacrawler provider_options invalid: {exc}") from exc
 
-        mc_items = [] if mc_error else _map_mc_records(mc_records, max_results)
-        # 客户端成功但清洗后 0 条同样按 NO_RESULTS 回退(§6.3 有效性判定)
-        # 相关性守卫(2026-11-19 真机事故防线,2026-11-20 覆盖 mc 分支 —— 审查
-        # 修订提醒的缺项):平台返回的低相关笔记同样不算成功 → IRRELEVANT_RESULTS
-        # → 回退 Bing;命中统计进诊断,不改变回退语义。
-        mc_relevance_blocked = False
-        if mc_error is None and mc_items:
-            matched = _count_relevant_results(str(query), mc_items)
-            mc_diag.setdefault("relevance_matched", matched)
-            mc_diag.setdefault("relevance_total", len(mc_items))
-            if matched < min(WEB_TOPIC_RELEVANCE_MIN_MATCHED, len(mc_items)):
-                mc_relevance_blocked = True
-        mc_primary_error = mc_error or (
-            "NO_RESULTS"
-            if not mc_items
-            else ("IRRELEVANT_RESULTS" if mc_relevance_blocked else None)
-        )
-        mc_primary_message = str(mc_message or "")
-        if mc_relevance_blocked:
-            mc_primary_message = (
-                f"relevance matched {mc_diag['relevance_matched']}"
-                f"/{mc_diag['relevance_total']} results"
+        attempts: list[dict[str, Any]] = []
+        selected_items: list[dict[str, Any]] = []
+        selected_platform = ""
+        selected_label = ""
+        # 整链 deadline(审查修订版 §3.5):单平台 timeout 只是单次上限,预算
+        # (chain_timeout_seconds)耗尽后不再启动下一平台,直接进 Bing。
+        deadline = time.monotonic() + max(int(mc_chain_timeout), 1)
+        for attempt_index, platform in enumerate(platform_chain):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                attempts.append(
+                    {
+                        "platform": platform,
+                        "attempt_index": attempt_index,
+                        "error_code": "TIME_BUDGET_EXHAUSTED",
+                        "message": (
+                            "chain time budget exhausted before this attempt started"
+                        ),
+                    }
+                )
+                break
+            label = _mc_client.platform_label(platform)
+            try:
+                records, error_code, message, diag = _mc_client.search_notes(
+                    query=str(query),
+                    max_results=max_results,
+                    platform=platform,
+                    project_root=str(opts.get("project_root")),
+                    save_root=str(opts.get("save_root")),
+                    timeout_seconds=min(mc_per_attempt_timeout, int(remaining)),
+                    headless=bool(opts.get("headless") or False),
+                    cdp_port=int(opts.get("cdp_port") or 9222),
+                    lock_dir=opts.get("lock_dir"),
+                )
+            except (TypeError, ValueError) as exc:
+                # provider_options 形状错误属编程错误:节点层 TOOL_EXECUTION_FAILED 留痕
+                raise ValueError(
+                    f"mediacrawler provider_options invalid: {exc}"
+                ) from exc
+
+            items = [] if error_code else _map_mc_records(records, max_results)
+            # 单平台成功条件(审查修订版 §4.2):子进程成功 + 结果文件可读 +
+            # 映射后 ≥1 条有效 + 相关性守卫通过;任一不满足 → 记录原因后试下一
+            # 平台。相关性守卫(2026-11-19 真机事故防线)逐平台执行,低相关结果
+            # 不算成功。
+            relevance_blocked = False
+            if error_code is None and items:
+                matched = _count_relevant_results(str(query), items)
+                diag.setdefault("relevance_matched", matched)
+                diag.setdefault("relevance_total", len(items))
+                if matched < min(WEB_TOPIC_RELEVANCE_MIN_MATCHED, len(items)):
+                    relevance_blocked = True
+            attempt_error = error_code or (
+                "NO_RESULTS"
+                if not items
+                else ("IRRELEVANT_RESULTS" if relevance_blocked else None)
             )
+            attempt_message = str(message or "")
+            if relevance_blocked:
+                attempt_message = (
+                    f"relevance matched {diag['relevance_matched']}"
+                    f"/{diag['relevance_total']} results"
+                )
+            attempts.append(
+                {
+                    "platform": platform,
+                    "attempt_index": attempt_index,
+                    "error_code": attempt_error,
+                    "message": attempt_message,
+                    "diagnostics": diag,
+                }
+            )
+            if attempt_error is None:
+                selected_items = items
+                selected_platform = platform
+                selected_label = label
+                break
+
         diagnostics: dict[str, Any] = {
             "requested_provider": "mediacrawler",
             "requested_platform": mc_platform,
+            "platform_chain": list(platform_chain),
+            "attempts": attempts,
             "mc_revision": mc_revision,
             "adapter_version": _mc_client.MEDIACRAWLER_ADAPTER_VERSION,
             "parser_version": (
                 f"mc_{mc_platform}_v{_mc_client.MEDIACRAWLER_ADAPTER_VERSION}"
             ),
-            "primary": mc_diag,
+            # primary 保持 = 主平台(首次尝试)诊断,兼容既有页面与断言(§4.4)
+            "primary": (attempts[0].get("diagnostics") or {}) if attempts else {},
         }
 
-        if mc_primary_error is None:
-            # MC 成功:provider=实际产出者,source 恒 "mediacrawler"
-            preview_urls = [it["url"] for it in mc_items if it.get("url")]
+        if selected_platform:
+            # MC 某平台成功:provider 恒 mediacrawler(source 不因平台伪造),
+            # engine 按实际产出平台显示;非主平台成功时 message 记录切换原因、
+            # platform_fallback 留痕(审查修订版 §4.4)。
+            switch_reasons = [
+                f"MediaCrawler({_mc_client.platform_label(str(a['platform']))}) "
+                + str(a["error_code"])
+                + (f": {a['message']}" if a.get("message") else "")
+                for a in attempts[:-1]
+                if a.get("error_code")
+            ]
+            switch_message = (
+                "; ".join(switch_reasons) + f"; 已切换 MediaCrawler({selected_label})"
+                if switch_reasons
+                else ""
+            )
+            preview_urls = [it["url"] for it in selected_items if it.get("url")]
             doc = _result(
-                items=mc_items,
+                items=selected_items,
                 preview_urls=preview_urls,
                 error_code=None,
-                message="",
+                message=switch_message,
                 diagnostics=diagnostics,
             )
             doc["request_hash"] = effective_request_hash
             doc["provider"] = "mediacrawler"
             doc["requested_provider"] = "mediacrawler"
-            doc["engine"] = f"MediaCrawler({mc_label})"
+            doc["selected_platform"] = selected_platform
+            doc["engine"] = f"MediaCrawler({selected_label})"
+            if selected_platform != mc_platform:
+                doc["platform_fallback"] = {
+                    "from_platform": mc_platform,
+                    "to_platform": selected_platform,
+                    "reason": attempts[0].get("error_code") if attempts else None,
+                }
             return doc
 
-        # ---- 回退:MC 失败或有效 0 条 → bing_html(审查 §6.4 回退矩阵) ----
+        # ---- 全链失败 → bing_html(审查 §6.4 回退矩阵;Bing 只调一次) ----
+        primary_attempt = attempts[0] if attempts else {}
         fallback_info: dict[str, Any] = {
             "from_provider": "mediacrawler",
             "from_platform": mc_platform,
             "to_provider": "bing_html",
-            "primary_error_code": mc_primary_error,
-            "primary_message": mc_primary_message,
+            # primary_* = 主平台(首次尝试)结果,字段名语义不变;整链逐平台
+            # 失败历史在 diagnostics.attempts 与 message(审查修订版 §4.4)。
+            "primary_error_code": primary_attempt.get("error_code") or "NO_RESULTS",
+            "primary_message": str(primary_attempt.get("message") or ""),
         }
         diagnostics["fallback_engine"] = "bing_html"
         bing_items, bing_error, bing_diag = _bing_html_search(
@@ -1505,10 +1591,13 @@ def search_web_topic(
             debug_dir=debug_dir,
         )
         diagnostics["fallback_diagnostics"] = bing_diag
-        mc_reason = (
-            f"MediaCrawler({mc_label}) {mc_primary_error}"
-            + (f": {mc_primary_message}" if mc_primary_message else "")
-        )
+        mc_reason = "; ".join(
+            f"MediaCrawler({_mc_client.platform_label(str(a['platform']))}) "
+            + str(a["error_code"])
+            + (f": {a['message']}" if a.get("message") else "")
+            for a in attempts
+            if a.get("error_code")
+        ) or "MediaCrawler all platforms failed without attempts"
 
         if bing_error:
             # 双重失败:status=failed;MC 主错误挂 fallback,Bing 错误挂
