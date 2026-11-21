@@ -107,3 +107,44 @@ DRAFT_BUILDER_BACKEND = legacy | pyjianyingdraft   # config.py,默认 legacy
 7. **人工高级特征阻断**:含关键帧/人工文本轨的草稿应被 `failed_blocked_features` 阻断且 legacy 草稿原样保留(error_log 可见)。
 8. **双语**:zh/en 两份草稿效果一致(同 job_id 转场/动画/花字同选)。
 9. 验收通过后按 §11.1#6 逐类别退役旧构造器(另一 PR)。
+
+---
+
+## 附录:全仓多链路模块清单(2026-11-22 盘点)
+
+> 防误解说明:本项目所有多链路均由**显式开关或数据源优先级**分派,同一时刻只有一条链生效,不存在静默 fallback(迁移设计文档 §13.2 明确禁止"旧 builder 作为 SDK 失败时的静默兜底")。默认链都经过真机验证;第二链属于三类之一:灰度待验收 / 降级回退 / 能力未接线。
+
+### A. 第10期灰度双链(`DRAFT_BUILDER_BACKEND`,config.py:506-508,默认 legacy;消费点 nodes/node_11_inject_sticker.py:275)
+
+| # | 效果段 | legacy 链(默认) | SDK 链(开关后) | 状态 |
+|---|---|---|---|---|
+| 1 | 字幕(node_08/08b) | `make_text_material` + 整轨替换 | SDK `TextSegment`(结构级 A/B 黄金对比逐键一致) | 双链已交付 |
+| 2 | 原生转场(node_09) | material 构造 + **挂后段** | SDK `add_transition` **挂前段**(§4.5 行为差异修正) | 双链已交付 |
+| 3 | 视频特效(node_09) | `build_native_video_effect_material` | SDK `add_effect`(强度 0-100) | 双链已交付 |
+| 4 | 文本动画(node_10/10b) | `build_native_text_animation_material` | SDK `add_animation`(in/out/loop) | 双链已交付 |
+| 5 | 贴纸(node_11) | `build_native_sticker_material` 挂视频段 refs | SDK `StickerSegment` 独立轨 | 双链已交付 |
+| 6 | 花字(node_10/10b) | 富形态手工构造(资源来自真机 rp.db 审计) | SDK `add_effect` 三重门禁(见 §3.3 定案) | 双链已交付 |
+| 7 | 初始草稿(node_05) | mapper→native 转换 | SDK initial builder | **SDK 链未实施**(§五遗留首项) |
+
+### B. 历史存在的真·多链模块(与第10期无关)
+
+| # | 模块 | 分派开关(默认值) | 各链路 | 分派点 |
+|---|---|---|---|---|
+| 1 | TTS 后端 | `TTS_BACKEND`(默认 `mock`) | `firered`(:8010)/ `jianying`(SAMI 朗读)/ `mock` | jy_common/tts_client.py:205-218 + nodes/storyline/_tts_adapter.py:108-122(双消费层共 env) |
+| 2 | 网页话题检索引擎 | `STORYLINE_WEB_TOPIC_ENGINE`(默认 `mediacrawler`) | mediacrawler(平台链 xhs→dy→ks→bili)/ bing_html / google_html / duckduckgo_html / stub;MC 失败自动回退 Bing | storyline_capabilities/search_web_topic.py:1297-1447,回退 :1701-1748 |
+| 3 | LLM 后端 | CLI `--llm-backend` + `VIDEO_LLM_BACKEND`(默认 stub)+ `CONSOLE_LLM_BACKEND`(空=拒启) | stub / gate / claude-cli / mcode-cli | agent_gate/factory.py:18-38;创建台门禁 web/console_service.py:227-236 |
+| 4 | 切镜检测 | `STORYLINE_SPLIT_SHOTS_DETECTOR`(默认 `auto`) | transnetv2(torch)/ frame_diff;auto=可用即用、失败自动回退留痕 | storyline_capabilities/split_shots.py:650-707 |
+| 5 | BGM 曲库来源 | 无独立 env(数据源优先级) | 云音乐 harvest JSONL(主)/ bgm_meta_ref.yaml 占位(降级) | storyline_capabilities/bgm_selector.py:175-190 |
+| 6 | 英文翻译 | 分派键与 LLM 后端共用 | LLMTranslateClient(真实)/ MockTranslateClient(`[EN] `前缀);下游 `translation_status != "real"` 门禁 | jy_common/translate_client.py:338 + agent_gate/bootstrap.py:25-35 |
+
+### C. 准多链(第二链存在但未激活/未接线)
+
+- **AI 转场 provider**:`STORYLINE_AI_TRANSITION_PROVIDER` 默认空=只写估算;配 `minimax` 才激活真实生成链(storyline_capabilities/ai_transition_provider.py:105)+ 审批门禁。
+- **剪映自动导出**:vendored SDK `jianying_controller.py` 能力存在但全库零引用(未接线);生产唯一导出链 = FFmpeg(draft_ops/draft_exporter.py),`FINAL_EXPORT_ENABLED` 只是接图开关。
+
+### D. 看似多链、实际不是(防误判)
+
+- **配音 node_05 铺轨 vs node_08 重铺**:同一实现先后两次落库(node_07 后时间自愈,重铺前删旧轨),非双链;
+- **BGM 自动铺轨(`JY_AUTO_BGM`)vs 关卡②人工**:机器侧单实现,人工补轨非代码链;
+- **`WORKFLOW_ENV`**:已退化为摆设,恒走 Postgres 异步(scripts/run_workflow.py:350);
+- 其余 env 开关(`TEXT_FLOWER_ENABLED`/`JY_AUTO_BGM`/`DRAFT_SOURCE_NORMALIZE_ENABLED` 等)均为同一实现的开关/调参,不构成多实现。
