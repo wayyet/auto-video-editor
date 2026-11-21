@@ -107,6 +107,17 @@ _PROVIDER_ENGINE_LABELS: dict[str, str] = {
 
 # mediacrawler 条目的 source 值(实际数据来源标识,进 script.json references)。
 _MC_ITEM_SOURCE = "mediacrawler"
+
+# 平台域名白名单(2026-11-21 ks/bili 准入修订版 §4.3:不让任意外部 URL 绕过
+# 域名校验)。MC 各平台 store **预构建**标准 URL,域名确定可枚举(xhs=百科/探索页、
+# dy=视频页、ks=short-video、bili=av 视频页);hostname 等于或以允许域结尾才接受。
+# 未登记域名的平台(未来扩展)退化为 scheme+hostname 校验。
+_MC_ALLOWED_URL_DOMAINS: dict[str, tuple[str, ...]] = {
+    "xhs": ("xiaohongshu.com",),
+    "dy": ("douyin.com",),
+    "ks": ("kuaishou.com",),
+    "bili": ("bilibili.com",),
+}
 # reach_mcp 条目 source 缺失时的兜底值(真实来源名在 reach_source 字段)。
 _REACH_ITEM_SOURCE = "reach_mcp"
 
@@ -1043,28 +1054,37 @@ _BING_ERROR_MESSAGES: dict[str, str] = {
 
 
 def _map_mc_records(
-    records: list[dict[str, Any]], max_results: int
+    records: list[dict[str, Any]],
+    max_results: int,
+    platform: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """MC 原始记录 → 四键条目(审查 §6.3 结果有效性判定)。
 
-    - url 只接受 http/https(与 extract_web_topic_references 的 scheme 纪律
-      一致,非法 URL 整条丢弃,不"就地修复");
+    - url 只接受 http/https 且**必须带 hostname**(2026-11-21 ks/bili 准入
+      修订版 §4.3:hostname 缺失整条丢弃,不"就地修复");
+    - ``platform`` 提供时执行**平台域名白名单**(§4.3:不让任意外部 URL 绕过
+      域名校验)—— hostname 等于或以允许域结尾才接受;平台未登记域名或
+      platform 缺省时退化为 scheme+hostname 校验(兼容旧调用/旧桩);
     - title 清洗后非空(空标题条目对下游引用无意义);
     - snippet 允许为空但限长;同 URL 去重取首条;
     - 上限 max_results;source 恒 "mediacrawler"(不因 engine/缓存伪造来源)。
     """
     items: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
+    allowed_domains = _MC_ALLOWED_URL_DOMAINS.get(str(platform or "").lower())
     for rec in records:
         if len(items) >= max_results:
             break
         if not isinstance(rec, dict):
             continue
         raw_url = ""
-        # URL 键白名单(2026-11-21 审查修订版 P1/§5.3):xhs=note_url,抖音
-        # store 记录=aweme_url(store/douyin/__init__.py),通用回退=url。
-        # 新平台接入前必须按其 store 实测字段后再扩此表。
-        for key in ("note_url", "url", "aweme_url"):
+        # URL 键白名单(2026-11-21 审查修订版 P1/§5.3;ks/bili 准入修订版 §4.3):
+        # xhs=note_url,dy=aweme_url,ks/bili=video_url(各自 store __init__.py
+        # 预构建;ks=https://www.kuaishou.com/short-video/{video_id},
+        # bili=https://www.bilibili.com/video/av{video_id}),通用回退=url。
+        # 不从 photo_id/video_id/bvid 静默猜造 URL;新平台接入前必须按其
+        # store 实测字段后再扩此表。
+        for key in ("note_url", "url", "aweme_url", "video_url"):
             candidate = str(rec.get(key) or "").strip()
             if candidate:
                 raw_url = candidate
@@ -1074,10 +1094,16 @@ def _map_mc_records(
             rec.get("desc") or rec.get("content"), WEB_TOPIC_SNIPPET_MAX_CHARS
         )
         try:
-            scheme = urllib.parse.urlsplit(raw_url).scheme.lower()
+            parsed = urllib.parse.urlsplit(raw_url)
+            scheme = parsed.scheme.lower()
+            hostname = (parsed.hostname or "").lower()
         except ValueError:
-            scheme = ""
-        if scheme not in _ALLOWED_URL_SCHEMES or not title:
+            scheme, hostname = "", ""
+        if scheme not in _ALLOWED_URL_SCHEMES or not hostname or not title:
+            continue
+        if allowed_domains and not any(
+            hostname == d or hostname.endswith("." + d) for d in allowed_domains
+        ):
             continue
         if raw_url in seen_urls:
             continue
@@ -1483,7 +1509,11 @@ def search_web_topic(
                     f"mediacrawler provider_options invalid: {exc}"
                 ) from exc
 
-            items = [] if error_code else _map_mc_records(records, max_results)
+            items = (
+                []
+                if error_code
+                else _map_mc_records(records, max_results, platform=platform)
+            )
             # 单平台成功条件(审查修订版 §4.2):子进程成功 + 结果文件可读 +
             # 映射后 ≥1 条有效 + 相关性守卫通过;任一不满足 → 记录原因后试下一
             # 平台。相关性守卫(2026-11-19 真机事故防线)逐平台执行,低相关结果

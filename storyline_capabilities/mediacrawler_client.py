@@ -45,11 +45,13 @@
   ``assembly_capabilities/ffproc.py`` 的 run_proc 纪律一致(Windows 父进程
   默认 ANSI 代码页,中文输出会被 GBK 解码打断);
 - 错误码复用 search_web_topic 既有域:``NETWORK_ERROR``(路径缺失/锁忙碌/
-  启动失败/超时/非零退出)、``PARSE_ERROR``(结果文件不可读)、
+  启动失败/超时/普通非零退出)、``PARSE_ERROR``(结果文件不可读)、
   ``NO_RESULTS``(进程正常退出但无结果文件/记录)、``AUTH_REQUIRED``
-  (2026-11-21 审查修订版 P1:退出码 0 + 无结果文件且 stderr/stdout 命中
-  登录态启发式标记 —— MC 登录失败走 ``sys.exit()`` 退出码 0,不能伪装成
-  "无搜索结果");
+  (2026-11-21 审查修订版 P1:退出码 0 无结果文件,或非零退出且 stderr/
+  stdout 命中登录态启发式标记 —— MC 登录失败既可能走无参 ``sys.exit()``
+  退出码 0(伪装成"无搜索结果"),也可能走 ``sys.exit(1)``(B站 start()
+  登录后二次 pong 失败,伪装成网络故障);命中标记才归类,普通非零退出
+  仍为 NETWORK_ERROR);
 - **平台代码 ≠ 物理输出目录**(2026-11-21 审查修订版 P1):MC 各平台 store
   的 ``AsyncFileWriter(platform=...)`` 决定目录名,与 CLI 平台代码不必相同
   (抖音代码 ``dy``,输出目录 ``douyin``),见 ``MC_OUTPUT_DIR_BY_PLATFORM``;
@@ -94,12 +96,17 @@ MC_PLATFORM_LABELS: dict[str, str] = {
     "zhihu": "知乎",
 }
 
-# 平台代码 → MC 物理输出目录名(2026-11-21 审查修订版 P1/§3.2):store/<平台>/_store_impl.py
-# 的 AsyncFileWriter(platform=...) 决定目录名,与 CLI 平台代码**不必相同** ——
-# 抖音代码是 "dy",输出目录是 "douyin"(douyin/_store_impl.py 固定 platform="douyin")。
-# 新平台接入前必须按其 store 实测目录名后注册映射,不得假定代码==目录名。
+# 平台代码 → MC 物理输出目录名(2026-11-21 审查修订版 P1/§3.2;2026-11-21 ks/bili
+# 准入核查复验):store/<平台>/_store_impl.py 的 AsyncFileWriter(platform=...) 决定
+# 目录名,与 CLI 平台代码**不必相同** —— dy→douyin(douyin/_store_impl.py)、
+# ks→kuaishou(kuaishou/_store_impl.py);bili 的 JSON store 恰好也叫 "bili"
+# (BiliJsonStoreImplement platform="bili";"bilibili" 是未启用的 JSONL store),
+# 显式登记固化契约,上游改名时由单测发现。新平台接入前必须按其 store 实测
+# 目录名后注册映射,不得假定代码==目录名。
 MC_OUTPUT_DIR_BY_PLATFORM: dict[str, str] = {
     "dy": "douyin",
+    "ks": "kuaishou",
+    "bili": "bili",
 }
 
 # 失败现场 stderr 全文落盘上限(脱敏后写入,超限截尾;审查修订版 §5.2-5)。
@@ -445,6 +452,18 @@ def search_notes(
                 return [], "NETWORK_ERROR", (
                     f"MediaCrawler timed out: {timeout_flag} "
                     "(first run needs QR scan in the popped-up browser window)"
+                ), diagnostics
+            # 非零退出也可能携带登录诊断(2026-11-21 ks/bili 准入 §2.5:B站
+            # start() 登录后二次 pong() 失败走 sys.exit(1))——命中明确登录标记
+            # 时归类 AUTH_REQUIRED;普通非零退出仍为 NETWORK_ERROR,不把所有
+            # 非零退出改判为登录失败。
+            joined = _redact(f"{proc.stderr or ''}\n{proc.stdout or ''}").lower()
+            if any(marker in joined for marker in _AUTH_HINT_MARKERS):
+                return [], "AUTH_REQUIRED", (
+                    f"MediaCrawler exited with code {proc.returncode} and "
+                    "stderr/stdout suggests login/QR-scan state not established "
+                    f"(run_id={stamp}; platform={output_platform}); "
+                    "scan-login may be required"
                 ), diagnostics
             return [], "NETWORK_ERROR", (
                 f"MediaCrawler exited with code {proc.returncode}; see diagnostics "
