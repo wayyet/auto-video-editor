@@ -211,6 +211,46 @@ def _inject_sticker_into(draft: dict, tag: str) -> tuple[list[str], dict]:
     return warnings, summary
 
 
+def _emit_sticker_spec(draft_dir: Path, draft: dict, log: list[str]) -> None:
+    """贴纸计划 → DraftBuildSpec.stickers(第10期阶段6,SDK 编译数据源)。
+
+    从**本轮注入后的草稿**自洽导出:我方 ``sticker-{text_id}`` 条目反解来源
+    字幕,时间范围取该字幕的 target_timerange(与写入同源)。SDK 编译时落
+    独立 sticker 轨(旧链路挂 video segment refs 是两种合法表达,编译器统一
+    用 SDK 轨)。失败降级不阻断。
+    """
+    try:
+        from jianying_sdk.spec import StickerSpec
+        from nodes._draft_build_spec import replace_spec_sections
+
+        materials = draft.get("materials") or {}
+        texts_by_id = {
+            str(t.get("id")): t
+            for t in materials.get("texts") or []
+            if isinstance(t, dict) and t.get("id")
+        }
+        stickers: list[StickerSpec] = []
+        for entry in materials.get("stickers") or []:
+            if not isinstance(entry, dict):
+                continue
+            entry_id = str(entry.get("id") or "")
+            if not entry_id.startswith(OUR_STICKER_PREFIX):
+                continue  # 人工贴纸(id 是 uuid)不由 spec 管理,原样保留在草稿
+            text_id = entry_id.removeprefix(OUR_STICKER_PREFIX)
+            target_tr = _text_timerange(draft, texts_by_id.get(text_id) or {})
+            stickers.append(StickerSpec(
+                sticker_id=entry_id,
+                resource_id=str(entry.get("resource_id") or ""),
+                start_us=int(target_tr.get("start") or 0),
+                duration_us=int(entry.get("duration") or 0),
+                source_subtitle_id=text_id or None,
+            ))
+        replace_spec_sections(draft_dir, stickers=stickers)
+        log.append(f"[node_11] 贴纸计划已入 spec:{len(stickers)} 条")
+    except Exception as exc:  # noqa: BLE001 — spec 是增强路径,绝不阻断 node_11
+        log.append(f"[node_11] 贴纸 spec 写入失败(不阻断): {exc!r}")
+
+
 def inject_sticker(state: WorkflowState) -> dict:
     """读取草稿 → 为每条字幕解析贴纸 resource_id → 原生注入/占位 fail-closed → 原子写回。
 
@@ -229,6 +269,8 @@ def inject_sticker(state: WorkflowState) -> dict:
     for tag, draft_file in targets:
         draft = load_draft(draft_file)
         warnings, summary = _inject_sticker_into(draft, f"node_11_{tag}")
+        # 第10期阶段6:贴纸计划同步入 spec(双稿各自独立,SDK 编译数据源)
+        _emit_sticker_spec(Path(draft_file).parent, draft, status_log)
         error_log.extend(warnings)
         sticker_summary[tag] = summary
         # Week 5:参数从 draft_path 提升为 draft_path.parent,safe_write_draft 双写

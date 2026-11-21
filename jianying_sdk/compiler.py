@@ -455,15 +455,44 @@ def _build_video_animations(
     return applied
 
 
-def _assert_no_unimplemented_sections(spec: DraftBuildSpec) -> None:
-    """阶段边界守卫:贴纸编译未交付前,非空 spec 不产出半成品。"""
-    pending = []
-    if spec.stickers:
-        pending.append("stickers(阶段6)")
-    if pending:
-        raise NotImplementedError(
-            "以下构建段编译尚未交付,请清空对应字段后再试: " + ", ".join(pending)
+def _build_stickers(
+    script,
+    spec: DraftBuildSpec,
+    refs: dict[str, Any],
+    degradations: list[dict[str, Any]],
+) -> int:
+    """贴纸 → SDK StickerSegment + 独立 sticker 轨(阶段6,§6.6)。
+
+    fail-closed:占位/非 19 位 resource_id 一律降级不落草稿(§4.7;
+    ``PLACEHOLDER_*`` 会让剪映加载到无效素材)。与旧链路同一判据
+    (``jy_common.native_fx.is_19_digit_resource_id``)。
+    """
+    jy = sdk()
+    from jy_common.native_fx import is_19_digit_resource_id
+
+    applied = 0
+    for sticker in sorted(spec.stickers, key=lambda s: (s.start_us, s.sticker_id)):
+        if not is_19_digit_resource_id(sticker.resource_id):
+            degradations.append({
+                "kind": "sticker", "sticker_id": sticker.sticker_id,
+                "resource_id": sticker.resource_id,
+                "reason": "placeholder_or_invalid_resource_id",
+            })
+            continue
+        duration_us = int(sticker.duration_us)
+        if duration_us <= 0:
+            degradations.append({
+                "kind": "sticker", "sticker_id": sticker.sticker_id,
+                "reason": "non_positive_duration",
+            })
+            continue
+        segment = jy.StickerSegment(
+            str(sticker.resource_id),
+            jy.Timerange(int(sticker.start_us), duration_us),
         )
+        script.add_segment(segment, refs["sticker"])
+        applied += 1
+    return applied
 
 
 def compile_spec(
@@ -490,7 +519,6 @@ def compile_spec(
             "spec 携带 SDK 无法忠实重建的人工高级特征,已暂停编译并保留原草稿:"
             + json.dumps(spec.timeline.blocked_features, ensure_ascii=False)
         )
-    _assert_no_unimplemented_sections(spec)
 
     script = new_script(spec)
     refs = append_base_tracks(script, spec)
@@ -516,6 +544,8 @@ def compile_spec(
     # 装饰挂完再统一落轨(SDK 在 add_segment 时注册动画/花字/气泡素材)
     for _sub, _seg in built_subs:
         script.add_segment(_seg, refs["text"])
+    # 阶段6:贴纸(独立 sticker 轨;refs["sticker"] 需 spec.stickers 非空才建轨)
+    stickers_applied = _build_stickers(script, spec, refs, degradations)
 
     payload = json.loads(script.dumps())
     validate_sdk_payload(payload)
@@ -529,6 +559,7 @@ def compile_spec(
         "transitions_applied": transitions_applied,
         "video_effects_applied": video_effects_applied,
         "video_animations_applied": video_animations_applied,
+        "stickers_applied": stickers_applied,
         "tracks": {
             TRACK_VIDEO_MAIN: len(built_clips),
             TRACK_AUDIO: len(audio_clips),
