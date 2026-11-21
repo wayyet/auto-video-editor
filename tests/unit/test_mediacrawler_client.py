@@ -531,3 +531,128 @@ def test_search_notes_failure_persists_redacted_evidence(
     assert diag["result_files"] == []
     # 落盘目录在时间戳运行目录内 → TTL 清扫可见
     assert mc.sweep_stale_runs(Path(env["save_root"]), ttl_days=3) == 0
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-21 ks/bili 准入修订版 §5 阶段3.1:目录映射正反向 + B站登录分类双向
+# ---------------------------------------------------------------------------
+def _fake_run_in_dir(store_dir: str, records, *, returncode: int = 0, stderr: str = ""):
+    """按**物理目录名**(非 CLI 代码)落结果 JSON 桩,模拟真实 MC store 行为。"""
+
+    def fake_run(cmd, cwd, timeout_seconds):  # noqa: ANN001
+        save_data_path = Path(cmd[cmd.index("--save_data_path") + 1])
+        data_dir = save_data_path / store_dir / "json"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "search_contents_2026-11-21.json").write_text(
+            json.dumps(records, ensure_ascii=False), encoding="utf-8"
+        )
+        return subprocess.CompletedProcess(cmd, returncode, "", stderr), None
+
+    return fake_run
+
+
+def _mc_kwargs_platform(env: dict[str, Any], platform: str) -> dict[str, Any]:
+    kwargs = _mc_kwargs(env)
+    kwargs["platform"] = platform
+    return kwargs
+
+
+def test_search_notes_kuaishou_results_live_under_kuaishou_dir(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """ks CLI 代码的物理输出目录是 kuaishou/json(准入修订版 §2.1 实测)。"""
+    env = _mc_env(tmp_path)
+    monkeypatch.setattr(
+        mc,
+        "_run_subprocess",
+        _fake_run_in_dir(
+            "kuaishou",
+            [
+                {
+                    "video_id": "1",
+                    "title": "t",
+                    "desc": "d",
+                    "video_url": "https://www.kuaishou.com/short-video/1",
+                }
+            ],
+        ),
+    )
+    items, error, _, diag = mc.search_notes(**_mc_kwargs_platform(env, "ks"))
+    assert error is None and len(items) == 1
+    assert diag["output_file"] == "kuaishou/json/search_contents_2026-11-21.json"
+
+
+def test_search_notes_ks_json_dir_is_not_read(tmp_path: Path, monkeypatch) -> None:
+    """反向守卫:写在 <CLI代码>/json(ks/json)的结果不得被误读。"""
+    env = _mc_env(tmp_path)
+    monkeypatch.setattr(mc, "_run_subprocess", _fake_run_in_dir("ks", []))
+    items, error, _, _ = mc.search_notes(**_mc_kwargs_platform(env, "ks"))
+    assert items == [] and error in ("NO_RESULTS", "AUTH_REQUIRED")
+
+
+def test_search_notes_bili_results_live_under_bili_dir(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """bili 的 JSON store 恰好也是 bili(BiliJsonStoreImplement);显式契约锁定。"""
+    env = _mc_env(tmp_path)
+    monkeypatch.setattr(
+        mc,
+        "_run_subprocess",
+        _fake_run_in_dir(
+            "bili",
+            [
+                {
+                    "video_id": "9",
+                    "title": "t",
+                    "desc": "d",
+                    "video_url": "https://www.bilibili.com/video/av9",
+                }
+            ],
+        ),
+    )
+    items, error, _, diag = mc.search_notes(**_mc_kwargs_platform(env, "bili"))
+    assert error is None and len(items) == 1
+    assert diag["output_file"] == "bili/json/search_contents_2026-11-21.json"
+
+
+def test_search_notes_bilibili_json_dir_is_not_read(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """反向守卫(准入修订版 §5 阶段3.1):B站正确目录就是 bili/json,
+    反向检查针对**错误的 bilibili/json**(未启用的 JSONL store 目录名)。"""
+    env = _mc_env(tmp_path)
+    monkeypatch.setattr(mc, "_run_subprocess", _fake_run_in_dir("bilibili", []))
+    items, error, _, _ = mc.search_notes(**_mc_kwargs_platform(env, "bili"))
+    assert items == [] and error in ("NO_RESULTS", "AUTH_REQUIRED")
+
+
+def test_bili_nonzero_exit_with_login_marker_is_auth_required(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """B站 start() 登录后二次 pong 失败走 sys.exit(1)(准入修订版 §2.5):
+    非零退出 + 登录标记 → AUTH_REQUIRED,不伪装网络故障。"""
+    env = _mc_env(tmp_path)
+    monkeypatch.setattr(
+        mc,
+        "_run_subprocess",
+        _fake_run_in_dir(
+            "bili", [], returncode=1, stderr="登录流程结束后仍未登录：请确认扫码已完成"
+        ),
+    )
+    items, error, message, diag = mc.search_notes(**_mc_kwargs_platform(env, "bili"))
+    assert items == [] and error == "AUTH_REQUIRED"
+    assert "登录" in message or "login" in message.lower()
+    assert diag["returncode"] == 1
+
+
+def test_bili_nonzero_exit_ordinary_error_stays_network_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """反向守卫:普通非零退出(无登录标记)仍为 NETWORK_ERROR,不把所有
+    非零退出改判为登录失败。"""
+    env = _mc_env(tmp_path)
+    monkeypatch.setattr(
+        mc, "_run_subprocess", _fake_run_in_dir("bili", [], returncode=1, stderr="boom")
+    )
+    items, error, _, _ = mc.search_notes(**_mc_kwargs_platform(env, "bili"))
+    assert items == [] and error == "NETWORK_ERROR"

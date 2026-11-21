@@ -51,7 +51,11 @@ def test_chain_primary_platform_rejected() -> None:
 
 
 def test_config_default_fallback_chain_is_dy() -> None:
-    """默认配置(未设 env)= xhs → dy → Bing(审查修订版 §4.1)。"""
+    """默认配置(未设 env)= xhs → dy → Bing(审查修订版 §4.1)。
+
+    ks/bili 准入修订版阶段2:白名单扩为可配置域,但**默认 env 不变**——
+    生产链仍 xhs→dy→Bing,ks/bili 须操作员真机验收后显式配置。
+    """
     assert config_mod.STORYLINE_WEB_TOPIC_MC_PLATFORM == "xhs"
     assert config_mod.STORYLINE_WEB_TOPIC_MC_FALLBACK_PLATFORMS == ("dy",)
 
@@ -62,5 +66,21 @@ def test_config_chain_timeout_defaults_and_range() -> None:
     assert 30 <= config_mod.STORYLINE_WEB_TOPIC_MC_CHAIN_TIMEOUT <= 1800
 
 
-def test_config_whitelist_includes_dy() -> None:
-    assert config_mod._MC_PLATFORM_WHITELIST == ("xhs", "dy")
+def test_config_whitelist_covers_admitted_platforms() -> None:
+    """白名单=xhs 主平台 + dy/ks/bili 已过源码核查与单测门槛的平台。"""
+    assert config_mod._MC_PLATFORM_WHITELIST == ("xhs", "dy", "ks", "bili")
+
+
+def test_config_chain_accepts_ks_and_bili_combos() -> None:
+    """ks/bili 过门后,§4.1 配置组合全部可解析(顺序=env 书写顺序)。"""
+    assert config_mod._parse_mc_platform_chain("dy,ks", config_mod._MC_PLATFORM_WHITELIST, "xhs") == (
+        "dy",
+        "ks",
+    )
+    assert config_mod._parse_mc_platform_chain(
+        "dy,ks,bili", config_mod._MC_PLATFORM_WHITELIST, "xhs"
+    ) == ("dy", "ks", "bili")
+    assert config_mod._parse_mc_platform_chain("dy,bili", config_mod._MC_PLATFORM_WHITELIST, "xhs") == (
+        "dy",
+        "bili",
+    )

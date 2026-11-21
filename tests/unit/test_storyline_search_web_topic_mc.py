@@ -605,3 +605,188 @@ def test_chain_hash_consistent_between_node_and_capability() -> None:
     assert mediacrawler_request_provider("xhs", "rev1") == (
         mediacrawler_request_provider(("xhs",), "rev1")
     )
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-21 ks/bili 准入修订版 §5 阶段3.2:平台 fixture/域名白名单/四级接力
+# ---------------------------------------------------------------------------
+def _mc_ks_note(idx: int = 1) -> dict:
+    """快手记录真实形状(store/kuaishou:video_url 预构建 short-video 链接)。"""
+    return {
+        "video_id": str(idx),
+        "title": f"夏季防晒视频{idx}",
+        "desc": f"夏季防晒 描述{idx}",
+        "video_url": f"https://www.kuaishou.com/short-video/{idx}",
+        "photo_id": "should_not_be_used_as_url",
+    }
+
+
+def _mc_bili_note(idx: int = 1) -> dict:
+    """B站记录真实形状(store/bilibili:video_url 预构建 av 链接,非 bvid)。"""
+    return {
+        "video_id": str(idx),
+        "title": f"夏季防晒视频{idx}",
+        "desc": f"夏季防晒 描述{idx}",
+        "video_url": f"https://www.bilibili.com/video/av{idx}",
+        "bvid": "should_not_be_used_as_url",
+    }
+
+
+def test_map_mc_records_ks_video_url_mapping() -> None:
+    """ks 记录经 video_url 生成标准四键;photo_id 不得被当 URL。"""
+    items = cap_mod._map_mc_records([_mc_ks_note(1)], max_results=5, platform="ks")
+    assert items == [
+        {
+            "url": "https://www.kuaishou.com/short-video/1",
+            "title": "夏季防晒视频1",
+            "snippet": "夏季防晒 描述1",
+            "source": "mediacrawler",
+        }
+    ]
+
+
+def test_map_mc_records_bili_av_url_not_rewritten() -> None:
+    """bili 记录保持 av 链接原样,不得改写成猜测的 BV URL(准入修订版 §2.1.2)。"""
+    items = cap_mod._map_mc_records([_mc_bili_note(7)], max_results=5, platform="bili")
+    assert items[0]["url"] == "https://www.bilibili.com/video/av7"
+
+
+def test_map_mc_records_hostname_required() -> None:
+    """无 hostname 的 URL 整条丢弃(§4.3:scheme+hostname 双校验)。"""
+    records = [
+        {"note_url": "https:///no-hostname/path", "title": "t"},
+        {"note_url": "https://ok.com/1", "title": "ok"},
+    ]
+    items = cap_mod._map_mc_records(records, max_results=5)
+    assert [it["url"] for it in items] == ["https://ok.com/1"]
+
+
+def test_map_mc_records_platform_domain_whitelist() -> None:
+    """platform 提供时执行域名白名单:外部 URL 绕不过去(§4.3)。"""
+    records = [
+        {**_mc_ks_note(1), "video_url": "https://evil.example.com/short-video/1"},
+        {**_mc_ks_note(2), "video_url": "https://v.kuaishou.com/short-video/2"},
+        _mc_ks_note(3),
+    ]
+    items = cap_mod._map_mc_records(records, max_results=5, platform="ks")
+    # evil.example.com 丢弃;v.kuaishou.com 是允许域的子域 → 接受
+    assert [it["url"] for it in items] == [
+        "https://v.kuaishou.com/short-video/2",
+        "https://www.kuaishou.com/short-video/3",
+    ]
+
+
+def test_map_mc_records_domain_check_for_existing_platforms() -> None:
+    """xhs/dy 同样受域名白名单约束(统一收紧,不让任意外部 URL 绕过)。"""
+    records = [
+        {"note_url": "https://mirror.example.com/explore/1", "title": "t1"},
+        {"note_url": "https://www.xiaohongshu.com/explore/2", "title": "t2"},
+        {"aweme_url": "https://mirror.example.com/video/3", "title": "t3"},
+    ]
+    items = cap_mod._map_mc_records(records, max_results=5, platform="xhs")
+    assert [it["url"] for it in items] == ["https://www.xiaohongshu.com/explore/2"]
+    items_dy = cap_mod._map_mc_records(
+        [
+            {"aweme_url": "https://www.douyin.com/video/9", "title": "t9"},
+        ],
+        max_results=5,
+        platform="dy",
+    )
+    assert [it["url"] for it in items_dy] == ["https://www.douyin.com/video/9"]
+
+
+def test_chain_ks_succeeds_after_xhs_dy_fail(monkeypatch) -> None:
+    """xhs → dy → ks 三级接力:ks 成功接管,不调 Bing。"""
+    bing_calls: list[int] = []
+    monkeypatch.setattr(
+        cap_mod,
+        "_bing_html_search",
+        lambda **kw: bing_calls.append(1) or (_BING_ONE, None, {}),
+    )
+    calls = _patch_mc_by_platform(
+        monkeypatch,
+        {
+            "xhs": ([], "NETWORK_ERROR", "down"),
+            "dy": ([], "AUTH_REQUIRED", "login needed"),
+            "ks": ([_mc_ks_note(1)], None, ""),
+        },
+    )
+    res = _mc_chain_call(options=_mc_chain_options(fallback=("dy", "ks")))
+    assert [c["platform"] for c in calls] == ["xhs", "dy", "ks"]
+    assert bing_calls == []
+    assert res["status"] == "ok" and res["provider"] == "mediacrawler"
+    assert res["engine"] == "MediaCrawler(快手)"
+    assert res["selected_platform"] == "ks"
+    assert res["platform_fallback"]["to_platform"] == "ks"
+    assert res["search_web_topic"][0]["url"] == "https://www.kuaishou.com/short-video/1"
+
+
+def test_chain_ks_fails_bili_succeeds_no_bing(monkeypatch) -> None:
+    """ks 失败后 bili 接管,Bing 不调用(准入修订版 §5 阶段3.2)。"""
+    bing_calls: list[int] = []
+    monkeypatch.setattr(
+        cap_mod,
+        "_bing_html_search",
+        lambda **kw: bing_calls.append(1) or (_BING_ONE, None, {}),
+    )
+    calls = _patch_mc_by_platform(
+        monkeypatch,
+        {
+            "xhs": ([], "NETWORK_ERROR", "down"),
+            "dy": ([], "NETWORK_ERROR", "down"),
+            "ks": ([], "NETWORK_ERROR", "ks down"),
+            "bili": ([_mc_bili_note(1)], None, ""),
+        },
+    )
+    res = _mc_chain_call(options=_mc_chain_options(fallback=("dy", "ks", "bili")))
+    assert [c["platform"] for c in calls] == ["xhs", "dy", "ks", "bili"]
+    assert bing_calls == []
+    assert res["engine"] == "MediaCrawler(B站)"
+    assert res["selected_platform"] == "bili"
+    assert res["search_web_topic"][0]["url"] == "https://www.bilibili.com/video/av1"
+
+
+def test_chain_ks_success_short_circuits_bili(monkeypatch) -> None:
+    """ks 成功即停:bili 不会被尝试(短路语义,§4.2)。"""
+    calls = _patch_mc_by_platform(
+        monkeypatch,
+        {"xhs": ([], "NETWORK_ERROR", "down"), "ks": ([_mc_ks_note(1)], None, "")},
+    )
+    res = _mc_chain_call(options=_mc_chain_options(fallback=("ks", "bili")))
+    assert [c["platform"] for c in calls] == ["xhs", "ks"]
+    assert res["selected_platform"] == "ks"
+
+
+def test_chain_four_platforms_all_fail_bing_once(monkeypatch) -> None:
+    """xhs/dy/ks/bili 全失败 → attempts 保留 4 条原因,Bing 只调一次。"""
+    bing_calls: list[int] = []
+    monkeypatch.setattr(
+        cap_mod,
+        "_bing_html_search",
+        lambda **kw: bing_calls.append(1) or (_BING_ONE, None, {}),
+    )
+    _patch_mc_by_platform(
+        monkeypatch,
+        {
+            "xhs": ([], "NETWORK_ERROR", "down"),
+            "dy": ([], "NETWORK_ERROR", "down"),
+            "ks": ([], "NETWORK_ERROR", "ks down"),
+            "bili": ([], "AUTH_REQUIRED", "login needed"),
+        },
+    )
+    res = _mc_chain_call(options=_mc_chain_options(fallback=("dy", "ks", "bili")))
+    assert bing_calls == [1]
+    attempts = res["diagnostics"]["attempts"]
+    assert [a["platform"] for a in attempts] == ["xhs", "dy", "ks", "bili"]
+    assert attempts[3]["error_code"] == "AUTH_REQUIRED"
+    assert "MediaCrawler(B站) AUTH_REQUIRED" in res["message"]
+    assert "已回退 Bing" in res["message"]
+
+
+def test_chain_hash_changes_with_ks_bili_membership() -> None:
+    """ks/bili 加入链或改变顺序必得不同 hash(缓存隔离)。"""
+    rev = "09ed1ec62d8"
+    full = mediacrawler_request_provider(("xhs", "dy", "ks", "bili"), rev)
+    assert full != mediacrawler_request_provider(("xhs", "dy"), rev)
+    assert full != mediacrawler_request_provider(("xhs", "dy", "ks"), rev)
+    assert full != mediacrawler_request_provider(("xhs", "dy", "bili", "ks"), rev)

@@ -908,6 +908,111 @@ def test_node_mc_cache_miss_when_chain_changes(
     assert calls["n"] == 2  # 链从 (xhs,dy) 变为 (xhs,) → 缓存失效
 
 
+# ---------------------------------------------------------------------------
+# 2026-11-21 ks/bili 准入修订版 §5 阶段3.3:标签/产物字段/部分准入
+# ---------------------------------------------------------------------------
+def _fake_platform_result(platform: str, from_platform: str = "xhs") -> Any:
+    label = {"ks": "快手", "bili": "B站", "dy": "抖音", "xhs": "小红书"}[platform]
+
+    def fake(**kwargs: Any) -> dict:
+        result = _ok_result(kwargs["query"])
+        result["selected_platform"] = platform
+        result["engine"] = f"MediaCrawler({label})"
+        result["platform_fallback"] = {
+            "from_platform": from_platform,
+            "to_platform": platform,
+            "reason": "NETWORK_ERROR",
+        }
+        return result
+
+    return fake
+
+
+def test_node_mc_ks_platform_fallback_tag_and_artifact(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """ks 接管:done + fallback_platform 标签;selected_platform/platform_fallback
+    原样入 artifact(准入修订版 §5 阶段3.3)。"""
+    monkeypatch.setattr(node_mod, "cap_topic", _fake_platform_result("ks"))
+    _patch_mc_engine_config(monkeypatch, fallback_platforms=("dy", "ks"))
+    out = storyline_search_web_topic_node(
+        _state(tmp_path, storyline_targets={"query": "夏季防晒"})
+    )
+    assert out["status_log"] == [
+        "storyline_search_web_topic_done",
+        "storyline_search_web_topic_fallback_platform",
+    ]
+    doc = json.loads(
+        Path(out["storyline_web_topic_artifact"]).read_text(encoding="utf-8")
+    )
+    assert doc["selected_platform"] == "ks"
+    assert doc["platform_fallback"] == {
+        "from_platform": "xhs",
+        "to_platform": "ks",
+        "reason": "NETWORK_ERROR",
+    }
+    assert doc["engine"] == "MediaCrawler(快手)"
+
+
+def test_node_mc_bili_platform_fallback_tag(tmp_path: Path, monkeypatch) -> None:
+    """bili 接管:同语义,engine 显示 MediaCrawler(B站)。"""
+    monkeypatch.setattr(node_mod, "cap_topic", _fake_platform_result("bili"))
+    _patch_mc_engine_config(monkeypatch, fallback_platforms=("dy", "ks", "bili"))
+    out = storyline_search_web_topic_node(
+        _state(tmp_path, storyline_targets={"query": "夏季防晒"})
+    )
+    assert out["status_log"] == [
+        "storyline_search_web_topic_done",
+        "storyline_search_web_topic_fallback_platform",
+    ]
+    doc = json.loads(
+        Path(out["storyline_web_topic_artifact"]).read_text(encoding="utf-8")
+    )
+    assert doc["engine"] == "MediaCrawler(B站)"
+    assert doc["selected_platform"] == "bili"
+
+
+def test_node_mc_partial_admission_chain_hash(tmp_path: Path, monkeypatch) -> None:
+    """仅 bili 过门(ks 未过)时,节点按 xhs → dy → bili 组装链与 hash
+    (准入修订版 §4.1 矩阵第 3 行)。"""
+    captured: dict = {}
+    monkeypatch.setattr(
+        node_mod,
+        "cap_topic",
+        _fake_cap_topic(captured, items=[{"url": "https://www.bilibili.com/video/av1", "title": "t", "snippet": "s", "source": "mediacrawler"}]),
+    )
+    _patch_mc_engine_config(monkeypatch, fallback_platforms=("dy", "bili"))
+
+    storyline_search_web_topic_node(
+        _state(tmp_path, storyline_targets={"query": "夏季防晒"})
+    )
+
+    assert captured["provider_options"]["fallback_platforms"] == ("dy", "bili")
+    assert captured["provider_options"]["chain_timeout_seconds"] == 600
+
+
+def test_node_mc_partial_admission_hash_uses_actual_chain(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """部分准入链的 hash 编入实际配置链 (xhs,dy,bili)(与能力层同函数)。"""
+    captured: dict = {}
+    monkeypatch.setattr(
+        node_mod, "cap_topic", _fake_cap_topic(captured, items=[{"url": "https://www.bilibili.com/video/av1", "title": "t", "snippet": "s", "source": "mediacrawler"}])
+    )
+    _patch_mc_engine_config(monkeypatch, fallback_platforms=("dy", "bili"))
+    out = storyline_search_web_topic_node(
+        _state(tmp_path, storyline_targets={"query": "夏季防晒"})
+    )
+    doc = json.loads(
+        Path(out["storyline_web_topic_artifact"]).read_text(encoding="utf-8")
+    )
+    assert doc["request_hash"] == build_request_hash(
+        query="夏季防晒",
+        provider=mediacrawler_request_provider(("xhs", "dy", "bili"), _MC_REVISION),
+        max_results=7,
+    )
+
+
 def test_node_mc_cache_hit_when_everything_unchanged(
     tmp_path: Path, monkeypatch
 ) -> None:
