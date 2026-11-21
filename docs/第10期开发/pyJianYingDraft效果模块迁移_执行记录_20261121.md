@@ -64,6 +64,7 @@
 
 ### 3.3 SDK 行为差异备忘(真机验收重点)
 
+- **花字×SDK 关系定案**(20261122 核查):**legacy 链(现网默认)零 SDK 参与** —— 花字绑定器 `nodes/_text_flower.py` 与构造器 `jy_common/native_fx.py` 无任何 SDK import;花字资源身份来自真机 rp.db 审计 + GUI 黄金样本(`templates/text_flower_resource_library.json` `_source` = `rpdb_flower_record.json`,**不是** SDK metadata 扫描产物 —— SDK 枚举本就无花字类目),material 由 `build_native_text_effect_material` 手工构造(20+ 键富形态),缓存守卫用项目自建 `cache_manifest`。**SDK 灰度链**(`DRAFT_BUILDER_BACKEND=pyjianyingdraft`)才走 `TextSegment.add_effect(effect_id)`(SDK 双 ID 合一接口,三重门禁:双 ID 一致 + cache_verified + 交叉表 `compat_status("flower")=="supported"`,不满足逐条降级)。花字渲染失败与是否用 SDK **无关**(根因 = 5.9.0.11632 旧客户端资源格式,两条写入链都只负责数据落草稿)。
 - **花字/气泡落桶**:SDK 把 `TextEffect`/`TextBubble` 导出到 `materials.effects` 桶 —— 与 legacy GUI 黄金样本(console-52373c6f9e11)同桶 ✓;但 SDK 条目是 **6 键精简形态**(id/effect_id/resource_id/type/apply_target_type/value),legacy 是 20+ 键富形态(含 path=缓存目录/category_id/name)。剪映 5.9.0.11632 能否渲染精简形态 **未验证**;且本机花字渲染本就受旧客户端资源格式问题影响(`TEXT_FLOWER_ENABLED` 默认关,见花字渲染根因文档)。GUI 验收必须覆盖此差异。
 - **动画 material 条目**:SDK 动画条目 id 用 effect_id(legacy 用自造确定性 id + effect_id 独立字段),语义字段(name/type/resource_id/start/duration)一致,upstream 已验证形态。
 
