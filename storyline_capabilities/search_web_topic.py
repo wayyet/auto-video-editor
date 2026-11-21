@@ -1048,7 +1048,10 @@ def _map_mc_records(
         if not isinstance(rec, dict):
             continue
         raw_url = ""
-        for key in ("note_url", "url"):
+        # URL 键白名单(2026-11-21 审查修订版 P1/§5.3):xhs=note_url,抖音
+        # store 记录=aweme_url(store/douyin/__init__.py),通用回退=url。
+        # 新平台接入前必须按其 store 实测字段后再扩此表。
+        for key in ("note_url", "url", "aweme_url"):
             candidate = str(rec.get(key) or "").strip()
             if candidate:
                 raw_url = candidate

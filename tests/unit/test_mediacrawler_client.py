@@ -411,3 +411,123 @@ def test_run_subprocess_timeout_kills_tree(monkeypatch) -> None:
     proc, flag = mc._run_subprocess(["x"], cwd=".", timeout_seconds=10)
     assert flag is not None and killed == [4242]
     assert proc.stdout == ""  # 杀树后回收剩余输出,无有效结果
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-21 审查修订版 P1:平台代码 → 物理输出目录映射(dy → douyin)
+# ---------------------------------------------------------------------------
+def test_platform_label_douyin() -> None:
+    assert mc.platform_label("dy") == "抖音"
+    assert mc.platform_label("xhs") == "小红书"
+
+
+def test_search_notes_douyin_results_live_under_douyin_dir(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """真实 MC 抖音输出目录是 douyin/json(store 用 platform="douyin"),
+    适配器按 --platform dy 调用后必须能从 douyin/json 读回结果(审查 §3.2)。"""
+
+    def fake_run_douyin(cmd, cwd, timeout_seconds):  # noqa: ANN001
+        records = [
+            {
+                "aweme_id": "1",
+                "title": "t",
+                "desc": "d",
+                "aweme_url": "https://www.douyin.com/video/1",
+            }
+        ]
+        save_data_path = Path(cmd[cmd.index("--save_data_path") + 1])
+        data_dir = save_data_path / "douyin" / "json"  # 真实行为:固定 douyin,非 dy
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "search_contents_2026-11-21.json").write_text(
+            json.dumps(records, ensure_ascii=False), encoding="utf-8"
+        )
+        return subprocess.CompletedProcess(cmd, 0, "", ""), None
+
+    env = _mc_env(tmp_path)
+    monkeypatch.setattr(mc, "_run_subprocess", fake_run_douyin)
+    kwargs = _mc_kwargs(env)
+    kwargs["platform"] = "dy"
+    items, error, _, diag = mc.search_notes(**kwargs)
+    assert error is None and len(items) == 1
+    assert diag["output_file"] == "douyin/json/search_contents_2026-11-21.json"
+
+
+def test_search_notes_wrong_platform_dir_is_not_read(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """反向守卫:结果写在 <代码>/json(dy/json)时不得被误读 —— 防映射退化为透传。"""
+
+    def fake_run_dy_dir(cmd, cwd, timeout_seconds):  # noqa: ANN001
+        save_data_path = Path(cmd[cmd.index("--save_data_path") + 1])
+        data_dir = save_data_path / "dy" / "json"  # 错误目录(映射应指向 douyin)
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "search_contents_2026-11-21.json").write_text(
+            "[]", encoding="utf-8"
+        )
+        return subprocess.CompletedProcess(cmd, 0, "", ""), None
+
+    env = _mc_env(tmp_path)
+    monkeypatch.setattr(mc, "_run_subprocess", fake_run_dy_dir)
+    kwargs = _mc_kwargs(env)
+    kwargs["platform"] = "dy"
+    items, error, _, _ = mc.search_notes(**kwargs)
+    assert items == [] and error in ("NO_RESULTS", "AUTH_REQUIRED")
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-21 审查修订版 P1:登录失败诊断(AUTH_REQUIRED)+ 失败现场证据落盘
+# ---------------------------------------------------------------------------
+def test_search_notes_exit0_no_file_with_login_markers_is_auth_required(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """MC 登录失败走 sys.exit() 退出码 0 + 无结果文件 → AUTH_REQUIRED,不伪装 NO_RESULTS。"""
+    env = _mc_env(tmp_path)
+    monkeypatch.setattr(
+        mc,
+        "_run_subprocess",
+        _fake_run([], write_results=False, stderr="请扫码登录 (qrcode) 后继续"),
+    )
+    items, error, message, diag = mc.search_notes(**_mc_kwargs(env))
+    assert items == [] and error == "AUTH_REQUIRED"
+    assert "login" in message.lower() or "登录" in message
+    assert diag["data_dir_exists"] is False
+
+
+def test_search_notes_exit0_no_file_without_markers_stays_no_results(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env = _mc_env(tmp_path)
+    monkeypatch.setattr(
+        mc, "_run_subprocess", _fake_run([], write_results=False, stderr="all good")
+    )
+    _, error, _, _ = mc.search_notes(**_mc_kwargs(env))
+    assert error == "NO_RESULTS"
+
+
+def test_search_notes_failure_persists_redacted_evidence(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """非零退出:脱敏 stderr 全文落盘到运行目录(TTL 兜底),诊断只记相对文件名。"""
+    env = _mc_env(tmp_path)
+    monkeypatch.setattr(
+        mc,
+        "_run_subprocess",
+        _fake_run(
+            [],
+            write_results=False,
+            returncode=1,
+            stderr="Traceback ...\nCookie: SESSIONABCDEF98765 xsec_token: abcdefgh123456",
+        ),
+    )
+    _, error, _, diag = mc.search_notes(**_mc_kwargs(env))
+    assert error == "NETWORK_ERROR"
+    assert diag["stderr_file"]
+    assert "/" in diag["stderr_file"] and diag["stderr_file"].endswith("stderr_full.txt")
+    evidence = Path(env["save_root"]) / diag["stderr_file"]
+    text = evidence.read_text(encoding="utf-8")
+    assert "SESSIONABCDEF98765" not in text and "***" in text
+    assert diag["data_dir_exists"] is False
+    assert diag["result_files"] == []
+    # 落盘目录在时间戳运行目录内 → TTL 清扫可见
+    assert mc.sweep_stale_runs(Path(env["save_root"]), ttl_days=3) == 0

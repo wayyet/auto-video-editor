@@ -46,7 +46,16 @@
   默认 ANSI 代码页,中文输出会被 GBK 解码打断);
 - 错误码复用 search_web_topic 既有域:``NETWORK_ERROR``(路径缺失/锁忙碌/
   启动失败/超时/非零退出)、``PARSE_ERROR``(结果文件不可读)、
-  ``NO_RESULTS``(进程正常退出但无结果文件/记录)。
+  ``NO_RESULTS``(进程正常退出但无结果文件/记录)、``AUTH_REQUIRED``
+  (2026-11-21 审查修订版 P1:退出码 0 + 无结果文件且 stderr/stdout 命中
+  登录态启发式标记 —— MC 登录失败走 ``sys.exit()`` 退出码 0,不能伪装成
+  "无搜索结果");
+- **平台代码 ≠ 物理输出目录**(2026-11-21 审查修订版 P1):MC 各平台 store
+  的 ``AsyncFileWriter(platform=...)`` 决定目录名,与 CLI 平台代码不必相同
+  (抖音代码 ``dy``,输出目录 ``douyin``),见 ``MC_OUTPUT_DIR_BY_PLATFORM``;
+- 失败现场证据(审查修订版 §5.2-5):非零退出/超时/退出码 0 无结果文件时,
+  脱敏 stderr 全文落盘到时间戳运行目录(TTL 清扫兜底),diagnostics 只记
+  相对文件名(P2-06 纪律不变)。
 """
 from __future__ import annotations
 
@@ -84,6 +93,29 @@ MC_PLATFORM_LABELS: dict[str, str] = {
     "tieba": "贴吧",
     "zhihu": "知乎",
 }
+
+# 平台代码 → MC 物理输出目录名(2026-11-21 审查修订版 P1/§3.2):store/<平台>/_store_impl.py
+# 的 AsyncFileWriter(platform=...) 决定目录名,与 CLI 平台代码**不必相同** ——
+# 抖音代码是 "dy",输出目录是 "douyin"(douyin/_store_impl.py 固定 platform="douyin")。
+# 新平台接入前必须按其 store 实测目录名后注册映射,不得假定代码==目录名。
+MC_OUTPUT_DIR_BY_PLATFORM: dict[str, str] = {
+    "dy": "douyin",
+}
+
+# 失败现场 stderr 全文落盘上限(脱敏后写入,超限截尾;审查修订版 §5.2-5)。
+MC_STDERR_EVIDENCE_MAX_CHARS: int = 64 * 1024
+
+# 登录态启发式标记(审查修订版 §3.7):退出码 0 + 无结果文件时,脱敏后的
+# stderr/stdout 命中任一标记 → AUTH_REQUIRED(而非 NO_RESULTS)。保守清单,
+# 宁可漏判(NO_RESULTS 兜底)不可误伤正常空结果路径。
+_AUTH_HINT_MARKERS: tuple[str, ...] = (
+    "qrcode",
+    "login",
+    "登录",
+    "二维码",
+    "请先登录",
+    "check_login_state",
+)
 
 # 平台代码全集(展示/校验参考;生产白名单以 config._MC_PLATFORM_WHITELIST 为准,
 # 首期仅 xhs —— 审查 P2-04:字段映射假定小红书记录结构。不 import config,
@@ -175,6 +207,37 @@ def _redact(text: str) -> str:
 def _tail(text: str, limit: int = 2048) -> str:
     text = str(text or "")
     return text if len(text) <= limit else text[-limit:]
+
+
+def _persist_failure_evidence(
+    run_dir: Path,
+    data_dir: Path,
+    proc: subprocess.CompletedProcess,
+    diagnostics: dict[str, Any],
+) -> None:
+    """失败现场证据(2026-11-21 审查修订版 §5.2-5):脱敏 stderr 全文落盘 +
+    输出目录状态,把"登录失败/文件未生成/解析失败"从纯猜测变成可复核证据。
+
+    - 落盘位置在时间戳运行目录内 → 由既有 TTL 清扫(sweep_stale_runs)兜底回收;
+    - diagnostics 只记相对文件名(run_id/stderr_full.txt),不含绝对路径(P2-06);
+    - 尽力而为:任何 IO 失败都不改变调用方的错误分类。
+    """
+    with contextlib.suppress(OSError):
+        run_dir.mkdir(parents=True, exist_ok=True)
+        stderr_text = _redact(getattr(proc, "stderr", "") or "")
+        if stderr_text:
+            if len(stderr_text) > MC_STDERR_EVIDENCE_MAX_CHARS:
+                stderr_text = stderr_text[-MC_STDERR_EVIDENCE_MAX_CHARS:]
+            (run_dir / "stderr_full.txt").write_text(
+                stderr_text, encoding="utf-8", errors="replace"
+            )
+            diagnostics["stderr_file"] = f"{run_dir.name}/stderr_full.txt"
+    diagnostics["data_dir_exists"] = data_dir.is_dir()
+    result_files: list[str] = []
+    if data_dir.is_dir():
+        with contextlib.suppress(OSError):
+            result_files = [p.name for p in sorted(data_dir.glob("*.json"))][:20]
+    diagnostics["result_files"] = result_files
 
 
 def sweep_stale_runs(save_root: Path, ttl_days: int = MC_RAW_TTL_DAYS) -> int:
@@ -344,10 +407,13 @@ def search_notes(
         # TTL 清扫(P2-08):上次失败残留的原始 JSON 不无限期留存
         diagnostics["swept_runs"] = sweep_stale_runs(save_root_path)
 
-        # 每次运行独立时间戳目录(AsyncFileWriter 会写 <save_data_path>/<platform>/json/)
+        # 每次运行独立时间戳目录;物理输出目录按 MC_OUTPUT_DIR_BY_PLATFORM 映射
+        # (2026-11-21 审查修订版 P1:平台代码 dy 的真实输出在 douyin/ 子目录)
         stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         run_dir = save_root_path / stamp
         diagnostics["run_id"] = stamp
+        output_platform = MC_OUTPUT_DIR_BY_PLATFORM.get(str(platform), str(platform))
+        data_dir = run_dir / output_platform / "json"
 
         cmd = [
             str(_resolve_python_exe(root)),
@@ -373,6 +439,7 @@ def search_notes(
         diagnostics["stdout_tail"] = _tail(_redact(proc.stdout))
         diagnostics["stderr_tail"] = _tail(_redact(proc.stderr))
         if timeout_flag is not None or proc.returncode != 0:
+            _persist_failure_evidence(run_dir, data_dir, proc, diagnostics)
             if timeout_flag is not None:
                 diagnostics["timeout"] = timeout_flag
                 return [], "NETWORK_ERROR", (
@@ -384,18 +451,29 @@ def search_notes(
                 "stdout_tail/stderr_tail for details"
             ), diagnostics
 
-        data_dir = run_dir / str(platform) / "json"
         candidates = sorted(data_dir.glob("search_contents_*.json"))
         if not candidates:
             # 兜底:结果文件命名变更时按任意 json 容错(glob 取最新)
             candidates = sorted(data_dir.glob("*.json"))
         if not candidates:
+            # 退出码 0 但无结果文件(2026-11-21 审查修订版 §3.7):保留现场证据
+            # 并区分登录态问题(AUTH_REQUIRED)与真实空结果(NO_RESULTS)——
+            # MC 登录失败走 sys.exit() 退出码 0,不能伪装成"无搜索结果"。
+            _persist_failure_evidence(run_dir, data_dir, proc, diagnostics)
+            joined = _redact(f"{proc.stderr or ''}\n{proc.stdout or ''}").lower()
+            if any(marker in joined for marker in _AUTH_HINT_MARKERS):
+                return [], "AUTH_REQUIRED", (
+                    "MediaCrawler finished (exit 0) without result file and "
+                    "stderr/stdout suggests login/QR-scan state not established "
+                    f"(run_id={stamp}; platform={output_platform}); "
+                    "scan-login may be required"
+                ), diagnostics
             return [], "NO_RESULTS", (
                 f"MediaCrawler finished (exit 0) but wrote no result file "
                 f"(run_id={stamp})"
             ), diagnostics
         out_file = candidates[-1]
-        diagnostics["output_file"] = f"{platform}/json/{out_file.name}"
+        diagnostics["output_file"] = f"{output_platform}/json/{out_file.name}"
 
         if out_file.stat().st_size > MC_RAW_MAX_BYTES:
             return [], "PARSE_ERROR", (
