@@ -54,6 +54,38 @@ _CROP_DEFAULT: dict[str, float] = {
     "upper_right_x": 1.0, "upper_right_y": 0.0,
 }
 
+_CLIP_DEFAULT: dict[str, Any] = {
+    "alpha": 1.0,
+    "flip": {"horizontal": False, "vertical": False},
+    "rotation": 0.0,
+    "scale": {"x": 1.0, "y": 1.0},
+    "transform": {"x": 0.0, "y": 0.0},
+}
+
+
+def _transform_is_default(transform: dict[str, Any]) -> bool:
+    """clip.transform 是否为全默认(SDK 重建稿恒带默认 dict,默认≠数据)。"""
+    try:
+        normalized = {
+            "alpha": float(transform.get("alpha", 1.0)),
+            "flip": {
+                "horizontal": bool((transform.get("flip") or {}).get("horizontal", False)),
+                "vertical": bool((transform.get("flip") or {}).get("vertical", False)),
+            },
+            "rotation": float(transform.get("rotation", 0.0)),
+            "scale": {
+                "x": float((transform.get("scale") or {}).get("x", 1.0)),
+                "y": float((transform.get("scale") or {}).get("y", 1.0)),
+            },
+            "transform": {
+                "x": float((transform.get("transform") or {}).get("x", 0.0)),
+                "y": float((transform.get("transform") or {}).get("y", 0.0)),
+            },
+        }
+    except (TypeError, ValueError):
+        return False
+    return normalized == {k: _CLIP_DEFAULT[k] for k in normalized}
+
 
 @dataclass
 class ExtractReport:
@@ -63,15 +95,47 @@ class ExtractReport:
     warnings: list[str] = field(default_factory=list)
 
 
-def _canonical_clip_index(canonical_plan: dict | None) -> dict[str, dict]:
-    """canonical plan clips 按 clip_id 索引(dict 形态;非法条目忽略)。"""
-    out: dict[str, dict] = {}
+def _canonical_clip_index(canonical_plan: dict | None) -> tuple[dict[str, dict], dict[tuple, dict]]:
+    """canonical plan clips 双索引:(clip_id → clip) 与 (路径+源范围 → clip)。
+
+    第二个索引用于 **SDK 重建稿**的身份恢复:SDK 的 video material
+    ``material_name`` 是文件名而非 canonical clip_id,重提取时按
+    ``(素材路径, 源入点ms, 源出点ms)`` 回配 canonical 身份(与 node_08 的
+    段→clip 源范围匹配同口径),保证重编译指纹稳定、AI 转场审计不丢。
+    """
+    by_id: dict[str, dict] = {}
+    by_range: dict[tuple, dict] = {}
     if not isinstance(canonical_plan, dict):
-        return out
+        return by_id, by_range
+    media_path_by_id: dict[str, str] = {}
+    for media in canonical_plan.get("source_media") or []:
+        if isinstance(media, dict) and media.get("media_id"):
+            uri = str(media.get("file_uri") or "")
+            try:
+                from storyline.mapper import file_uri_to_path
+
+                media_path_by_id[str(media["media_id"])] = file_uri_to_path(uri)
+            except (ValueError, ImportError):
+                media_path_by_id[str(media["media_id"])] = uri
     for clip in canonical_plan.get("clips") or []:
-        if isinstance(clip, dict) and clip.get("clip_id"):
-            out[str(clip["clip_id"])] = clip
-    return out
+        if not isinstance(clip, dict) or not clip.get("clip_id"):
+            continue
+        by_id[str(clip["clip_id"])] = clip
+        try:
+            key = (
+                _norm_path_key(media_path_by_id.get(str(clip.get("source_media_id") or ""), "")),
+                int(clip.get("source_in_ms") or 0),
+                int(clip.get("source_out_ms") or 0),
+            )
+            if key[0]:
+                by_range[key] = clip
+        except (TypeError, ValueError):
+            continue
+    return by_id, by_range
+
+
+def _norm_path_key(path: str) -> str:
+    return str(path or "").replace("\\", "/").lower()
 
 
 def _parse_ai_pair(raw: Any) -> dict[str, str] | None:
@@ -137,12 +201,44 @@ def _is_our_subtitle_material(material_id: Any) -> bool:
     return any(mid.startswith(prefix) for prefix in _OUR_SUBTITLE_PREFIXES)
 
 
+def _is_planned_subtitle(
+    segment: dict,
+    subtitle_ids: set[str],
+    subtitle_texts: set[str],
+    materials: dict,
+) -> bool:
+    """文本段是否属于 spec 已规划字幕(阶段7:SDK 重建稿 uuid material id 场景)。
+
+    按 text material 的 content 显示文本与 ``spec_subtitle_texts`` 比对;
+    ``subtitle_ids`` 命中(legacy ``text-zh-N`` 口径)同样认领。
+    """
+    material_id = str(segment.get("material_id") or "")
+    if material_id in subtitle_ids:
+        return True
+    if not subtitle_texts:
+        return False
+    text_material = next(
+        (
+            t for t in (materials.get("texts") or [])
+            if isinstance(t, dict) and str(t.get("id") or "") == material_id
+        ),
+        None,
+    )
+    if text_material is None:
+        return False
+    from jy_common.native_text import native_content_text
+
+    display = native_content_text(text_material.get("content"))
+    return bool(display) and str(display) in subtitle_texts
+
+
 def extract_timeline_snapshot(
     draft: dict,
     *,
     draft_dir: Path | str | None = None,
     canonical_plan: dict | None = None,
     spec_subtitle_ids: list[str] | None = None,
+    spec_subtitle_texts: list[str] | None = None,
 ) -> ExtractReport:
     """从当前(原生 schema)草稿提取规范化时间线。
 
@@ -152,8 +248,10 @@ def extract_timeline_snapshot(
         draft_dir: 草稿目录(用于读取原生转换 sidecar 恢复音频 role;可选)。
         canonical_plan: ``state["storyline_plan"]``(dict);提供时恢复 AI 转场
             clip 的 ``ai_transition_pair`` 溯源。
-        spec_subtitle_ids: spec 已规划的中文/英文字幕 material id;提供时这些
-            文本段不视为人工残留(编译时由字幕计划重建)。
+        spec_subtitle_ids: spec 已规划的中文/英文字幕 material id(legacy 草稿
+            的 ``text-zh-N`` id 口径);提供时这些文本段不视为人工残留。
+        spec_subtitle_texts: spec 已规划字幕的**显示文本**(SDK 重建稿的文本
+            material id 是 uuid,只能按 content 文本认领;阶段7)。
 
     Returns:
         :class:`ExtractReport`(section + warnings;blocked 特征在
@@ -202,7 +300,7 @@ def extract_timeline_snapshot(
         for m in (materials.get(bucket) or [])
         if isinstance(m, dict) and m.get("id")
     }
-    canonical_index = _canonical_clip_index(canonical_plan)
+    canonical_index, canonical_by_range = _canonical_clip_index(canonical_plan)
 
     if video_tracks:
         track = video_tracks[0] if len(video_tracks) == 1 else find_video_track(draft)
@@ -232,8 +330,10 @@ def extract_timeline_snapshot(
             if seg.get("keyframe_refs"):
                 blocked.append(_blocked("segment_keyframe_refs", segment_id=str(seg.get("id"))))
 
-            # clip transform(SDK ClipSettings 同名字段直传)
+            # clip transform(SDK ClipSettings 同名字段直传;全默认不记 —— SDK
+            # 重建稿恒带完整默认 dict,记下会造成重提取指纹漂移,阶段7)
             transform = seg.get("clip") if isinstance(seg.get("clip"), dict) else {}
+            transform_non_default = bool(transform) and not _transform_is_default(transform)
             # 素材 crop(非全幅默认才保留;与 SDK CropSettings 同形)
             crop = material.get("crop") if isinstance(material.get("crop"), dict) else None
             crop_non_default = bool(crop) and {
@@ -242,7 +342,7 @@ def extract_timeline_snapshot(
             } != _CROP_DEFAULT
 
             clip_settings: dict[str, Any] = {}
-            if transform:
+            if transform_non_default:
                 clip_settings["transform"] = transform
             if crop_non_default:
                 clip_settings["crop"] = crop
@@ -251,6 +351,17 @@ def extract_timeline_snapshot(
             role = "main"
             pair: dict[str, str] | None = None
             canonical_clip = canonical_index.get(clip_id)
+            if canonical_clip is None and canonical_by_range:
+                # SDK 重建稿:material_name 是文件名,按路径+源范围回配 canonical 身份
+                src_in_us = int(source.get("start") or 0)
+                src_dur_us = int(source.get("duration") or 0)
+                canonical_clip = canonical_by_range.get((
+                    _norm_path_key(str(material.get("path") or "")),
+                    src_in_us // 1000,
+                    (src_in_us + src_dur_us) // 1000,
+                ))
+                if canonical_clip is not None:
+                    clip_id = str(canonical_clip.get("clip_id") or clip_id)
             if canonical_clip is not None:
                 pair = _parse_ai_pair(canonical_clip.get("ai_transition_pair"))
                 if pair:
@@ -310,8 +421,16 @@ def extract_timeline_snapshot(
                         segment_id=str(seg.get("id")), ref=str(ref),
                     ))
             path = str(material.get("path") or "")
+            # 稳定音频身份(阶段7:SDK 重建稿段 id 换 uuid,指纹须不漂移)。
+            # 内容寻址 = 路径主干@目标区间;seg id 只作最后兜底。
+            path_stem = Path(path).stem or "audio"
+            audio_id = (
+                f"{path_stem}@{int(target.get('start') or 0)}-{int(target.get('duration') or 0)}"
+                if path
+                else str(seg.get("id") or material_id)
+            )
             audio_clips.append(AudioClipSpec(
-                audio_id=str(seg.get("id") or material_id),
+                audio_id=audio_id,
                 source_path=path,
                 target_start_us=int(target.get("start") or 0),
                 target_duration_us=int(target.get("duration") or 0),
@@ -327,8 +446,10 @@ def extract_timeline_snapshot(
 
     # 4. 文本 / 贴纸轨残留:不在 spec 计划内的文本段视为人工成果 → 阻断。
     #    我方字幕 material id 前缀(text-zh-N / text-en-N)是工作流链产物,
-    #    编译时会整轨重建,不算人工残留(阶段3)。
+    #    编译时会整轨重建,不算人工残留(阶段3);SDK 重建稿的文本 material id
+    #    是 uuid,按 content 显示文本与 spec 字幕比对认领(阶段7)。
     subtitle_ids = {str(x) for x in (spec_subtitle_ids or [])}
+    subtitle_texts = {str(x) for x in (spec_subtitle_texts or []) if x}
     for track in draft.get("tracks") or []:
         if not isinstance(track, dict):
             continue
@@ -339,7 +460,7 @@ def extract_timeline_snapshot(
         if ttype == "text":
             manual = [
                 s for s in segments
-                if str(s.get("material_id") or "") not in subtitle_ids
+                if not _is_planned_subtitle(s, subtitle_ids, subtitle_texts, materials)
                 and not _is_our_subtitle_material(s.get("material_id"))
             ]
             if manual:

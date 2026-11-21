@@ -141,6 +141,13 @@ def _build_clips(
             material = video_material_factory(clip.source_path, crop)
         else:
             material = _build_video_material(jy, clip.source_path, crop)
+        # 业务身份进 material_name(mapper 同款先例):SDK 默认写文件名,会让
+        # 下轮重提取的 clip_id 漂移、指纹失稳(阶段7)。替换前段引用同一素材的
+        # 场景:同路径多 clip 各有 material 实例,互不影响。
+        try:
+            material.material_name = clip.clip_id
+        except Exception:  # noqa: BLE001 - 替身/异常素材不影响编译主流程
+            pass
         clip_settings = _build_clip_settings(jy, transform)
         segment = jy.VideoSegment(
             material,

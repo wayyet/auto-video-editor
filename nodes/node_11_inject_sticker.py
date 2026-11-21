@@ -20,7 +20,10 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+import config
 
 from jy_common.native_fx import (
     OUR_STICKER_PREFIX,
@@ -266,6 +269,11 @@ def inject_sticker(state: WorkflowState) -> dict:
 
     has_en_dir = bool(state.get("draft_dir_en_branch"))
     sticker_summary: dict[str, dict] = {}
+    # 第10期阶段7:SDK 编译后端(pyjianyingdraft)时,node_11 是唯一编译写入
+    # 入口 —— legacy 注入先落盘 + spec 发射,再以当前草稿+全量 spec SDK 重建
+    # (失败降级保留 legacy 产物,§11.1)。
+    sdk_backend = str(getattr(config, "DRAFT_BUILDER_BACKEND", "legacy")) == "pyjianyingdraft"
+    canonical_plan = state.get("storyline_plan")
     for tag, draft_file in targets:
         draft = load_draft(draft_file)
         warnings, summary = _inject_sticker_into(draft, f"node_11_{tag}")
@@ -284,6 +292,36 @@ def inject_sticker(state: WorkflowState) -> dict:
                 ),
             )
         )
+        if sdk_backend:
+            compile_note = f"node_11_compile_{tag}"
+            try:
+                from jianying_sdk.pipeline import compile_and_publish_draft
+
+                record = compile_and_publish_draft(
+                    Path(draft_file).parent,
+                    Path(draft_file),
+                    job_id=str(state.get("session_id") or ""),
+                    canonical_plan=canonical_plan if isinstance(canonical_plan, dict) else None,
+                    audit_node=compile_note,
+                )
+            except Exception as exc:  # noqa: BLE001 - 管线异常兜底(§11.1 不覆盖有效草稿)
+                record = {"status": "failed", "note": repr(exc)}
+            status_log.append(f"{compile_note}:{record.get('status')}")
+            if record.get("status") == "failed":
+                error_log.append(
+                    f"[node_11] SDK 编译失败({tag}),已保留 legacy 草稿: {record.get('note')}"
+                )
+            elif record.get("status") == "failed_blocked_features":
+                error_log.append(
+                    f"[node_11] SDK 编译被人工高级特征阻断({tag}),"
+                    "保留 legacy 草稿: 见 spec.timeline.blocked_features"
+                )
+            elif record.get("status") == "skipped_no_spec":
+                status_log.append(f"{compile_note}_no_spec")
+            elif record.get("status") == "compiled":
+                status_log.append(
+                    f"{compile_note}_counts:{json.dumps(record.get('counts') or {}, ensure_ascii=False)}"
+                )
 
     if len(targets) == 1 and has_en_dir:
         error_log.append(missing_en_note(state))

@@ -75,24 +75,22 @@ def test_compile_minimal_spec_shape() -> None:
     assert round_trip == payload
 
 
-def test_compile_rejects_populated_spec_phase_boundary() -> None:
-    """阶段边界守卫:装饰/效果编译未交付前,非空 spec 不产出半成品草稿。
+def test_compile_populated_spec_all_sections() -> None:
+    """阶段3-6 交付后:全部构建段可一次性编译出完整草稿(阶段守卫已撤)。
 
-    字幕编译已在阶段3 交付;此处用尚未交付的 text_decorations 触发守卫。
+    阶段1 曾用本用例锁"非空 spec 不产出半成品"的阶段边界;阶段6 收尾后
+    转为全段编译冒烟。
     """
     from jianying_sdk.spec import SubtitleSpec, TextDecorationSpec
 
     spec = _minimal_spec()
-    spec.text_decorations.append(TextDecorationSpec(subtitle_id="sub-1"))
-    with pytest.raises(NotImplementedError):
-        compile_spec(spec)
-    # 字幕已可编译(阶段3),不再是守卫触发条件
-    spec2 = _minimal_spec()
-    spec2.subtitles.append(
+    spec.subtitles.append(
         SubtitleSpec(subtitle_id="sub-1", text="你好", start_us=0, end_us=1_000_000, language="zh")
     )
-    result = compile_spec(spec2)
+    spec.text_decorations.append(TextDecorationSpec(subtitle_id="sub-1"))
+    result = compile_spec(spec)
     assert result.summary["counts"]["subtitles"] == 1
+    assert result.payload["tracks"]  # 至少 video + text 轨
 
 
 def test_compile_fingerprint_skip_and_force() -> None:
