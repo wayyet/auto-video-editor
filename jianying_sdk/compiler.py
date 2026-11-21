@@ -208,12 +208,17 @@ def _build_audio_clips(
     return audio_clips
 
 
-def _build_subtitles(script, spec: DraftBuildSpec, refs: dict[str, Any]) -> list:
-    """字幕计划 → SDK TextSegment(样式经 style_mapper,折行文本为渲染口径)。"""
+def _build_subtitles(script, spec: DraftBuildSpec, refs: dict[str, Any]) -> list[tuple]:
+    """字幕计划 → SDK TextSegment(样式经 style_mapper,折行文本为渲染口径)。
+
+    返回 ``(SubtitleSpec, segment)`` 对;**暂不 add_segment** —— SDK 在
+    ``add_segment`` 时才把 animations/bubble/effect 注册进素材桶,装饰必须先挂
+    后注册(阶段4 顺序约束)。调用方在装饰后统一 add_segment。
+    """
     jy = sdk()
     from jianying_sdk.style_mapper import subtitle_text_segment_kwargs
 
-    built = []
+    built: list[tuple] = []
     for sub in sorted(spec.subtitles, key=lambda s: (s.start_us, s.subtitle_id)):
         duration_us = int(sub.end_us - sub.start_us)
         if duration_us <= 0:
@@ -230,16 +235,91 @@ def _build_subtitles(script, spec: DraftBuildSpec, refs: dict[str, Any]) -> list
             border=jy.TextBorder(**border_kwargs) if border_kwargs else None,
             clip_settings=jy.ClipSettings(**clip_kwargs),
         )
-        script.add_segment(segment, refs["text"])
-        built.append(sub)
+        built.append((sub, segment))
     return built
 
 
+def _apply_text_decorations(
+    script,
+    spec: DraftBuildSpec,
+    refs: dict[str, Any],
+    built_subs: list[tuple],
+    degradations: list[dict[str, Any]],
+) -> int:
+    """文本装饰(动画/花字/气泡)→ 续加到已建 TextSegment(阶段4,§6.2)。
+
+    - 动画顺序遵守 SDK 约束:先入场/出场,后循环(§4.4);
+    - 花字走 ``TextSegment.add_effect(effect_id)``:仅当 ``effect_id ==
+      resource_id``(SDK 双 ID 合一约束)且验证状态达 cache_verified;
+    - 不支持的装饰资源 **降级不阻断**(记录 degradations;§6.2 非破坏性降级,
+      不因单个资源失败关闭全部装饰)。
+    """
+    jy = sdk()
+    from jianying_sdk import resource_registry
+
+    seg_by_id = {sub.subtitle_id: seg for sub, seg in built_subs}
+    applied = 0
+    for deco in spec.text_decorations:
+        segment = seg_by_id.get(deco.subtitle_id)
+        if segment is None:
+            degradations.append({
+                "kind": "text_decoration",
+                "subtitle_id": deco.subtitle_id,
+                "reason": "subtitle_not_built(零时长或未规划)",
+            })
+            continue
+        # 动画:in/out 先于 loop(SDK SegmentAnimations 约束)
+        for anim in sorted(deco.animations, key=lambda a: (0 if a.kind in ("in", "out") else 1, a.effect_id)):
+            resolved = resource_registry.resolve_text_animation(anim.effect_id, require_supported=True)
+            if resolved is None:
+                degradations.append({
+                    "kind": "text_animation",
+                    "subtitle_id": deco.subtitle_id,
+                    "effect_id": anim.effect_id,
+                    "reason": "unsupported_or_unverified",
+                })
+                continue
+            segment.add_animation(
+                resolved.member,
+                int(anim.duration_us) if anim.duration_us else None,
+            )
+            applied += 1
+        # 花字:SDK 双 ID 合一约束(§4.2)+ 验证门禁(§6.2)
+        flower = deco.text_effect
+        if flower is not None:
+            if (
+                flower.effect_id == flower.resource_id
+                and flower.verification in ("cache_verified", "client_preview_verified")
+                and resource_registry.compat_status("flower", flower.effect_id) == "supported"
+            ):
+                segment.add_effect(flower.effect_id)
+                applied += 1
+            else:
+                degradations.append({
+                    "kind": "text_flower",
+                    "subtitle_id": deco.subtitle_id,
+                    "effect_id": flower.effect_id,
+                    "reason": "needs_sdk_extension_or_unverified",
+                })
+        # 气泡:effect_id 与 resource_id 分开传(§4.3)
+        bubble = deco.text_bubble
+        if bubble is not None:
+            if bubble.verification in ("cache_verified", "client_preview_verified"):
+                segment.add_bubble(bubble.effect_id, bubble.resource_id)
+                applied += 1
+            else:
+                degradations.append({
+                    "kind": "text_bubble",
+                    "subtitle_id": deco.subtitle_id,
+                    "effect_id": bubble.effect_id,
+                    "reason": "unverified",
+                })
+    return applied
+
+
 def _assert_no_unimplemented_sections(spec: DraftBuildSpec) -> None:
-    """阶段边界守卫:装饰/效果/贴纸/转场编译未交付前,非空 spec 不产出半成品。"""
+    """阶段边界守卫:效果/贴纸/转场编译未交付前,非空 spec 不产出半成品。"""
     pending = []
-    if spec.text_decorations:
-        pending.append("text_decorations(阶段4)")
     if spec.transitions:
         pending.append("transitions(阶段5)")
     if spec.video_effects:
@@ -288,7 +368,14 @@ def compile_spec(
     audio_clips = _build_audio_clips(
         script, spec, refs, audio_material_factory=audio_material_factory
     )
-    subtitles = _build_subtitles(script, spec, refs)
+    built_subs = _build_subtitles(script, spec, refs)
+    degradations: list[dict[str, Any]] = []
+    decorations_applied = _apply_text_decorations(
+        script, spec, refs, built_subs, degradations
+    )
+    # 装饰挂完再统一落轨(SDK 在 add_segment 时注册动画/花字/气泡素材)
+    for _sub, _seg in built_subs:
+        script.add_segment(_seg, refs["text"])
 
     payload = json.loads(script.dumps())
     validate_sdk_payload(payload)
@@ -297,11 +384,12 @@ def compile_spec(
     counts = {
         "video_clips": len(clips),
         "audio_clips": len(audio_clips),
-        "subtitles": len(subtitles),
+        "subtitles": len(built_subs),
+        "text_decorations_applied": decorations_applied,
         "tracks": {
             TRACK_VIDEO_MAIN: len(clips),
             TRACK_AUDIO: len(audio_clips),
-            TRACK_SUBTITLES: len(subtitles),
+            TRACK_SUBTITLES: len(built_subs),
         },
         "materials_total": sum(
             len(v) for v in payload.get("materials", {}).values() if isinstance(v, list)
@@ -312,6 +400,7 @@ def compile_spec(
         "fingerprint": fingerprint,
         "compiled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "counts": counts,
+        "degradations": degradations,
     }
     return CompileResult(
         payload=payload,

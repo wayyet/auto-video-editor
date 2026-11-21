@@ -202,9 +202,12 @@ def _apply_text_animations(
         warnings.append(f"[{tag}] 无可用入场动画资源,动画降级不写入")
     else:
         # 选中信息只进摘要与 status_log 标签(text_fx_summary 已在死键治理中移除)
+        # 2026-11-21 第10期阶段4:补 resource_id/duration_s(spec 发射消费)
         summary["selected"] = {
             "name": str(anim_meta.get("name") or ""),
             "effect_id": str(anim_meta.get("effect_id") or ""),
+            "resource_id": str(anim_meta.get("resource_id") or anim_meta.get("effect_id") or ""),
+            "duration_s": float(anim_meta.get("duration_s") or 0.0),
         }
 
     materials = draft.setdefault("materials", {})
@@ -312,8 +315,81 @@ def apply_text_fx(
         )
     log.extend(warnings)
     log.extend(flower_warnings)
+    # 第10期阶段4:文本装饰计划同步入 spec(SDK 编译数据源;legacy 行为不变)。
+    # 非破坏性降级语义与 legacy 一致:本轮未选中任何资源 → 不动 spec 既有装饰段
+    # (审查 P1-01 同款,避免降级清空上一轮计划)。
+    _emit_text_decoration_spec(draft, draft_path.parent, summary, flower_summary, log, node_tag)
     log.extend(apply_and_write(draft_path, draft, node_tag, done_tag=done_tag))
     return log, {**summary, "text_flower": flower_summary}
+
+
+def _emit_text_decoration_spec(
+    draft: dict,
+    draft_dir: Path,
+    animation_summary: dict,
+    flower_summary: dict,
+    log: list[str],
+    node_tag: str,
+) -> None:
+    """文本装饰计划 → DraftBuildSpec.text_decorations(第10期阶段4)。
+
+    数据源与 legacy 写入完全同源(同一份选取审计):动画取 ``animation_summary
+    ["selected"]``,花字取 ``flower_summary["selected"]``;逐字幕展开到
+    ``text-zh-``/``text-en-`` 我方字幕。失败降级不阻断。
+    """
+    try:
+        from jianying_sdk.spec import ResourceRef, TextAnimationEntry, TextDecorationSpec
+        from nodes._draft_build_spec import replace_spec_sections
+
+        anim_meta = animation_summary.get("selected") or {}
+        flower_meta = flower_summary.get("selected") or {}
+        has_animation = bool(anim_meta.get("effect_id"))
+        flower_written = (
+            str(flower_summary.get("status") or "") == "written"
+            and bool(flower_meta.get("effect_id"))
+        )
+        if not has_animation and not flower_written:
+            return  # 本轮零选取:非破坏,spec 既有装饰段保持原样
+
+        animations = None
+        if has_animation:
+            duration_s = float(anim_meta.get("duration_s") or 0.0)
+            animations = [
+                TextAnimationEntry(
+                    kind="in",
+                    effect_id=str(anim_meta.get("effect_id") or ""),
+                    resource_id=str(anim_meta.get("resource_id") or anim_meta.get("effect_id") or ""),
+                    name=str(anim_meta.get("name") or ""),
+                    duration_us=(int(round(duration_s * 1_000_000)) or None),
+                )
+            ]
+        text_effect = None
+        if flower_written:
+            text_effect = ResourceRef(
+                effect_id=str(flower_meta.get("effect_id") or ""),
+                resource_id=str(flower_meta.get("resource_id") or flower_meta.get("effect_id") or ""),
+                name=str(flower_meta.get("name") or ""),
+                verification="cache_verified",
+            )
+
+        specs: list[TextDecorationSpec] = []
+        for text_obj in (draft.get("materials") or {}).get("texts") or []:
+            if not isinstance(text_obj, dict) or not _is_our_text(text_obj):
+                continue
+            specs.append(
+                TextDecorationSpec(
+                    subtitle_id=str(text_obj.get("id") or ""),
+                    text_effect=text_effect,
+                    animations=list(animations or []),
+                )
+            )
+        replace_spec_sections(draft_dir, text_decorations=specs)
+        log.append(
+            f"[{node_tag}] 文本装饰计划已入 spec:{len(specs)} 条字幕"
+            f"(动画={1 if has_animation else 0},花字={'有' if flower_written else '无'})"
+        )
+    except Exception as exc:  # noqa: BLE001 — spec 是增强路径,绝不阻断 node_10
+        log.append(f"[{node_tag}] 文本装饰 spec 写入失败(不阻断): {exc!r}")
 
 
 def inject_text_fx(state: WorkflowState, config: Optional[RunnableConfig] = None) -> dict:

@@ -239,6 +239,8 @@ def apply_text_flower_effects(
     summary["selected"] = {
         "name": str(flower_meta.get("name") or ""),
         "effect_id": str(flower_meta.get("effect_id") or ""),
+        # 2026-11-21 第10期阶段4:补 resource_id(spec 发射消费;花字库条目双 ID)
+        "resource_id": str(flower_meta.get("resource_id") or flower_meta.get("effect_id") or ""),
     }
     materials = draft.setdefault("materials", {})
     effects_bucket = materials.setdefault("effects", [])
