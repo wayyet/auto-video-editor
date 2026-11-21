@@ -779,3 +779,21 @@ $env:STORYLINE_ENABLE_AI_TRANSITION = "0"
 - 已知限制:事件丢失(存储降级)时该段历史不可回放;Web 进程不执行
   `Command(resume=...)`(langgraph 版本与生产不同,恢复走 agent_gate/人工脚本)。
 - `E:\Documents\kuaishou\.claude\skills\jianying-speed-fit-35s` — Week 3 节点 7 帧对齐公式金标准
+---
+
+## 附:草稿构建后端灰度开关(第10期 pyJianYingDraft 效果模块迁移,2026-11-21)
+
+`DRAFT_BUILDER_BACKEND = legacy | pyjianyingdraft`(config.py;默认 `legacy`):
+
+- `legacy`(默认):各效果节点(字幕/转场/特效/文本装饰/贴纸)直接改写
+  `draft_content.json`,行为与迁移前完全一致。
+- `pyjianyingdraft`:效果节点只写各自的 `DraftBuildSpec` 计划
+  (`<草稿目录>/.autovideo_draft_build_spec.json`,zh/en 各一份),node_11 作为
+  唯一编译入口用 vendored pyJianYingDraft 0.3.1(`vendor/pyJianYingDraft/sdk`,
+  锁定 commit `1e22847`,来源与补丁台账见该目录 `PROVENANCE.md`)一次性重建草稿,
+  经 `safe_write_draft` 原子双写发布。编译失败/检出人工高级特征
+  (`blocked_features`)/发布异常时**不覆盖当前有效草稿**,降级保留 legacy 产物。
+- 相关资源:阶段0 资源交叉表 `templates/sdk_resource_compatibility.json`
+  (转场「快门」「水墨」SDK 无枚举,自动降级);文字气泡空库
+  `templates/text_bubble_resource_library.json`(待真机回填)。
+- 执行记录与操作员验收清单:`docs/第10期开发/pyJianYingDraft效果模块迁移_执行记录_20261121.md`。

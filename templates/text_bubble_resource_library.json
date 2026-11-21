@@ -1,0 +1,15 @@
+{
+  "_comment": "文字气泡资源库(第10期效果模块迁移 设计文档 §4.3/§6.2)。SDK TextSegment.add_bubble(effect_id, resource_id) 双 ID 分传。资源 ID 必须来自真实剪映样本(操作员在剪映 5.9.0.11632 建 UI 样本后按 _reverse_engineering_steps 回填);禁止硬编码猜测 ID。条目验证状态四态:structure_verified / cache_verified / license_verified / client_preview_verified。",
+  "_reverse_engineering_pending": true,
+  "_reverse_engineering_steps": [
+    "1. 备份一份当前草稿的 draft_content.json",
+    "2. 在剪映 UI 中给任一文本挂一个目标气泡效果,保存并关闭",
+    "3. diff 找出新增的气泡素材条目(气泡在剪映原生工程 materials 中按 text_shape/气泡分类落桶)",
+    "4. 提取 effect_id 与 resource_id(两者不同,须分别记录)",
+    "5. 回填到 bubbles 列表并填写 verification 四态 + 剪映版本 + 验证草稿 id"
+  ],
+  "_source": "待操作员真机样本回填(与 sticker_template.json 同流程)",
+  "_generated_at": "2026-11-21T00:00:00+00:00",
+  "_counts": {"bubbles_total": 0, "bubbles_verified": 0},
+  "bubbles": []
+}
