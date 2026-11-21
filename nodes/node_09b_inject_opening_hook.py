@@ -27,6 +27,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import config
@@ -88,8 +89,24 @@ def _sorted_video_segments(draft: dict) -> list[dict]:
     return segments
 
 
-def _first_subtitle_text(draft: dict) -> str | None:
-    """中文草稿里第 1 条我方字幕(text-zh- 前缀)的显示文本;没有则 None。"""
+def _first_subtitle_text(draft: dict, draft_dir: Path | None = None) -> str | None:
+    """中文草稿里第 1 条字幕的显示文本;没有则 None。
+
+    2026-11-22 SDK 链转正:编译稿的文本 material id 是 uuid,``text-zh-`` 前缀
+    扫描失效 —— 字幕计划权威在 spec sidecar(subtitle_id 保留 text-zh- 口径),
+    spec 有中文字幕时优先读它;旧任务草稿(无 spec/空字幕)走 draft 前缀扫描兜底。
+    """
+    if draft_dir is not None:
+        try:
+            from nodes._draft_build_spec import load_build_spec
+
+            spec = load_build_spec(draft_dir)
+        except Exception:  # noqa: BLE001 — spec 读取异常回落草稿扫描
+            spec = None
+        subs = [s for s in (spec.subtitles or []) if s.language == "zh"] if spec else []
+        if subs:
+            first = min(subs, key=lambda s: s.start_us)
+            return first.wrap_content or first.text
     texts = [
         t
         for t in (draft.get("materials", {}).get("texts") or [])
@@ -307,7 +324,7 @@ def inject_opening_hook(state: WorkflowState) -> dict:
         draft = load_draft(draft_file)
         title: str | None = None
         if tag == ZH:
-            title = pick_hook_title(state, _first_subtitle_text(draft))
+            title = pick_hook_title(state, _first_subtitle_text(draft, draft_file.parent))
             if title is None:
                 status_log.append("node_09b_inject_opening_hook_noop:no_title")
         warnings, _summary = _inject_hook_into(draft, title, f"node_09b_{tag}")
