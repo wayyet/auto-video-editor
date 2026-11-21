@@ -27,7 +27,13 @@ from typing import Any, Callable
 from jianying_sdk._sdk_loader import sdk
 from jianying_sdk.fingerprint import compute_build_fingerprint
 from jianying_sdk.publisher import validate_sdk_payload
-from jianying_sdk.spec import AudioClipSpec, DraftBuildSpec, TimelineClipSpec
+from jianying_sdk.spec import (
+    TRACK_VOICEOVER_EN,
+    TRACK_VOICEOVER_ZH,
+    AudioClipSpec,
+    DraftBuildSpec,
+    TimelineClipSpec,
+)
 
 #: 编译器版本(写入 spec.compile.compiler_version 与摘要;契约变更须 bump)
 COMPILER_VERSION = "pyjy-adapter-v1"
@@ -74,18 +80,35 @@ def new_script(spec: DraftBuildSpec):
     )
 
 
+def audio_track_name(role: str) -> str:
+    """AudioClipSpec.role → 落轨名(配音分语言独立成轨,其余进 audio_main)。"""
+    if role == "voiceover_zh":
+        return TRACK_VOICEOVER_ZH
+    if role == "voiceover_en":
+        return TRACK_VOICEOVER_EN
+    return TRACK_AUDIO
+
+
 def append_base_tracks(script, spec: DraftBuildSpec) -> dict[str, Any]:
     """按需创建受控轨道(渲染层级 = 追加顺序:视频在底,字幕/贴纸在上)。
 
     空轨道不创建(剪映对空轨行为未验证,SDK 正常用法也是"加段时建轨");
-    字幕/贴纸轨在阶段3/6 有计划数据时才出现。
+    字幕/贴纸轨在阶段3/6 有计划数据时才出现。音频按 role 分轨(2026-11-22:
+    配音轨名语义在编译稿存活,node_12 关卡②/镜像、node_13 音量角色、QA 语言
+    隔离均按轨名识别配音),只创建实际用到的音轨。
     """
     jy = sdk()
     refs: dict[str, Any] = {
         "video": script.append_track(jy.TrackSpec(jy.TrackType.video, name=TRACK_VIDEO_MAIN)),
     }
     if spec.timeline.audio_clips:
-        refs["audio"] = script.append_track(jy.TrackSpec(jy.TrackType.audio, name=TRACK_AUDIO))
+        refs["audio_tracks"] = {}
+        for clip in spec.timeline.audio_clips:
+            name = audio_track_name(clip.role)
+            if name not in refs["audio_tracks"]:
+                refs["audio_tracks"][name] = script.append_track(
+                    jy.TrackSpec(jy.TrackType.audio, name=name)
+                )
     if spec.subtitles:
         refs["text"] = script.append_track(jy.TrackSpec(jy.TrackType.text, name=TRACK_SUBTITLES))
     if spec.stickers:
@@ -197,7 +220,7 @@ def _build_audio_clips(
     *,
     audio_material_factory: AudioMaterialFactory | None = None,
 ) -> list[AudioClipSpec]:
-    """音频片段(BGM/配音/人工)→ SDK AudioSegment(单条音轨,含淡入淡出)。"""
+    """音频片段(BGM/配音/人工)→ SDK AudioSegment(按 role 分轨,含淡入淡出)。"""
     jy = sdk()
     audio_clips = sorted(spec.timeline.audio_clips, key=lambda a: (a.target_start_us, a.audio_id))
     for audio in audio_clips:
@@ -217,7 +240,7 @@ def _build_audio_clips(
         )
         if audio.fade_in_us > 0 or audio.fade_out_us > 0:
             segment.add_fade(int(audio.fade_in_us), int(audio.fade_out_us))
-        script.add_segment(segment, refs["audio"])
+        script.add_segment(segment, refs["audio_tracks"][audio_track_name(audio.role)])
     return audio_clips
 
 
@@ -558,6 +581,11 @@ def compile_spec(
     validate_sdk_payload(payload)
 
     duration_us = int(script.duration or 0)
+    # 音频按 role 分轨,counts.tracks 逐轨名计数(audio_main 只含 bgm/manual)
+    audio_track_counts: dict[str, int] = {}
+    for clip in audio_clips:
+        name = audio_track_name(clip.role)
+        audio_track_counts[name] = audio_track_counts.get(name, 0) + 1
     counts = {
         "video_clips": len(built_clips),
         "audio_clips": len(audio_clips),
@@ -569,7 +597,7 @@ def compile_spec(
         "stickers_applied": stickers_applied,
         "tracks": {
             TRACK_VIDEO_MAIN: len(built_clips),
-            TRACK_AUDIO: len(audio_clips),
+            **audio_track_counts,
             TRACK_SUBTITLES: len(built_subs),
         },
         "materials_total": sum(

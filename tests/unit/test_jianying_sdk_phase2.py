@@ -262,6 +262,34 @@ def test_extract_audio_clips_with_fade_and_sidecar_role(tmp_path: Path) -> None:
     assert audio[0].source_path == "C:/media/bgm.mp3"
 
 
+def test_extract_audio_role_from_voiceover_track_names() -> None:
+    """2026-11-22 补:配音 role 按**源轨名**判定(编译稿按 role 分轨落回同名轨)。
+
+    轨名精确匹配优先于 node_05 sidecar 回退;未命名/bgm 轨仍走原解析路径。
+    node_12 关卡②/镜像、node_13 音量角色、QA 语言隔离的轨名语义依赖此判定。
+    """
+    draft, _ = _native_draft()
+    draft["tracks"].extend([
+        {
+            "type": "audio", "id": "track-vo-zh", "name": "Voiceover_zh",
+            "segments": [_segment("vo-zh-1", "vo-zh-1", (0, 3_000_000), (0, 3_000_000))],
+        },
+        {
+            "type": "audio", "id": "track-vo-en", "name": "en_voiceover",
+            "segments": [_segment("vo-en-1", "vo-en-1", (0, 3_000_000), (0, 3_000_000))],
+        },
+    ])
+    draft["materials"]["audios"].extend([
+        {"id": "vo-zh-1", "path": "C:/media/vo_zh.mp3", "name": "vo_zh.mp3"},
+        {"id": "vo-en-1", "path": "C:/media/vo_en.mp3", "name": "vo_en.mp3"},
+    ])
+    report = extract_timeline_snapshot(draft)
+    roles = {c.audio_id.split("@")[0]: c.role for c in report.section.audio_clips}
+    assert roles["vo_zh"] == "voiceover_zh"
+    assert roles["vo_en"] == "voiceover_en"
+    assert roles["bgm"] == "manual"
+
+
 @pytest.mark.parametrize(
     "mutate,kind",
     [
@@ -376,6 +404,37 @@ def test_compile_clips_and_audio_shape() -> None:
     audio_segs = tracks[TRACK_AUDIO]["segments"]
     assert len(audio_segs) == 1
     assert audio_segs[0]["volume"] == 0.4
+
+
+def test_compile_audio_roles_split_tracks() -> None:
+    """2026-11-22 补:配音按 role 分轨落回原轨名,bgm/manual 留 audio_main。
+
+    编译稿若把配音压进单条 audio_main,node_12 关卡②会把配音当 BGM、
+    node_13 会按 BGM 压配音音量、QA 语言隔离按轨名检测失效——本用例锁定
+    "role → 轨名" 分轨行为。
+    """
+    draft, _ = _native_draft()
+    draft["tracks"].extend([
+        {
+            "type": "audio", "id": "track-vo-zh", "name": "Voiceover_zh",
+            "segments": [_segment("vo-zh-1", "vo-zh-1", (0, 2_000_000), (0, 2_000_000))],
+        },
+        {
+            "type": "audio", "id": "track-vo-en", "name": "en_voiceover",
+            "segments": [_segment("vo-en-1", "vo-en-1", (0, 2_000_000), (0, 2_000_000))],
+        },
+    ])
+    draft["materials"]["audios"].extend([
+        {"id": "vo-zh-1", "path": "C:/media/vo_zh.mp3", "name": "vo_zh.mp3"},
+        {"id": "vo-en-1", "path": "C:/media/vo_en.mp3", "name": "vo_en.mp3"},
+    ])
+    spec = _spec_from_extract(draft)
+    result = compile_spec(spec, video_material_factory=_video_factory, audio_material_factory=_audio_factory)
+    tracks = {t["name"]: t for t in result.payload["tracks"]}
+    assert set(tracks) == {TRACK_VIDEO_MAIN, TRACK_AUDIO, "Voiceover_zh", "en_voiceover"}
+    assert len(tracks["Voiceover_zh"]["segments"]) == 1
+    assert len(tracks["en_voiceover"]["segments"]) == 1
+    assert len(tracks[TRACK_AUDIO]["segments"]) == 1
 
 
 def test_rebuild_preserves_invariants() -> None:

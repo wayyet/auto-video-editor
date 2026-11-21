@@ -605,6 +605,77 @@ def test_build_qa_categories_compile_failure_keeps_legacy_judgement(tmp_path) ->
     assert categories["subtitles_zh"]["status"] == CAT_FAILED
 
 
+def test_build_qa_categories_text_animation_sdk_compiled_counts(tmp_path) -> None:
+    """编译稿动画口径(2026-11-22 补):按 spec 装饰计划计数。
+
+    编译稿动画素材落 materials.animations 且文本 id 是 uuid,legacy 前缀口径
+    恒失效;零选取(装饰无动画条目)是 node_10 非破坏设计路径,不造闸门失败。
+    """
+    draft_dir = _sdk_compiled_draft_dir(tmp_path)
+    from jianying_sdk.spec import TextAnimationEntry, TextDecorationSpec
+    from nodes._draft_build_spec import replace_spec_sections
+
+    replace_spec_sections(draft_dir, text_decorations=[
+        TextDecorationSpec(
+            subtitle_id="text-zh-1",
+            animations=[TextAnimationEntry(
+                kind="in", effect_id="fx-1", resource_id="19digits0123456789",
+                name="弹跳", duration_us=500_000,
+            )],
+        ),
+        TextDecorationSpec(subtitle_id="text-zh-2"),
+    ])
+    compiled = {
+        "materials": {"texts": [{"id": "0F1E-UUID-A"}, {"id": "0F1E-UUID-B"}]},
+        "tracks": [],
+    }
+    categories, new_issues, gate_failed = build_qa_categories(
+        _cat_state(
+            voiceover_summary={"provider": "jianying", "written": 2},
+            draft_path=str(draft_dir / "draft_content.json"),
+        ),
+        zh_draft=compiled,
+        en_draft=None,
+        deep_issues=[],
+    )
+    cat = categories["text_animation"]
+    assert cat["status"] == CAT_PASSED, cat
+    assert cat["counts"]["planned_animations"] == 1
+    assert cat["counts"]["planned_subtitles"] == 2
+    assert cat["counts"]["source"] == "sdk_compile"
+    assert not gate_failed
+
+
+def test_build_qa_categories_text_animation_sdk_degraded(tmp_path) -> None:
+    """编译降级(kind=text_animation)→ 逐条 issue,类别 failed(required)。"""
+    draft_dir = _sdk_compiled_draft_dir(tmp_path)
+    from nodes._draft_build_spec import load_build_spec, write_build_spec
+
+    spec = load_build_spec(draft_dir)
+    spec.compile.last_result = {
+        "status": "compiled",
+        "counts": {"subtitles": 2},
+        "degradations": [{"kind": "text_animation", "reason": "unsupported: 弹跳"}],
+    }
+    write_build_spec(draft_dir, spec)
+    compiled = {
+        "materials": {"texts": [{"id": "0F1E-UUID-A"}, {"id": "0F1E-UUID-B"}]},
+        "tracks": [],
+    }
+    categories, new_issues, gate_failed = build_qa_categories(
+        _cat_state(
+            voiceover_summary={"provider": "jianying", "written": 2},
+            draft_path=str(draft_dir / "draft_content.json"),
+        ),
+        zh_draft=compiled,
+        en_draft=None,
+        deep_issues=[],
+    )
+    assert categories["text_animation"]["status"] == CAT_FAILED
+    assert any(i["category"] == "text_animation" for i in new_issues)
+    assert gate_failed
+
+
 def test_tail_chain_sticker_track_binding_accepted() -> None:
     """SDK 编译稿贴纸落独立 sticker 轨 → 不再误报「贴纸未挂到任何视频段」。"""
     from nodes.node_join_before_delivery import _tail_chain_structured

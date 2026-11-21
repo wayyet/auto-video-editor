@@ -903,16 +903,12 @@ def _our_text_ids(draft: dict | None, prefix: str) -> list[str]:
     ]
 
 
-def _sdk_compiled_subtitle_count(draft_dir: str | None) -> int | None:
-    """SDK 编译稿(2026-11-22 链转正)的字幕计数。
-
-    SDK 编译稿的文本 material id 是 uuid,``text-zh-`` 前缀计数恒 0;此处改读
-    草稿目录 spec sidecar 的编译回执 —— 只有 SDK 真正编译过(``compiled`` /
-    ``skipped_fingerprint``)才认 spec.subtitles 数,防止 legacy 稿被误放行。
+def _load_compiled_spec(draft_dir: str | None):
+    """读草稿目录 spec sidecar;仅当编译回执为成功态(compiled/skipped_fingerprint)返回 spec。
 
     Returns:
-        spec 已规划字幕数;``None`` = 非编译稿/无 spec/读取失败(调用方走
-        legacy 前缀口径)。
+        DraftBuildSpec;``None`` = 无目录/无 spec/读取失败/编译未成功(调用方
+        回退 legacy 前缀口径,防止未编译稿被误放行)。
     """
     if not draft_dir:
         return None
@@ -927,7 +923,50 @@ def _sdk_compiled_subtitle_count(draft_dir: str | None) -> int | None:
     status = str((spec.compile.last_result or {}).get("status") or "")
     if status not in ("compiled", "skipped_fingerprint"):
         return None
+    return spec
+
+
+def _sdk_compiled_subtitle_count(draft_dir: str | None) -> int | None:
+    """SDK 编译稿(2026-11-22 链转正)的字幕计数。
+
+    SDK 编译稿的文本 material id 是 uuid,``text-zh-`` 前缀计数恒 0;此处改读
+    草稿目录 spec sidecar 的编译回执 —— 只有 SDK 真正编译过(``compiled`` /
+    ``skipped_fingerprint``)才认 spec.subtitles 数,防止 legacy 稿被误放行。
+
+    Returns:
+        spec 已规划字幕数;``None`` = 非编译稿/无 spec/读取失败(调用方走
+        legacy 前缀口径)。
+    """
+    spec = _load_compiled_spec(draft_dir)
+    if spec is None:
+        return None
     return len(spec.subtitles or [])
+
+
+def _text_animation_state_from_spec(
+    draft_dir: str | None,
+) -> tuple[int, int, list[dict[str, Any]]] | None:
+    """编译稿字幕动画口径(2026-11-22 补):读 spec sidecar 装饰计划与编译降级。
+
+    编译稿文本 material id 是 uuid、动画素材落 ``materials.animations``(vendor
+    script_material),legacy 的"前缀 id + material_animations 绑定"双口径均失效
+    —— 改以 spec 为准:动画条目数 / 字幕计划数 / ``kind=text_animation`` 降级项。
+
+    Returns:
+        (planned_animations, planned_subtitles, degraded_entries);
+        ``None`` = 非编译稿/无 spec/读取失败(调用方回退 legacy 口径)。
+    """
+    spec = _load_compiled_spec(draft_dir)
+    if spec is None:
+        return None
+    decorations = list(spec.text_decorations or [])
+    planned_anim = sum(len(d.animations or []) for d in decorations)
+    degraded = [
+        d
+        for d in ((spec.compile.last_result or {}).get("degradations") or [])
+        if isinstance(d, dict) and str(d.get("kind")) == "text_animation"
+    ]
+    return planned_anim, len(spec.subtitles or []), degraded
 
 
 def _bgm_segment_count(draft: dict | None) -> int:
@@ -1134,10 +1173,36 @@ def build_qa_categories(
             "单镜头无剪辑边界" if video_segments <= 1 else "未要求转场"
         )
 
-    # 8) text_animation:无我方字幕(zh+en)时 n/a;缺绑定已由尾链 issue 报
-    if not zh_texts and not en_texts and _status_of("text_animation") == CAT_PASSED:
-        categories["text_animation"]["status"] = CAT_NOT_APPLICABLE
-        categories["text_animation"]["note"] = "无我方字幕"
+    # 8) text_animation:2026-11-22 SDK 链转正后编译稿文本 material id 是 uuid、
+    #    动画素材落 materials.animations(vendor script_material),legacy 的
+    #    "前缀 id + material_animations 绑定"双口径均失效(尾链检查恒跳过)。
+    #    编译回执 ok 时改读 spec sidecar:kind=text_animation 降级项逐条 issue
+    #    (fail-closed 通道);零选取(node_10 非破坏设计路径)不造新闸门失败,
+    #    仅留 counts 供诊断;spec 无字幕计划 = n/a。非编译稿维持前缀 n/a 口径。
+    if not zh_texts and not en_texts:
+        ta_state = _text_animation_state_from_spec(zh_draft_dir)
+        if ta_state is not None:
+            planned_anim, planned_subs, ta_degraded = ta_state
+            if planned_subs == 0:
+                if _status_of("text_animation") == CAT_PASSED:
+                    categories["text_animation"]["status"] = CAT_NOT_APPLICABLE
+                    categories["text_animation"]["note"] = "spec 无字幕计划"
+            else:
+                categories["text_animation"]["counts"] = {
+                    "planned_animations": planned_anim,
+                    "planned_subtitles": planned_subs,
+                    "degraded": len(ta_degraded),
+                    "source": "sdk_compile",
+                }
+                for entry in ta_degraded:
+                    _append_issue(
+                        "text_animation",
+                        "字幕动画",
+                        f"SDK 编译动画降级: {entry.get('reason') or entry}",
+                    )
+        elif _status_of("text_animation") == CAT_PASSED:
+            categories["text_animation"]["status"] = CAT_NOT_APPLICABLE
+            categories["text_animation"]["note"] = "无我方字幕"
 
     # 9) stickers:required 且占位降级 = degraded(fail-closed 未落草稿);
     #    required 且无任何贴纸 = failed;非 required 无贴纸 = n/a

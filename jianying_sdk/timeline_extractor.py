@@ -23,7 +23,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from jianying_sdk.spec import AudioClipSpec, CanvasSpec, TimelineClipSpec, TimelineSection
+from jianying_sdk.spec import (
+    TRACK_VOICEOVER_EN,
+    TRACK_VOICEOVER_ZH,
+    AudioClipSpec,
+    CanvasSpec,
+    TimelineClipSpec,
+    TimelineSection,
+)
 from nodes._draft_io import find_video_track
 
 #: 人工高级素材桶(非空 → blocked;SDK 无法按语义重建,§7.2)
@@ -405,6 +412,16 @@ def extract_timeline_snapshot(
     for track in draft.get("tracks") or []:
         if not isinstance(track, dict) or track.get("type") != "audio":
             continue
+        # 2026-11-22 链转正补丁:配音按**源轨名**判定 role(编译稿按 role 分轨
+        # 落回同名配音轨,node_12/13/QA 的轨名语义依赖它)。轨名精确匹配优先,
+        # node_05 原生转换 sidecar 的 id_map 仅作回退(bgm/manual 等原语义不变)。
+        track_name = str(track.get("name") or "")
+        if track_name == TRACK_VOICEOVER_ZH:
+            track_role = "voiceover_zh"
+        elif track_name == TRACK_VOICEOVER_EN:
+            track_role = "voiceover_en"
+        else:
+            track_role = None
         for seg in track.get("segments") or []:
             if not isinstance(seg, dict):
                 continue
@@ -444,7 +461,7 @@ def extract_timeline_snapshot(
                 source_duration_us=int(source.get("duration") or 0),
                 speed=float(seg.get("speed") or 1.0),
                 volume=float(seg.get("volume") or 1.0),
-                role=resolve_role(material_id),
+                role=track_role if track_role else resolve_role(material_id),
                 fade_in_us=fade_in_us,
                 fade_out_us=fade_out_us,
                 name=str(material.get("name") or material.get("material_name") or ""),

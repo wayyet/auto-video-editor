@@ -146,11 +146,23 @@ class StickerSpec(BaseModel):
     source_subtitle_id: str | None = None
 
 
+#: 配音轨名(node_08 中文配音 / node_17 英文配音标记;nodes/_dual_draft 同源引用)。
+#: 编译器按 ``AudioClipSpec.role`` 分轨落回这两个轨名,保证 node_12 关卡②/镜像、
+#: node_13 音量角色、QA 语言隔离的"轨名识别"语义在 SDK 编译稿上存活(2026-11-22)。
+TRACK_VOICEOVER_ZH = "Voiceover_zh"
+TRACK_VOICEOVER_EN = "en_voiceover"
+
+
 class AudioClipSpec(BaseModel):
     """音频片段(BGM / 配音 / 人工音频;编译为 SDK AudioSegment)。
 
-    - 音频轨可有多条(自动 BGM 轨 / node_08 权威配音轨 / 人工添加),提取器
-      按时间线位置铺进同一条 SDK 音频轨(音轨间无渲染层级语义,合并无损)。
+    - 音频轨可有多条(自动 BGM 轨 / node_08 权威配音轨 / 人工添加)。提取器按
+      时间线位置合并进 ``timeline.audio_clips``;编译器按 ``role`` 分轨:
+      ``voiceover_zh``/``voiceover_en`` 各自落回配音轨名(见上方常量),
+      其余(bgm/manual)铺进 ``audio_main``——音轨间无渲染层级语义,合并无损,
+      但**轨名语义有主**(下游按轨名识别配音)。
+    - ``role`` 由提取器按源轨名判定(配音轨名精确匹配),node_05 原生转换
+      sidecar 的 id_map 仅作回退。
     - ``fade_in_us``/``fade_out_us`` 来自 ``materials.audio_fades``(node_13)。
     """
 
@@ -162,7 +174,7 @@ class AudioClipSpec(BaseModel):
     source_duration_us: int = 0
     speed: float = 1.0
     volume: float = 1.0
-    role: Literal["bgm", "voiceover", "manual"] = "manual"
+    role: Literal["bgm", "voiceover", "voiceover_zh", "voiceover_en", "manual"] = "manual"
     fade_in_us: int = 0
     fade_out_us: int = 0
     name: str = ""

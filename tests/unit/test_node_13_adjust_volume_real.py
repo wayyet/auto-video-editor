@@ -229,6 +229,30 @@ def test_is_voiceover_track_matches_both_markers() -> None:
     assert not is_voiceover_track({})
 
 
+def test_compiled_draft_voiceover_track_grouping() -> None:
+    """SDK 编译稿按 role 分轨后,轨名角色分组恢复(2026-11-22 补)。
+
+    编译器把 ``voiceover_zh``/``voiceover_en`` 落回 ``Voiceover_zh``/
+    ``en_voiceover`` 轨、其余进 ``audio_main`` —— 本用例锁定该形态下
+    配音不再被当 BGM(单轨压平时代的回归)。
+    """
+    from nodes.node_13_adjust_volume import _audio_tracks_by_role
+
+    draft = {
+        "tracks": [
+            {"type": "audio", "id": "t-main", "name": "audio_main",
+             "segments": [{"id": "bgm-1"}]},
+            {"type": "audio", "id": "t-vo-zh", "name": "Voiceover_zh",
+             "segments": [{"id": "vo-zh-1"}]},
+            {"type": "audio", "id": "t-vo-en", "name": "en_voiceover",
+             "segments": [{"id": "vo-en-1"}]},
+        ]
+    }
+    roles = _audio_tracks_by_role(draft)
+    assert [s["id"] for t in roles["voiceover"] for s in t["segments"]] == ["vo-zh-1", "vo-en-1"]
+    assert [s["id"] for t in roles["bgm"] for s in t["segments"]] == ["bgm-1"]
+
+
 def test_fade_clamped_to_segment_duration(tmp_path: Path) -> None:
     """fade 时长超过段长 → 钳制到段长(1s 段 + 2s/3s 配置)。"""
     draft = {

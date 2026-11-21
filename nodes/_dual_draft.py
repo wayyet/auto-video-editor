@@ -32,6 +32,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from jianying_sdk.spec import TRACK_VOICEOVER_EN, TRACK_VOICEOVER_ZH
+
 # 英文分支草稿在目录下的固定文件名,与 nodes/node_08b_add_subtitles_en.py、
 # nodes/node_10_inject_text_fx.py、nodes/node_16a_translate_and_check.py 共用同一约定。
 _DRAFT_FILENAME = "draft_content.json"
@@ -43,14 +45,16 @@ EN = "en"
 # P3b(2026-11-08):node_17 写入英文分支草稿的配音轨标记(track 与 segment 同名)。
 # node_12 镜像按此标记做"按角色合并"(只替换镜像轨,保留配音轨);
 # draft_ops.draft_integrity.check_audio_mirror 据此把配音轨排除出镜像一致性比对。
-EN_VOICEOVER_TRACK_NAME = "en_voiceover"
+# 2026-11-22:字面量改从 jianying_sdk.spec 同源引用(SDK 编译按 role 分轨落回
+# 同名轨,两处必须恒等,禁止再各自硬编码)。
+EN_VOICEOVER_TRACK_NAME = TRACK_VOICEOVER_EN
 
 # 2026-11-17 P0(英文分支配音隔离):node_08 写入中文主草稿的配音轨名(权威定义,
 # node_08 原私有常量 _ZH_VOICEOVER_TRACK_NAME 改为引用此处)。英文分支 v2 策略
 # (en_branch_audio_policy_version)以"轨名精确匹配"为唯一清理条件 —— node_fork
 # 清理、node_12 镜像过滤、QA 语言隔离检查三方共用,禁止按文件名/路径含 zh 等
 # 模糊条件删轨(人工 BGM 可能撞名)。
-ZH_VOICEOVER_TRACK_NAME = "Voiceover_zh"
+ZH_VOICEOVER_TRACK_NAME = TRACK_VOICEOVER_ZH
 
 # 2026-11-17 P0:英文分支音频策略版本(node_fork 写
 # state.en_branch_audio_policy_version)。"v2" = 本次运行新建/重放的英文分支
