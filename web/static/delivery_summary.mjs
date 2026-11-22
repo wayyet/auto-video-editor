@@ -121,9 +121,22 @@ export function reduceDeliveryCard(delivery, summary) {
     };
     if (summary.categories) next.effects = deliveryEffectsRow(summary.categories);
   } else if (ev === "delivery.qa_repair") {
+    // 2026-11-23 修复 §4.6:事件分项 attempted/compiled/failed/replayed_hook,
+    // "已尝试"不再暗示成功;旧事件(仅 retried)向后兼容降级展示。
+    const attempted = summary.attempted || summary.retried || [];
+    const parts = [`尝试:${attempted.join(", ") || "无可修复类别"}`];
+    if (Array.isArray(summary.compiled) && summary.compiled.length) {
+      parts.push(`编译成功:${summary.compiled.join(", ")}`);
+    }
+    if (Array.isArray(summary.failed) && summary.failed.length) {
+      parts.push(`编译失败:${summary.failed.join(", ")}`);
+    }
+    if (Array.isArray(summary.replayed_hook) && summary.replayed_hook.length) {
+      parts.push(`hook 已重放:${summary.replayed_hook.join(", ")}`);
+    }
     next.delivery_qa = {
       state: "warn",
-      note: `定向修复中:${(summary.retried || []).join(", ") || "无可修复类别"}(修复后复检)`,
+      note: `定向修复中:${parts.join(";")}(修复后复检)`,
       issues: [],
     };
   } else if (ev === "delivery.qa_failed") {

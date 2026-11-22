@@ -1016,3 +1016,64 @@ def test_zh_voiceover_without_artifact_skips(tmp_path: Path) -> None:
     assert not [t for t in after["tracks"] if t["type"] == "audio"]
     assert "voiceover_summary" not in out
     assert any("中文配音跳过" in x for x in out["status_log"])
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-23 SegmentOverlap 修复(console-3e866b87d5d6):配音不得压到下一段
+# node_07 把视频压到目标时长后,配音比组区间长 → 旧实现按组起点原长铺段,
+# 同轨重叠 → SDK 编译 SegmentOverlap。实测超出的 314ms 含人声,不能直接裁尾。
+# ---------------------------------------------------------------------------
+def _vo_segments_sorted(draft_file: Path) -> tuple[dict, list[dict]]:
+    draft = json.loads(draft_file.read_text(encoding="utf-8"))
+    vo_tracks = [t for t in draft["tracks"] if t["type"] == "audio"]
+    assert len(vo_tracks) == 1
+    segs = sorted(vo_tracks[0]["segments"], key=lambda s: s["target_timerange"]["start"])
+    return draft, segs
+
+
+def test_zh_voiceover_overflow_sped_up_without_overlap(tmp_path: Path) -> None:
+    """配音略长于组区间(x1.0667 ≤ 上限)→ 整段加速塞入时间槽,不丢语音、不重叠。"""
+    draft_file = _write_draft(tmp_path, _zh_draft())
+    entries = _vo_entries(tmp_path)
+    # 组1 区间 0-3s,配音 3.2s → 超 200ms
+    entries[0]["path"] = _write_wav(tmp_path / "storyline" / "voiceover_0001_long.wav", 3_200)
+    entries[0]["duration"] = 3_200
+    state = _vo_state(draft_file, tmp_path, entries)
+
+    out = add_subtitles(state)
+
+    draft, segs = _vo_segments_sorted(draft_file)
+    s1, s2 = segs
+    assert s1["target_timerange"] == {"start": 0, "duration": 3_000_000}
+    assert s1["source_timerange"] == {"start": 0, "duration": 3_200_000}
+    assert s1["speed"] == pytest.approx(3.2 / 3.0)
+    # speed 伴随素材与段速度一致(剪映按 material 速度播放)
+    speeds = {m["id"]: m for m in draft["materials"]["speeds"]}
+    companion = [speeds[r] for r in s1["extra_material_refs"] if r in speeds]
+    assert companion and companion[0]["speed"] == pytest.approx(3.2 / 3.0)
+    # 同轨不重叠
+    s1_end = s1["target_timerange"]["start"] + s1["target_timerange"]["duration"]
+    assert s1_end <= s2["target_timerange"]["start"]
+    # 第二段未超出,保持 1.0 速
+    assert s2["speed"] == pytest.approx(1.0)
+    assert out["voiceover_summary"]["written"] == 2
+    assert any("已加速" in x for x in out["status_log"])
+
+
+def test_zh_voiceover_large_overflow_trimmed_without_overlap(tmp_path: Path) -> None:
+    """超出过多(x1.67 > 上限)→ 退化为裁尾(旧行为),显式 note,仍不重叠。"""
+    draft_file = _write_draft(tmp_path, _zh_draft())
+    entries = _vo_entries(tmp_path)
+    entries[0]["path"] = _write_wav(tmp_path / "storyline" / "voiceover_0001_huge.wav", 5_000)
+    entries[0]["duration"] = 5_000
+    state = _vo_state(draft_file, tmp_path, entries)
+
+    out = add_subtitles(state)
+
+    _draft, segs = _vo_segments_sorted(draft_file)
+    s1, s2 = segs
+    assert s1["target_timerange"] == {"start": 0, "duration": 3_000_000}
+    assert s1["source_timerange"]["duration"] == 3_000_000
+    assert s1["speed"] == pytest.approx(1.0)
+    assert s1["target_timerange"]["duration"] <= s2["target_timerange"]["start"]
+    assert any("已裁尾" in x for x in out["status_log"])

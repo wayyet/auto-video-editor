@@ -163,6 +163,46 @@ def test_pipeline_fingerprint_skip(tmp_path: Path) -> None:
     assert second["status"] == "skipped_fingerprint"
 
 
+def test_pipeline_force_rebuild_bypasses_fingerprint_shortcut(tmp_path: Path) -> None:
+    """R-05/修复计划 §4.4:force_rebuild 跳过"指纹相同"短路 —— 指纹未变 ≠
+    草稿当前完整(草稿中的转场/动画可能已被删),QA repair 须真实重建。"""
+    _setup_task(tmp_path)
+    _write_spec_with_subtitles(tmp_path)
+    from jianying_sdk.pipeline import compile_and_publish_draft
+
+    assert compile_and_publish_draft(tmp_path, tmp_path / "draft_content.json", job_id="s")["status"] == "compiled"
+    assert compile_and_publish_draft(tmp_path, tmp_path / "draft_content.json", job_id="s")["status"] == "skipped_fingerprint"
+    forced = compile_and_publish_draft(
+        tmp_path, tmp_path / "draft_content.json", job_id="s", force_rebuild=True
+    )
+    assert forced["status"] == "compiled"
+    assert forced["write"]["ok"] is True
+    # 强制重建后指纹回执照常回写(观测通道不因 force 失真)
+    from nodes._draft_build_spec import load_build_spec
+
+    assert load_build_spec(tmp_path).compile.last_compiled_fingerprint == forced["fingerprint"]
+
+
+def test_pipeline_force_rebuild_still_respects_blocked_features(tmp_path: Path) -> None:
+    """强制重建只绕过指纹优化,不绕过 blocked_features fail-closed(§7.2)。"""
+    _setup_task(tmp_path)
+    _write_spec_with_subtitles(tmp_path)
+    draft = json.loads((tmp_path / "draft_content.json").read_text(encoding="utf-8"))
+    draft["tracks"][0]["segments"][0]["common_keyframes"] = [{"id": "human-kf"}]
+    (tmp_path / "draft_content.json").write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
+
+    from jianying_sdk.pipeline import compile_and_publish_draft
+
+    for kwargs in ({}, {"force_rebuild": True}):
+        record = compile_and_publish_draft(
+            tmp_path, tmp_path / "draft_content.json", job_id="s", **kwargs
+        )
+        assert record["status"] == "failed_blocked_features", kwargs
+    # 草稿原样保留(含人工关键帧)
+    payload = json.loads((tmp_path / "draft_content.json").read_text(encoding="utf-8"))
+    assert payload["tracks"][0]["segments"][0]["common_keyframes"]
+
+
 def test_pipeline_no_spec_explicit_skip(tmp_path: Path) -> None:
     """旧线程兼容(§阶段7):无 spec → 显式跳过,legacy 草稿原样保留。"""
     _setup_task(tmp_path)

@@ -16,6 +16,17 @@ from __future__ import annotations
 
 from typing import Any
 
+#: 开场钩子标题产物的确定性身份(单一权威来源:node_09b 的构造/幂等清理与
+#: jianying_sdk.timeline_extractor 的豁免识别共用同一组字符串,防两处各自维护
+#: 发生漂移;2026-11-23 交付 QA 修复 —— hook 标题段曾被提取器判为人工文本,
+#: 阻断了交付 QA repair 的重编译,详见 docs/第10期开发 修复计划)。
+HOOK_TRACK_ID = "track-text-hook"
+HOOK_TITLE_TRACK_NAME = "opening_title"
+HOOK_TITLE_ID_BASE = "hook-title"
+HOOK_TITLE_PREFIX = HOOK_TITLE_ID_BASE + "-"
+HOOK_SEGMENT_ID_BASE = HOOK_TITLE_ID_BASE + "-seg"
+HOOK_SEGMENT_PREFIX = HOOK_SEGMENT_ID_BASE + "-"
+
 #: 开场大字标题的最大长度(第 2 优先级切句路径的截断上限;显式传入不截断)。
 HOOK_TITLE_MAX_LEN = 12
 

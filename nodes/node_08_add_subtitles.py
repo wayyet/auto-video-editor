@@ -406,6 +406,22 @@ def _build_zh_subtitles(
 #: 过滤/QA 语言隔离检查三方共用),此处以别名引用,消除双处漂移。
 #: 本节点拥有的配音轨 id(重建时的固定 id,重放幂等)
 _ZH_VOICEOVER_TRACK_ID = "track-audio-zh-voiceover"
+#: 配音"加速塞进时间槽"的速度上限(2026-11-23 SegmentOverlap 修复)。
+#:
+#: node_07 把视频时间轴压到目标时长(缺省 35s)时只改视频段,TTS 配音时长不变;
+#: 本节点按组起点铺配音,配音长于压缩后的组区间就会越过下一段起点 → 同轨
+#: 重叠 → SDK 编译抛 SegmentOverlap(console-3e866b87d5d6:35.628s→35.0s,
+#: 每组超 314ms,且超出部分实测含人声,不能直接裁尾)。
+#: 超出比例 ≤ 本上限 → 整段加速完整塞入(不丢语音、不变调);超过上限 → 退化
+#: 为裁尾(保持旧行为,并显式记 note 提示语音被截)。
+_ZH_VOICEOVER_MAX_FIT_SPEED = 1.15
+
+
+def _fmt_ms(us: int) -> str:
+    """微秒 → 毫秒整数字符串(note 用)。"""
+    return str(int(us) // 1000)
+
+
 #: WAV 头的保守大小(字节);文件不超过它视为空音频
 _WAV_HEADER_MIN_BYTES = 44
 
@@ -495,26 +511,71 @@ def _write_zh_voiceover_track(draft: dict, state: WorkflowState) -> tuple[dict |
     new_mats: list[dict] = []
     new_segs: list[dict] = []
     new_speeds: list[dict] = []
+    # 2026-11-23 SegmentOverlap 修复:先收集全部落点,再按"下一段起点 / 草稿
+    # 末尾"算每段可用时间槽,保证同轨不重叠(旧实现只钳草稿末尾,配音长于
+    # 压缩后的组区间时会压到下一段上)。
+    placements: list[tuple[int, str, dict]] = []
     for e in valid:
         vid = str(e.get("voiceover_id") or "")
         span = spans.get(str(e.get("group_id") or ""))
         if span is None:
             notes.append(f"中文配音 {vid} 跳过:组 {e.get('group_id')} 在当前草稿无时间区间")
             continue
-        start_us = int(span[0])
-        duration_us = int(e["duration"]) * 1000
+        placements.append((int(span[0]), vid, e))
+    placements.sort(key=lambda p: (p[0], p[1]))
+
+    for idx, (start_us, vid, e) in enumerate(placements):
+        natural_us = int(e["duration"]) * 1000
+        slot_end_candidates: list[int] = []
         if total_us > 0:
-            duration_us = min(duration_us, max(0, total_us - start_us))
+            slot_end_candidates.append(total_us)
+        if idx + 1 < len(placements):
+            slot_end_candidates.append(int(placements[idx + 1][0]))
+        slot_us = (
+            min(slot_end_candidates) - start_us if slot_end_candidates else natural_us
+        )
+        if slot_us <= 0:
+            notes.append(
+                f"中文配音 {vid} 跳过:起点 {_fmt_ms(start_us)}ms 无可用时间槽"
+                "(与下一段同起点或已在草稿末尾之后)"
+            )
+            continue
+
+        speed = 1.0
+        duration_us = natural_us
+        source_us = natural_us
+        if natural_us > slot_us:
+            over_us = natural_us - slot_us
+            ratio = natural_us / slot_us
+            if ratio <= _ZH_VOICEOVER_MAX_FIT_SPEED:
+                # 加速完整塞入:目标时长 = 时间槽,源跨度 = 整段配音
+                speed = ratio
+                duration_us = slot_us
+                notes.append(
+                    f"中文配音 {vid} 长 {_fmt_ms(natural_us)}ms 超出时间槽 "
+                    f"{_fmt_ms(slot_us)}ms(超 {_fmt_ms(over_us)}ms),已加速 "
+                    f"x{speed:.4f} 完整塞入(防同轨重叠 SegmentOverlap)"
+                )
+            else:
+                # 超出过多:加速会明显失真 → 裁尾(旧行为),显式提示语音被截
+                duration_us = slot_us
+                source_us = slot_us
+                notes.append(
+                    f"中文配音 {vid} 长 {_fmt_ms(natural_us)}ms 超出时间槽 "
+                    f"{_fmt_ms(slot_us)}ms(超 {_fmt_ms(over_us)}ms,需 x{ratio:.2f} "
+                    f"> 上限 x{_ZH_VOICEOVER_MAX_FIT_SPEED}),已裁尾 —— 尾部语音会被截掉"
+                )
         if duration_us <= 0:
             continue
         mat = build_native_audio_material(
-            id_seed=f"zh-voiceover:{vid}", path=str(e["path"]), duration_us=duration_us
+            id_seed=f"zh-voiceover:{vid}", path=str(e["path"]), duration_us=source_us
         )
         seg, companions = build_native_audio_segment(
             id_seed=f"zh-voiceover-seg:{vid}",
             material_id=mat["id"],
             start_us=start_us,
             duration_us=duration_us,
+            speed=speed,
         )
         new_mats.append(mat)
         new_segs.append(seg)

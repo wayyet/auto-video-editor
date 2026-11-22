@@ -102,8 +102,147 @@ def test_repair_retries_only_repairable(monkeypatch) -> None:
     assert called == ["ok", "ok"]
     assert out["delivery_qa_retry_count"] == DELIVERY_QA_MAX_REPAIRS
     tags = out["status_log"]
-    assert "delivery_qa_repaired:transitions,stickers" in tags
+    # 2026-11-23 修复 §4.6:attempted ≠ compiled;"已尝试"不再伪装成"已修复"
+    assert "delivery_qa_repair_attempted:transitions,stickers" in tags
     assert "delivery_qa_unrepairable:bgm" in tags
+
+
+def test_repair_merges_action_state_updates(monkeypatch) -> None:
+    """R-04:action 返回的 status_log/error_log 增量必须并入 repair 节点 state。"""
+
+    def _fake_action(state):
+        return {
+            "status_log": ["fake_action_status"],
+            "error_log": ["[fake] 编译未成功"],
+        }
+
+    monkeypatch.setattr(
+        "nodes.node_delivery_qa_repair._build_dispatch",
+        lambda: {"transitions": _fake_action},
+    )
+    state = _state(
+        gate_failed=True,
+        categories={"transitions": {"status": "failed", "required": True}},
+    )
+    out = delivery_qa_repair(state)
+    assert "fake_action_status" in out["status_log"]
+    assert "[fake] 编译未成功" in out["error_log"]
+
+
+def test_repair_compile_receipts_consumed_per_branch(monkeypatch) -> None:
+    """R-04/R-05:分支级编译回执进 delivery_qa_compile;zh 成功/en 失败独立记录。"""
+
+    def _fake_action(state):
+        return {
+            "status_log": ["delivery_qa_recompile_zh:compiled"],
+            "error_log": ["[delivery_qa] SDK 重编译未成功(en): failed; SegmentOverlap('x')"],
+            "delivery_qa_compile": {
+                "zh": {"status": "compiled", "note": "", "fingerprint": "fp-zh"},
+                "en": {"status": "failed", "note": "SegmentOverlap('x')", "fingerprint": "fp-en"},
+            },
+        }
+
+    monkeypatch.setattr(
+        "nodes.node_delivery_qa_repair._build_dispatch",
+        lambda: {"transitions": _fake_action},
+    )
+    state = _state(
+        gate_failed=True,
+        categories={"transitions": {"status": "failed", "required": True}},
+    )
+    out = delivery_qa_repair(state)
+    tags = out["status_log"]
+    assert "delivery_qa_repair_compiled:zh" in tags
+    assert "delivery_qa_repair_failed:en" in tags
+    assert out["delivery_qa_compile"]["zh"]["status"] == "compiled"
+    assert out["delivery_qa_compile"]["en"]["status"] == "failed"
+    assert any("重编译未成功(en)" in line for line in out["error_log"])
+
+
+def test_repair_replays_hook_only_for_compiled_branches(monkeypatch, tmp_path) -> None:
+    """R-07:编译成功的分支重放 hook;失败/跳过分支不重放;日志增量并入 state。"""
+    zh_draft = tmp_path / "draft_content.json"
+    zh_draft.write_text("{}", encoding="utf-8")
+    en_dir = tmp_path / "en"
+    en_dir.mkdir()
+    (en_dir / "draft_content.json").write_text("{}", encoding="utf-8")
+
+    replayed_files: list[str] = []
+
+    def _fake_replay(draft_file, state, *, lang):
+        replayed_files.append(lang)
+        return {"status_log": [f"node_09b_hook_replay_{lang}_done"], "error_log": []}
+
+    monkeypatch.setattr(
+        "nodes.node_09b_inject_opening_hook.replay_hook_for_draft", _fake_replay
+    )
+
+    def _fake_action(state):
+        return {
+            "delivery_qa_compile": {
+                "zh": {"status": "compiled", "note": "", "fingerprint": "fp"},
+                "en": {"status": "failed", "note": "blocked", "fingerprint": "fp"},
+            },
+        }
+
+    monkeypatch.setattr(
+        "nodes.node_delivery_qa_repair._build_dispatch",
+        lambda: {"transitions": _fake_action},
+    )
+    state = _state(
+        gate_failed=True,
+        categories={"transitions": {"status": "failed", "required": True}},
+    )
+    state["draft_path"] = str(zh_draft)
+    state["draft_dir_en_branch"] = str(en_dir)
+    out = delivery_qa_repair(state)
+    assert replayed_files == ["zh"]  # 只重放编译成功的分支
+    assert "delivery_qa_repair_replayed_hook:zh" in out["status_log"]
+    assert "node_09b_hook_replay_zh_done" in out["status_log"]
+
+
+def test_compile_receipt_status_write_failed_counts_as_failed() -> None:
+    """R-05:compiled 但 write.ok=false 按失败处理,不得算修复成功。"""
+    from nodes.node_delivery_qa_repair import _compile_receipt_status
+
+    assert _compile_receipt_status({"status": "compiled", "write": {"ok": True}}) == "compiled"
+    assert _compile_receipt_status({"status": "compiled", "write": {"ok": False}}) == "failed"
+    assert _compile_receipt_status({"status": "failed_blocked_features"}) == "failed_blocked_features"
+    assert _compile_receipt_status({"status": "skipped_no_spec"}) == "skipped_no_spec"
+    assert _compile_receipt_status({"status": "skipped_fingerprint"}) == "skipped_fingerprint"
+
+
+def test_recompile_drafts_consumes_pipeline_receipt(monkeypatch, tmp_path) -> None:
+    """_recompile_drafts 消费 compile_and_publish_draft 回执并按分支记录。"""
+    import nodes.node_delivery_qa_repair as repair_mod
+
+    zh_draft = tmp_path / "draft_content.json"
+    zh_draft.write_text("{}", encoding="utf-8")
+    calls: list[dict] = []
+
+    def _fake_compile(draft_dir, draft_path, *, job_id, canonical_plan, audit_node, force_rebuild):
+        calls.append({"audit_node": audit_node, "force_rebuild": force_rebuild})
+        if audit_node.endswith("_zh"):
+            return {"status": "compiled", "fingerprint": "fp", "write": {"ok": True}}
+        return {
+            "status": "failed_blocked_features",
+            "fingerprint": "fp",
+            "note": "UnsupportedManualFeatureError([...])",
+        }
+
+    monkeypatch.setattr(
+        "jianying_sdk.pipeline.compile_and_publish_draft", _fake_compile
+    )
+    state = {
+        "draft_path": str(zh_draft),
+        "draft_dir_en_branch": str(tmp_path / "en_missing"),  # 目录不存在 → 不编译 en
+        "session_id": "sess-test",
+    }
+    out = repair_mod._recompile_drafts(state)
+    assert len(calls) == 1 and calls[0]["force_rebuild"] is True
+    assert out["delivery_qa_compile"]["zh"]["status"] == "compiled"
+    assert "delivery_qa_recompile_zh:compiled" in out["status_log"]
+
 
 
 def test_repair_no_blocked_categories_still_sets_retry_count() -> None:

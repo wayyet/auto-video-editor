@@ -392,27 +392,43 @@ def build_native_audio_material(
 
 
 def build_native_audio_segment(
-    *, id_seed: str, material_id: str, start_us: int, duration_us: int
+    *,
+    id_seed: str,
+    material_id: str,
+    start_us: int,
+    duration_us: int,
+    speed: float = 1.0,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """构造原生音频段(34 键,clip/hdr/uniform_scale=None)+ 其 speed 伴随素材。
 
     返回 ``(segment, companion_materials)``;调用方须把伴随素材并入
     ``materials.speeds``(与转换路径同口径,避免悬空 extra_material_refs)。
+
+    ``speed``(2026-11-23 SegmentOverlap 修复):>1.0 时为"加速塞进时间槽"——
+    ``duration_us`` 是**目标**(时间线)时长,源跨度 = ``round(duration_us*speed)``,
+    与视频段同一速度语义(速度 = 源跨度/目标跨度);SDK 提取/重建按
+    source/target 派生同一速度,编译稿不漂移。缺省 1.0 与旧行为逐字节一致。
     """
+    speed = float(speed) if speed and speed > 0 else 1.0
     seg_id = _new_id(id_seed, "audio_segment")
     speed_id = _new_id(seg_id, "audio_speed")
     seg = _convert_audio_segment(
-        {"target_start_us": int(start_us), "speed": 1.0},
+        {"target_start_us": int(start_us), "speed": speed},
         seg_id,
         material_id,
         speed_id,
         duration_us=max(0, int(duration_us)),
     )
+    if speed != 1.0:
+        seg["source_timerange"] = {
+            "start": 0,
+            "duration": int(round(max(0, int(duration_us)) * speed)),
+        }
     companion = {
         "curve_speed": None,
         "id": speed_id,
         "mode": 0,
-        "speed": 1.0,
+        "speed": speed,
         "type": "speed",
     }
     return seg, [companion]

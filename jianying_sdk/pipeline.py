@@ -36,6 +36,7 @@ def compile_and_publish_draft(
     job_id: str,
     canonical_plan: dict | None = None,
     audit_node: str = "node_11_compile",
+    force_rebuild: bool = False,
 ) -> dict[str, Any]:
     """把当前草稿 + spec 编译为 SDK 重建稿并安全发布。
 
@@ -45,6 +46,11 @@ def compile_and_publish_draft(
         job_id: 任务 ID(spec 缺失时的降级日志用;spec 身份由 node_07 建立)。
         canonical_plan: ``state["storyline_plan"]``(AI 转场审计恢复;可选)。
         audit_node: draft_mutations 审计节点名。
+        force_rebuild: 跳过"指纹相同"短路并传 ``force=True`` 给 compile_spec。
+            普通 node_11 首编保持默认 False(保留指纹跳过优化);交付 QA repair
+            对已判定缺失的构建块置 True —— 指纹未变 ≠ 草稿当前完整(草稿中的
+            转场/动画可能已被删),不能凭旧指纹跳过重建(审查 R-05)。**只绕过
+            指纹优化,不绕过 blocked_features fail-closed 与安全写入**。
 
     Returns:
         摘要 dict::
@@ -89,7 +95,7 @@ def compile_and_publish_draft(
     spec.canvas = canvas_of(draft)
 
     fingerprint = compute_build_fingerprint(spec)
-    if spec.compile.last_compiled_fingerprint == fingerprint:
+    if not force_rebuild and spec.compile.last_compiled_fingerprint == fingerprint:
         return {
             "status": "skipped_fingerprint",
             "fingerprint": fingerprint,
@@ -97,7 +103,7 @@ def compile_and_publish_draft(
         }
 
     try:
-        result = compile_spec(spec)
+        result = compile_spec(spec, force=force_rebuild)
     except Exception as exc:  # noqa: BLE001 - 编译失败不覆盖当前有效草稿(§11.1)
         status = (
             "failed_blocked_features"

@@ -34,6 +34,11 @@ import config
 from jy_common.hook_title import (
     HOOK_ANIMATION_CANDIDATES,
     HOOK_EFFECT_CANDIDATES,
+    HOOK_SEGMENT_ID_BASE,
+    HOOK_TITLE_ID_BASE,
+    HOOK_TITLE_PREFIX,
+    HOOK_TITLE_TRACK_NAME,
+    HOOK_TRACK_ID,
     pick_hook_title,
 )
 from jy_common.native_fx import (
@@ -57,11 +62,10 @@ from nodes._subtitle_texts import (
 from state import WorkflowState
 
 #: 我方开场钩子产物的确定性 id / 轨道约定(幂等清理只动这些;人工素材 id 是
-#: 剪映 uuid,不落这些前缀,不受影响)。
-HOOK_TRACK_ID = "track-text-hook"
-HOOK_TITLE_TRACK_NAME = "opening_title"
+#: 剪映 uuid,不落这些前缀,不受影响)。轨道/标题身份常量自
+#: jy_common.hook_title 导入(提取器豁免识别同源,防漂移);特效/动画前缀
+#: 仅本节点消费,留本地。
 HOOK_EFFECT_PREFIX = "hook-effect-"
-HOOK_TITLE_PREFIX = "hook-title-"
 HOOK_ANIM_PREFIX = "anim-hook-title-"
 _HOOK_REFS_PREFIXES = (HOOK_EFFECT_PREFIX, HOOK_TITLE_PREFIX, HOOK_ANIM_PREFIX)
 
@@ -231,18 +235,18 @@ def _inject_hook_into(draft: dict, title: str | None, tag: str) -> tuple[list[st
             duration_us=title_dur_us,
             style=_HOOK_TITLE_STYLE,
             track_name=HOOK_TITLE_TRACK_NAME,
-            id_prefix="hook-title",
+            id_prefix=HOOK_TITLE_ID_BASE,
             canvas_width=canvas_width_from_draft(draft),
         )
         upsert_by_id(materials.setdefault("texts", []), title_material)
 
         title_seg = make_text_segment(
             index=0,
-            material_id="hook-title-1",
+            material_id=f"{HOOK_TITLE_ID_BASE}-1",
             start_us=0,
             duration_us=title_dur_us,
             style=_HOOK_TITLE_STYLE,
-            id_prefix="hook-title-seg",
+            id_prefix=HOOK_SEGMENT_ID_BASE,
         )
         # 入场动画守卫(2026-11-19 审查 P1-02):与字幕池同一套标准 —— verified
         # (GUI 实证)+ 本地缓存存在双闸,候选按序取第一个双闸通过的;不允许仅凭
@@ -297,6 +301,46 @@ def _inject_hook_into(draft: dict, title: str | None, tag: str) -> tuple[list[st
             summary["animation_restored"] = 1
 
     return warnings, summary
+
+
+def replay_hook_for_draft(draft_file: Path, state: WorkflowState, *, lang: str) -> dict:
+    """对**单份**草稿重放开场钩子(交付 QA repair 编译成功后恢复;2026-11-23)。
+
+    SDK 编译是全量重建,我方 hook 产物(spec 计划外)会被静默抹掉 —— 交付 QA
+    repair 在编译回执确认该分支成功后按分支调本函数恢复。复用
+    :func:`_inject_hook_into` 的幂等构建(确定性 id + 先清后写),不另起一套
+    标题构建逻辑(审查计划 §4.5);日志以**增量**返回(纯 state-update 契约,
+    R-04/R-07:由调用方合并,不依赖对输入 state 的原地修改)。
+
+    - zh:特效 + 大字标题 + 入场动画(标题文本同主链 ``pick_hook_title``,
+      从 spec sidecar 取第 1 条字幕 —— 编译稿文本 material id 是 uuid);
+    - en:只特效(主链口径,英文不做标题);
+    - ``OPENING_HOOK_ENABLED=false`` → noop(空增量,不为关闭的 hook 写产物)。
+    """
+    if not config.OPENING_HOOK_ENABLED:
+        return {
+            "status_log": [f"node_09b_hook_replay_{lang}_noop:disabled"],
+            "error_log": [],
+        }
+    status_log: list[str] = []
+    error_log: list[str] = []
+    draft = load_draft(draft_file)
+    title: str | None = None
+    if lang == ZH:
+        title = pick_hook_title(state, _first_subtitle_text(draft, draft_file.parent))
+        if title is None:
+            status_log.append(f"node_09b_hook_replay_{lang}_noop:no_title")
+    warnings, _summary = _inject_hook_into(draft, title, f"node_09b_replay_{lang}")
+    error_log.extend(warnings)
+    status_log.extend(
+        apply_and_write(
+            draft_file,
+            draft,
+            "node_09b",
+            done_tag=f"node_09b_hook_replay_{lang}_done",
+        )
+    )
+    return {"status_log": status_log, "error_log": error_log}
 
 
 def inject_opening_hook(state: WorkflowState) -> dict:

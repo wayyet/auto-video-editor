@@ -359,6 +359,91 @@ def test_extract_still_blocks_unknown_video_refs() -> None:
     assert "unrecognized_segment_ref" in kinds
 
 
+# ---------------------------------------------------------------------------
+# node_09b 开场钩子标题的窄范围豁免(2026-11-23 交付 QA 修复)
+# ---------------------------------------------------------------------------
+def _append_hook_title(
+    draft: dict,
+    *,
+    track_id: str = "track-text-hook",
+    track_name: str = "opening_title",
+    seg_id: str = "hook-title-seg-1",
+    material_id: str = "hook-title-1",
+    material_track_name: str = "opening_title",
+    include_material: bool = True,
+) -> None:
+    """往草稿追加 node_09b 形态的开场标题轨(+ 可选 text material)。"""
+    if include_material:
+        draft["materials"].setdefault("texts", []).append({
+            "id": material_id,
+            "content": json.dumps({"text": "开场标题"}, ensure_ascii=False),
+            "type": "text",
+            "track_name": material_track_name,
+            "target_timerange": {"start": 0, "duration": 3_000_000},
+        })
+    draft["tracks"].append({
+        "type": "text",
+        "id": track_id,
+        "name": track_name,
+        "segments": [{
+            "id": seg_id,
+            "material_id": material_id,
+            "target_timerange": {"start": 0, "duration": 3_000_000},
+        }],
+    })
+
+
+def test_extract_exempts_our_hook_title_segment() -> None:
+    """标准 node_09b 形态(轨 id/轨名/段前缀/material 前缀+存在+轨名一致):
+    开场标题段不落入 manual_text_track,重编译不再被阻断。"""
+    draft, _ = _native_draft()
+    _append_hook_title(draft)
+    report = extract_timeline_snapshot(draft)
+    assert report.section.blocked_features == []
+
+
+@pytest.mark.parametrize(
+    "kwargs,desc",
+    [
+        ({"track_name": "user_title"}, "hook 轨名被人工改名 → 仍阻断"),
+        ({"seg_id": "manual-seg-1"}, "hook 轨上的非 hook 段 id → 仍阻断"),
+        ({"material_id": "manual-title-1"}, "hook 轨上非 hook material id → 仍阻断"),
+        ({"include_material": False}, "hook 段引用不存在的 material(悬空) → 仍阻断"),
+        ({"material_track_name": "Subtitles"}, "material 轨名字段与产物契约不符 → 仍阻断"),
+        ({"track_id": "track-text-other"}, "非 hook 轨道 id → 仍阻断"),
+    ],
+)
+def test_extract_still_blocks_mismatched_hook_identity(kwargs: dict, desc: str) -> None:
+    """身份五重校验任一不满足都不得豁免:人工文本保护语义不放宽。"""
+    draft, _ = _native_draft()
+    _append_hook_title(draft, **kwargs)
+    report = extract_timeline_snapshot(draft)
+    kinds = [b["kind"] for b in report.section.blocked_features]
+    assert "manual_text_track" in kinds, desc
+
+
+def test_extract_exempts_only_hook_among_manual_text() -> None:
+    """hook 段与普通人工段并存:只豁免 hook,人工段仍进入 blocked。"""
+    draft, _ = _native_draft()
+    _append_hook_title(draft)
+    draft["tracks"].append({
+        "type": "text",
+        "id": "track-text-manual",
+        "name": "手工字幕",
+        "segments": [{
+            "id": "user-seg-9",
+            "material_id": "user-material-9",
+            "target_timerange": {"start": 5_000_000, "duration": 2_000_000},
+        }],
+    })
+    report = extract_timeline_snapshot(draft)
+    manual_blocks = [
+        b for b in report.section.blocked_features if b["kind"] == "manual_text_track"
+    ]
+    assert len(manual_blocks) == 1
+    assert manual_blocks[0]["segment_ids"] == ["user-seg-9"]
+
+
 def test_canvas_of_fallback() -> None:
     draft, _ = _native_draft()
     assert canvas_of(draft).fps == 30
@@ -598,3 +683,58 @@ def test_node_07_spec_failure_degrades(tmp_path: Path, monkeypatch: pytest.Monke
     out = speed_fit(state)
     assert any("构建说明快照失败" in tag for tag in out["status_log"])
     assert out.get("snapshot2_path")  # 放行路径照常产快照②
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-23 SegmentOverlap 修复(console-3e866b87d5d6):同轨音频重叠预检
+# ---------------------------------------------------------------------------
+def _with_zh_voiceover(draft: dict, segments: list[dict]) -> dict:
+    draft["tracks"].append(
+        {"type": "audio", "id": "track-vo-zh", "name": "Voiceover_zh", "segments": segments}
+    )
+    draft["materials"]["audios"].extend([
+        {"id": "vo-zh-1", "path": "C:/media/vo_zh_1.wav", "name": "vo_zh_1.wav"},
+        {"id": "vo-zh-2", "path": "C:/media/vo_zh_2.wav", "name": "vo_zh_2.wav"},
+    ])
+    return draft
+
+
+def test_compile_voiceover_overlap_raises_located_error() -> None:
+    """同轨配音重叠 → 编译前预检抛 AudioClipOverlapError(仍是 ValueError),
+    报错带轨名/重叠毫秒/上游提示,不再是 SDK 裸 SegmentOverlap。"""
+    from jianying_sdk.compiler import AudioClipOverlapError
+
+    draft, _ = _native_draft()
+    _with_zh_voiceover(draft, [
+        _segment("vo-zh-1", "vo-zh-1", (0, 3_314_000), (0, 3_314_000)),
+        _segment("vo-zh-2", "vo-zh-2", (3_000_000, 2_000_000), (0, 2_000_000)),
+    ])
+    spec = _spec_from_extract(draft)
+    assert not spec.timeline.blocked_features  # 重叠不是人工特征,提取不阻断
+    with pytest.raises(AudioClipOverlapError) as exc:
+        compile_spec(spec, video_material_factory=_video_factory, audio_material_factory=_audio_factory)
+    assert isinstance(exc.value, ValueError)
+    msg = str(exc.value)
+    assert "Voiceover_zh" in msg
+    assert "314ms" in msg
+    assert "node_08" in msg
+
+
+def test_compile_voiceover_abutting_and_sped_up_ok() -> None:
+    """首尾相接不算重叠;node_08 加速塞入的配音段(源 3.2s → 目标 3.0s)可编译,
+    SDK 由 source/target 派生同一速度。"""
+    draft, _ = _native_draft()
+    _with_zh_voiceover(draft, [
+        _segment("vo-zh-1", "vo-zh-1", (0, 3_000_000), (0, 3_200_000), speed=3.2 / 3.0),
+        _segment("vo-zh-2", "vo-zh-2", (3_000_000, 2_000_000), (0, 2_000_000)),
+    ])
+    spec = _spec_from_extract(draft)
+    result = compile_spec(spec, video_material_factory=_video_factory, audio_material_factory=_audio_factory)
+    tracks = {t["name"]: t for t in result.payload["tracks"]}
+    vo_segs = sorted(
+        tracks["Voiceover_zh"]["segments"], key=lambda s: s["target_timerange"]["start"]
+    )
+    assert len(vo_segs) == 2
+    assert vo_segs[0]["target_timerange"] == {"start": 0, "duration": 3_000_000}
+    assert vo_segs[0]["source_timerange"]["duration"] == 3_200_000
+    assert vo_segs[0]["speed"] == pytest.approx(3.2 / 3.0)

@@ -249,6 +249,11 @@ class WorkflowState(TypedDict, total=False):
     # delivery QA 修复循环计数(delivery_qa_repair 唯一写入者,无需 reducer):
     # repair 重跑幂等修复节点后回 join 复检;仍失败则终止为 run.failed。
     delivery_qa_retry_count: NotRequired[int]
+    # 交付 QA repair 的分支级编译回执(2026-11-23 修复 R-04/R-05:repair 必须
+    # 消费 compile_and_publish_draft 的返回并留痕,attempted ≠ compiled)。
+    # 形如 {"zh": {"status": "...", "note": "...", "fingerprint": "..."},
+    #       "en": {...}};最终通过与否仍由 join 复检报告决定。
+    delivery_qa_compile: NotRequired[dict]
 
     # ===== Week 5 新增字段(对齐第 5 周计划 §1.1 / §4.1)=====
     # 节点 17 写,验收脚本读。Week 5 仍是 stub,产出 en_dub.wav 占位空 wav。

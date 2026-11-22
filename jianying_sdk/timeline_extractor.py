@@ -31,6 +31,12 @@ from jianying_sdk.spec import (
     TimelineClipSpec,
     TimelineSection,
 )
+from jy_common.hook_title import (
+    HOOK_SEGMENT_PREFIX,
+    HOOK_TITLE_PREFIX,
+    HOOK_TITLE_TRACK_NAME,
+    HOOK_TRACK_ID,
+)
 from nodes._draft_io import find_video_track
 
 #: 人工高级素材桶(非空 → blocked;SDK 无法按语义重建,§7.2)
@@ -237,6 +243,43 @@ def _is_planned_subtitle(
 
     display = native_content_text(text_material.get("content"))
     return bool(display) and str(display) in subtitle_texts
+
+
+def _is_our_hook_title_segment(track: dict, segment: dict, materials: dict) -> bool:
+    """文本段是否属于工作流自产的开场钩子标题(node_09b 产物;2026-11-23 修复)。
+
+    开场钩子标题写在 spec 字幕计划之外(node_09b 编译后原生写入),按旧的
+    认领规则会落入 ``manual_text_track``,阻断 SDK 重编译(交付 QA repair
+    必现)。豁免采用**窄范围五重身份校验**,全部命中才认领;任一不满足
+    继续按人工文本阻断:
+
+    1. 轨道 id = ``track-text-hook``;2. 轨道类型 text;3. 轨名 =
+       ``opening_title``;4. 段 id 命中 ``hook-title-seg-`` 前缀;
+    5. material id 命中 ``hook-title-`` 前缀、material 实际存在且其
+       ``track_name`` 身份字段与本节点产物契约一致。
+
+    身份常量与 node_09b 同源(``jy_common.hook_title``),防两处字符串漂移。
+    其余人工文本 / 悬空段 / 改名轨仍全部阻断(fail-closed 不放宽)。
+    """
+    if track.get("id") != HOOK_TRACK_ID or str(track.get("type") or "") != "text":
+        return False
+    if str(track.get("name") or "") != HOOK_TITLE_TRACK_NAME:
+        return False
+    if not str(segment.get("id") or "").startswith(HOOK_SEGMENT_PREFIX):
+        return False
+    material_id = str(segment.get("material_id") or "")
+    if not material_id.startswith(HOOK_TITLE_PREFIX):
+        return False
+    text_material = next(
+        (
+            t for t in (materials.get("texts") or [])
+            if isinstance(t, dict) and str(t.get("id") or "") == material_id
+        ),
+        None,
+    )
+    if text_material is None:
+        return False
+    return str(text_material.get("track_name") or "") == HOOK_TITLE_TRACK_NAME
 
 
 def extract_timeline_snapshot(
@@ -471,6 +514,9 @@ def extract_timeline_snapshot(
     #    我方字幕 material id 前缀(text-zh-N / text-en-N)是工作流链产物,
     #    编译时会整轨重建,不算人工残留(阶段3);SDK 重建稿的文本 material id
     #    是 uuid,按 content 显示文本与 spec 字幕比对认领(阶段7)。
+    #    node_09b 开场钩子标题段按窄范围身份校验豁免(2026-11-23 修复:曾因
+    #    落入 manual_text_track 阻断交付 QA repair 重编译);其余未知人工文本
+    #    保持 fail-closed。
     subtitle_ids = {str(x) for x in (spec_subtitle_ids or [])}
     subtitle_texts = {str(x) for x in (spec_subtitle_texts or []) if x}
     for track in draft.get("tracks") or []:
@@ -485,6 +531,7 @@ def extract_timeline_snapshot(
                 s for s in segments
                 if not _is_planned_subtitle(s, subtitle_ids, subtitle_texts, materials)
                 and not _is_our_subtitle_material(s.get("material_id"))
+                and not _is_our_hook_title_segment(track, s, materials)
             ]
             if manual:
                 blocked.append(_blocked(

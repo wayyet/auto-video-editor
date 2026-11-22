@@ -81,6 +81,18 @@ test("reduceDeliveryCard:QA 三态 + sha 摘要 + 效果落盘行", () => {
   assert.equal(next.delivery_qa.state, "warn");
   next = reduceDeliveryCard(next, { event: "delivery.qa_repair", retried: ["transitions"] });
   assert.ok(next.delivery_qa.note.includes("transitions"));
+  // 2026-11-23 修复 §4.6:新事件分项 attempted/compiled/failed/replayed_hook
+  next = reduceDeliveryCard(next, {
+    event: "delivery.qa_repair",
+    attempted: ["transitions"],
+    compiled: ["zh"],
+    failed: ["en"],
+    replayed_hook: ["zh"],
+  });
+  assert.ok(next.delivery_qa.note.includes("尝试:transitions"));
+  assert.ok(next.delivery_qa.note.includes("编译成功:zh"));
+  assert.ok(next.delivery_qa.note.includes("编译失败:en"));
+  assert.ok(next.delivery_qa.note.includes("hook 已重放:zh"));
   next = reduceDeliveryCard(next, { event: "delivery.qa_failed", blocked: ["voiceover_zh"] });
   assert.equal(next.delivery_qa.state, "fail");
 });

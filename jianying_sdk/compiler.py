@@ -58,6 +58,18 @@ class FingerprintUnchangedError(RuntimeError):
     """spec 指纹与上次编译一致 —— 调用方应跳过本次编译/发布。"""
 
 
+class AudioClipOverlapError(ValueError):
+    """同一受控音轨上的音频片段时间区间重叠 —— 编译前预检 fail-closed。
+
+    2026-11-23(console-3e866b87d5d6):SDK ``Track.add_segment`` 遇重叠只抛
+    ``SegmentOverlap('New segment overlaps with existing segment [start, end]')``,
+    不带轨名/片段身份/重叠量,排障只能翻 checkpoint。本预检在任何 SDK 落轨前
+    给出可定位的报错(轨名 + 两段 audio_id + 区间 + 重叠毫秒 + 上游提示)。
+    继承 ``ValueError`` 与 SDK ``SegmentOverlap`` 同类,调用方(pipeline 折叠为
+    ``failed``)语义不变;**不自动挪轨/裁剪**——那会掩盖上游时间槽缺陷。
+    """
+
+
 @dataclass
 class CompileResult:
     """一次编译的产物与摘要(payload 经 publisher 发布;对象本身不落盘)。"""
@@ -213,6 +225,38 @@ def _build_clip_settings(jy, transform: dict[str, Any]):
     return jy.ClipSettings(**clip_kwargs)
 
 
+def _check_audio_overlaps(audio_clips: list[AudioClipSpec]) -> None:
+    """按落轨名分组检查同轨重叠(首尾相接不算重叠);有重叠即抛 AudioClipOverlapError。"""
+    by_track: dict[str, list[AudioClipSpec]] = {}
+    for clip in audio_clips:
+        by_track.setdefault(audio_track_name(clip.role), []).append(clip)
+    problems: list[str] = []
+    for track_name, clips in by_track.items():
+        ordered = sorted(clips, key=lambda a: (int(a.target_start_us), a.audio_id))
+        for prev, cur in zip(ordered, ordered[1:]):
+            prev_end = int(prev.target_start_us) + int(prev.target_duration_us)
+            cur_start = int(cur.target_start_us)
+            if cur_start < prev_end:
+                problems.append(
+                    f"轨 {track_name}: {prev.audio_id} [{int(prev.target_start_us)}, {prev_end}]"
+                    f" 与 {cur.audio_id} [{cur_start}, "
+                    f"{cur_start + int(cur.target_duration_us)}] 重叠 "
+                    f"{(prev_end - cur_start) // 1000}ms"
+                )
+    if problems:
+        hint = ""
+        if any(f"轨 {TRACK_VOICEOVER_ZH}" in p or f"轨 {TRACK_VOICEOVER_EN}" in p for p in problems):
+            hint = (
+                ";配音轨重叠通常是上游配音写轨时间槽越界(node_07 压缩视频后配音未重新"
+                "适配,见 node_08 _write_zh_voiceover_track)"
+            )
+        raise AudioClipOverlapError(
+            "音频片段同轨重叠,SDK 无法落轨(会抛 SegmentOverlap),已暂停编译并保留原草稿:"
+            + "; ".join(problems)
+            + hint
+        )
+
+
 def _build_audio_clips(
     script,
     spec: DraftBuildSpec,
@@ -223,6 +267,8 @@ def _build_audio_clips(
     """音频片段(BGM/配音/人工)→ SDK AudioSegment(按 role 分轨,含淡入淡出)。"""
     jy = sdk()
     audio_clips = sorted(spec.timeline.audio_clips, key=lambda a: (a.target_start_us, a.audio_id))
+    # 落轨前预检:同轨重叠给出可定位报错(而非 SDK 裸 SegmentOverlap)
+    _check_audio_overlaps(audio_clips)
     for audio in audio_clips:
         if audio_material_factory is not None:
             material = audio_material_factory(audio.source_path)
