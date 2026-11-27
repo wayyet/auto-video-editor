@@ -701,3 +701,63 @@ def test_tail_chain_sticker_track_binding_accepted() -> None:
     issues = _tail_chain_structured(draft, "zh", "中文主草稿")
     sticker_issues = [i for i in issues if i.get("category") == "stickers"]
     assert sticker_issues == [], f"独立贴纸轨不得误报: {sticker_issues}"
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-23(console-4f97c7818e4c):SDK 重编译换 uuid 后按内容配对 BGM 镜像
+# ---------------------------------------------------------------------------
+def _bgm_draft(seg_id: str, mat_id: str, *, path: str = "C:/Cache/music/27afec4f.mp3",
+               start: int = 0, duration: int = 30_707_000, voiceover_name: str = "Voiceover_zh") -> dict:
+    """配音轨 + BGM 轨(audio_main)的最小 SDK 编译稿形态。"""
+    return {
+        "materials": {"audios": [
+            {"id": f"vo-{seg_id}", "path": "X:/runs/t1/storyline/voiceover_0001.wav"},
+            {"id": mat_id, "name": "准备出发", "path": path},
+        ]},
+        "tracks": [
+            {"type": "audio", "name": voiceover_name, "segments": [
+                {"id": f"vo-seg-{seg_id}", "material_id": f"vo-{seg_id}",
+                 "target_timerange": {"start": 0, "duration": 14_434_000}}]},
+            {"type": "audio", "name": "audio_main", "segments": [
+                {"id": seg_id, "material_id": mat_id,
+                 "target_timerange": {"start": start, "duration": duration}}]},
+        ],
+    }
+
+
+def test_mirror_matches_by_content_after_independent_recompile() -> None:
+    """两份草稿各自重编译:段/素材 id 全不同,但文件名+区间一致 → 不报错。"""
+    zh = _bgm_draft("aaa111", "mat-zh-uuid")
+    en = _bgm_draft("bbb222", "mat-en-uuid", voiceover_name="en_voiceover",
+                    path="C:\\Cache\\music\\27AFEC4F.mp3")  # 分隔符/大小写不同也算同一文件
+    result = check_audio_mirror(zh, en)
+    assert result["issues"] == []
+    assert result["summary"]["matched"] is True
+    assert result["summary"]["content_matched_segments"] == 1
+
+
+def test_mirror_content_mismatch_still_errors() -> None:
+    """内容配对不放宽:英文侧 BGM 区间不同 → 仍报英文缺段/多段。"""
+    zh = _bgm_draft("aaa111", "mat-zh-uuid")
+    en = _bgm_draft("bbb222", "mat-en-uuid", voiceover_name="en_voiceover", duration=20_000_000)
+    result = check_audio_mirror(zh, en)
+    assert result["summary"]["matched"] is False
+    errors = [i for i in result["issues"] if i["severity"] == "error"]
+    assert any("英文缺段" in i["detail"] and "英文多段" in i["detail"] for i in errors)
+
+
+def test_mirror_content_mismatch_different_file_errors() -> None:
+    """英文侧换了另一首曲子 → 报错。"""
+    zh = _bgm_draft("aaa111", "mat-zh-uuid")
+    en = _bgm_draft("bbb222", "mat-en-uuid", voiceover_name="en_voiceover",
+                    path="C:/Cache/music/other.mp3")
+    assert check_audio_mirror(zh, en)["summary"]["matched"] is False
+
+
+def test_mirror_same_id_dangling_material_still_errors() -> None:
+    """id 配对的老路径不变:英文段引用的素材缺失 → 报「英文草稿缺 audio material」。"""
+    zh = _bgm_draft("aaa111", "mat-1")
+    en = _bgm_draft("aaa111", "mat-1", voiceover_name="en_voiceover")
+    en["materials"]["audios"] = [m for m in en["materials"]["audios"] if m["id"] != "mat-1"]
+    result = check_audio_mirror(zh, en)
+    assert any("英文草稿缺 audio material mat-1" in i["detail"] for i in result["issues"])

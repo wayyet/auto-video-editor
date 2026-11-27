@@ -283,3 +283,70 @@ def test_repair_nodes_registered_in_graph() -> None:
     assert ("join_before_delivery", "delivery_qa_repair") in edges
     assert ("delivery_qa_repair", "join_before_delivery") in edges
     assert ("delivery_qa_failed", "__end__") in edges
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-23(console-4f97c7818e4c):重编译后补 BGM 镜像
+# ---------------------------------------------------------------------------
+def _compile_action(zh_status: str, en_status: str):
+    def _action(state):
+        return {
+            "delivery_qa_compile": {
+                "zh": {"status": zh_status, "note": "", "fingerprint": "fp"},
+                "en": {"status": en_status, "note": "", "fingerprint": "fp"},
+            },
+        }
+    return _action
+
+
+def test_repair_remirrors_bgm_after_compile(monkeypatch) -> None:
+    """任一分支编译成功 → 调 node_12 镜像;成功/失败 note 分别进 status_log/error_log。"""
+    calls: list[str] = []
+
+    def _fake_mirror(state):
+        calls.append("mirror")
+        return ["node_12_bgm_mirrored_en_done:1", "[node_12] 镜像段有 1 个无法镜像的 companion ref,已剥离(防悬空)"]
+
+    monkeypatch.setattr("nodes.node_12_human_add_bgm.mirror_bgm_to_en_draft", _fake_mirror)
+    monkeypatch.setattr(
+        "nodes.node_delivery_qa_repair._build_dispatch",
+        lambda: {"transitions": _compile_action("compiled", "compiled")},
+    )
+    state = _state(gate_failed=True, categories={"transitions": {"status": "failed", "required": True}})
+    out = delivery_qa_repair(state)
+    assert calls == ["mirror"]
+    assert "delivery_qa_repair_remirrored_bgm" in out["status_log"]
+    assert "node_12_bgm_mirrored_en_done:1" in out["status_log"]
+    assert any("companion ref" in line for line in out["error_log"])
+
+
+def test_repair_skips_remirror_when_nothing_compiled(monkeypatch) -> None:
+    """两侧都未编译(失败/跳过)→ 草稿未动,不镜像、不打标签。"""
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "nodes.node_12_human_add_bgm.mirror_bgm_to_en_draft",
+        lambda state: calls.append("mirror") or [],
+    )
+    monkeypatch.setattr(
+        "nodes.node_delivery_qa_repair._build_dispatch",
+        lambda: {"transitions": _compile_action("failed", "skipped_no_spec")},
+    )
+    state = _state(gate_failed=True, categories={"transitions": {"status": "failed", "required": True}})
+    out = delivery_qa_repair(state)
+    assert calls == []
+    assert "delivery_qa_repair_remirrored_bgm" not in out["status_log"]
+
+
+def test_repair_remirror_exception_is_logged_not_raised(monkeypatch) -> None:
+    """镜像抛异常不阻断复检路由,如实记 error_log。"""
+    def _boom(state):
+        raise RuntimeError("jianying running")
+
+    monkeypatch.setattr("nodes.node_12_human_add_bgm.mirror_bgm_to_en_draft", _boom)
+    monkeypatch.setattr(
+        "nodes.node_delivery_qa_repair._build_dispatch",
+        lambda: {"transitions": _compile_action("compiled", "failed")},
+    )
+    state = _state(gate_failed=True, categories={"transitions": {"status": "failed", "required": True}})
+    out = delivery_qa_repair(state)
+    assert any("BGM 重镜像异常" in line for line in out["error_log"])

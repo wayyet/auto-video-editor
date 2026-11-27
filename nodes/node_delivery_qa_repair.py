@@ -37,6 +37,11 @@
 - **hook 重放** —— 编译成功的分支 hook 被抹,按分支调
   ``node_09b.replay_hook_for_draft`` 恢复;日志增量合并进 repair state;
   重放失败如实记 error_log,不伪装成功(计划 §4.5)。
+
+2026-11-23 BGM 镜像修复(console-4f97c7818e4c):
+
+- **BGM 重镜像** —— force_rebuild 让两份草稿的 BGM 段 id 各自换成新 uuid,
+  编译成功后补调 ``node_12.mirror_bgm_to_en_draft`` 恢复镜像不变量。
 """
 
 from __future__ import annotations
@@ -265,6 +270,39 @@ def _replay_hooks_for_compiled(
     return replayed
 
 
+def _remirror_bgm_after_compile(
+    compile_results: dict[str, dict[str, Any]],
+    state: WorkflowState,
+    merged: dict[str, list[str]],
+) -> bool:
+    """重编译成功后把中文 BGM 重新镜像进英文草稿(2026-11-23,console-4f97c7818e4c)。
+
+    正常尾链顺序是 node_11 编译 → node_12 镜像,镜像在编译**之后**,两份草稿的
+    BGM 段 id 一致;repair 的 ``force_rebuild`` 在镜像**之后**又各自重建两份草稿,
+    SDK 用 uuid4 重新生成段/素材 id,镜像关系被打散。这里补回 node_12 的镜像
+    (按角色合并、幂等、失败只记 error_log 不抛),恢复正常链的不变量。
+
+    只要有任一分支编译成功就执行:zh 重建 → 英文侧要跟上新 id;en 重建 →
+    英文侧的 BGM 段 id 也已漂移。两侧都未编译(失败/跳过)时草稿未动,不执行。
+
+    Returns:
+        是否执行了镜像(用于状态标签)。
+    """
+    if not any(rec.get("status") == "compiled" for rec in compile_results.values()):
+        return False
+    from nodes.node_12_human_add_bgm import mirror_bgm_to_en_draft
+
+    try:
+        notes = mirror_bgm_to_en_draft(state)
+    except Exception as exc:  # noqa: BLE001 — 镜像失败不阻断复检路由,如实记错
+        merged["error_log"].append(f"[delivery_qa] BGM 重镜像异常: {exc!r}")
+        return True
+    for note in notes:
+        key = "status_log" if note.startswith("node_12_bgm_mirrored_en_done") else "error_log"
+        merged[key].append(note)
+    return True
+
+
 def _emit_qa_event(event: str, *, node_id: str, detail: dict) -> None:
     """经 LangGraph custom stream 上报 delivery.qa_* 观测事件(与 join 同款)。"""
     try:
@@ -296,6 +334,7 @@ def delivery_qa_repair(state: WorkflowState) -> dict:
     merged: dict[str, list[str]] = {"status_log": [], "error_log": []}
     compile_results: dict[str, dict[str, Any]] = {}
     replayed: list[str] = []
+    remirrored = False
     if blocked:
         dispatch = _build_dispatch()
         for key in blocked:
@@ -311,6 +350,7 @@ def delivery_qa_repair(state: WorkflowState) -> dict:
             if isinstance(compile_update, dict):
                 compile_results.update(compile_update)
         replayed = _replay_hooks_for_compiled(compile_results, state, merged)
+        remirrored = _remirror_bgm_after_compile(compile_results, state, merged)
 
     compiled_langs = sorted(
         lang for lang, rec in compile_results.items() if rec.get("status") == "compiled"
@@ -328,6 +368,8 @@ def delivery_qa_repair(state: WorkflowState) -> dict:
         tags.append(f"delivery_qa_repair_failed:{','.join(failed_langs)}")
     if replayed:
         tags.append(f"delivery_qa_repair_replayed_hook:{','.join(replayed)}")
+    if remirrored:
+        tags.append("delivery_qa_repair_remirrored_bgm")
     if unrepairable:
         tags.append(f"delivery_qa_unrepairable:{','.join(unrepairable)}")
     _emit_qa_event(
@@ -339,6 +381,7 @@ def delivery_qa_repair(state: WorkflowState) -> dict:
             "compiled": compiled_langs,
             "failed": failed_langs,
             "replayed_hook": replayed,
+            "remirrored_bgm": remirrored,
         },
     )
     return {

@@ -609,6 +609,51 @@ def registered_expected_for(draft_dir: Path) -> bool:
 # ---------------------------------------------------------------------------
 # 关卡② 音频镜像完整性
 # ---------------------------------------------------------------------------
+def _audio_materials_by_id(draft: dict) -> dict[str, dict]:
+    """``materials.audios`` 按 id 建索引(镜像内容配对用)。"""
+    return {
+        str(m.get("id")): m
+        for m in ((draft.get("materials") or {}).get("audios") or [])
+        if isinstance(m, dict) and m.get("id")
+    }
+
+
+def _audio_segments(tracks: list[dict]) -> list[dict]:
+    """展开音轨的段(只收 dict 段,保持轨序/段序)。"""
+    return [
+        s
+        for t in tracks
+        for s in (t.get("segments") or [])
+        if isinstance(s, dict)
+    ]
+
+
+def _audio_content_key(segment: dict, audios_by_id: dict[str, dict]) -> tuple | None:
+    """音频段的内容身份 ``(素材文件名小写, 目标起点 us, 目标时长 us)``。
+
+    SDK 重编译会把段/素材 id 换成新 uuid,但素材路径与时间线位置不变 ——
+    与 ``jianying_sdk.timeline_extractor`` 的稳定音频身份(路径主干@目标区间)
+    同口径。素材解析不到或没有 ``path`` 时返回 ``None``(只能按 id 配对,
+    不做模糊匹配,避免把两段不同的音频误配成一对)。
+    """
+    material = audios_by_id.get(str(segment.get("material_id") or ""))
+    if not material:
+        return None
+    path = str(material.get("path") or "").strip()
+    if not path:
+        return None
+    file_name = path.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    target = segment.get("target_timerange") or {}
+
+    def _us(value: Any) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return -1
+
+    return (file_name, _us(target.get("start")), _us(target.get("duration")))
+
+
 def check_audio_mirror(zh_draft: dict, en_draft: dict) -> dict[str, Any]:
     """校验中文音频轨(含引用的 audio materials)完整镜像到英文草稿。
 
@@ -670,16 +715,59 @@ def check_audio_mirror(zh_draft: dict, en_draft: dict) -> dict[str, Any]:
         issues.append(_issue("BGM镜像", SEV_ERROR, "-", f"中文音频轨未镜像到英文草稿(中文 {summary['zh_segments']} 段)"))
         return {"issues": issues, "summary": summary}
 
-    zh_seg_ids: list[str] = [
-        str(s["id"]) for t in zh_tracks for s in (t.get("segments") or []) if isinstance(s, dict) and s.get("id")
-    ]
-    en_seg_ids: list[str] = [
-        str(s["id"]) for t in en_tracks for s in (t.get("segments") or []) if isinstance(s, dict) and s.get("id")
-    ]
-    summary["matched"] = set(zh_seg_ids) == set(en_seg_ids)
+    # 2026-11-23(console-4f97c7818e4c 复盘):段配对改两级口径。
+    # SDK 每次编译用 uuid4 重新生成段/素材 id;delivery_qa_repair 对中英草稿各自
+    # force_rebuild 后,同一条 BGM 两侧 id 必然不同,旧实现"段 id 集合相等"把
+    # 内容完全一致的镜像误判为 failed(bgm 不可自动修复 → run.failed)。
+    # 现在:① 段 id 相同直接配对(node_12 镜像后的常态,兼容无素材信息的旧夹具);
+    # ② 余下的段按内容身份配对 ——(素材文件名, 目标起点, 目标时长),与
+    # timeline_extractor 的稳定音频身份"路径主干@目标区间"同口径。
+    # 镜像一致性不放宽:内容对不上的段照样报英文缺段/多段。
+    zh_mats = _audio_materials_by_id(zh_draft)
+    en_mats = _audio_materials_by_id(en_draft)
+    zh_segs = _audio_segments(zh_tracks)
+    en_segs = _audio_segments(en_tracks)
+
+    pairs: list[tuple[dict, dict]] = []
+    en_by_id: dict[str, dict] = {}
+    for s in en_segs:
+        if s.get("id"):
+            en_by_id.setdefault(str(s["id"]), s)
+    zh_left: list[dict] = []
+    used_en: set[int] = set()
+    for s in zh_segs:
+        hit = en_by_id.get(str(s.get("id") or ""))
+        if s.get("id") and hit is not None and id(hit) not in used_en:
+            pairs.append((s, hit))
+            used_en.add(id(hit))
+        else:
+            zh_left.append(s)
+    en_left = [s for s in en_segs if id(s) not in used_en]
+
+    en_pool: dict[tuple, list[dict]] = {}
+    for s in en_left:
+        key = _audio_content_key(s, en_mats)
+        if key is not None:
+            en_pool.setdefault(key, []).append(s)
+    zh_unmatched: list[dict] = []
+    content_matched = 0
+    for s in zh_left:
+        key = _audio_content_key(s, zh_mats)
+        bucket = en_pool.get(key) if key is not None else None
+        if bucket:
+            hit = bucket.pop(0)
+            pairs.append((s, hit))
+            used_en.add(id(hit))
+            content_matched += 1
+        else:
+            zh_unmatched.append(s)
+    en_unmatched = [s for s in en_segs if id(s) not in used_en]
+
+    summary["content_matched_segments"] = content_matched
+    summary["matched"] = not zh_unmatched and not en_unmatched
     if not summary["matched"]:
-        missing = sorted(set(zh_seg_ids) - set(en_seg_ids))
-        extra = sorted(set(en_seg_ids) - set(zh_seg_ids))
+        missing = sorted(str(s.get("id") or "?") for s in zh_unmatched)
+        extra = sorted(str(s.get("id") or "?") for s in en_unmatched)
         detail = []
         if missing:
             detail.append(f"英文缺段 {missing}")
@@ -687,16 +775,23 @@ def check_audio_mirror(zh_draft: dict, en_draft: dict) -> dict[str, Any]:
             detail.append(f"英文多段 {extra}")
         issues.append(_issue("BGM镜像", SEV_ERROR, "-", f"英文音频轨与中文不一致:{'; '.join(detail)}"))
 
-    # 引用的 audio materials 必须能在英文侧解析(mirror 复制过)
+    # 引用的 audio materials 必须能在英文侧解析(mirror 复制过)。
+    # 配对段看英文侧段自己的 material_id(内容配对时两侧 id 本就不同);
+    # 未配对的中文段沿用旧口径(中文 material id 在英文侧必须存在)。
     en_known = _material_ids(en_draft)
     zh_known = _material_ids(zh_draft)
-    for t in zh_tracks:
-        for s in (t.get("segments") or []):
-            if not isinstance(s, dict):
-                continue
-            mid = s.get("material_id")
-            if mid and str(mid) in zh_known and str(mid) not in en_known:
-                issues.append(_issue("BGM镜像", SEV_ERROR, "-", f"英文草稿缺 audio material {mid}(镜像丢失)"))
+    for zh_seg, en_seg in pairs:
+        zh_mid = zh_seg.get("material_id")
+        en_mid = en_seg.get("material_id")
+        if zh_mid and str(zh_mid) in zh_known and not (en_mid and str(en_mid) in en_known):
+            issues.append(_issue(
+                "BGM镜像", SEV_ERROR, "-",
+                f"英文草稿缺 audio material {en_mid or zh_mid}(镜像丢失)",
+            ))
+    for zh_seg in zh_unmatched:
+        mid = zh_seg.get("material_id")
+        if mid and str(mid) in zh_known and str(mid) not in en_known:
+            issues.append(_issue("BGM镜像", SEV_ERROR, "-", f"英文草稿缺 audio material {mid}(镜像丢失)"))
     return {"issues": issues, "summary": summary}
 
 
